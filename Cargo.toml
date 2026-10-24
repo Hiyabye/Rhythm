@@ -1,0 +1,7 @@
+[workspace]
+members = ["src-tauri", "crates/ai-worker"]
+resolver = "2"
+
+[profile.release]
+strip = true
+lto = "thin"
