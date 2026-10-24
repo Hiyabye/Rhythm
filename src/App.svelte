@@ -2,6 +2,8 @@
   import { onMount, tick } from 'svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import Icon from './lib/Icon.svelte';
+  import ArchiveView from './lib/ArchiveView.svelte';
+  import SourceSettings from './lib/SourceSettings.svelte';
   import type { EnergyProfile, Settings, Snapshot, Theme, WorkerStatus } from './lib/types';
 
   const navigation = [
@@ -34,7 +36,7 @@
   let notice = $state('');
   let desktop = $state(false);
   let interestDraft = $state('');
-  let query = $state('');
+  let noticesEnabled = $derived(snapshot?.extensions.some((extension) => extension.id === 'sogang_notices' && extension.enabled) ?? false);
   let theme = $state<Theme>('system');
   let systemDark = $state(false);
   let heading = $derived(navigation.find((item) => item.id === page)!);
@@ -153,7 +155,7 @@
         </button>
       {/each}
     </nav>
-    <div class="sidebar-bottom"><span class="local-dot"></span><span>내 기기에 머무는 정보</span><small>v0.1.0 · Foundation</small></div>
+    <div class="sidebar-bottom"><span class="local-dot"></span><span>내 기기에 머무는 정보</span><small>v0.2.0 · 로컬 공지 아카이브</small></div>
   </aside>
 
   <main id="main" tabindex="-1">
@@ -173,8 +175,8 @@
             <div class="setting-row"><div><h3>시작과 종료</h3><p>마지막으로 저장한 설정으로 시작하며, 창을 닫으면 앱도 종료됩니다.</p></div></div>
           </section>
           <section id="extensions" class="settings-section"><div class="section-heading"><h2>확장 기능</h2><p>필요한 정보원만 선택하세요. 꺼도 저장된 정보는 지워지지 않습니다.</p></div>
-            {#if snapshot}{#each snapshot.extensions as extension}<div class="extension-row"><div class="extension-symbol"><Icon name="inbox" size={22} /></div><div class="extension-description"><h3>{extension.display_name}</h3><p>{extension.description}</p><span class="availability">{extension.available ? '사용 가능' : '준비 중 · 소식 동기화는 아직 제공되지 않습니다'}</span></div><button class="switch" class:on={extension.enabled} role="switch" aria-checked={extension.enabled} aria-label={`${extension.display_name} 사용 설정`} disabled={busy} onclick={() => toggleExtension(extension.id, !extension.enabled)}><span></span></button></div>{/each}{:else}<p class="muted">{loading ? '확장 기능을 불러오는 중입니다.' : '데스크톱 앱에서 등록된 확장 기능을 확인할 수 있습니다.'}</p>{/if}
-            <p class="footnote">준비 중인 확장 기능은 사용 설정만 저장하며, 동기화나 알림을 실행하지 않습니다.</p>
+            {#if snapshot}{#each snapshot.extensions as extension}<div class="extension-row"><div class="extension-symbol"><Icon name="inbox" size={22} /></div><div class="extension-description"><h3>{extension.display_name}</h3><p>{extension.description}</p><span class="availability">{extension.available ? '사용 가능 · 수동 동기화' : '현재 사용할 수 없습니다'}</span></div><button class="switch" class:on={extension.enabled} role="switch" aria-checked={extension.enabled} aria-label={`${extension.display_name} 사용 설정`} disabled={busy} onclick={() => toggleExtension(extension.id, !extension.enabled)}><span></span></button></div>{/each}{:else}<p class="muted">{loading ? '확장 기능을 불러오는 중입니다.' : '데스크톱 앱에서 등록된 확장 기능을 확인할 수 있습니다.'}</p>{/if}
+            {#if noticesEnabled}<SourceSettings enabled={noticesEnabled} />{:else}<p class="footnote">서강대학교 공지를 켜면 정보원을 구독하고 자료를 가져올 수 있습니다. 꺼도 이미 보관한 공지와 구독 설정은 유지됩니다.</p>{/if}
           </section>
           <section id="ai" class="settings-section"><div class="section-heading"><h2>AI 모델</h2><p>나의 기기에서 실행하는 AI. 정보는 외부 추론 서버로 보내지 않습니다.</p></div>
             <div class="setting-row"><div><h3>AI 엔진</h3><p>별도 프로세스에서 실행되는 mistral.rs</p></div><div class="inline-controls"><span class="engine-state" class:healthy={snapshot?.worker.state === 'ready'}><span></span>{!snapshot ? '상태 확인 전' : snapshot.worker.state === 'ready' ? (snapshot.worker.runtime_available ? '엔진 대기 중' : '추론 런타임 없음') : snapshot.worker.state === 'failed' ? '응답 없음' : '사용할 수 없음'}</span><button class="icon-button" disabled={!snapshot || busy} aria-label="AI 엔진 상태 새로고침" onclick={refreshWorker}><Icon name="refresh" size={17} /></button></div></div>
@@ -195,21 +197,11 @@
             <div class="privacy-note"><Icon name="lock" size={18} /><p>설정과 관심사는 로컬에 저장됩니다. 클라우드 추론, 원격 저장소, 사용 정보 수집을 사용하지 않습니다.</p></div>
             <div class="planned"><strong>백업 및 복원 · 향후 제공</strong><p>이 버전에는 백업과 복원 기능이 없습니다. 앱 업데이트 시에는 마이그레이션으로 기존 데이터를 유지합니다.</p></div>
           </section>
-          <section id="about" class="settings-section about-section"><div class="about-brand"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><h2>Rhythm</h2><span>0.1.0</span></div><p>나의 하루를 정돈하는 로컬 퍼스트 개인 커맨드 센터.</p><p class="muted">조용하게 연결하고, 나에게 중요한 것에 집중합니다.</p><div class="about-meta"><span>MIT 라이선스</span><span>github.com/Hiyabye/Rhythm</span></div></section>
+          <section id="about" class="settings-section about-section"><div class="about-brand"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><h2>Rhythm</h2><span>0.2.0</span></div><p>나의 하루를 정돈하는 로컬 퍼스트 개인 커맨드 센터.</p><p class="muted">조용하게 연결하고, 나에게 중요한 것에 집중합니다.</p><div class="about-meta"><span>MIT 라이선스</span><span>github.com/Hiyabye/Rhythm</span></div></section>
         </div>
       </div>
-    {:else if page === 'today'}
-      <div class="today-intro"><span class="section-kicker">하루의 시작을 조금 더 가볍게</span><h2>중요한 것에 집중할 수 있도록.</h2><p>여러 곳에 흩어진 소식과 다가오는 일정을<br class="desktop-break" /> 나만의 흐름으로 정리할 공간입니다.</p></div>
-      <section class="briefing-empty"><div class="empty-glyph"><span class="beat large" aria-hidden="true"><i></i><i></i><i></i><i></i></span></div><span class="section-kicker">나만의 브리핑</span><h3>아직 도착한 소식이 없어요</h3><p>정보원이 연결되면 관심 있는 소식과 중요한 마감일을<br class="desktop-break" /> 이곳에서 한눈에 확인할 수 있습니다.</p><button class="button" onclick={() => navigate('settings')}>나의 공간 설정하기 <Icon name="arrow" size={16} /></button><span class="quiet-caption">현재는 앱의 기반을 준비하는 첫 번째 버전입니다.</span></section>
-      <div class="principles"><div><span>01</span><h3>내 기기에 안전하게</h3><p>정보와 관심사는 내 기기에 남습니다.</p></div><div><span>02</span><h3>필요한 정보만 차분하게</h3><p>앞으로 연결될 소식을 위한 나만의 자리.</p></div><div><span>03</span><h3>나의 속도에 맞춰</h3><p>설정에서 테마와 에너지 프로필을 골라보세요.</p></div></div>
-    {:else if page === 'search'}
-      <form class="search-form" onsubmit={(event) => event.preventDefault()} role="search"><Icon name="search" size={22} /><label class="sr-only" for="archive-search">보관된 정보 검색</label><input id="archive-search" type="search" bind:value={query} placeholder="어떤 정보를 찾고 있나요?" autocomplete="off" /><span class="search-hint">로컬 검색</span></form>
-      <div class="search-meta"><span>보관된 문서 0개</span><span>검색 기능 준비 중</span></div>
-      <section class="empty-state"><span class="empty-icon"><Icon name="search" size={32} /></span><h2>{query.trim() ? '아직 검색할 문서가 없습니다' : '필요한 정보를 찾을 공간'}</h2><p>{query.trim() ? '현재는 문서가 수집되거나 색인되지 않았습니다. 검색어는 저장하거나 외부로 보내지 않습니다.' : '앞으로 수집한 소식을 제목과 내용으로 검색할 수 있습니다. 지금은 검색 화면의 기반만 준비되어 있습니다.'}</p><span class="quiet-caption">로컬 문서 검색은 v0.2.0에서 제공할 예정입니다.</span></section>
-    {:else if page === 'inbox'}
-      <div class="collection-heading"><span>모든 소식 <b>0</b></span><span>정보원 연결 준비 중</span></div><section class="empty-state"><span class="empty-icon"><Icon name="inbox" size={34} /></span><h2>새로운 소식이 모이는 곳</h2><p>확장 기능이 연결되면 여러 정보원의 소식이 이곳에 모입니다. 아직 수집된 소식은 없습니다.</p><button class="button secondary" onclick={() => navigate('settings')}>확장 기능 살펴보기 <Icon name="arrow" size={16} /></button><span class="quiet-caption">서강대학교 공지 수집은 v0.2.0에서 시작합니다.</span></section>
     {:else}
-      <div class="collection-heading"><span>저장한 항목 <b>0</b></span><span>내가 고른 중요한 정보</span></div><section class="empty-state"><span class="empty-icon"><Icon name="bookmark" size={32} /></span><h2>다시 꺼내 보고 싶은 소식</h2><p>앞으로 중요한 공지와 기회를 저장하면 이곳에서 모아볼 수 있습니다. 아직 보관된 항목은 없습니다.</p><span class="quiet-caption">소식 저장 기능은 공지 아카이브와 함께 제공할 예정입니다.</span></section>
+      <ArchiveView {page} {desktop} enabled={noticesEnabled} onsettings={() => navigate('settings')} />
     {/if}
     <footer class="page-footer"><span>Rhythm</span><span>조용하게, 나의 리듬으로.</span></footer>
   </main>

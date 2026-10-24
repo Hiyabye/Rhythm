@@ -1,0 +1,805 @@
+use super::{model::*, network, parser};
+use crate::storage::Store;
+use sha2::{Digest, Sha256};
+use std::{
+    collections::HashSet,
+    future::Future,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+};
+use url::Url;
+
+pub type SharedStore = Arc<Mutex<Store>>;
+const ARTICLE_LIMIT: usize = 4 * 1024 * 1024;
+const FILE_LIMIT: usize = 20 * 1024 * 1024;
+const IMPORT_RESOURCES: u64 = 256 * 1024 * 1024;
+
+pub trait Transport: Send + Sync {
+    fn fetch<'a>(
+        &'a self,
+        url: &'a Url,
+        validators: Option<(Option<String>, Option<String>)>,
+        limit: usize,
+        cancel: &'a AtomicBool,
+    ) -> impl Future<Output = Result<network::Fetch, String>> + Send + 'a;
+}
+impl Transport for network::Client {
+    async fn fetch(
+        &self,
+        url: &Url,
+        validators: Option<(Option<String>, Option<String>)>,
+        limit: usize,
+        cancel: &AtomicBool,
+    ) -> Result<network::Fetch, String> {
+        self.get(url, validators, limit, cancel).await
+    }
+}
+pub fn with_store<T>(
+    store: &SharedStore,
+    operation: impl FnOnce(&Store) -> Result<T, String>,
+) -> Result<T, String> {
+    let guard = store
+        .lock()
+        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
+    operation(&guard)
+}
+fn active(store: &SharedStore, cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Acquire) || !with_store(store, |s| s.enabled("sogang_notices"))? {
+        Err("동기화를 중단했습니다. 저장된 자료는 유지됩니다.".into())
+    } else {
+        Ok(())
+    }
+}
+fn ensure_active(store: &Store, cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Acquire) || !store.enabled("sogang_notices")? {
+        return Err("동기화를 중단했습니다.".into());
+    }
+    Ok(())
+}
+#[derive(Clone, Default)]
+pub struct Budget {
+    pub pages: Option<u32>,
+    pub articles: Option<u32>,
+}
+pub struct Controller {
+    busy: AtomicBool,
+    cancel: AtomicBool,
+    status: Mutex<SyncStatus>,
+}
+impl Controller {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            busy: AtomicBool::new(false),
+            cancel: AtomicBool::new(false),
+            status: Mutex::new(SyncStatus {
+                running: false,
+                source_id: None,
+                mode: String::new(),
+                page: 0,
+                message: "동기화 대기 중".into(),
+            }),
+        })
+    }
+    pub fn status(&self) -> Result<SyncStatus, String> {
+        self.status
+            .lock()
+            .map(|s| s.clone())
+            .map_err(|_| "동기화 상태를 확인하지 못했습니다.".into())
+    }
+    fn update(&self, source_id: Option<String>, mode: &str, page: u32, message: &str) {
+        if let Ok(mut status) = self.status.lock() {
+            *status = SyncStatus {
+                running: true,
+                source_id,
+                mode: mode.into(),
+                page,
+                message: message.into(),
+            };
+        }
+    }
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Release);
+    }
+    pub async fn wait(&self) {
+        while self.busy.load(Ordering::Acquire) {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+    fn reserve(&self) -> Result<(), String> {
+        self.busy
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| "다른 동기화가 진행 중입니다. 완료하거나 중단한 뒤 시도해 주세요.")?;
+        self.cancel.store(false, Ordering::Release);
+        Ok(())
+    }
+    fn finish(&self, message: String) {
+        if let Ok(mut status) = self.status.lock() {
+            status.running = false;
+            status.message = message;
+        }
+        self.busy.store(false, Ordering::Release);
+    }
+    pub fn start(
+        self: &Arc<Self>,
+        store: SharedStore,
+        root: PathBuf,
+        client: network::Client,
+        ids: Option<Vec<String>>,
+        mode: String,
+    ) -> Result<SyncStatus, String> {
+        if !["historical", "incremental"].contains(&mode.as_str()) {
+            return Err("동기화 방식을 확인해 주세요.".into());
+        }
+        // The same lock serializes extension disabling and job admission.
+        let sources = with_store(&store, |s| {
+            ensure_active(s, &AtomicBool::new(false))?;
+            let sources: Vec<_> = s
+                .sources()?
+                .into_iter()
+                .filter(|source| {
+                    source.subscribed
+                        && source.definition.supported
+                        && ids
+                            .as_ref()
+                            .is_none_or(|ids| ids.contains(&source.definition.id))
+                })
+                .collect();
+            if sources.is_empty() {
+                return Err("동기화할 정보원을 구독해 주세요.".into());
+            }
+            if ids.as_ref().is_some_and(|ids| {
+                ids.iter()
+                    .any(|id| !sources.iter().any(|s| &s.definition.id == id))
+            }) {
+                return Err("지원되는 구독 정보원을 선택해 주세요.".into());
+            }
+            self.reserve()?;
+            Ok(sources)
+        })?;
+        self.update(None, &mode, 0, "동기화를 준비하고 있습니다.");
+        let controller = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let outcome = controller
+                .execute(&store, &root, &client, sources, &mode, Budget::default())
+                .await;
+            controller.finish(match outcome {
+                Ok(()) => "동기화 작업이 끝났습니다. 정보원별 결과를 확인해 주세요.".into(),
+                Err(e) => e,
+            });
+        });
+        self.status()
+    }
+    pub fn retry(
+        self: &Arc<Self>,
+        store: SharedStore,
+        root: PathBuf,
+        client: network::Client,
+        id: i64,
+    ) -> Result<SyncStatus, String> {
+        let resource = with_store(&store, |s| {
+            ensure_active(s, &AtomicBool::new(false))?;
+            let resource = s.resource(id)?;
+            self.reserve()?;
+            Ok(resource)
+        })?;
+        self.update(None, "resource", 0, "첨부 자료를 다시 내려받고 있습니다.");
+        let controller = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let result = async {
+                let url =
+                    Url::parse(&resource.url).map_err(|_| "첨부 자료 주소가 올바르지 않습니다.")?;
+                let policy = Robots::load(&client, &url, &controller.cancel).await?;
+                let mut bytes = 0;
+                download_resource(
+                    &store,
+                    &root,
+                    &client,
+                    &controller.cancel,
+                    &policy,
+                    &resource,
+                    &mut bytes,
+                )
+                .await
+            }
+            .await;
+            controller.finish(
+                result
+                    .map(|_| "첨부 자료 다운로드가 끝났습니다. 저장 상태를 확인해 주세요.".into())
+                    .unwrap_or_else(|e| e),
+            );
+        });
+        self.status()
+    }
+    pub async fn execute<T: Transport>(
+        &self,
+        store: &SharedStore,
+        root: &Path,
+        transport: &T,
+        sources: Vec<SourceInfo>,
+        mode: &str,
+        budget: Budget,
+    ) -> Result<(), String> {
+        let mut resource_bytes = 0;
+        for source in sources {
+            active(store, &self.cancel)?;
+            let mut current = source.clone();
+            current.status = "running".into();
+            current.failed = 0;
+            if mode == "incremental" {
+                current.discovered = 0;
+                current.archived = 0;
+            }
+            persist(store, &current, "running", None, false)?;
+            let outcome = self
+                .source(
+                    store,
+                    root,
+                    transport,
+                    &mut current,
+                    mode,
+                    &budget,
+                    &mut resource_bytes,
+                )
+                .await;
+            if let Err(error) = outcome {
+                let cancelled = self.cancel.load(Ordering::Acquire)
+                    || !with_store(store, |s| s.enabled("sogang_notices"))?;
+                persist(
+                    store,
+                    &current,
+                    if cancelled { "cancelled" } else { "failed" },
+                    Some(&error),
+                    false,
+                )?;
+                if cancelled {
+                    return Err(error);
+                }
+            }
+        }
+        Ok(())
+    }
+    #[allow(clippy::too_many_arguments)] // One source run shares a bounded transport and resource budget.
+    async fn source<T: Transport>(
+        &self,
+        store: &SharedStore,
+        root: &Path,
+        transport: &T,
+        current: &mut SourceInfo,
+        mode: &str,
+        budget: &Budget,
+        resource_bytes: &mut u64,
+    ) -> Result<(), String> {
+        let historical = mode == "historical";
+        let seed = !historical
+            && with_store(store, |s| {
+                s.archive_query(&ArchiveQuery {
+                    source_id: Some(current.definition.id.clone()),
+                    limit: Some(1),
+                    ..Default::default()
+                })
+            })?
+            .total
+                == 0;
+        if historical && current.history_complete {
+            persist(store, current, "completed", None, true)?;
+            return Ok(());
+        }
+        let first_page = if historical { current.next_page } else { 1 };
+        let definition = &current.definition.clone();
+        let initial = parser::list_url(definition, first_page)?;
+        let policy = Robots::load(transport, &initial, &self.cancel).await?;
+        let mut seen = HashSet::new();
+        let mut page_hashes = HashSet::new();
+        let mut page = first_page;
+        let mut processed = 0;
+        loop {
+            active(store, &self.cancel)?;
+            if page > 100_000 {
+                persist(
+                    store,
+                    current,
+                    "limited",
+                    Some(
+                        "안전한 페이지 수 제한에 도달했습니다. 전체 이력 완료로 표시하지 않습니다.",
+                    ),
+                    false,
+                )?;
+                return Ok(());
+            }
+            self.update(
+                Some(definition.id.clone()),
+                mode,
+                page,
+                "목록과 원문을 보관하고 있습니다.",
+            );
+            let url = parser::list_url(definition, page)?;
+            let response =
+                fetch(transport, &url, None, ARTICLE_LIMIT, &self.cancel, &policy).await?;
+            let listing = match response {
+                network::Fetch::Body { bytes, mime, .. } => {
+                    check_document_mime(definition, mime.as_deref())?;
+                    parser::listing(
+                        definition,
+                        page,
+                        std::str::from_utf8(&bytes)
+                            .map_err(|_| "공지 목록 문자 인코딩을 지원하지 않습니다.")?,
+                    )?
+                }
+                network::Fetch::NotModified => {
+                    return Err("보관되지 않은 목록의 변경 없음 응답을 받았습니다.".into())
+                }
+            };
+            let pinned = listing.entries.iter().filter(|entry| entry.pinned).count();
+            self.update(
+                Some(definition.id.clone()),
+                mode,
+                page,
+                &format!(
+                    "{} / {} 페이지 · 고정 공지 {}건 포함 · 원문 보관 중",
+                    page, listing.total_pages, pinned
+                ),
+            );
+            let fingerprint = listing
+                .entries
+                .iter()
+                .map(|e| e.external_id.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            if listing.has_next && (!page_hashes.insert(fingerprint) || listing.entries.is_empty())
+            {
+                return Err("학교 목록이 반복되어 가져오기를 중단했습니다. 전체 이력을 완료하지 않았습니다.".into());
+            }
+            let mut errors = Vec::new();
+            let mut known_regular_frontier = false;
+            let mut all_regular_known = true;
+            for entry in listing.entries {
+                active(store, &self.cancel)?;
+                let existing_id =
+                    with_store(store, |s| s.document_id(&definition.id, &entry.external_id))?;
+                let exists = existing_id.is_some();
+                if !entry.pinned {
+                    known_regular_frontier = true;
+                    all_regular_known &= exists;
+                }
+                if !seen.insert(entry.external_id.clone()) {
+                    continue;
+                }
+                if historical {
+                    if let Some(id) = existing_id {
+                        for resource in with_store(store, |s| s.pending_resources(id))? {
+                            download_resource(
+                                store,
+                                root,
+                                transport,
+                                &self.cancel,
+                                &policy,
+                                &resource,
+                                resource_bytes,
+                            )
+                            .await?;
+                        }
+                        continue;
+                    }
+                }
+                if budget.articles.is_some_and(|max| processed >= max) {
+                    persist(store,current,"limited",Some("개발 검증용 제한으로 일부만 가져왔습니다. 전체 이력은 아직 완료되지 않았습니다."),false)?;
+                    return Ok(());
+                }
+                if !exists {
+                    current.discovered += 1;
+                }
+                let result = async {
+                    let validators =
+                        with_store(store, |s| s.validators(&definition.id, &entry.external_id))?;
+                    let url = parser::detail_url(definition, &entry)?;
+                    let response = fetch(
+                        transport,
+                        &url,
+                        validators,
+                        ARTICLE_LIMIT,
+                        &self.cancel,
+                        &policy,
+                    )
+                    .await?;
+                    match response {
+                        network::Fetch::NotModified => with_store(store, |s| {
+                            ensure_active(s, &self.cancel)?;
+                            s.checked(&definition.id, &entry.external_id)
+                        })?,
+                        network::Fetch::Body {
+                            bytes,
+                            etag,
+                            last_modified,
+                            mime,
+                        } => {
+                            check_document_mime(definition, mime.as_deref())?;
+                            let mut article = parser::article(
+                                definition,
+                                &entry,
+                                std::str::from_utf8(&bytes)
+                                    .map_err(|_| "공지 본문 문자 인코딩을 지원하지 않습니다.")?,
+                            )?;
+                            article.etag = etag;
+                            article.last_modified = last_modified;
+                            let (id, _) = with_store(store, |s| {
+                                ensure_active(s, &self.cancel)?;
+                                s.upsert_article(&definition.id, &article, historical || seed)
+                            })?;
+                            if !exists {
+                                current.archived += 1;
+                            }
+                            for resource in with_store(store, |s| s.pending_resources(id))? {
+                                download_resource(
+                                    store,
+                                    root,
+                                    transport,
+                                    &self.cancel,
+                                    &policy,
+                                    &resource,
+                                    resource_bytes,
+                                )
+                                .await?;
+                            }
+                        }
+                    }
+                    Ok::<_, String>(())
+                }
+                .await;
+                processed += 1;
+                if let Err(error) = result {
+                    active(store, &self.cancel)?;
+                    current.failed += 1;
+                    errors.push(error);
+                }
+                persist(store, current, "running", None, false)?;
+            }
+            // Never checkpoint beyond a page containing failed article retrievals.
+            if !errors.is_empty() {
+                return Err(format!(
+                    "원문 {}건을 보관하지 못했습니다. 같은 페이지에서 이어집니다. {}",
+                    errors.len(),
+                    errors[0]
+                ));
+            }
+            if historical {
+                current.next_page = page + 1;
+            }
+            if !listing.has_next {
+                if historical {
+                    current.history_complete = true;
+                }
+                persist(store, current, "completed", None, true)?;
+                return Ok(());
+            }
+            // The three-page edit window must not truncate discovery of a larger
+            // burst. Only regular records (never repeated pins) establish a frontier.
+            if !historical && page >= 3 && (seed || (known_regular_frontier && all_regular_known)) {
+                persist(store, current, "completed", None, true)?;
+                return Ok(());
+            }
+            if budget.pages.is_some_and(|max| page - first_page + 1 >= max) {
+                persist(store,current,"limited",Some("개발 검증용 페이지 제한으로 중단했습니다. 이력은 이어서 가져올 수 있습니다."),false)?;
+                return Ok(());
+            }
+            persist(store, current, "running", None, false)?;
+            page += 1;
+        }
+    }
+}
+fn persist(
+    store: &SharedStore,
+    source: &SourceInfo,
+    status: &str,
+    error: Option<&str>,
+    success: bool,
+) -> Result<(), String> {
+    with_store(store, |s| {
+        s.source_progress(
+            &source.definition.id,
+            status,
+            source.next_page,
+            source.history_complete,
+            source.discovered,
+            source.archived,
+            source.failed,
+            error,
+            success,
+        )
+    })
+}
+fn check_document_mime(source: &SourceDefinition, mime: Option<&str>) -> Result<(), String> {
+    if if source.id == "sogang-academic" {
+        mime != Some("application/json")
+    } else {
+        !matches!(mime, Some("text/html" | "application/xhtml+xml"))
+    } {
+        return Err("학교 서버가 예상한 공지 형식 대신 다른 자료를 반환했습니다.".into());
+    }
+    Ok(())
+}
+async fn fetch<T: Transport>(
+    transport: &T,
+    url: &Url,
+    validators: Option<(Option<String>, Option<String>)>,
+    limit: usize,
+    cancel: &AtomicBool,
+    policy: &Robots,
+) -> Result<network::Fetch, String> {
+    if !policy.permits(url) {
+        return Err("학교의 robots.txt 정책에 따라 수집을 중단했습니다.".into());
+    }
+    if policy.delay > 0.65 {
+        tokio::select! {_=tokio::time::sleep(std::time::Duration::from_secs_f64(policy.delay))=>{},_=wait_cancel(cancel)=>return Err("동기화를 중단했습니다.".into())}
+    }
+    transport.fetch(url, validators, limit, cancel).await
+}
+async fn wait_cancel(cancel: &AtomicBool) {
+    while !cancel.load(Ordering::Acquire) {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+}
+type RobotGroup = (Vec<String>, Vec<(String, bool)>, f64);
+struct Robots {
+    origin: String,
+    rules: Vec<(String, bool)>,
+    delay: f64,
+}
+impl Robots {
+    async fn load<T: Transport>(
+        transport: &T,
+        url: &Url,
+        cancel: &AtomicBool,
+    ) -> Result<Self, String> {
+        let robots = url
+            .join("/robots.txt")
+            .map_err(|_| "정보원 주소를 확인해 주세요.")?;
+        match transport.fetch(&robots, None, 64 * 1024, cancel).await? {
+            network::Fetch::Body { bytes, .. } => Self::parse(
+                url,
+                std::str::from_utf8(&bytes)
+                    .map_err(|_| "학교의 수집 정책을 해석하지 못했습니다.")?,
+            ),
+            _ => Err("학교의 수집 정책을 확인하지 못했습니다.".into()),
+        }
+    }
+    fn parse(url: &Url, body: &str) -> Result<Self, String> {
+        let mut groups: Vec<RobotGroup> = Vec::new();
+        let mut agents = Vec::new();
+        let mut rules = Vec::new();
+        let mut delay = 0.0;
+        let mut directives = false;
+        for line in body.lines() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            let Some((name, value)) = line.split_once(':') else {
+                continue;
+            };
+            let value = value.trim();
+            match name.trim().to_ascii_lowercase().as_str() {
+                "user-agent" => {
+                    if directives {
+                        groups.push((
+                            std::mem::take(&mut agents),
+                            std::mem::take(&mut rules),
+                            delay,
+                        ));
+                        delay = 0.0;
+                        directives = false;
+                    }
+                    agents.push(value.to_ascii_lowercase());
+                }
+                "allow" | "disallow" if !agents.is_empty() => {
+                    directives = true;
+                    if !value.is_empty() {
+                        rules.push((value.into(), name.trim().eq_ignore_ascii_case("allow")));
+                    }
+                }
+                "crawl-delay" if !agents.is_empty() => {
+                    directives = true;
+                    delay = value
+                        .parse::<f64>()
+                        .map_err(|_| "학교의 요청 간격 정책을 해석하지 못했습니다.")?;
+                }
+                _ => {}
+            }
+        }
+        groups.push((agents, rules, delay));
+        let specific = groups
+            .iter()
+            .any(|(a, _, _)| a.iter().any(|a| a == "rhythm"));
+        let mut policy = Self {
+            origin: url.origin().ascii_serialization(),
+            rules: Vec::new(),
+            delay: 0.65,
+        };
+        for (agents, rules, delay) in groups {
+            if agents
+                .iter()
+                .any(|a| a == if specific { "rhythm" } else { "*" })
+            {
+                policy.rules.extend(rules);
+                policy.delay = policy.delay.max(delay);
+            }
+        }
+        if !policy.delay.is_finite() || policy.delay > 60.0 || policy.delay < 0.0 {
+            return Err("학교의 수집 간격 정책은 자동 처리할 수 없습니다.".into());
+        }
+        Ok(policy)
+    }
+    fn permits(&self, url: &Url) -> bool {
+        // Automatic cross-origin resource fetching is not needed for verified boards.
+        if url.origin().ascii_serialization() != self.origin {
+            return false;
+        }
+        let path = &url[url::Position::BeforePath..url::Position::AfterQuery];
+        let mut decision = (0, true);
+        for (rule, allow) in &self.rules {
+            let pattern = rule.trim_end_matches('$');
+            let mut rest = path;
+            let mut matched = true;
+            for (index, part) in pattern.split('*').enumerate() {
+                if index == 0 {
+                    if let Some(next) = rest.strip_prefix(part) {
+                        rest = next
+                    } else {
+                        matched = false;
+                        break;
+                    }
+                } else if let Some(found) = rest.find(part) {
+                    rest = &rest[found + part.len()..]
+                } else {
+                    matched = false;
+                    break;
+                }
+            }
+            if rule.ends_with('$') && !rest.is_empty() {
+                matched = false;
+            }
+            let weight = pattern.replace('*', "").len();
+            if matched && (weight > decision.0 || (weight == decision.0 && *allow)) {
+                decision = (weight, *allow);
+            }
+        }
+        decision.1
+    }
+}
+fn raster(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+async fn download_resource<T: Transport>(
+    store: &SharedStore,
+    root: &Path,
+    transport: &T,
+    cancel: &AtomicBool,
+    policy: &Robots,
+    resource: &ResourceRecord,
+    total: &mut u64,
+) -> Result<(), String> {
+    active(store, cancel)?;
+    let outcome: Result<(), String> = async {
+        let url=Url::parse(&resource.url).map_err(|_|"첨부 자료 주소를 해석하지 못했습니다.")?;
+        network::validate_url(&url)?;
+        if *total>=IMPORT_RESOURCES {return Err("이번 가져오기의 첨부 자료 한도(256 MB)에 도달했습니다. 필요한 자료를 개별적으로 다시 내려받아 주세요.".into());}
+        let limit=if resource.kind=="image" {10*1024*1024}else{FILE_LIMIT};
+        match fetch(transport,&url,None,limit,cancel,policy).await? {
+            network::Fetch::Body{bytes,mime,..}=>{
+                let media=if resource.kind=="image" {Some(raster(&bytes).ok_or("안전한 이미지 형식(PNG, JPEG, GIF, WebP)이 아니어서 보관하지 않았습니다.")?.to_string())} else {
+                    let mime=mime.filter(|m|!matches!(m.as_str(),"text/html"|"application/xhtml+xml"|"application/javascript"|"text/javascript"|"image/svg+xml"));
+                    if mime.is_none() || bytes.is_empty(){return Err("첨부 파일 대신 오류 페이지 또는 지원하지 않는 자료를 받았습니다.".into());}
+                    let lower=resource.filename.to_ascii_lowercase();
+                    if ![".pdf",".hwp",".hwpx",".doc",".docx",".xls",".xlsx",".ppt",".pptx",".zip",".txt",".png",".jpg",".jpeg",".gif",".webp"].iter().any(|ext|lower.ends_with(ext)){return Err("자동 다운로드를 지원하지 않는 첨부 파일 형식입니다.".into());}
+                    if lower.ends_with(".pdf") && !bytes.starts_with(b"%PDF-"){return Err("PDF 파일 형식 검증에 실패했습니다.".into());}
+                    mime
+                };
+                if total.saturating_add(bytes.len() as u64)>IMPORT_RESOURCES {return Err("이번 가져오기의 첨부 자료 한도(256 MB)를 초과했습니다.".into());}
+                active(store,cancel)?;
+                let hash=format!("{:x}",Sha256::digest(&bytes));
+                let extension = if resource.kind=="image" {match media.as_deref(){Some("image/png")=>"png",Some("image/jpeg")=>"jpg",Some("image/gif")=>"gif",_=>"webp"}} else {resource.filename.rsplit('.').next().unwrap_or("bin")};
+                let extension=extension.to_ascii_lowercase();
+                let relative=format!("resources/{hash}.{extension}");
+                tokio::fs::create_dir_all(root.join("resources")).await.map_err(|_|"첨부 저장 폴더를 만들지 못했습니다. 저장 공간과 권한을 확인해 주세요.")?;
+                let temporary=root.join(format!("resources/{hash}.part"));
+                tokio::fs::write(&temporary,&bytes).await.map_err(|_|"첨부 파일을 저장하지 못했습니다. 남은 저장 공간과 권한을 확인해 주세요.")?;
+                let destination=root.join(&relative);
+                // Generated hash paths never contain a remote filename. A completed file
+                // is installed before its reference is committed to SQLite.
+                if tokio::fs::try_exists(&destination).await.map_err(|_|"첨부 파일 경로를 확인하지 못했습니다.")? {
+                    // A retry must repair corrupt bytes, not discard its verified download.
+                    let size=tokio::fs::metadata(&destination).await.map_err(|_|"기존 첨부 파일을 확인하지 못했습니다.")?.len();
+                    let matches = if size<=FILE_LIMIT as u64 {
+                        let existing=tokio::fs::read(&destination).await.map_err(|_|"기존 첨부 파일을 확인하지 못했습니다.")?;
+                        Sha256::digest(&existing)==Sha256::digest(&bytes)
+                    } else {false};
+                    if matches {
+                        tokio::fs::remove_file(&temporary).await.map_err(|_|"임시 첨부 파일을 정리하지 못했습니다.")?;
+                    } else {
+                        // Windows does not replace an existing destination on rename.
+                        tokio::fs::remove_file(&destination).await.map_err(|_|"손상된 첨부 파일을 교체하지 못했습니다.")?;
+                        tokio::fs::rename(&temporary,&destination).await.map_err(|_|"첨부 파일 복구를 완료하지 못했습니다.")?;
+                    }
+                } else {tokio::fs::rename(&temporary,&destination).await.map_err(|_|"첨부 파일 저장을 완료하지 못했습니다.")?;}
+                with_store(store,|s|{ensure_active(s,cancel)?;s.resource_result(resource.id,"downloaded",media.as_deref(),Some(bytes.len() as u64),Some(&relative),Some(&hash),None)})?;
+                *total+=bytes.len() as u64;
+                Ok(())
+            },_=>Err("첨부 파일에 잘못된 변경 없음 응답이 도착했습니다.".into())
+        }
+    }.await;
+    if let Err(error) = outcome {
+        active(store, cancel)?;
+        if resource.status == "downloaded" && local_resource(store, root, resource.id).await.is_ok()
+        {
+            return Err(format!(
+                "다시 내려받지 못했습니다. 기존 로컬 자료는 안전하게 유지됩니다. {error}"
+            ));
+        }
+        let status = if error.contains("크기") || error.contains("한도") {
+            "too_large"
+        } else if error.contains("지원")
+            || error.contains("검증된")
+            || error.contains("안전한 이미지")
+        {
+            "unsupported"
+        } else {
+            "failed"
+        };
+        with_store(store, |s| {
+            s.resource_result(resource.id, status, None, None, None, None, Some(&error))
+        })?;
+    }
+    Ok(())
+}
+pub async fn local_resource(
+    store: &SharedStore,
+    root: &Path,
+    id: i64,
+) -> Result<(ResourceRecord, Vec<u8>), String> {
+    let resource = with_store(store, |s| s.resource(id))?;
+    if resource.status != "downloaded" {
+        return Err("이 자료는 아직 로컬에 저장되지 않았습니다.".into());
+    }
+    let path = root.join(
+        resource
+            .local_path
+            .as_ref()
+            .ok_or("로컬 자료 경로가 없습니다.")?,
+    );
+    let canonical_root = tokio::fs::canonicalize(root.join("resources"))
+        .await
+        .map_err(|_| "첨부 저장 폴더를 찾지 못했습니다.")?;
+    let canonical = tokio::fs::canonicalize(&path)
+        .await
+        .map_err(|_| "로컬 첨부 파일을 찾지 못했습니다. 다시 내려받아 주세요.")?;
+    if !canonical.starts_with(canonical_root) {
+        return Err("안전하지 않은 로컬 자료 경로입니다.".into());
+    }
+    let metadata = tokio::fs::metadata(&canonical)
+        .await
+        .map_err(|_| "로컬 첨부 파일을 확인하지 못했습니다.")?;
+    if metadata.len() > FILE_LIMIT as u64 {
+        return Err("로컬 첨부 파일의 크기가 허용 범위를 초과했습니다.".into());
+    }
+    let bytes = tokio::fs::read(&canonical)
+        .await
+        .map_err(|_| "로컬 첨부 파일을 읽지 못했습니다.")?;
+    if Some(format!("{:x}", Sha256::digest(&bytes))) != resource.sha256 {
+        return Err("로컬 자료의 무결성 검증에 실패했습니다. 다시 내려받아 주세요.".into());
+    }
+    Ok((resource, bytes))
+}
+pub fn image_mime(bytes: &[u8]) -> Option<&'static str> {
+    raster(bytes)
+}
+#[cfg(test)]
+mod tests;

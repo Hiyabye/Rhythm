@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod archive;
 mod core;
 mod extensions;
 mod intelligence;
@@ -6,12 +7,19 @@ mod storage;
 use extensions::{ExtensionInfo, Registry};
 use intelligence::{Worker, WorkerStatus};
 use serde::Serialize;
-use std::sync::Mutex;
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 use storage::{Settings, StorageInfo, Store};
 use tauri::Manager;
 
 struct AppState {
-    store: Mutex<Store>,
+    _instance_lock: std::fs::File,
+    store: Arc<Mutex<Store>>,
+    data_root: PathBuf,
+    archive: Arc<archive::sync::Controller>,
+    network: archive::Client,
     registry: Registry,
     worker: tokio::sync::Mutex<Worker>,
 }
@@ -71,6 +79,9 @@ async fn set_extension(
             .map_err(|_| "저장소에 접근할 수 없습니다.")?;
         state.registry.set(&store, &id, enabled)?;
     }
+    if !enabled {
+        state.archive.wait().await;
+    }
     snapshot(&state).await
 }
 #[tauri::command]
@@ -81,8 +92,15 @@ fn main() {
     let app = tauri::Builder::default()
         .setup(|app| {
             core::install_menu(app.handle())?;
-            let path = app.path().app_data_dir()?.join("rhythm.sqlite3");
-            let store = Store::open(&path).map_err(std::io::Error::other)?;
+            let data_root = app.path().app_data_dir()?;
+            let instance_lock = core::lock_data_dir(&data_root).map_err(std::io::Error::other)?;
+            let store =
+                Store::open(&data_root.join("rhythm.sqlite3")).map_err(std::io::Error::other)?;
+            store
+                .catalog(&archive::definitions())
+                .map_err(std::io::Error::other)?;
+            let archive = archive::sync::Controller::new();
+            let network = archive::client().map_err(std::io::Error::other)?;
             let executable = std::env::current_exe()?
                 .parent()
                 .ok_or("실행 파일 경로를 찾을 수 없습니다.")?
@@ -97,8 +115,12 @@ fn main() {
                 worker
             });
             app.manage(AppState {
-                store: Mutex::new(store),
-                registry: Registry::new(),
+                _instance_lock: instance_lock,
+                store: Arc::new(Mutex::new(store)),
+                registry: Registry::new(archive.clone()),
+                data_root,
+                archive,
+                network,
                 worker: tokio::sync::Mutex::new(worker),
             });
             Ok(())
@@ -107,7 +129,20 @@ fn main() {
             get_snapshot,
             save_settings,
             set_extension,
-            worker_status
+            worker_status,
+            archive::archive_sources,
+            archive::archive_subscribe,
+            archive::archive_summary,
+            archive::archive_query,
+            archive::archive_document,
+            archive::archive_state,
+            archive::archive_start,
+            archive::archive_cancel,
+            archive::archive_status,
+            archive::archive_retry_resource,
+            archive::archive_resource_image,
+            archive::archive_reveal_resource,
+            archive::archive_open_original
         ])
         .build(tauri::generate_context!())
         .expect("Rhythm을 시작하지 못했습니다. 로컬 저장소와 시스템 환경을 확인해 주세요.");
@@ -116,6 +151,7 @@ fn main() {
             let state = handle.state::<AppState>();
             state.registry.stop_all();
             tauri::async_runtime::block_on(async {
+                state.archive.wait().await;
                 state.worker.lock().await.shutdown().await;
             });
         }

@@ -9,22 +9,31 @@ pub struct ExtensionInfo {
     pub available: bool,
     pub enabled: bool,
 }
-// Lifecycle implementations must cancel their own jobs and notifications before stop returns.
-// No connector is active in v0.1.0; saved opt-in is independent from availability.
+// Stop signals cancellation synchronously; the owning async command waits for
+// in-flight work to settle without holding the database lock.
 pub trait Extension: Send + Sync {
     fn metadata(&self) -> ExtensionInfo;
     fn start(&self) -> Result<(), String>;
     fn stop(&self) -> Result<(), String>;
 }
-struct SogangNotices;
+struct SogangNotices {
+    jobs: std::sync::Arc<crate::archive::sync::Controller>,
+}
 impl Extension for SogangNotices {
     fn metadata(&self) -> ExtensionInfo {
-        ExtensionInfo{id:"sogang_notices",display_name:"서강대학교 공지",description:"학교 공지를 모아 원문과 변경 이력을 보관합니다. 동기화는 v0.2.0에서 제공할 예정입니다.",available:false,enabled:false}
+        ExtensionInfo {
+            id: "sogang_notices",
+            display_name: "서강대학교 공지",
+            description: "구독한 학교 공지의 원문, 첨부 자료와 변경 이력을 이 기기에 보관합니다.",
+            available: true,
+            enabled: false,
+        }
     }
     fn start(&self) -> Result<(), String> {
-        Err("공지 동기화는 아직 지원하지 않습니다.".into())
+        Ok(())
     }
     fn stop(&self) -> Result<(), String> {
+        self.jobs.cancel();
         Ok(())
     }
 }
@@ -32,9 +41,9 @@ pub struct Registry {
     modules: Vec<Box<dyn Extension>>,
 }
 impl Registry {
-    pub fn new() -> Self {
+    pub fn new(jobs: std::sync::Arc<crate::archive::sync::Controller>) -> Self {
         Self {
-            modules: vec![Box::new(SogangNotices)],
+            modules: vec![Box::new(SogangNotices { jobs })],
         }
     }
     pub fn list(&self, store: &Store) -> Result<Vec<ExtensionInfo>, String> {
@@ -74,14 +83,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unavailable_extension_saves_opt_in_without_starting_or_deleting_data() {
+    fn operational_extension_preserves_preferences_without_automatic_networking() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(&directory.path().join("rhythm.db")).unwrap();
-        let registry = Registry::new();
+        let registry = Registry::new(crate::archive::sync::Controller::new());
         registry.set(&store, "sogang_notices", true).unwrap();
         let enabled = registry.list(&store).unwrap();
         assert!(enabled[0].enabled);
-        assert!(!enabled[0].available);
+        assert!(enabled[0].available);
         registry.set(&store, "sogang_notices", false).unwrap();
         assert!(!registry.list(&store).unwrap()[0].enabled);
         assert_eq!(store.settings().unwrap().theme, "system");

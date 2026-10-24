@@ -2,65 +2,96 @@
 
 **내 기기에 머무는, 나만의 하루를 위한 커맨드 센터.**
 
-Rhythm is a Korean-first desktop application for organizing personal information. Its long-term goal is to bring useful announcements, opportunities, and deadlines together and make sense of them with local AI—not a cloud chatbot.
+Rhythm은 학교 공지와 개인 정보를 내 컴퓨터에 모으는 한국어 데스크톱 앱입니다. 클라우드 계정 없이 시작할 수 있으며, 한 번 보관한 공지 본문과 내려받은 자료는 인터넷 연결 없이 다시 볼 수 있습니다.
 
-## Principles
+## 원칙
 
-- **Local-first:** SQLite stores settings and interests on your computer. No cloud account, hosted database, telemetry, or cloud inference is required.
-- **AI-native:** a bundled Rust worker contains the local inference runtime. No Ollama, Python environment, or separately installed inference server is needed.
-- **User-controlled:** interests and extension preferences are explicit. Disabling an extension does not delete its data.
-- **Quiet by design:** a restrained Korean interface, Pretendard typography, and light, dark, and system themes.
+- **로컬 우선:** 설정, 공지, 검색 색인과 읽음·저장 상태를 내 기기에 보관합니다. 클라우드 데이터베이스, 원격 AI, 텔레메트리를 사용하지 않습니다.
+- **사용자가 결정:** 정보원을 구독하고 직접 가져오기를 실행합니다. 구독이나 확장 기능을 꺼도 이미 보관한 자료는 지우지 않습니다.
+- **조용한 화면:** 한국어 인터페이스, Pretendard 글꼴, 라이트·다크·시스템 테마를 제공합니다.
+- **분리된 로컬 AI:** 추론 런타임은 별도 Rust 프로세스에 들어 있습니다. Ollama, Python 환경이나 별도 추론 서버가 필요하지 않습니다. 공지의 AI 분석은 아직 제공하지 않습니다.
 
-## Current status — 0.1.0 foundation
+## 현재 기능 — v0.2.0 로컬 공지 아카이브
 
-The five main sections—오늘, 받은 소식, 탐색, 보관함, 설정—are present. Settings persist theme, energy profile, interests, and extension preferences locally. The Sogang Notices extension is registered but **does not collect notices yet**. The inbox, briefing, search, and saved-item pages are intentional empty states, not populated demonstrations.
+**오늘 · 받은 소식 · 탐색 · 보관함 · 설정**에서 실제로 보관한 공지를 살펴볼 수 있습니다.
 
-The separate `rhythm-ai-worker` contains mistral.rs 0.8.1 and supports health, status, shutdown, and an explicit local-model inference request. No model is bundled or downloaded at launch. Model installation, automatic summaries, notifications, background operation, and real document search are not available in this release. Qwen3.5 2B/4B/9B are planned, not verified model support.
+- 학교 공개 게시판 구독, 과거 자료 가져오기와 이어받기, 수동 새 소식·변경 확인.
+- 공지 본문, 게시일·작성자·분류, 보관 이력과 읽음·저장 상태.
+- 제목과 본문의 한국어 일부 단어·영문·숫자 검색, 정보원·분류·읽음 상태 필터와 페이지 탐색.
+- 지원되는 본문 이미지와 첨부 파일의 로컬 저장, 저장 상태·실패 이유 확인과 개별 재시도.
+- v0.1.0의 테마, 에너지 프로필, 관심사와 확장 기능 설정 유지.
 
-## Run locally
+정보원 목록은 32개이지만, **현재 수집을 지원하는 정보원은 다음 6개뿐입니다.** 나머지는 원문 수집 검증 전이며 구독할 수 없습니다.
 
-You need:
+| 기관 | 지원 게시판 |
+| --- | --- |
+| 서강대학교 | 학부 학사공지 |
+| 서강대학교 소프트웨어융합대학 | 학사 공지, 대학원 공지, 대외정보, 소식, 취업·인턴십 |
 
-- Node.js **22.12 or newer** and npm.
-- A current stable Rust toolchain, **at least 1.90**, with `cargo` and `rustc` on `PATH`.
-- Your platform's [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/): Xcode/Command Line Tools on macOS; Microsoft C++ build tools and WebView2 on Windows; WebKitGTK and the documented native libraries on Linux.
-- Internet access for the initial dependency installation. The resulting application does not need internet access to start.
+모델 설치, AI 요약·분류·개인화, 알림, 자동·예약 수집, 백그라운드 실행과 클라우드 동기화는 제공하지 않습니다. 앱에 모델 가중치를 포함하거나 실행할 때 내려받지 않습니다. Qwen3.5 2B/4B/9B는 검증된 지원 모델이 아닙니다.
 
-From the repository root:
+## 공지 가져오기
+
+1. **설정 → 확장 기능**에서 **서강대학교 공지**를 켭니다.
+2. 지원되는 정보원을 구독합니다. 구독만으로 수집을 시작하지는 않습니다.
+3. **과거 자료 가져오기**를 누릅니다. 접근 가능한 공개 목록을 페이지별로 가져오며, 중단한 작업은 **과거 자료 이어받기**로 계속할 수 있습니다.
+4. 이후에는 **새 소식 및 변경 확인**을 실행합니다. 최근 세 페이지와 고정 공지를 다시 확인하고, 새 공지가 더 있으면 이미 보관한 일반 공지에 도달할 때까지 탐색합니다. 처음부터 이 작업을 실행하면 우선 최근 세 페이지를 과거 자료로 보관하며, 전체 과거 이력을 가져온 것으로 표시하지 않습니다.
+5. **받은 소식**에서 읽고 **탐색**에서 검색합니다. 중요한 공지는 저장 버튼으로 **보관함**에 모읍니다.
+
+공지 본문과 자료의 보관 상태는 구분됩니다. 학교에서 지운 파일, 접근 제한이 있는 자료, 외부 호스트의 자료나 용량·형식 제한을 넘는 파일은 저장되지 않을 수 있습니다. 본문은 남기고 각 자료의 상태를 표시합니다. 이미 내려받은 파일은 **저장 폴더에서 보기**로 확인할 수 있으며, 앱이 자동으로 실행하지 않습니다. **학교 원문 열기**와 본문 외부 링크는 사용자가 누를 때 기본 브라우저에서 열립니다.
+
+확장 기능을 끄면 진행 중인 가져오기를 중단하고 구독 설정 화면을 숨깁니다. 이미 보관한 공지의 읽기·검색·저장은 계속 사용할 수 있습니다. 오래된 공지의 모든 수정 사항을 매번 전수 재검사하는 기능은 아닙니다.
+
+## 로컬에서 실행
+
+필요한 환경:
+
+- Node.js **22.12 이상**과 npm.
+- **Rust 1.90 이상**의 최신 안정 버전. `cargo`와 `rustc`가 `PATH`에 있어야 합니다.
+- 운영체제별 [Tauri 2 사전 준비](https://v2.tauri.app/start/prerequisites/): macOS의 Xcode/Command Line Tools, Windows의 Microsoft C++ 빌드 도구와 WebView2, Linux의 WebKitGTK 등 네이티브 라이브러리.
+- 최초 의존성 설치를 위한 인터넷 연결. 설치 후 앱 시작과 로컬 자료 열람에는 인터넷이 필요하지 않습니다.
+
+저장소 루트에서 실행합니다.
 
 ```sh
 npm ci
 npm run desktop
 ```
 
-Build the desktop application and platform bundles:
+데스크톱 앱과 플랫폼 패키지를 빌드하려면:
 
 ```sh
 npm run desktop:build
 ```
 
-These scripts build the CPU AI worker, stage its target-specific sidecar, and invoke Tauri. The first build is substantial because it compiles the inference runtime. They do **not** download model weights. `npm run dev` alone is a browser preview: local data access and settings persistence require the desktop application.
+이 명령은 CPU AI 워커를 빌드하고 앱에 함께 배치합니다. 추론 런타임 때문에 첫 빌드는 오래 걸릴 수 있지만 모델 가중치를 내려받지는 않습니다. `npm run dev`만 실행하면 브라우저 미리보기이며, 로컬 자료 접근과 설정 저장은 데스크톱 앱에서만 동작합니다.
 
-To experiment with a compatible GGUF you already have, see the [worker instructions](crates/ai-worker/README.md#actual-local-inference-test). This is an explicit developer test, not a model installer.
+이미 가진 GGUF의 명시적 추론 테스트는 [워커 안내](crates/ai-worker/README.md#actual-local-inference-test)를 참고하세요. 모델 설치 기능이나 공지 분석 기능은 아닙니다.
 
-## Data and privacy
+## 데이터와 개인정보
 
-Settings → 데이터 및 개인정보 displays the actual database location and storage size. Rhythm uses Tauri's platform-specific application data directory and a `rhythm.sqlite3` database. Closing the main window exits the application and requests worker shutdown; there is no tray/background mode. Backup and restore are not implemented yet.
+**설정 → 데이터 및 개인정보**에서 실제 데이터베이스 위치와 DB 크기를 확인할 수 있습니다. 운영체제별 앱 데이터 폴더에 `rhythm.sqlite3`와 내려받은 자료를 저장합니다. DB 크기 표시는 첨부 자료까지 합한 전체 디스크 사용량이 아닙니다. 과거 자료를 많이 가져오면 저장 공간을 사용할 수 있습니다.
 
-## Platforms and verification
+공개 학교 사이트에서 자료를 가져올 때만 네트워크를 사용하며, 로그인이나 접근 제한을 우회하지 않습니다. 검색어와 보관 자료를 외부 서비스로 보내지 않습니다. 창을 닫으면 가져오기를 중단하고 AI 워커도 종료합니다. 트레이·백그라운드 모드와 백업·복원 기능은 아직 없습니다.
 
-macOS is the primary development platform. Windows and Linux build checks are configured in GitHub Actions; configuration alone is **not** evidence that they have passed or that runtime behavior has been tested.
+## 플랫폼과 검증 범위
 
-On macOS Apple Silicon, the native debug `.app` was built and launched with its bundled worker. Desktop theme, extension, and energy-profile changes were exercised and checked in SQLite across app restarts; normal quit and window-close cleaned up the worker. An unexpected worker termination updated AI status while leaving the app running. Frontend checks, Rust tests, and Clippy passed. A real CPU inference test with an existing **Qwen3-0.6B-Q8_0.gguf** produced text and shut down cleanly.
+macOS가 주 개발 환경입니다. v0.1.0에서는 macOS 네이티브 앱 실행, 설정 유지, 워커 종료와 실제 Qwen3-0.6B CPU 추론을 확인했고, [macOS·Windows·Linux CI 빌드](https://github.com/Hiyabye/Rhythm/actions/runs/40083118153)도 통과했습니다. 이 결과가 v0.2.0이나 각 플랫폼의 실제 사용 검증을 대신하지는 않습니다.
 
-Metal compilation was blocked by the missing Apple Metal Toolchain, despite Xcode being installed; CPU remains the default. Qwen3.5 artifacts, CUDA/GPU execution, release-optimized installers, and Windows/Linux runtime behavior remain unverified. See [the roadmap](docs/ROADMAP.md#v010--foundation) for remaining verification gates.
+v0.2.0의 프런트엔드 검사·빌드, Rust 워크스페이스 테스트와 엄격한 Clippy 검사를 통과했습니다. 실제 앱 크레이트의 제한된 실사이트 테스트에서는 6개 우선 정보원에서 본문 6건과 자료 9개를 보관한 뒤, 네트워크 클라이언트 없이 DB를 다시 열어 검색·읽기·자료 접근을 확인했습니다. macOS 디버그 앱과 DMG를 빌드했고, 네이티브 창에서 구독·수집·중단, 본문과 로컬 이미지, 한국어 검색, 읽음·저장 상태 유지, 수집 중 확장 기능 끄기와 종료 시 워커 정리를 확인했습니다. **전체 과거 이력, 접근성 전반, Windows·Linux의 v0.2.0 CI·실행은 아직 검증 완료로 표시하지 않습니다.** 최신 확인 범위와 남은 항목은 [로드맵](docs/ROADMAP.md#v020--local-university-notice-archive)을 참고하세요.
 
-## Technology
+Linux 의존성의 `glib 0.18.5`에는 [알려진 문제](https://github.com/advisories/GHSA-wrw7-89jp-8q8g)가 있으며, 별도 Dependabot 보안 업데이트 작업은 현재 Tauri/GTK 의존성 제약으로 실패했습니다. Linux 배포 전 해결해야 할 항목으로 [로드맵](docs/ROADMAP.md)에 기록했습니다.
 
-Tauri 2 · Rust · Tokio · Svelte 5 · TypeScript · Tailwind CSS · SQLite with FTS5 available for future search · mistral.rs in a separate process · Pretendard · npm
+Metal은 Apple Metal Toolchain 부재로 초기 컴파일이 막혔습니다. CUDA/GPU 실행, Qwen3.5 모델과 배포용 설치 패키지 역시 미검증입니다.
 
-[Roadmap](docs/ROADMAP.md) · [Architecture](docs/ARCHITECTURE.md) · [Design](docs/DESIGN.md)
+## 기술
 
-## License and assets
+Tauri 2 · Rust · Tokio · Svelte 5 · TypeScript · Tailwind CSS · SQLite FTS5 · 별도 프로세스의 mistral.rs · Pretendard · npm
 
-Rhythm is [MIT licensed](LICENSE), © Jihoon Lee. The original Beat logo is included under the same license. [Pretendard](https://github.com/orioncactus/pretendard) is distributed under the SIL Open Font License 1.1; its [license](assets/licenses/Pretendard-OFL.txt) is retained in this repository and packaged as an application resource. Dependency licenses remain their respective authors' licenses.
+[로드맵](docs/ROADMAP.md) · [아키텍처](docs/ARCHITECTURE.md) · [디자인](docs/DESIGN.md)
+
+## 라이선스와 자료
+
+Rhythm은 [MIT 라이선스](LICENSE), © Jihoon Lee로 배포합니다. 자체 제작한 Beat 로고도 같은 라이선스를 따릅니다. [Pretendard](https://github.com/orioncactus/pretendard)는 SIL Open Font License 1.1이며, [라이선스 사본](assets/licenses/Pretendard-OFL.txt)을 저장소와 앱 리소스에 포함합니다. 의존성은 각각의 라이선스를 따릅니다.
+
+학교 공지와 첨부 자료의 권리는 원저작자에게 있습니다. Rhythm의 MIT 라이선스가 학교 자료의 재배포 권한을 부여하지는 않습니다. 참고 수집기의 공개 정보원 식별자와 동작을 조사했지만, 별도 라이선스가 확인되지 않은 참고 프로젝트의 코드를 MIT 코드로 간주하지 않습니다.

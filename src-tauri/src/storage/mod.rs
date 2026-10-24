@@ -2,6 +2,26 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+mod archive;
+#[cfg(test)]
+mod archive_tests;
+const SCHEMA_VERSION: i64 = 2;
+
+fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
+    let migrations = [
+        include_str!("../../migrations/001_foundation.sql"),
+        include_str!("../../migrations/002_archive.sql"),
+    ];
+    for migration in migrations.iter().skip(version as usize) {
+        let transaction = connection.transaction().map_err(|e| e.to_string())?;
+        transaction
+            .execute_batch(migration)
+            .map_err(|e| e.to_string())?;
+        transaction.commit().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
     pub theme: String,
@@ -36,27 +56,24 @@ impl Store {
         connection
             .busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|e| e.to_string())?;
-        connection
-            .execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;")
-            .map_err(|e| e.to_string())?;
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
-        if version > 1 {
+        if version > SCHEMA_VERSION {
             return Err(
                 "더 새로운 Rhythm에서 만든 데이터베이스입니다. 앱을 업데이트해 주세요.".into(),
             );
         }
-        if version == 0 {
-            let tx = connection.transaction().map_err(|e| e.to_string())?;
-            tx.execute_batch(include_str!("../../migrations/001_foundation.sql"))
-                .map_err(|e| e.to_string())?;
-            tx.commit().map_err(|e| e.to_string())?;
-        }
-        Ok(Self {
+        connection
+            .execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;")
+            .map_err(|e| e.to_string())?;
+        migrate(&mut connection, version)?;
+        let store = Self {
             connection,
             path: path.into(),
-        })
+        };
+        store.reset_interrupted()?;
+        Ok(store)
     }
     pub fn settings(&self) -> Result<Settings, String> {
         self.connection
@@ -118,7 +135,10 @@ impl Store {
         Ok(StorageInfo {
             path: self.path.display().to_string(),
             bytes,
-            schema_version: 1,
+            schema_version: self
+                .connection
+                .query_row("PRAGMA user_version", [], |row| row.get(0))
+                .map_err(|e| e.to_string())?,
         })
     }
 }
@@ -166,7 +186,7 @@ mod tests {
         let path = dir.path().join("db");
         Connection::open(&path)
             .unwrap()
-            .execute_batch("PRAGMA user_version=2")
+            .execute_batch("PRAGMA user_version=3")
             .unwrap();
         assert!(Store::open(&path).is_err());
     }

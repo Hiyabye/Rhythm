@@ -1,24 +1,60 @@
 # Design — Quiet Intelligence
 
-Rhythm is a personal command center, not a chatbot-first dashboard. The foundation should feel calm and useful even before sources are connected. Empty space communicates the absence of real information; it is not filled with fictional announcements.
+Rhythm is a personal command center, not a chatbot-first dashboard. v0.2.0 makes actual local notices useful without AI, a model or an internet connection. Empty space communicates missing information; fictional notices and fabricated activity do not fill it.
 
-## Korean-first interface
+## Korean-first navigation
 
-Main navigation is **오늘 · 받은 소식 · 탐색 · 보관함 · 설정**. Labels, empty states, settings feedback, and application-facing errors use natural Korean. Product identifiers and model names remain recognizable. Future features are described as planned rather than represented by buttons that pretend to work.
+Main navigation remains **오늘 · 받은 소식 · 탐색 · 보관함 · 설정**. Labels, feedback and application-facing errors use natural Korean; product identifiers and model names stay recognizable.
 
-The daily page introduces a future briefing. The inbox, search, and saved-item views establish a consistent layout without claiming an archive exists. Settings is the functional center of v0.1.0, with sections for general preferences, extensions, AI, personalization, notifications, energy, privacy/data, and application information.
+| View | v0.2 behavior |
+| --- | --- |
+| 오늘 | Actual archived/unread/saved/new-notice counts and recent local notices. Historical imports are excluded from the new-notice count. No generated briefing or relevance ranking. |
+| 받은 소식 | Paginated local notices with unread indicators, source/date/category metadata, filters and save controls. |
+| 탐색 | Explicit local title/body search, mixed Korean/English/numeric terms, plain-text snippets and highlighted matches. |
+| 보관함 | User-saved notices, independent of extension enablement. Saving does not mean every attachment was downloaded. |
+| 설정 | Existing preferences plus extension opt-in, grouped source subscriptions, manual collection and progress/error controls. |
+
+`App.svelte` centralizes navigation, clears stale hash/scroll position and focuses main content. `ArchiveView.svelte` resets filters when changing sections, tracks asynchronous search generations and returns focus to the opened row on reader close. Browser previews clearly identify desktop-only behavior and disable local operations rather than showing simulated persistence.
+
+## Archive list and search
+
+Notices use restrained list rows rather than a dashboard of colored cards. Titles lead, followed by source, publication date, category and a **과거 자료** label where applicable. Unread state uses both a dot and accessible text; saved state has an independent pressed button. Missing resources receive a visible note without implying the text is unavailable.
+
+Source/category selectors and publication-date order apply to actual local records. Inbox adds an unread-only control. Search runs on explicit submission, not a remote suggestion service; its explanatory text says that whitespace-separated terms must all occur and queries stay local. Highlighting renders escaped text and `mark` elements, never arbitrary search-result HTML. Lists use 30-row pages and announce their range.
+
+Empty states distinguish: no archive yet, no saved notices, no matching filters and load/search failure. They offer source settings or a clear retry when appropriate. A loading indicator is not a success count; a failed response does not fabricate an empty completed import.
+
+## Reader and resource recovery
+
+`DocumentReader.svelte` presents source, title, date, author/category, read/saved actions and **학교 원문 열기** above the stored body. Opening a notice marks it read; the user can reverse that state. Earlier meaningful snapshots are selectable in **보관 이력**, while read/saved state remains attached to the document.
+
+The reader is a restricted local document surface, not an embedded live school page. It preserves useful headings, paragraphs, emphasis, lists and tables without school navigation, scripts, forms or styling. Original fetched JSON/HTML is stored for archival purposes but is never injected directly. Local images come only from integrity-checked raster data URIs; unavailable images become explanatory placeholders. There is no remote-image fallback.
+
+Body text and linked resources have separate status. The resource section shows original filename, downloaded/missing/failed/oversized/unsupported state, size, MIME and optional SHA-256. **저장 폴더에서 보기** reveals a verified local file without executing it. **다시 내려받기** is an explicit network action, disabled when the extension is off or another resource job is running.
+
+A persisted `downloaded` label is not proof the file still exists. Observed local-read/reveal failures are tracked per resource, override the success label and remove the reader's “all stored” claim. Metadata refresh alone does not erase that error. Successful local validation can clear it; retry remains available even for a formerly downloaded file. Missing/corrupt bytes must not silently cause remote retrieval.
+
+External links carry a visible external marker and open through the OS browser only after activation. HTTP(S) link metadata is not automatic-download permission. Esc returns to the list unless a select is being operated; native controls, heading focus and status/alert feedback support keyboard use.
+
+## Source subscriptions and collection
+
+The extension switch represents persisted opt-in, not a background scheduler. Enabling **서강대학교 공지** reveals `SourceSettings.svelte`; source subscriptions are separate switches grouped by institution/department with a text filter. The 32-source catalog clearly distinguishes six supported sources from 26 **원문 수집 미지원** sources. Unsupported switches are disabled, not optimistically labeled working.
+
+Actions distinguish **과거 자료 가져오기 / 이어받기** from **새 소식 및 변경 확인**. Selection checkboxes target a subset of subscribed sources; no selection targets all supported subscriptions. Subscribing alone starts nothing. Progress shows the current source/page/message plus persisted per-source attempt/success times, discovered/archived/failed counts, checkpoint and error.
+
+Historical collection can be cancelled and resumed. Limited, interrupted or failed work is not labeled complete. “Public historical pages complete” does not mean every attachment succeeded. The initial incremental seed is recent historical material, not a flood of new announcements. Incremental checks revisit recent/pinned records and discover newer records; they do not promise a full audit of every old edit.
+
+Disabling requests cancellation and waits for in-flight work, hides source controls and leaves stored text, resources, search and saved items accessible. The UI does not present notifications, AI summaries, automatic scheduling or energy-aware crawling as operational.
 
 ## Typography and layout
 
-Pretendard Variable is bundled through the `pretendard` npm package and imported locally in `src/main.ts`; startup does not rely on a font CDN. The font stack falls back to Pretendard, native system fonts, and sans-serif. Pretendard uses the SIL Open Font License 1.1; see the package's `dist/LICENSE.txt`.
+Pretendard Variable is imported locally through the `pretendard` npm package in `src/main.ts`; startup does not use a font CDN. The font stack falls back to native system fonts and sans-serif. Its SIL Open Font License is retained at `assets/licenses/Pretendard-OFL.txt` and bundled as an application resource.
 
-Hierarchy comes primarily from type size/weight, whitespace, and alignment. A persistent left sidebar gives navigation a stable location. Settings uses an internal section list and a restrained content column. At narrower widths the sidebar becomes icon navigation and settings controls reflow. The native window retains platform controls and a minimum usable size.
+Hierarchy comes from type size/weight, whitespace and alignment. A stable left sidebar anchors navigation. Settings uses an internal section list and restrained content column; archive lists and reader share the same surfaces. At narrower widths sidebar labels yield to icon navigation and controls reflow. Native window controls and a minimum window size are retained. Long content, tables, resource rows and narrower layouts still need native interactive verification.
 
-The UI styles live in `src/app.css`; reusable SVG symbols are in `src/lib/Icon.svelte`. Tailwind CSS is integrated, with custom semantic component classes defining the current visual system.
+Styles live in `src/app.css`; reusable symbols are in `src/lib/Icon.svelte`. Tailwind CSS is integrated, while semantic component classes define the visual system.
 
 ## Color
-
-Brand anchors:
 
 | Role | Color |
 | --- | --- |
@@ -27,25 +63,16 @@ Brand anchors:
 | Dark foundation | `#202622` |
 | Muted green reference | `#A1AA9C` |
 
-The light UI refines ivory into a near-white main surface (`#FAF9F6`) and warmer sidebar (`#F0EEE7`). Dark mode uses the dark foundation, muted green text, and a lighter green accent. CSS variables define backgrounds, text, dividers, interactive surfaces, and errors; the dark theme changes the same tokens rather than introducing a separate visual language.
+Light mode uses a near-white main surface (`#FAF9F6`) and warmer sidebar (`#F0EEE7`). Dark mode changes the same semantic tokens for surfaces, text, dividers, interaction and errors. Color emphasizes selection, focus and primary actions; state is not communicated through color alone. Thin separators organize content without purple gradients, glowing AI ornaments or fabricated activity indicators.
 
-Color is restrained: selection, focus, and primary actions receive emphasis. Thin separators organize information instead of stacks of colorful cards. There are no purple gradients, glowing AI ornaments, or fabricated activity indicators.
+## Interaction and accessibility boundaries
 
-## Components and interaction
+Theme selection applies immediately, persists through Rust and reverts on save failure; system mode follows OS preference. Energy profiles remain stored preferences without scheduling effects. Effects are short and reduced-motion styles are included.
 
-- A four-bar mark anchors the sidebar and empty briefing state.
-- Selected navigation combines background, text weight, and a small marker, not color alone.
-- Theme is a segmented control; energy profiles are a compact option group.
-- Extension switches represent persisted opt-in, while availability is separately described. An unavailable connector is never labeled operational.
-- Settings save feedback and errors are announced with status/alert semantics.
-- Disabled controls and explicit explanatory text distinguish future capabilities from operations.
-- Text inputs have labels; icon-only buttons retain accessible names.
-- Focus-visible outlines, a skip link, keyboard-operable native controls, and reduced-motion styles are included.
-
-Theme selection takes effect immediately and is persisted through the Rust backend; a save failure restores the stored theme. System mode follows the OS color preference. Effects are limited to short interaction transitions. Accessibility and contrast still require interactive testing on the actual native webviews; CSS and semantic markup alone are not a completed accessibility audit.
+The interface includes labels, icon-button names, native keyboard-operable controls, focus-visible outlines, a skip link and status/alert semantics. These are implementation properties, **not a completed accessibility audit**. Frontend compilation/checks passed. A macOS native smoke test exercised source controls/cancellation, archived text/local image, Korean search/highlighting, read/save persistence and saved access while the extension was disabled. Complete keyboard/screen-reader behavior, repair/error presentation, narrow layouts and cross-platform webviews remain verification gates in [the roadmap](ROADMAP.md).
 
 ## Beat branding
 
-`assets/branding/beat.svg` is the original vector source. Four vertical rounded bars have different heights, creating a simple rhythm recognizable at small sizes. The initial app icon uses ivory bars on forest green with a rounded square background. Tauri-generated desktop icon formats live in `src-tauri/icons/` and should be retained in source control.
+`assets/branding/beat.svg` is the original vector source. Four rounded bars of different heights form a rhythm recognizable at small sizes; the desktop icon uses ivory bars on forest green. Generated desktop icon formats in `src-tauri/icons/` remain committed.
 
-The in-app mark uses `currentColor` so it works in both themes. The initial branding is intentionally simple and may be refined later without changing navigation or application architecture. The original logo is covered by Rhythm's MIT license; font and other dependency licenses remain separate.
+The in-app mark uses `currentColor` for both themes. Branding can evolve without changing application boundaries. The original logo follows Rhythm's MIT license; font/dependency licenses and the rights to school content remain separate.
