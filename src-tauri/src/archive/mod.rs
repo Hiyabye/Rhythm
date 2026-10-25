@@ -109,11 +109,16 @@ pub async fn archive_retry_resource(
 }
 #[tauri::command]
 pub async fn archive_resource_image(state: State<'_, AppState>, id: i64) -> Result<String, String> {
-    let (resource, bytes) = sync::local_resource(&state.store, &state.data_root, id).await?;
-    if resource.kind != "image" || bytes.len() > 10 * 1024 * 1024 {
+    let (_, bytes) = sync::local_resource(&state.store, &state.data_root, id).await?;
+    // Released archives may label an inline raster as an attachment when both
+    // roles shared its URL. Local integrity, size and raster bytes are the boundary.
+    image_data_uri(&bytes)
+}
+fn image_data_uri(bytes: &[u8]) -> Result<String, String> {
+    if bytes.len() > 10 * 1024 * 1024 {
         return Err("이 자료는 지원되는 로컬 이미지가 아닙니다.".into());
     }
-    let mime = sync::image_mime(&bytes).ok_or("안전한 로컬 이미지 형식이 아닙니다.")?;
+    let mime = sync::image_mime(bytes).ok_or("안전한 로컬 이미지 형식이 아닙니다.")?;
     Ok(format!(
         "data:{mime};base64,{}",
         base64::engine::general_purpose::STANDARD.encode(bytes)
@@ -143,4 +148,19 @@ pub async fn archive_open_original(url: String) -> Result<(), String> {
     }
     tauri_plugin_opener::open_url(parsed.as_str(), None::<&str>)
         .map_err(|_| "기본 브라우저에서 외부 링크를 열지 못했습니다.".into())
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+    #[test]
+    fn verified_raster_images_do_not_depend_on_legacy_resource_role() {
+        let png = b"\x89PNG\r\n\x1a\nlocal raster";
+        assert!(image_data_uri(png)
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
+        assert!(image_data_uri(b"%PDF-document").is_err());
+        assert!(image_data_uri(b"<svg onload=\"alert(1)\"></svg>").is_err());
+        assert!(image_data_uri(&vec![0; 10 * 1024 * 1024 + 1]).is_err());
+    }
 }

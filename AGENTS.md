@@ -2,7 +2,7 @@
 
 ## Scope and architecture
 
-Rhythm is a Korean-first, local-first Tauri 2 desktop command center. Read `docs/ARCHITECTURE.md` before changing component boundaries and `docs/ROADMAP.md` before adding product scope. Current implementation is v0.2.0: a native-Rust, manually synchronized Sogang notice archive. No notice AI processing, model installer, scheduler, notifications, external web crawler or cloud service is implemented.
+Rhythm is a Korean-first, local-first Tauri 2 desktop command center. Read `docs/ARCHITECTURE.md` before changing component boundaries and `docs/ROADMAP.md` before adding product scope. Current implementation is v0.2.1: a hardened native-Rust, manually synchronized Sogang notice archive. Collector comparison/provenance and adoption decisions are in `docs/COLLECTOR_COMPARISON.md`. No notice AI processing, model installer, scheduler, notifications, external web crawler or cloud service is implemented.
 
 - `src/`: Svelte 5 runes, TypeScript and Tailwind/custom CSS. `App.svelte` owns navigation/settings; `lib/ArchiveView.svelte`, `DocumentReader.svelte` and `SourceSettings.svelte` own archive surfaces. `lib/types.ts` mirrors command payloads.
 - `src-tauri/src/main.rs`: Tauri command registration, application state/startup/exit; `core/mod.rs` owns the data-directory lock and platform menu.
@@ -28,12 +28,15 @@ npm run desktop:build -- --debug      # debug worker/application/bundle
 npm run desktop:build -- --no-bundle  # native build without installer generation
 npm run check                        # Svelte/TypeScript diagnostics
 npm run build                        # frontend production build only
+npm run test:ui                      # compiled frontend + mocked IPC, Chromium/WebKit
 cargo fmt --all
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 ```
 
 Tauri checks need `src-tauri/binaries/rhythm-ai-worker-<host-triple>[.exe]`. The desktop scripts create it; CI stages a debug worker before Clippy/tests. Direct Tauri invocation on a fresh checkout bypasses this step. Generated sidecars are ignored; icons are committed. The helper targets the host and assumes Cargo's default workspace `target/` directory.
+
+UI tests use the dev dependency `@playwright/test` and require its Chromium/WebKit binaries (`npx playwright install chromium webkit`; CI also installs OS prerequisites). `playwright.config.ts` builds/serves the actual frontend at 127.0.0.1:4178; tests mock only the Tauri boundary and must not be reported as native backend verification. Test output/traces stay under ignored `node_modules/.cache/`. Do not rely on a running preview server; the suite owns its server. Maintain meaningful keyboard/focus, failure-state, paging and reader regressions alongside Rust/native checks.
 
 For core real-worker lifecycle/crash-isolation tests, build the worker and set `RHYTHM_WORKER_TEST_BIN` to its absolute executable path before `cargo test -p rhythm`. Without it, the core real-worker test returns early; a passing suite alone does not establish process integration. Worker process tests launch their own test-built executable. Actual-model inference is separately ignored and opt-in via `RHYTHM_TEST_MODEL`; never claim it verified without real output.
 
@@ -48,7 +51,10 @@ cargo test --locked -p rhythm storage::archive_tests
 cargo test --locked -p rhythm archive::parser
 cargo test --locked -p rhythm archive::sync
 cargo test --locked -p rhythm archive::tls
+cargo test --locked -p rhythm large_archive_operations -- --ignored --nocapture
 ```
+
+The ignored benchmark ingests 5,000 generated records through actual Store APIs, verifies pagination/filter/index correctness and reports warm debug samples. It is not a live crawl, native IPC or a timing gate. Storage failure tests use an isolated SQLite page cap/abort trigger, never a full host disk or production DB.
 
 `src-tauri/src/archive/sync/tests.rs::bounded_live_import_and_offline_reopen` is ignored deliberately. When bounded public-site verification is within the approved task, run it explicitly:
 
@@ -67,8 +73,8 @@ Do not run unbounded live collection as part of ordinary tests/CI. Prefer determ
 - Acquire the process-lifetime OS data-directory lock **before** opening/recovering the store. Controller admission additionally allows one archive/retry job. Do not open a second live production store to inspect progress: `Store::open` recovers persisted `running` sources as interrupted.
 - Schema 2 follows released `001_foundation.sql` via `002_archive.sql`. Never rewrite released migrations. Require ordered transactional migration/upgrade/rollback tests and reject unknown newer schemas without modifying them.
 - Document identity is `(source_id, external_id)`. Preserve original fetched representations, sanitized/normalized content, meaningful revisions and independent read/saved state. Fetch/parse/resource failures must not replace good content or erase user state.
-- Catalog has 32 sources; only main `sogang-academic` and five `computing-*` sources are supported. Working list extraction alone is not support. Require verified full article/resource extraction and fixtures before changing support flags.
-- Historical checkpoints advance only after article retrievals on a page succeed; resume pending resources for existing text. Mark history complete only at the last public page, never at a test/safety limit. Resource completeness is separate.
+- Catalog has 32 sources; main `sogang-academic`, five `computing-*`, and `eng-general`/`eng-careers`/`eng-academic`/`eng-research` are supported. Engineering uses current `/board/{notice,recruit,academic,research}` SSR routes, not retired CMS routes; `parser.rs` dispatches to its source-specific `engineering.rs` submodule. Working list extraction alone is not support. Require verified full article/resource extraction and fixtures before changing support flags.
+- Historical checkpoints advance only after article retrievals on a page succeed; resume pending resources for existing text, including HTTP 304 article checks. Counters describe the current attempt; checkpoint/history state is cumulative. Resource failure outcomes are nonfatal to article archival but must surface as failure for explicit retry. Mark history complete only at the last public page, never at a test/safety limit. Resource completeness is separate.
 - Incremental discovery must continue past the three-page edit window while regular records are new; repeated pins cannot establish the known frontier. First incremental seed is historical, not a flood of new notices. It is not a full audit of old edits.
 - `sogang_notices` is operational but opt-in and source subscriptions are separate. Restoring/enabling preferences starts no network work. `stop` signals cancellation; the owning async disable/exit path waits without holding the SQLite lock. Hide source controls while disabled, reject new downloads, retain archives/subscriptions and allow local read/search/save.
 - Never retain SQLite mutex guards across async network/worker/filesystem operations. Check cancellation/extension enablement at commit boundaries.
@@ -76,16 +82,16 @@ Do not run unbounded live collection as part of ordinary tests/CI. Prefer determ
 ## Security and implementation constraints
 
 - Keep user-facing UI, feedback and errors in natural Korean. Internal IDs/docs may use English. Keep `src/lib/types.ts` and Rust payloads synchronized; validate backend inputs.
-- Automatic fetches use exact approved HTTPS hosts/routes, public DNS with pinned answers, validated redirects, pacing/robots checks, cancellation, size/deadline/retry limits. Preserving HTTP(S) resource metadata is not permission to fetch it. No authentication/access-control bypass, unrestricted remote image fetches or downloaded-code execution.
+- Automatic fetches use exact approved HTTPS hosts/routes, public DNS with pinned answers, same-origin redirects authorized by robots before every hop, pacing, cancellation, size/deadline/retry limits. Transport returns redirect targets; only the sync policy layer may follow them. Completed resource response bytes consume the job budget even if format validation or filesystem persistence fails. Preserving HTTP(S) resource metadata is not permission to fetch it. No authentication/access-control bypass, unrestricted remote image fetches or downloaded-code execution.
 - `archive/tls.rs` supplements only the exact `www.sogang.ac.kr` intermediate chain. Intermediates are **untrusted candidates**, not roots. Preserve Mozilla roots and normal WebPKI hostname/validity/signature/usage/path checks. Read `src-tauri/src/archive/certificates/README.md` before certificate changes; never repair connectivity by accepting invalid certificates or promoting intermediates to roots.
 - Render only sanitized reader content; original responses are archive data. No script/style/iframe/event-handler content or remote-image fallback. Local images require bounded raster bytes and SHA-256 verification. External HTTP(S) links require explicit user action through the OS browser. File reveal must not execute attachments.
 - Retain MIME/size/hash/state metadata, generated paths and last-good verified resource references. Retry must repair corrupt bytes rather than assume a hash filename proves integrity. Report failed/oversized/unsupported resources without discarding useful text.
 - No localhost AI HTTP, cloud inference/storage, telemetry or separate inference service. Model ownership stays in the worker; stdout is exclusively versioned protocol and diagnostics go to stderr. Preserve CPU startup without weights/GPU tooling; do not equate one tested artifact with model/backend compatibility.
-- Reference collector licensing is unestablished. Do not copy its implementation under an assumed MIT license. Official notice/fixture content retains its original rights.
+- Both reference collectors' source licensing is unestablished. Do not copy its implementation under an assumed MIT license. Official notice/fixture content retains its original rights.
 - Use Rustfmt; frontend code must pass `npm run check` without warnings. No separate frontend formatter/linter is configured.
 
 ## Verification and documentation
 
 Run affected checks, inspect the final diff and report exact evidence/limits. At minimum, settings changes need persistence/reopen tests; worker changes need process protocol/lifecycle tests; archive changes need the affected migration/parser/sync/offline regressions. Foundation CI success does not establish v0.2 CI. Native compilation does not establish rendering, accessibility, offline reader behavior, full historical coverage or Windows/Linux runtime parity. An ignored test or a real-worker test that returned early is not verification.
 
-Keep `docs/ARCHITECTURE.md`, `docs/DESIGN.md` and `docs/ROADMAP.md` accurate when claims change. README is for users and basic run/build instructions; development workflows belong here. Mark release gates complete only after the corresponding checks actually ran. Do not add community-management templates, changelogs, publishing/updater infrastructure or future-release behavior outside scope.
+Keep `docs/ARCHITECTURE.md`, `docs/DESIGN.md` and `docs/ROADMAP.md` accurate when claims change. README is for users and basic run/build instructions; development workflows belong here. Mark release gates complete only after the corresponding checks actually ran. The observed three-OS run is v0.2.0 (`40110222263`), not v0.2.1; new UI CI configuration is not evidence of a passing run. Linux distribution remains blocked by transitive glib 0.18.5 / RUSTSEC-2024-0429; do not suppress the advisory or force incompatible GTK dependencies. Do not add community-management templates, changelogs, publishing/updater infrastructure or future-release behavior outside scope.

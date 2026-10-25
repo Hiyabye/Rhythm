@@ -202,7 +202,8 @@ impl Controller {
                     &resource,
                     &mut bytes,
                 )
-                .await
+                .await?
+                .into_result()
             }
             .await;
             controller.finish(
@@ -227,11 +228,11 @@ impl Controller {
             active(store, &self.cancel)?;
             let mut current = source.clone();
             current.status = "running".into();
+            // Progress counters describe this attempt, not distinct IDs accumulated
+            // across failed pages and restarts. Checkpoints remain cumulative.
             current.failed = 0;
-            if mode == "incremental" {
-                current.discovered = 0;
-                current.archived = 0;
-            }
+            current.discovered = 0;
+            current.archived = 0;
             persist(store, &current, "running", None, false)?;
             let outcome = self
                 .source(
@@ -313,7 +314,7 @@ impl Controller {
                 Some(definition.id.clone()),
                 mode,
                 page,
-                "목록과 원문을 보관하고 있습니다.",
+                "이번 동기화의 목록과 원문을 보관하고 있습니다.",
             );
             let url = parser::list_url(definition, page)?;
             let response =
@@ -328,8 +329,10 @@ impl Controller {
                             .map_err(|_| "공지 목록 문자 인코딩을 지원하지 않습니다.")?,
                     )?
                 }
-                network::Fetch::NotModified => {
-                    return Err("보관되지 않은 목록의 변경 없음 응답을 받았습니다.".into())
+                network::Fetch::NotModified | network::Fetch::Redirect(_) => {
+                    return Err(
+                        "보관되지 않은 목록의 변경 없음 또는 이동 응답을 받았습니다.".into(),
+                    )
                 }
             };
             let pinned = listing.entries.iter().filter(|entry| entry.pinned).count();
@@ -369,18 +372,8 @@ impl Controller {
                 }
                 if historical {
                     if let Some(id) = existing_id {
-                        for resource in with_store(store, |s| s.pending_resources(id))? {
-                            download_resource(
-                                store,
-                                root,
-                                transport,
-                                &self.cancel,
-                                &policy,
-                                &resource,
-                                resource_bytes,
-                            )
+                        self.pending_resources(store, root, transport, &policy, id, resource_bytes)
                             .await?;
-                        }
                         continue;
                     }
                 }
@@ -405,10 +398,26 @@ impl Controller {
                     )
                     .await?;
                     match response {
-                        network::Fetch::NotModified => with_store(store, |s| {
-                            ensure_active(s, &self.cancel)?;
-                            s.checked(&definition.id, &entry.external_id)
-                        })?,
+                        network::Fetch::NotModified => {
+                            let id = existing_id
+                                .ok_or("보관되지 않은 원문의 변경 없음 응답을 받았습니다.")?;
+                            with_store(store, |s| {
+                                ensure_active(s, &self.cancel)?;
+                                s.checked(&definition.id, &entry.external_id)
+                            })?;
+                            self.pending_resources(
+                                store,
+                                root,
+                                transport,
+                                &policy,
+                                id,
+                                resource_bytes,
+                            )
+                            .await?;
+                        }
+                        network::Fetch::Redirect(_) => {
+                            return Err("학교 서버 이동 응답을 처리하지 못했습니다.".into())
+                        }
                         network::Fetch::Body {
                             bytes,
                             etag,
@@ -431,18 +440,15 @@ impl Controller {
                             if !exists {
                                 current.archived += 1;
                             }
-                            for resource in with_store(store, |s| s.pending_resources(id))? {
-                                download_resource(
-                                    store,
-                                    root,
-                                    transport,
-                                    &self.cancel,
-                                    &policy,
-                                    &resource,
-                                    resource_bytes,
-                                )
-                                .await?;
-                            }
+                            self.pending_resources(
+                                store,
+                                root,
+                                transport,
+                                &policy,
+                                id,
+                                resource_bytes,
+                            )
+                            .await?;
                         }
                     }
                     Ok::<_, String>(())
@@ -488,6 +494,32 @@ impl Controller {
             page += 1;
         }
     }
+    #[allow(clippy::too_many_arguments)]
+    async fn pending_resources<T: Transport>(
+        &self,
+        store: &SharedStore,
+        root: &Path,
+        transport: &T,
+        policy: &Robots,
+        id: i64,
+        total: &mut u64,
+    ) -> Result<(), String> {
+        for resource in with_store(store, |s| s.pending_resources(id))? {
+            // A persisted resource failure is nonfatal to article/page completion.
+            // Cancellation and database failures still propagate.
+            download_resource(
+                store,
+                root,
+                transport,
+                &self.cancel,
+                policy,
+                &resource,
+                total,
+            )
+            .await?;
+        }
+        Ok(())
+    }
 }
 fn persist(
     store: &SharedStore,
@@ -528,13 +560,31 @@ async fn fetch<T: Transport>(
     cancel: &AtomicBool,
     policy: &Robots,
 ) -> Result<network::Fetch, String> {
-    if !policy.permits(url) {
-        return Err("학교의 robots.txt 정책에 따라 수집을 중단했습니다.".into());
+    let mut target = url.clone();
+    for redirects in 0..=3 {
+        // Apply robots to every hop before any request, not only the original URL.
+        // Origin equality also prevents sending validators to another source host.
+        if !policy.permits(&target) {
+            return Err("학교의 robots.txt 정책에 따라 수집을 중단했습니다.".into());
+        }
+        if policy.delay > 0.65 {
+            tokio::select! {_=tokio::time::sleep(std::time::Duration::from_secs_f64(policy.delay))=>{},_=wait_cancel(cancel)=>return Err("동기화를 중단했습니다.".into())}
+        }
+        match transport
+            .fetch(&target, validators.clone(), limit, cancel)
+            .await?
+        {
+            network::Fetch::Redirect(next) => {
+                if redirects == 3 {
+                    return Err("학교 서버의 이동 경로가 너무 많습니다.".into());
+                }
+                network::validate_url(&next)?;
+                target = next;
+            }
+            response => return Ok(response),
+        }
     }
-    if policy.delay > 0.65 {
-        tokio::select! {_=tokio::time::sleep(std::time::Duration::from_secs_f64(policy.delay))=>{},_=wait_cancel(cancel)=>return Err("동기화를 중단했습니다.".into())}
-    }
-    transport.fetch(url, validators, limit, cancel).await
+    unreachable!()
 }
 async fn wait_cancel(cancel: &AtomicBool) {
     while !cancel.load(Ordering::Acquire) {
@@ -557,15 +607,25 @@ impl Robots {
             .join("/robots.txt")
             .map_err(|_| "정보원 주소를 확인해 주세요.")?;
         match transport.fetch(&robots, None, 64 * 1024, cancel).await? {
-            network::Fetch::Body { bytes, .. } => Self::parse(
-                url,
-                std::str::from_utf8(&bytes)
-                    .map_err(|_| "학교의 수집 정책을 해석하지 못했습니다.")?,
-            ),
+            network::Fetch::Body { bytes, mime, .. } => {
+                if matches!(mime.as_deref(), Some("text/html" | "application/xhtml+xml")) {
+                    return Err("학교의 수집 정책 대신 HTML 오류 페이지를 받았습니다.".into());
+                }
+                Self::parse(
+                    url,
+                    std::str::from_utf8(&bytes)
+                        .map_err(|_| "학교의 수집 정책을 해석하지 못했습니다.")?,
+                )
+            }
             _ => Err("학교의 수집 정책을 확인하지 못했습니다.".into()),
         }
     }
     fn parse(url: &Url, body: &str) -> Result<Self, String> {
+        // An HTTP-200 error page is not an empty allow-all robots policy.
+        let start = body.trim_start_matches('\u{feff}').trim_start();
+        if start.starts_with('<') || start.contains('\0') {
+            return Err("학교의 수집 정책 대신 해석할 수 없는 자료를 받았습니다.".into());
+        }
         let mut groups: Vec<RobotGroup> = Vec::new();
         let mut agents = Vec::new();
         let mut rules = Vec::new();
@@ -601,6 +661,10 @@ impl Robots {
                     delay = value
                         .parse::<f64>()
                         .map_err(|_| "학교의 요청 간격 정책을 해석하지 못했습니다.")?;
+                    // Validate before max(): floating-point max can discard NaN.
+                    if !delay.is_finite() || !(0.0..=60.0).contains(&delay) {
+                        return Err("학교의 수집 간격 정책은 자동 처리할 수 없습니다.".into());
+                    }
                 }
                 _ => {}
             }
@@ -636,33 +700,57 @@ impl Robots {
         let path = &url[url::Position::BeforePath..url::Position::AfterQuery];
         let mut decision = (0, true);
         for (rule, allow) in &self.rules {
-            let pattern = rule.trim_end_matches('$');
-            let mut rest = path;
-            let mut matched = true;
-            for (index, part) in pattern.split('*').enumerate() {
-                if index == 0 {
-                    if let Some(next) = rest.strip_prefix(part) {
-                        rest = next
-                    } else {
-                        matched = false;
-                        break;
-                    }
-                } else if let Some(found) = rest.find(part) {
-                    rest = &rest[found + part.len()..]
-                } else {
-                    matched = false;
-                    break;
-                }
-            }
-            if rule.ends_with('$') && !rest.is_empty() {
-                matched = false;
-            }
-            let weight = pattern.replace('*', "").len();
+            let pattern = rule.strip_suffix('$').unwrap_or(rule);
+            let matched = wildcard_prefix(pattern.as_bytes(), path.as_bytes(), rule.ends_with('$'));
+            let weight = pattern.bytes().filter(|byte| *byte != b'*').count();
             if matched && (weight > decision.0 || (weight == decision.0 && *allow)) {
                 decision = (weight, *allow);
             }
         }
         decision.1
+    }
+}
+// Iterative glob matching with a single remembered wildcard; no recursion or
+// regex backtracking. Unanchored robots rules match any suffix of the URL path.
+fn wildcard_prefix(pattern: &[u8], text: &[u8], anchored: bool) -> bool {
+    let (mut p, mut t) = (0, 0);
+    let (mut star, mut retry) = (None, 0);
+    while t < text.len() {
+        if p == pattern.len() && !anchored {
+            return true;
+        }
+        if p < pattern.len() && pattern[p] == b'*' {
+            star = Some(p);
+            p += 1;
+            retry = t;
+        } else if p < pattern.len() && pattern[p] == text[t] {
+            p += 1;
+            t += 1;
+        } else if let Some(index) = star {
+            retry += 1;
+            t = retry;
+            p = index + 1;
+        } else {
+            return false;
+        }
+    }
+    while p < pattern.len() && pattern[p] == b'*' {
+        p += 1;
+    }
+    p == pattern.len()
+}
+
+#[derive(Debug)]
+enum DownloadOutcome {
+    Downloaded,
+    Failed(String),
+}
+impl DownloadOutcome {
+    fn into_result(self) -> Result<(), String> {
+        match self {
+            Self::Downloaded => Ok(()),
+            Self::Failed(error) => Err(error),
+        }
     }
 }
 fn raster(bytes: &[u8]) -> Option<&'static str> {
@@ -686,15 +774,19 @@ async fn download_resource<T: Transport>(
     policy: &Robots,
     resource: &ResourceRecord,
     total: &mut u64,
-) -> Result<(), String> {
+) -> Result<DownloadOutcome, String> {
     active(store, cancel)?;
     let outcome: Result<(), String> = async {
         let url=Url::parse(&resource.url).map_err(|_|"첨부 자료 주소를 해석하지 못했습니다.")?;
         network::validate_url(&url)?;
         if *total>=IMPORT_RESOURCES {return Err("이번 가져오기의 첨부 자료 한도(256 MB)에 도달했습니다. 필요한 자료를 개별적으로 다시 내려받아 주세요.".into());}
-        let limit=if resource.kind=="image" {10*1024*1024}else{FILE_LIMIT};
+        let limit=(if resource.kind=="image" {10*1024*1024}else{FILE_LIMIT}).min((IMPORT_RESOURCES-*total) as usize);
         match fetch(transport,&url,None,limit,cancel,policy).await? {
             network::Fetch::Body{bytes,mime,..}=>{
+                // Charge received bytes even when format validation or disk writes fail.
+                // The transport independently caps the next response to remaining budget.
+                *total=total.saturating_add(bytes.len() as u64);
+                if bytes.len()>limit || *total>IMPORT_RESOURCES {return Err("이번 가져오기의 첨부 자료 한도(256 MB)를 초과했습니다.".into());}
                 let media=if resource.kind=="image" {Some(raster(&bytes).ok_or("안전한 이미지 형식(PNG, JPEG, GIF, WebP)이 아니어서 보관하지 않았습니다.")?.to_string())} else {
                     let mime=mime.filter(|m|!matches!(m.as_str(),"text/html"|"application/xhtml+xml"|"application/javascript"|"text/javascript"|"image/svg+xml"));
                     if mime.is_none() || bytes.is_empty(){return Err("첨부 파일 대신 오류 페이지 또는 지원하지 않는 자료를 받았습니다.".into());}
@@ -703,7 +795,6 @@ async fn download_resource<T: Transport>(
                     if lower.ends_with(".pdf") && !bytes.starts_with(b"%PDF-"){return Err("PDF 파일 형식 검증에 실패했습니다.".into());}
                     mime
                 };
-                if total.saturating_add(bytes.len() as u64)>IMPORT_RESOURCES {return Err("이번 가져오기의 첨부 자료 한도(256 MB)를 초과했습니다.".into());}
                 active(store,cancel)?;
                 let hash=format!("{:x}",Sha256::digest(&bytes));
                 let extension = if resource.kind=="image" {match media.as_deref(){Some("image/png")=>"png",Some("image/jpeg")=>"jpg",Some("image/gif")=>"gif",_=>"webp"}} else {resource.filename.rsplit('.').next().unwrap_or("bin")};
@@ -731,7 +822,6 @@ async fn download_resource<T: Transport>(
                     }
                 } else {tokio::fs::rename(&temporary,&destination).await.map_err(|_|"첨부 파일 저장을 완료하지 못했습니다.")?;}
                 with_store(store,|s|{ensure_active(s,cancel)?;s.resource_result(resource.id,"downloaded",media.as_deref(),Some(bytes.len() as u64),Some(&relative),Some(&hash),None)})?;
-                *total+=bytes.len() as u64;
                 Ok(())
             },_=>Err("첨부 파일에 잘못된 변경 없음 응답이 도착했습니다.".into())
         }
@@ -740,9 +830,9 @@ async fn download_resource<T: Transport>(
         active(store, cancel)?;
         if resource.status == "downloaded" && local_resource(store, root, resource.id).await.is_ok()
         {
-            return Err(format!(
+            return Ok(DownloadOutcome::Failed(format!(
                 "다시 내려받지 못했습니다. 기존 로컬 자료는 안전하게 유지됩니다. {error}"
-            ));
+            )));
         }
         let status = if error.contains("크기") || error.contains("한도") {
             "too_large"
@@ -757,8 +847,9 @@ async fn download_resource<T: Transport>(
         with_store(store, |s| {
             s.resource_result(resource.id, status, None, None, None, None, Some(&error))
         })?;
+        return Ok(DownloadOutcome::Failed(error));
     }
-    Ok(())
+    Ok(DownloadOutcome::Downloaded)
 }
 pub async fn local_resource(
     store: &SharedStore,

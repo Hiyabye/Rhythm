@@ -68,7 +68,7 @@ fn cases() -> Vec<(
 fn catalog_has_exact_stable_source_identities_and_honest_support() {
     let sources = catalog::definitions();
     assert_eq!(sources.len(), 32);
-    assert_eq!(sources.iter().filter(|s| s.supported).count(), 6);
+    assert_eq!(sources.iter().filter(|s| s.supported).count(), 10);
     assert_eq!(
         sources.iter().map(|s| &s.id).collect::<HashSet<_>>().len(),
         32
@@ -278,6 +278,88 @@ fn untrusted_html_cannot_execute_or_fetch_remote_content_and_preserves_structure
     assert_eq!(resources[0].kind, "image");
     assert!(plain.contains("컴퓨터 연구"));
     assert!(!plain.contains("bad"));
+}
+#[test]
+fn computing_news_distinguishes_public_route_from_internal_attachment_parent() {
+    let source = source("computing-updates");
+    let entry = ListingEntry {
+        external_id: "282".into(),
+        url: "https://computing.sogang.ac.kr/ko/community/news/detail/282".into(),
+        pinned: false,
+    };
+    let body = include_str!("computing-news-detail-282.html");
+    for broken in [
+        body.replace("SN:C,CD_NM:", "SN:999,CD_NM:"),
+        body.replace("PARENT_SEQ:C,FILE_PATH:", "PARENT_SEQ:999,FILE_PATH:"),
+        body.replace(
+            r#"routePath:"\u002Fko\u002Fcommunity\u002Fnews\u002Fdetail\u002F282""#,
+            r#"routePath:"\u002Fko\u002Fcommunity\u002Fnews\u002Fdetail\u002F283""#,
+        ),
+        body.replace(
+            r#"community\u002Fnews\u002F282\u002F"#,
+            r#"community\u002Fnews\u002F283\u002F"#,
+        ),
+    ] {
+        assert_ne!(broken, body);
+        assert!(article(&source, &entry, &broken).is_err());
+    }
+    let article = article(&source, &entry, body).unwrap();
+    assert_eq!(article.external_id, "282");
+    assert!(article.title.contains("정연우"));
+    assert_eq!(article.published_at, "2026-10-08");
+    assert!(article.resources.iter().any(|r| r
+        .url
+        .ends_with("community/news/282/20261008140703_n3Cf8M.png")));
+}
+#[test]
+fn main_list_rejects_conflicting_duplicates_invalid_pin_and_truncated_metadata() {
+    let source = source("sogang-academic");
+    let fixture: Value = serde_json::from_str(include_str!("main-list-exact.json")).unwrap();
+    for mutation in 0..5 {
+        let mut value = fixture.clone();
+        match mutation {
+            0 => {
+                value["data"]["list"][0]["isTop"] = "unknown".into();
+            }
+            1 => {
+                value["data"]["size"] = 49.into();
+            }
+            2 => {
+                value["data"]["pages"] = 31.into();
+            }
+            3 => {
+                value["data"]["list"].as_array_mut().unwrap().pop();
+            }
+            _ => {
+                let mut duplicate = value["data"]["list"][0].clone();
+                duplicate["title"] = "다른 제목".into();
+                value["data"]["list"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(duplicate);
+            }
+        }
+        assert!(
+            listing(&source, 1, &value.to_string()).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+#[test]
+fn an_attachment_also_used_inline_retains_its_image_role() {
+    let source = source("sogang-academic");
+    let entry = ListingEntry {
+        external_id: "551637".into(),
+        url: main_canonical("551637").into(),
+        pinned: true,
+    };
+    let mut body: Value = serde_json::from_str(include_str!("main-detail.json")).unwrap();
+    let url = "https://www.sogang.ac.kr/file-fe-prd/editor/example.png";
+    body["data"]["fileValue1"] = url.into();
+    body["data"]["content"] = format!("<p>공지 내용</p><img src=\"{url}\" alt=\"안내\">").into();
+    let article = article(&source, &entry, &body.to_string()).unwrap();
+    assert_eq!(article.resources.len(), 1);
+    assert_eq!(article.resources[0].kind, "image");
 }
 #[test]
 fn nuxt_alias_reader_is_data_only_and_rejects_expressions() {

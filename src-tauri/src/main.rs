@@ -93,7 +93,16 @@ fn main() {
         .setup(|app| {
             core::install_menu(app.handle())?;
             let data_root = app.path().app_data_dir()?;
-            let instance_lock = core::lock_data_dir(&data_root).map_err(std::io::Error::other)?;
+            let instance_lock = match core::lock_data_dir(&data_root) {
+                Ok(lock) => lock,
+                Err(error) => {
+                    // Tauri panics for an Err returned from setup. An already-owned
+                    // data directory is an ordinary rejected launch, not a crash.
+                    eprintln!("{error}");
+                    app.handle().exit(1);
+                    return Ok(());
+                }
+            };
             let store =
                 Store::open(&data_root.join("rhythm.sqlite3")).map_err(std::io::Error::other)?;
             store
@@ -148,7 +157,9 @@ fn main() {
         .expect("Rhythm을 시작하지 못했습니다. 로컬 저장소와 시스템 환경을 확인해 주세요.");
     app.run(|handle, event| {
         if let tauri::RunEvent::Exit = event {
-            let state = handle.state::<AppState>();
+            let Some(state) = handle.try_state::<AppState>() else {
+                return; // A rejected second launch never opened the store or worker.
+            };
             state.registry.stop_all();
             tauri::async_runtime::block_on(async {
                 state.archive.wait().await;

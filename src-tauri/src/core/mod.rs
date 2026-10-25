@@ -70,6 +70,36 @@ pub fn install_menu(app: &AppHandle) -> tauri::Result<()> {
 #[cfg(test)]
 mod ownership_tests {
     #[test]
+    fn data_dir_lock_excludes_other_processes_and_releases_on_drop() {
+        const ROOT: &str = "RHYTHM_TEST_LOCK_ROOT";
+        const AVAILABLE: &str = "RHYTHM_TEST_LOCK_AVAILABLE";
+        if let Some(root) = std::env::var_os(ROOT) {
+            let available = std::env::var(AVAILABLE).unwrap() == "true";
+            assert_eq!(
+                super::lock_data_dir(std::path::Path::new(&root)).is_ok(),
+                available
+            );
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("자료 보관");
+        let first = super::lock_data_dir(&root).unwrap();
+        let child = |available: bool| {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "core::ownership_tests::data_dir_lock_excludes_other_processes_and_releases_on_drop", "--nocapture"])
+                .env(ROOT, &root).env(AVAILABLE, available.to_string()).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        child(false);
+        drop(first);
+        child(true);
+    }
+    #[test]
     fn second_owner_is_rejected_and_lock_is_released_on_drop() {
         let directory = tempfile::tempdir().unwrap();
         let first = super::lock_data_dir(directory.path()).unwrap();

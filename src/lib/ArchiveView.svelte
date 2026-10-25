@@ -21,6 +21,9 @@
   let offset = $state(0);
   let loading = $state(false);
   let error = $state('');
+  let feedback = $state('');
+  let pendingSaves = $state<Record<number, boolean>>({});
+  let restoreListFocus = false;
   let readerId = $state<number | null>(null);
   let revision = $state(0);
   let listHeading = $state<HTMLHeadingElement>();
@@ -32,6 +35,8 @@
     const currentPage = page;
     void currentPage;
     readerId = null;
+    lastOpened = 0;
+    restoreListFocus = false;
     draft = '';
     query = '';
     source = '';
@@ -79,13 +84,27 @@
     const current = ++requestId;
     loading = true;
     error = '';
+    let clamped = false;
     try {
       const next = await invoke<ArchivePage>('archive_query', { query: filters });
       if (!active || current !== requestId) return;
+      // Saving or marking read can remove the final item of a filtered page.
+      // Re-query the last valid page rather than presenting a false empty archive.
+      const lastOffset = Math.max(0, Math.floor((next.total - 1) / pageSize) * pageSize);
+      if (filters.offset > lastOffset) {
+        clamped = true;
+        offset = lastOffset;
+        return;
+      }
       result = next;
       if (category && !next.categories.includes(category)) category = '';
     } catch (reason) { if (active && current === requestId) error = archiveError(reason); }
-    finally { if (active && current === requestId) loading = false; }
+    finally {
+      if (active && current === requestId && !clamped) {
+        loading = false;
+        if (restoreListFocus) void focusList();
+      }
+    }
   }
 
   function search(event: SubmitEvent) {
@@ -95,21 +114,44 @@
   }
 
   async function save(item: DocumentItem) {
+    if (pendingSaves[item.id]) return;
+    pendingSaves = { ...pendingSaves, [item.id]: true };
+    error = '';
+    feedback = '';
+    const saved = !item.saved;
     try {
-      await invoke('archive_state', { id: item.id, isRead: null, saved: !item.saved });
+      await invoke('archive_state', { id: item.id, isRead: null, saved });
+      if (!active) return;
+      item.saved = saved;
+      feedback = saved ? '보관함에 저장했습니다.' : '보관함에서 해제했습니다.';
       revision++;
       await refreshContext();
-    } catch (reason) { error = archiveError(reason); }
+    } catch (reason) { if (active) error = archiveError(reason); }
+    finally { if (active) pendingSaves = { ...pendingSaves, [item.id]: false }; }
   }
 
-  function changed() { revision++; void refreshContext(); }
+  function changed() {
+    if (active) {
+      // A reader's automatic state write can finish after returning to the list.
+      // Reconcile focus again if that write removes the previously focused row.
+      if (readerId === null && lastOpened > 0) restoreListFocus = true;
+      revision++;
+      void refreshContext();
+    }
+  }
 
-  async function closeReader() {
+  function closeReader() {
+    restoreListFocus = true;
     readerId = null;
     changed();
+  }
+  async function focusList() {
     await tick();
+    if (!active || readerId !== null || loading) return;
+    restoreListFocus = false;
     const target = document.getElementById(`notice-${lastOpened}`) ?? listHeading;
     target?.focus({ preventScroll: true });
+    target?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
   }
   let lastOpened = 0;
   async function open(item: DocumentItem) {
@@ -155,6 +197,8 @@
     </div>
     <div class="collection-heading archive-list-heading"><h2 bind:this={listHeading} tabindex="-1">{page === 'today' ? '최근 공지' : page === 'bookmark' ? '저장한 공지' : query ? '검색 결과' : '보관된 공지'} <span class="muted">{result.total.toLocaleString('ko-KR')}</span></h2><button class="text-button" disabled={!desktop || loading} onclick={() => { revision++; void refreshContext(); }}>목록 새로고침</button></div>
     {#if error}<div class="archive-error" role="alert">{error}<button class="text-button" onclick={() => { revision++; void refreshContext(); }}>다시 시도</button></div>{/if}
+    <p class="sr-only archive-result-status" role="status">{loading ? '로컬 공지를 불러오는 중입니다.' : error ? '목록을 새로 불러오지 못했습니다.' : `공지 ${result.total.toLocaleString('ko-KR')}개${result.total ? ` · ${offset + 1}–${Math.min(offset + pageSize, result.total)}` : ''}`}</p>
+    <p class="archive-feedback" role="status">{feedback}</p>
     {#if loading}<p class="loading" role="status">로컬 공지를 불러오는 중입니다…</p>{/if}
     {#if result.items.length}
       <ul class="notice-list" aria-label="공지 목록">
@@ -166,12 +210,12 @@
               {#if page === 'search' && item.snippet}<span class="notice-snippet"><Highlighted text={item.snippet} {query} /></span>{/if}
               {#if item.content_status === 'missing_resources'}<span class="notice-resource-warning">일부 첨부 자료 미저장</span>{/if}
             </button>
-            <button class="notice-save icon-button" aria-label={`${item.title} ${item.saved ? '저장 해제' : '보관함에 저장'}`} aria-pressed={item.saved} class:is-saved={item.saved} onclick={() => save(item)}><Icon name="bookmark" size={19} /></button>
+            <button class="notice-save icon-button" aria-label={`${item.title} ${item.saved ? '저장 해제' : '보관함에 저장'}`} aria-pressed={item.saved} class:is-saved={item.saved} disabled={pendingSaves[item.id]} onclick={() => save(item)}><Icon name="bookmark" size={19} /></button>
           </li>
         {/each}
       </ul>
       <nav class="archive-pagination" aria-label="공지 목록 페이지"><button class="button secondary small" disabled={offset === 0 || loading} onclick={() => paginate(-1)}>이전</button><span aria-live="polite">{offset + 1}–{Math.min(offset + pageSize, result.total)} / {result.total}</span><button class="button secondary small" disabled={offset + pageSize >= result.total || loading} onclick={() => paginate(1)}>다음</button></nav>
-    {:else if !loading}
+    {:else if !loading && !error}
       <div class="empty-state archive-empty"><span class="empty-icon"><Icon name={page === 'bookmark' ? 'bookmark' : page === 'search' ? 'search' : 'inbox'} size={30} /></span><h2>{query || source || category || unread ? '조건에 맞는 공지가 없습니다' : page === 'bookmark' ? '아직 저장한 공지가 없습니다' : '아직 보관된 공지가 없습니다'}</h2><p>{query || source || category || unread ? '검색어 또는 필터를 바꿔 보세요. 이미 보관한 내용만 검색하며 인터넷 연결은 필요하지 않습니다.' : page === 'bookmark' ? '공지 옆의 저장 버튼으로 중요한 정보를 모아 보세요. 확장 기능을 꺼도 보관함은 유지됩니다.' : '설정에서 정보원을 구독하고 공개된 공지를 가져오세요. 한 번 보관한 본문은 오프라인에서도 읽을 수 있습니다.'}</p>{#if page !== 'bookmark' && !query}<button class="button secondary" onclick={onsettings}>정보원 설정하기 <Icon name="arrow" size={16} /></button>{/if}</div>
     {/if}
   </section>

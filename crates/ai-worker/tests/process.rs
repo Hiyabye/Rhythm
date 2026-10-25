@@ -1,7 +1,68 @@
-use std::io::Write;
-use std::process::{Command, Stdio};
+use std::io::{Read, Write};
+use std::process::{Child, Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+
+fn capture_pipe(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            pipe.read_to_end(&mut bytes).unwrap();
+        }
+        bytes
+    })
+}
+
+fn wait_with_deadline(mut child: Child, limit: Duration) -> Output {
+    // Drain both pipes while waiting: a verbose worker must not block on its
+    // diagnostics pipe before the parent can observe exit or enforce the deadline.
+    let stdout = capture_pipe(child.stdout.take());
+    let stderr = capture_pipe(child.stderr.take());
+    let deadline = Instant::now() + limit;
+    let mut timed_out = false;
+    let mut wait_error = None;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => {
+                timed_out = matches!(result, Ok(None));
+                wait_error = result.err();
+                let _ = child.kill();
+                break child
+                    .wait()
+                    .expect("reap worker after wait failure/deadline");
+            }
+        }
+    };
+    let output = Output {
+        status,
+        stdout: stdout.join().unwrap(),
+        stderr: stderr.join().unwrap(),
+    };
+    assert!(wait_error.is_none(), "worker wait failed: {wait_error:?}");
+    assert!(
+        !timed_out,
+        "worker exceeded {limit:?}; killed and reaped: {output:?}"
+    );
+    output
+}
+
+#[test]
+#[should_panic(expected = "killed and reaped")]
+fn hanging_worker_is_killed_at_test_deadline() {
+    let child = Command::new(env!("CARGO_BIN_EXE_rhythm-ai-worker"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Keep stdin open without a request, so a healthy worker deliberately waits.
+    wait_with_deadline(child, Duration::from_millis(50));
+}
 
 #[test]
 fn executable_protocol_survives_bad_requests_and_exits_cleanly() {
@@ -24,7 +85,7 @@ fn executable_protocol_survives_bad_requests_and_exits_cleanly() {
         writeln!(input, "{request}").unwrap();
     }
     drop(input);
-    let output = child.wait_with_output().unwrap();
+    let output = wait_with_deadline(child, Duration::from_secs(15));
     assert!(output.status.success(), "{:?}", output);
     let responses: Vec<Value> = String::from_utf8(output.stdout)
         .unwrap()
@@ -63,7 +124,7 @@ fn actual_local_inference() {
     .unwrap();
     writeln!(input, "{}", json!({"version":1,"id":2,"method":"shutdown"})).unwrap();
     drop(input);
-    let output = child.wait_with_output().unwrap();
+    let output = wait_with_deadline(child, Duration::from_secs(180));
     assert!(output.status.success());
     let output = String::from_utf8(output.stdout).unwrap();
     let responses: Vec<Value> = output
@@ -88,12 +149,13 @@ fn actual_local_inference() {
 
 #[test]
 fn executable_exits_on_parent_stdin_close() {
-    let output = Command::new(env!("CARGO_BIN_EXE_rhythm-ai-worker"))
+    let child = Command::new(env!("CARGO_BIN_EXE_rhythm-ai-worker"))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
+        .spawn()
         .unwrap();
+    let output = wait_with_deadline(child, Duration::from_secs(15));
     assert!(output.status.success());
     assert!(output.stdout.is_empty());
 }

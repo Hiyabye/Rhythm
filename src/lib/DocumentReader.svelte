@@ -31,7 +31,7 @@
       if (resourceBusy) void invoke<SyncStatus>('archive_status').then(async (status) => {
         if (!status.running && !disposed) {
           resourceBusy = false;
-          feedback = status.message;
+          feedback = archiveError(status.message);
           await load(detail?.revision_id ?? null);
           onchange();
         }
@@ -47,12 +47,7 @@
     try {
       const result = await invoke<DocumentDetail>('archive_document', { id, revisionId });
       if (disposed || request !== generation) return;
-      if (markRead && !result.item.is_read) {
-        await invoke('archive_state', { id, isRead: true, saved: null });
-        result.item.is_read = true;
-        onchange();
-      }
-      const rendered = await localHtml(result);
+      const rendered = await localHtml(result, request);
       if (disposed || request !== generation) return;
       detail = result;
       selectedRevision = String(result.revision_id);
@@ -60,22 +55,39 @@
       localResourceErrors = rendered.errors;
       await tick();
       heading?.focus({ preventScroll: true });
+      // A failed preference/state write must never make readable archival text
+      // unavailable (for example when the disk is full or becomes read-only).
+      if (markRead && !result.item.is_read) {
+        busy = true;
+        try {
+          await invoke('archive_state', { id, isRead: true, saved: null });
+          // A user can return before this write completes. Refresh the parent
+          // even then so an unread-only list cannot retain the just-read row.
+          onchange();
+          if (disposed || request !== generation) return;
+          detail.item.is_read = true;
+        } catch (reason) {
+          if (!disposed && request === generation) error = archiveError(reason);
+        } finally { if (!disposed && request === generation) busy = false; }
+      }
     } catch (reason) { if (!disposed && request === generation) error = archiveError(reason); }
     finally { if (!disposed && request === generation) loading = false; }
   }
 
-  async function localHtml(document: DocumentDetail): Promise<{ html: string; errors: Record<number, string> }> {
+  async function localHtml(document: DocumentDetail, request: number): Promise<{ html: string; errors: Record<number, string> }> {
     // A reload alone does not verify an attachment. Keep observed failures until
     // its local bytes are successfully read or explicitly revealed again.
     const errors = Object.fromEntries(document.resources
       .filter((resource) => localResourceErrors[resource.id])
       .map((resource) => [resource.id, localResourceErrors[resource.id]]));
+    const images = new Map<number, Promise<string>>();
     const parsed = new DOMParser().parseFromString(document.body_html, 'text/html');
     const output = window.document.createElement('div');
     const allowed = new Set(['p', 'div', 'span', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'table',
-      'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'caption', 'strong', 'b', 'em', 'i', 'u', 's', 'blockquote', 'pre', 'code', 'hr', 'a', 'img']);
+      'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'caption', 'strong', 'b', 'em', 'i', 'u', 's', 'sub', 'sup', 'blockquote', 'pre', 'code', 'hr', 'a', 'img']);
     const blocked = new Set(['script', 'style', 'iframe', 'object', 'embed', 'svg', 'math', 'form', 'input', 'button', 'link', 'meta']);
     async function copy(node: Node, parent: HTMLElement) {
+      if (disposed || request !== generation) return;
       if (node.nodeType === Node.TEXT_NODE) { parent.append(window.document.createTextNode(node.textContent ?? '')); return; }
       if (!(node instanceof Element)) return;
       const tag = node.tagName.toLowerCase();
@@ -83,10 +95,20 @@
       if (!allowed.has(tag)) { for (const child of [...node.childNodes]) await copy(child, parent); return; }
       if (tag === 'img') {
         const url = node.getAttribute('data-resource-url');
-        const resource = document.resources.find((item) => item.kind === 'image' && item.url === url);
+        // v0.2.0 could retain only the attachment role for a URL also used inline.
+        // The backend independently validates raster bytes, so these archives are
+        // safe to hydrate without rewriting any stored resource metadata.
+        const resource = document.resources.find((item) => item.kind === 'image' && item.url === url)
+          ?? document.resources.find((item) => item.url === url);
         if (resource?.status === 'downloaded') {
           try {
-            const data = await invoke<string>('archive_resource_image', { id: resource.id });
+            let imageData = images.get(resource.id);
+            if (!imageData) {
+              imageData = invoke<string>('archive_resource_image', { id: resource.id });
+              images.set(resource.id, imageData);
+            }
+            const data = await imageData;
+            if (disposed || request !== generation) return;
             if (/^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(data)) {
               const image = window.document.createElement('img');
               image.src = data;
@@ -130,6 +152,17 @@
     }
     for (const node of [...parsed.body.childNodes]) await copy(node, output);
     return { html: output.innerHTML, errors };
+  }
+
+  function scrollBody(event: KeyboardEvent) {
+    if (event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      const node = event.currentTarget as HTMLElement;
+      if (node.scrollWidth > node.clientWidth) {
+        event.preventDefault();
+        node.scrollBy({ left: event.key === 'ArrowRight' ? 80 : -80, behavior: 'instant' });
+      }
+    }
   }
 
   function explicitLinks(node: HTMLElement) {
@@ -209,7 +242,8 @@
         </label>
       {/if}
     </header>
-    <div class="reader-body" use:explicitLinks>{@html safeHtml}</div>
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions (Wide document tables need an explicitly focusable keyboard scroll region.) -->
+    <div class="reader-body" role="region" tabindex="0" aria-label="공지 본문 · 넓은 표는 좌우로 이동할 수 있습니다" onkeydown={scrollBody} use:explicitLinks>{@html safeHtml}</div>
     {#if !safeHtml && !loading}<div class="reader-plain">{detail.body_text}</div>{/if}
     {#if detail.resources.length}
       <section class="reader-resources" aria-labelledby="resource-heading">

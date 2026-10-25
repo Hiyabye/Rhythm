@@ -1,5 +1,15 @@
 export function archiveError(reason: unknown): string {
-  return typeof reason === 'string' ? reason : '작업을 완료하지 못했습니다. 다시 시도해 주세요.';
+  if (typeof reason !== 'string') return '작업을 완료하지 못했습니다. 다시 시도해 주세요.';
+  if (/database or disk is full|no space left on device/i.test(reason)) {
+    return '저장 공간이 부족해 작업을 완료하지 못했습니다. 공간을 확보한 뒤 다시 시도해 주세요.';
+  }
+  if (/readonly database|read-only file system|permission denied/i.test(reason)) {
+    return '저장 위치에 쓸 수 없습니다. 폴더 권한을 확인한 뒤 다시 시도해 주세요.';
+  }
+  if (/database is (?:locked|busy)/i.test(reason)) {
+    return '저장소가 다른 작업을 처리하고 있습니다. 잠시 후 다시 시도해 주세요.';
+  }
+  return /[가-힣]/.test(reason) ? reason : '작업을 완료하지 못했습니다. 다시 시도해 주세요.';
 }
 
 export function archiveDate(value: string | null, includeTime = false): string {
@@ -23,7 +33,7 @@ export function archiveSize(bytes: number | null): string {
 
 export function sourceStatus(status: string): string {
   return ({ idle: '대기', running: '수집 중', completed: '완료', failed: '오류', cancelled: '취소됨',
-    interrupted: '중단됨 · 이어받기 가능', limited: '공개 접근 제한' } as Record<string, string>)[status] ?? '확인 필요';
+    interrupted: '중단됨 · 이어받기 가능', limited: '일부 가져옴 · 이어받기 가능' } as Record<string, string>)[status] ?? '확인 필요';
 }
 
 export function resourceStatus(status: string): string {

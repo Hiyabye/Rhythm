@@ -319,13 +319,19 @@ impl Store {
             .map_err(|e| e.to_string())?;
         for resource in &article.resources {
             transaction.execute("INSERT OR IGNORE INTO resources(document_id,revision_id,url,filename,kind) VALUES(?1,?2,?3,?4,?5)",params![id,revision_id,resource.url,resource.filename,resource.kind]).map_err(|e|e.to_string())?;
-            // Immutable local copies can be shared by revisions; an unavailable resource is retried.
-            transaction.execute("UPDATE resources SET (status,mime,bytes,local_path,sha256,error)=(SELECT status,mime,bytes,local_path,sha256,NULL FROM resources prior WHERE prior.document_id=?1 AND prior.url=?3 AND prior.status='downloaded' AND prior.revision_id<>?2 ORDER BY prior.id DESC LIMIT 1) WHERE document_id=?1 AND revision_id=?2 AND url=?3 AND EXISTS(SELECT 1 FROM resources prior WHERE prior.document_id=?1 AND prior.url=?3 AND prior.status='downloaded' AND prior.revision_id<>?2)",params![id,revision_id,resource.url]).map_err(|e|e.to_string())?;
+            // Reuse bytes only for the same URL and role; image and attachment
+            // access have different validation limits. This avoids a download,
+            // not a remote-byte recheck; local access still verifies integrity.
+            transaction.execute("UPDATE resources SET (status,mime,bytes,local_path,sha256,error)=(SELECT status,mime,bytes,local_path,sha256,NULL FROM resources prior WHERE prior.document_id=?1 AND prior.url=?3 AND prior.kind=?4 AND prior.status='downloaded' AND prior.revision_id<>?2 ORDER BY prior.id DESC LIMIT 1) WHERE document_id=?1 AND revision_id=?2 AND url=?3 AND EXISTS(SELECT 1 FROM resources prior WHERE prior.document_id=?1 AND prior.url=?3 AND prior.kind=?4 AND prior.status='downloaded' AND prior.revision_id<>?2)",params![id,revision_id,resource.url,resource.kind]).map_err(|e|e.to_string())?;
         }
         transaction.commit().map_err(|e| e.to_string())?;
         Ok((id, true))
     }
     pub(crate) fn archive_query(&self, query: &ArchiveQuery) -> Result<ArchivePage, String> {
+        // SQLite LIKE/FTS treat NUL as a terminator even in bound values.
+        if query.query.contains('\0') {
+            return Err("검색어에 사용할 수 없는 문자가 포함되어 있습니다.".into());
+        }
         if query.query.chars().count() > 512 {
             return Err("검색어는 512자 이내로 입력해 주세요.".into());
         }
@@ -439,7 +445,7 @@ impl Store {
         let selected = revision_id
             .or_else(|| revisions.first().map(|r| r.id))
             .ok_or("보관된 버전을 찾을 수 없습니다.")?;
-        let (canonical_url,body_html,body_text)=self.connection.query_row("SELECT canonical_url,body_html,body_text,title,author,category,published_at FROM document_revisions WHERE id=?1 AND document_id=?2",params![selected,id],|r| {
+        let (canonical_url,body_html,body_text): (String, String, String)=self.connection.query_row("SELECT canonical_url,body_html,body_text,title,author,category,published_at FROM document_revisions WHERE id=?1 AND document_id=?2",params![selected,id],|r| {
             item.title=r.get(3)?; item.author=r.get(4)?; item.category=r.get(5)?; item.published_at=r.get(6)?;
             Ok((r.get(0)?,r.get(1)?,r.get(2)?))
         }).map_err(|_|"이 공지에 해당하는 보관 버전을 찾을 수 없습니다.".to_string())?;
@@ -455,7 +461,7 @@ impl Store {
             "missing_resources"
         }
         .into();
-        item.snippet = excerpt(&item.snippet, &[]);
+        item.snippet = excerpt(&body_text, &[]);
         Ok(DocumentDetail {
             item,
             canonical_url,

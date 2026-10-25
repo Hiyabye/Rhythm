@@ -21,7 +21,34 @@ its original rights; Rhythm's MIT license does not relicense it.
   exact scalar aliases referenced by that list, using the original invocation's
   values. No JavaScript was executed to obtain this data.
 
-`parser_tests.rs` checks these structures and separately constructs invalid/empty
-and hostile-content cases. Counts are observations for these fixtures, not parser
+The following additional bounded captures were obtained during v0.2.1 verification
+(2026-10-25), using public GETs only:
+
+- `computing-news-detail-282.html`: canonical link, original `article.board-detail`,
+  and the original Nuxt script from
+  `https://computing.sogang.ac.kr/ko/community/news/detail/282`. No JavaScript was
+  executed. The public route ID is 282, but `DETAIL.SN` and attachment
+  `PARENT_SEQ` resolve to 562; attachment paths still use public ID 282. This
+  regression requires both identities to agree with their respective contracts.
+- `eng-{notice,academic,recruit,research}-list.html`: original canonical link and
+  `<main>` from `https://eng.sogang.ac.kr/board/{board}` (notice/academic include
+  `?page=1`). These current SSR pages replace the four corresponding retired CMS
+  listing routes, not the unsupported Engineering newsletter.
+- `eng-notice-page2.html`: same extraction from `/board/notice?page=2`. Unlike
+  Computing, Engineering pins appear only on page one. Total 361 includes five
+  pins; regular ordinals go from 356 on page one to 346 on page two.
+- `eng-*-detail-*.html`: canonical link and original `<main>` for notice/20,
+  notice/723, academic/4, recruit/676 and research/728. Author, UTC machine timestamps,
+  visible Korean date/time, full `.post-body`, tables, attachment names and URLs
+  are unchanged. Recruitment's captured article has the inline image
+  `/files/fBshpBDiVU3e0JhUuiWvR/image-941579-1.png`; academic/4 has three
+  extensionless `/download/{id}` links with authoritative filenames in markup.
+  Navigation inside `<main>` remains so scope-extraction regressions are testable;
+  unrelated document head, footer, and scripts are omitted. Line endings are
+  normalized to LF and trailing line whitespace is removed; these are structural
+  compatibility fixtures, not byte-for-byte HTTP response captures.
+
+`parser_tests.rs` and `engineering_tests.rs` check these structures and separately
+construct invalid/empty and hostile-content cases. Counts are observations for these fixtures, not parser
 constants. Live university content may change; production mismatches must produce
 an explicit source/parser error rather than an empty successful archive.

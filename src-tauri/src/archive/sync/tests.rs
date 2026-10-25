@@ -34,6 +34,8 @@ struct Fake {
     resources: AtomicBool,
     missing_resources: AtomicBool,
     robots: Mutex<String>,
+    redirects: Mutex<HashMap<String, String>>,
+    limits: Mutex<Vec<(String, usize)>>,
     gate: Option<Arc<Gate>>,
     resource_gate: Option<Arc<Gate>>,
 }
@@ -50,6 +52,8 @@ impl Fake {
             resources: AtomicBool::new(false),
             missing_resources: AtomicBool::new(false),
             robots: Mutex::new("User-agent: *\nAllow: /\n".into()),
+            redirects: Mutex::new(HashMap::new()),
+            limits: Mutex::new(Vec::new()),
             gate: None,
             resource_gate: None,
         }
@@ -93,13 +97,17 @@ impl Transport for Fake {
         &self,
         url: &Url,
         validators: Option<(Option<String>, Option<String>)>,
-        _limit: usize,
+        limit: usize,
         _cancel: &AtomicBool,
     ) -> Result<network::Fetch, String> {
         self.calls
             .lock()
             .unwrap()
             .push((url.to_string(), validators.clone()));
+        self.limits.lock().unwrap().push((url.to_string(), limit));
+        if let Some(target) = self.redirects.lock().unwrap().get(url.as_str()) {
+            return Ok(network::Fetch::Redirect(Url::parse(target).unwrap()));
+        }
         let body = |bytes: Vec<u8>, mime: &str, etag: Option<String>| {
             Ok(network::Fetch::Body {
                 bytes,
@@ -140,7 +148,15 @@ impl Transport for Fake {
                 .collect();
             value["data"]["pageNum"] = json!(page);
             value["data"]["pages"] = json!(pages.len());
-            value["data"]["total"] = json!(pages.iter().flatten().collect::<HashSet<_>>().len());
+            // Synthetic pages may be deliberately sparse to exercise checkpoints,
+            // but must retain a coherent public API page-count/row-size envelope.
+            let unique = pages.iter().flatten().collect::<HashSet<_>>().len();
+            let implied = pages.len().saturating_sub(1) * 50
+                + pages
+                    .last()
+                    .map_or(0, |ids| ids.iter().collect::<HashSet<_>>().len());
+            value["data"]["total"] = json!(unique.max(implied));
+            value["data"]["size"] = json!(ids.iter().collect::<HashSet<_>>().len());
             value["data"]["list"] = json!(rows);
             value["data"]["hasNextPage"] = json!(page < pages.len());
             return body(value.to_string().into_bytes(), "application/json", None);
@@ -1044,6 +1060,8 @@ async fn resource_retry_keeps_good_offline_copy_and_repairs_corrupt_or_oversized
         &mut 0,
     )
     .await
+    .unwrap()
+    .into_result()
     .unwrap_err();
     assert!(error.contains("기존 로컬 자료"));
     assert_eq!(
@@ -1178,8 +1196,8 @@ async fn bounded_live_import_and_offline_reopen() {
     }
     assert_eq!(
         items(&store).len(),
-        6,
-        "fresh bounded live archive must contain one article per priority source"
+        ids.len(),
+        "fresh bounded live archive must contain one article per supported source"
     );
     let first = items(&store)[0].id;
     with_store(&store, |s| {
@@ -1231,5 +1249,344 @@ async fn bounded_live_import_and_offline_reopen() {
     }
     let saved = with_store(&offline, |s| s.document(first, None)).unwrap();
     assert!(saved.item.is_read && saved.item.saved);
-    eprintln!("LIVE_IMPORT root={} documents=6 downloaded_resources={} missing_resources={} local_resource_bytes={} historical_coverage=partial_only",root.display(),downloaded,missing,local_bytes);
+    eprintln!("LIVE_IMPORT root={} documents={} downloaded_resources={} missing_resources={} local_resource_bytes={} historical_coverage=partial_only",root.display(),ids.len(),downloaded,missing,local_bytes);
+}
+
+#[tokio::test]
+async fn conditional_recheck_resumes_pending_resources_without_new_revision() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![2]]);
+    fake.resources.store(true, Ordering::Release);
+    fake.missing_resources.store(true, Ordering::Release);
+    run(
+        &Controller::new(),
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    let id = items(&store)[0].id;
+    let before = with_store(&store, |s| s.document(id, None)).unwrap();
+    assert_eq!(
+        before
+            .resources
+            .iter()
+            .filter(|r| r.status != "downloaded")
+            .count(),
+        2
+    );
+    fake.missing_resources.store(false, Ordering::Release);
+    fake.conditional.store(true, Ordering::Release);
+    run(
+        &Controller::new(),
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "incremental",
+        Budget::default(),
+    )
+    .await;
+    let after = with_store(&store, |s| s.document(id, None)).unwrap();
+    assert_eq!(after.revisions.len(), before.revisions.len());
+    assert!(with_store(&store, |s| s.pending_resources(id))
+        .unwrap()
+        .is_empty());
+    for resource in after.resources {
+        assert!(local_resource(&store, dir.path(), resource.id)
+            .await
+            .is_ok());
+    }
+}
+
+#[tokio::test]
+async fn failed_explicit_retry_is_not_success_but_article_stays_archived() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![2]]);
+    fake.resources.store(true, Ordering::Release);
+    fake.missing_resources.store(true, Ordering::Release);
+    run(
+        &Controller::new(),
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    let id = items(&store)[0].id;
+    let resource = with_store(&store, |s| s.document(id, None))
+        .unwrap()
+        .resources
+        .remove(0);
+    let policy = Robots::parse(
+        &Url::parse(&resource.url).unwrap(),
+        "User-agent: *\nAllow: /\n",
+    )
+    .unwrap();
+    let outcome = download_resource(
+        &store,
+        dir.path(),
+        &fake,
+        &AtomicBool::new(false),
+        &policy,
+        &resource,
+        &mut 0,
+    )
+    .await
+    .unwrap();
+    assert!(outcome.into_result().unwrap_err().contains("모의 첨부"));
+    let source = with_store(&store, |s| s.source(MAIN)).unwrap();
+    assert_eq!(source.status, "completed");
+    assert!(source.history_complete);
+    assert_eq!(source.failed, 0);
+    assert_eq!(items(&store).len(), 1);
+}
+
+#[tokio::test]
+async fn resource_budget_counts_failed_disk_writes_and_caps_remaining_request() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![2]]);
+    fake.resources.store(true, Ordering::Release);
+    fake.missing_resources.store(true, Ordering::Release);
+    run(
+        &Controller::new(),
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    let id = items(&store)[0].id;
+    let resource = with_store(&store, |s| s.document(id, None))
+        .unwrap()
+        .resources
+        .remove(0);
+    fake.missing_resources.store(false, Ordering::Release);
+    let bad_root = dir.path().join("not-a-directory");
+    std::fs::write(&bad_root, b"blocking path").unwrap();
+    let policy = Robots::parse(
+        &Url::parse(&resource.url).unwrap(),
+        "User-agent: *\nAllow: /\n",
+    )
+    .unwrap();
+    let mut total = IMPORT_RESOURCES - 100;
+    let outcome = download_resource(
+        &store,
+        &bad_root,
+        &fake,
+        &AtomicBool::new(false),
+        &policy,
+        &resource,
+        &mut total,
+    )
+    .await
+    .unwrap();
+    assert!(outcome.into_result().is_err());
+    assert!(total > IMPORT_RESOURCES - 100);
+    assert_eq!(fake.limits.lock().unwrap().last().unwrap().1, 100);
+    assert_eq!(
+        with_store(&store, |s| s.resource(resource.id))
+            .unwrap()
+            .status,
+        "failed"
+    );
+}
+
+#[test]
+fn robots_validates_delays_and_html_without_rejecting_empty_policy() {
+    let url = Url::parse(PNG_URL).unwrap();
+    for delay in ["NaN", "inf", "-2", "61"] {
+        assert!(
+            Robots::parse(&url, &format!("User-agent: *\nCrawl-delay: {delay}\n")).is_err(),
+            "{delay}"
+        );
+    }
+    assert!(Robots::parse(&url, "<!doctype html><html>error</html>").is_err());
+    assert!(Robots::parse(&url, "\u{feff} <html>error</html>").is_err());
+    assert!(Robots::parse(&url, "# valid empty policy\n")
+        .unwrap()
+        .permits(&url));
+}
+
+#[test]
+fn robots_wildcards_end_anchors_queries_and_agent_precedence() {
+    let origin = Url::parse("https://computing.sogang.ac.kr").unwrap();
+    let policy = Robots::parse(&origin, "User-agent: *\nDisallow: /web/file/*a$\nDisallow: /web/file/private*\nAllow: /web/file/private/public\nDisallow: /query?*x=x$\n").unwrap();
+    for path in [
+        "/web/file/editor/aa",
+        "/web/file/private/a",
+        "/query?a=1&x=x",
+    ] {
+        assert!(!policy.permits(&origin.join(path).unwrap()), "{path}");
+    }
+    for path in [
+        "/web/file/editor/ab",
+        "/web/file/private/public/a",
+        "/query?x=y",
+    ] {
+        assert!(policy.permits(&origin.join(path).unwrap()), "{path}");
+    }
+    let specific = Robots::parse(
+        &origin,
+        "User-agent: *\nDisallow: /\nUser-agent: Rhythm\nDisallow: /private\nAllow: /private\n",
+    )
+    .unwrap();
+    assert!(specific.permits(&origin.join("/private").unwrap()));
+    assert!(specific.permits(&origin.join("/other").unwrap()));
+    assert!(!specific.permits(&Url::parse("https://www.sogang.ac.kr/other").unwrap()));
+}
+
+#[tokio::test]
+async fn redirect_targets_are_checked_against_robots_before_requesting() {
+    let fake = Fake::new(vec![]);
+    let start = Url::parse(PNG_URL).unwrap();
+    let blocked = "https://www.sogang.ac.kr/file-fe-prd/editor/blocked.png";
+    fake.redirects
+        .lock()
+        .unwrap()
+        .insert(start.to_string(), blocked.into());
+    let policy = Robots::parse(
+        &start,
+        "User-agent: *\nDisallow: /file-fe-prd/editor/blocked.png\n",
+    )
+    .unwrap();
+    let result = fetch(&fake, &start, None, 1024, &AtomicBool::new(false), &policy).await;
+    assert!(result.unwrap_err().contains("robots.txt"));
+    assert_eq!(fake.paths(), vec![start.to_string()]);
+    fake.redirects.lock().unwrap().insert(
+        start.to_string(),
+        "https://computing.sogang.ac.kr/web/file/editor/next.png".into(),
+    );
+    assert!(
+        fetch(&fake, &start, None, 1024, &AtomicBool::new(false), &policy)
+            .await
+            .unwrap_err()
+            .contains("robots.txt")
+    );
+    assert_eq!(fake.paths().len(), 2);
+    fake.redirects
+        .lock()
+        .unwrap()
+        .insert(start.to_string(), start.to_string());
+    assert!(
+        fetch(&fake, &start, None, 1024, &AtomicBool::new(false), &policy)
+            .await
+            .unwrap_err()
+            .contains("이동 경로")
+    );
+    assert_eq!(fake.paths().len(), 6);
+}
+
+#[tokio::test]
+async fn robots_html_mime_and_redirect_are_not_an_allow_all_policy() {
+    struct RobotsReply(bool);
+    impl Transport for RobotsReply {
+        async fn fetch(
+            &self,
+            url: &Url,
+            _: Option<(Option<String>, Option<String>)>,
+            _: usize,
+            _: &AtomicBool,
+        ) -> Result<network::Fetch, String> {
+            if self.0 {
+                Ok(network::Fetch::Body {
+                    bytes: b"User-agent: *\nAllow: /\n".to_vec(),
+                    mime: Some("text/html".into()),
+                    etag: None,
+                    last_modified: None,
+                })
+            } else {
+                Ok(network::Fetch::Redirect(
+                    url.join("/file-fe-prd/editor/robots.txt").unwrap(),
+                ))
+            }
+        }
+    }
+    for reply in [RobotsReply(true), RobotsReply(false)] {
+        assert!(Robots::load(
+            &reply,
+            &Url::parse(PNG_URL).unwrap(),
+            &AtomicBool::new(false)
+        )
+        .await
+        .is_err());
+    }
+}
+
+#[tokio::test]
+async fn allowed_same_origin_redirect_reapplies_policy_and_preserves_validator() {
+    let fake = Fake::new(vec![]);
+    let start = Url::parse("https://www.sogang.ac.kr/file-fe-prd/editor/previous.png").unwrap();
+    fake.redirects
+        .lock()
+        .unwrap()
+        .insert(start.to_string(), PNG_URL.into());
+    let policy = Robots::parse(&start, "User-agent: *\nAllow: /\n").unwrap();
+    let validator = Some((Some("\"test\"".into()), None));
+    let response = fetch(
+        &fake,
+        &start,
+        validator.clone(),
+        1024,
+        &AtomicBool::new(false),
+        &policy,
+    )
+    .await
+    .unwrap();
+    let network::Fetch::Body { bytes, .. } = response else {
+        panic!("expected image")
+    };
+    assert_eq!(bytes, png());
+    assert_eq!(
+        fake.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, v)| v)
+            .collect::<Vec<_>>(),
+        vec![&validator, &validator]
+    );
+}
+
+#[tokio::test]
+async fn historical_resume_counters_describe_only_current_attempt() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![2, 3]]);
+    fake.failed.lock().unwrap().insert(3);
+    run(
+        &Controller::new(),
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    let first = with_store(&store, |s| s.source(MAIN)).unwrap();
+    assert_eq!((first.discovered, first.archived, first.failed), (2, 1, 1));
+    fake.failed.lock().unwrap().clear();
+    run(
+        &Controller::new(),
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    let second = with_store(&store, |s| s.source(MAIN)).unwrap();
+    assert_eq!(
+        (second.discovered, second.archived, second.failed),
+        (1, 1, 0)
+    );
+    assert_eq!(items(&store).len(), 2);
 }

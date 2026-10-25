@@ -17,6 +17,8 @@ pub struct Client {
 }
 #[derive(Debug)]
 pub enum Fetch {
+    /// Return redirects to the policy owner; transport never follows them implicitly.
+    Redirect(Url),
     NotModified,
     Body {
         bytes: Vec<u8>,
@@ -70,167 +72,162 @@ impl Client {
         max_bytes: usize,
         cancel: &AtomicBool,
     ) -> Result<Fetch, Failure> {
-        let mut url = original.clone();
-        for redirect in 0..=3 {
-            validate_url(&url).map_err(Failure::Fatal)?;
-            let host = url
-                .host_str()
-                .ok_or_else(|| Failure::Fatal("학교 서버 주소가 올바르지 않습니다.".into()))?;
-            let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, 443))
-                .await
-                .map_err(|_| {
-                    Failure::Retry(
-                        "학교 서버 주소를 찾을 수 없습니다. 인터넷 연결을 확인해 주세요.".into(),
-                    )
-                })?
-                .collect();
-            if addresses.is_empty() || addresses.iter().any(|address| !public_ip(address.ip())) {
-                return Err(Failure::Fatal(
-                    "공개 인터넷 주소가 아닌 다운로드 요청을 차단했습니다.".into(),
-                ));
-            }
-            // Resolve once, validate every answer, and pin this connection to those
-            // answers. Automatic redirects/proxies must not bypass the same policy.
-            let client = reqwest::Client::builder()
-                .use_preconfigured_tls(super::tls::config().map_err(Failure::Fatal)?)
-                .https_only(true)
-                .no_proxy()
-                .redirect(reqwest::redirect::Policy::none())
-                .resolve_to_addrs(host, &addresses)
-                .connect_timeout(Duration::from_secs(8))
-                .timeout(Duration::from_secs(20))
-                .pool_max_idle_per_host(0)
-                .user_agent("Rhythm/0.2.0 (local university notice archive)")
-                .build()
-                .map_err(|_| Failure::Fatal("안전한 HTTPS 연결을 준비하지 못했습니다.".into()))?;
-            {
-                let mut last = self.gate.lock().await;
-                let delay = Duration::from_millis(650).saturating_sub(last.elapsed());
-                tokio::select! {_=tokio::time::sleep(delay)=>{},_=cancelled(cancel)=>return Err(Failure::Fatal("사용자가 동기화를 중단했습니다.".into()))};
-                *last = Instant::now();
-            }
-            let mut request = client.get(url.clone()).header(
-                header::ACCEPT,
-                if url.path() == "/robots.txt" {
-                    "text/plain,*/*;q=0.1"
-                } else if url.path().starts_with("/api/") {
-                    "application/json"
-                } else {
-                    "text/html,application/pdf,image/*,application/octet-stream;q=0.8"
-                },
-            );
-            // Conditional headers are tied to the original document, never forwarded
-            // across an origin-changing redirect.
-            if url.origin() == original.origin() {
-                if let Some((etag, last_modified)) = &validators {
-                    if let Some(etag) = etag {
-                        request = request.header(header::IF_NONE_MATCH, etag);
-                    }
-                    if let Some(last_modified) = last_modified {
-                        request = request.header(header::IF_MODIFIED_SINCE, last_modified);
-                    }
+        let url = original;
+        validate_url(url).map_err(Failure::Fatal)?;
+        let host = url
+            .host_str()
+            .ok_or_else(|| Failure::Fatal("학교 서버 주소가 올바르지 않습니다.".into()))?;
+        let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, 443))
+            .await
+            .map_err(|_| {
+                Failure::Retry(
+                    "학교 서버 주소를 찾을 수 없습니다. 인터넷 연결을 확인해 주세요.".into(),
+                )
+            })?
+            .collect();
+        if addresses.is_empty() || addresses.iter().any(|address| !public_ip(address.ip())) {
+            return Err(Failure::Fatal(
+                "공개 인터넷 주소가 아닌 다운로드 요청을 차단했습니다.".into(),
+            ));
+        }
+        // Resolve once, validate every answer, and pin this connection to those
+        // answers. Automatic redirects/proxies must not bypass the same policy.
+        let client = reqwest::Client::builder()
+            .use_preconfigured_tls(super::tls::config().map_err(Failure::Fatal)?)
+            .https_only(true)
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .resolve_to_addrs(host, &addresses)
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(20))
+            .pool_max_idle_per_host(0)
+            .user_agent(concat!(
+                "Rhythm/",
+                env!("CARGO_PKG_VERSION"),
+                " (local university notice archive)"
+            ))
+            .build()
+            .map_err(|_| Failure::Fatal("안전한 HTTPS 연결을 준비하지 못했습니다.".into()))?;
+        {
+            let mut last = self.gate.lock().await;
+            let delay = Duration::from_millis(650).saturating_sub(last.elapsed());
+            tokio::select! {_=tokio::time::sleep(delay)=>{},_=cancelled(cancel)=>return Err(Failure::Fatal("사용자가 동기화를 중단했습니다.".into()))};
+            *last = Instant::now();
+        }
+        let mut request = client.get(url.clone()).header(
+            header::ACCEPT,
+            if url.path() == "/robots.txt" {
+                "text/plain,*/*;q=0.1"
+            } else if url.path().starts_with("/api/") {
+                "application/json"
+            } else {
+                "text/html,application/pdf,image/*,application/octet-stream;q=0.8"
+            },
+        );
+        // Conditional headers are tied to the original document, never forwarded
+        // across an origin-changing redirect.
+        if url.origin() == original.origin() {
+            if let Some((etag, last_modified)) = &validators {
+                if let Some(etag) = etag {
+                    request = request.header(header::IF_NONE_MATCH, etag);
+                }
+                if let Some(last_modified) = last_modified {
+                    request = request.header(header::IF_MODIFIED_SINCE, last_modified);
                 }
             }
-            let mut response=request.send().await.map_err(|error|{
+        }
+        let mut response=request.send().await.map_err(|error|{
                 if error.is_builder(){Failure::Fatal("학교 응답 검증 값이 올바르지 않습니다.".into())}
                 else{Failure::Retry("학교 서버에 안전하게 연결하지 못했습니다. 연결 상태나 인증서 구성을 확인해 주세요.".into())}
             })?;
-            let status = response.status();
-            if [301, 302, 303, 307, 308].contains(&status.as_u16()) {
-                if redirect == 3 {
-                    return Err(Failure::Fatal(
-                        "학교 서버의 이동 경로가 너무 많습니다.".into(),
-                    ));
-                }
-                let location = response
-                    .headers()
-                    .get(header::LOCATION)
-                    .and_then(|v| v.to_str().ok())
-                    .ok_or_else(|| {
-                        Failure::Fatal("학교 서버 이동 주소가 올바르지 않습니다.".into())
-                    })?;
-                url = url.join(location).map_err(|_| {
-                    Failure::Fatal("학교 서버 이동 주소가 올바르지 않습니다.".into())
-                })?;
-                continue;
-            }
-            if status == StatusCode::NOT_MODIFIED {
-                if !validators
-                    .as_ref()
-                    .is_some_and(|(etag, modified)| etag.is_some() || modified.is_some())
-                {
-                    return Err(Failure::Fatal(
-                        "검증 정보가 없는 문서에 변경 없음 응답이 도착했습니다.".into(),
-                    ));
-                }
-                return Ok(Fetch::NotModified);
-            }
-            if status == StatusCode::TOO_MANY_REQUESTS {
+        let status = response.status();
+        if [301, 302, 307, 308].contains(&status.as_u16()) || status.as_u16() == 303 {
+            let location = response
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| Failure::Fatal("학교 서버 이동 주소가 올바르지 않습니다.".into()))?;
+            let target = url
+                .join(location)
+                .map_err(|_| Failure::Fatal("학교 서버 이동 주소가 올바르지 않습니다.".into()))?;
+            validate_url(&target).map_err(Failure::Fatal)?;
+            return Ok(Fetch::Redirect(target));
+        }
+        if status == StatusCode::NOT_MODIFIED {
+            if !validators
+                .as_ref()
+                .is_some_and(|(etag, modified)| etag.is_some() || modified.is_some())
+            {
                 return Err(Failure::Fatal(
-                    "학교 서버가 요청을 제한했습니다. 잠시 기다린 후 다시 동기화해 주세요.".into(),
+                    "검증 정보가 없는 문서에 변경 없음 응답이 도착했습니다.".into(),
                 ));
             }
-            if status.is_server_error() || status == StatusCode::REQUEST_TIMEOUT {
-                return Err(Failure::Retry(format!(
-                    "학교 서버에 일시적인 오류가 발생했습니다. (HTTP {})",
-                    status.as_u16()
-                )));
-            }
-            if !status.is_success() {
-                return Err(Failure::Fatal(format!(
-                    "공개 자료에 접근할 수 없습니다. (HTTP {})",
-                    status.as_u16()
-                )));
-            }
-            if response
-                .content_length()
-                .is_some_and(|size| size > max_bytes as u64)
-            {
+            return Ok(Fetch::NotModified);
+        }
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            return Err(Failure::Fatal(
+                "학교 서버가 요청을 제한했습니다. 잠시 기다린 후 다시 동기화해 주세요.".into(),
+            ));
+        }
+        if status.is_server_error() || status == StatusCode::REQUEST_TIMEOUT {
+            return Err(Failure::Retry(format!(
+                "학교 서버에 일시적인 오류가 발생했습니다. (HTTP {})",
+                status.as_u16()
+            )));
+        }
+        if !status.is_success() {
+            return Err(Failure::Fatal(format!(
+                "공개 자료에 접근할 수 없습니다. (HTTP {})",
+                status.as_u16()
+            )));
+        }
+        if response
+            .content_length()
+            .is_some_and(|size| size > max_bytes as u64)
+        {
+            return Err(Failure::Fatal(
+                "파일이 다운로드 크기 제한을 초과했습니다.".into(),
+            ));
+        }
+        let get_header = |name: header::HeaderName| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .filter(|v| v.len() <= 4096)
+                .map(str::to_owned)
+        };
+        let etag = get_header(header::ETAG);
+        let last_modified = get_header(header::LAST_MODIFIED);
+        let mime = get_header(header::CONTENT_TYPE).map(|v| {
+            v.split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase()
+        });
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| Failure::Retry("자료를 내려받던 중 연결이 끊어졌습니다.".into()))?
+        {
+            if bytes.len().saturating_add(chunk.len()) > max_bytes {
                 return Err(Failure::Fatal(
                     "파일이 다운로드 크기 제한을 초과했습니다.".into(),
                 ));
             }
-            let get_header = |name: header::HeaderName| {
-                response
-                    .headers()
-                    .get(name)
-                    .and_then(|v| v.to_str().ok())
-                    .filter(|v| v.len() <= 4096)
-                    .map(str::to_owned)
-            };
-            let etag = get_header(header::ETAG);
-            let last_modified = get_header(header::LAST_MODIFIED);
-            let mime = get_header(header::CONTENT_TYPE).map(|v| {
-                v.split(';')
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .to_ascii_lowercase()
-            });
-            let mut bytes = Vec::new();
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|_| Failure::Retry("자료를 내려받던 중 연결이 끊어졌습니다.".into()))?
-            {
-                if bytes.len().saturating_add(chunk.len()) > max_bytes {
-                    return Err(Failure::Fatal(
-                        "파일이 다운로드 크기 제한을 초과했습니다.".into(),
-                    ));
-                }
-                bytes.extend_from_slice(&chunk);
-                if cancel.load(Ordering::Acquire) {
-                    return Err(Failure::Fatal("사용자가 동기화를 중단했습니다.".into()));
-                }
+            bytes.extend_from_slice(&chunk);
+            if cancel.load(Ordering::Acquire) {
+                return Err(Failure::Fatal("사용자가 동기화를 중단했습니다.".into()));
             }
-            return Ok(Fetch::Body {
-                bytes,
-                etag,
-                last_modified,
-                mime,
-            });
         }
-        unreachable!()
+        Ok(Fetch::Body {
+            bytes,
+            etag,
+            last_modified,
+            mime,
+        })
     }
 }
 enum Failure {
@@ -275,6 +272,29 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
                 && positive_id(parts[4])
                 && !parts[5].is_empty();
             article || attachment || path.starts_with("/web/file/editor/") || path == "/robots.txt"
+        }
+        "eng.sogang.ac.kr" => {
+            let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+            let board = (parts.len() == 2 || parts.len() == 3)
+                && parts[0] == "board"
+                && ["notice", "recruit", "academic", "research"].contains(&parts[1])
+                && (parts.len() == 2 || positive_id(parts[2]));
+            let download = parts.len() == 2 && parts[0] == "download" && positive_id(parts[1]);
+            // Observed official recruit article /board/recruit/676 embeds
+            // /files/fBshpBDiVU3e0JhUuiWvR/image-941579-1.png. Do not allow
+            // generic asset, application, or arbitrary nested file routes.
+            let image = parts.len() == 3
+                && parts[0] == "files"
+                && !parts[1].is_empty()
+                && parts[1].len() <= 128
+                && parts[1]
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+                && parts[2].len() <= 512
+                && [".png", ".jpg", ".jpeg", ".gif", ".webp"]
+                    .iter()
+                    .any(|extension| parts[2].to_ascii_lowercase().ends_with(extension));
+            board || download || image || path == "/robots.txt"
         }
         _ => false,
     };
@@ -368,6 +388,44 @@ mod tests {
             &Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData?pkId=1").unwrap()
         )
         .is_ok());
+    }
+    #[test]
+    fn engineering_policy_is_limited_to_verified_public_routes() {
+        for path in [
+            "/board/notice",
+            "/board/recruit/676",
+            "/board/academic/4",
+            "/board/research/728",
+            "/download/708",
+            "/files/fBshpBDiVU3e0JhUuiWvR/image-941579-1.png",
+            "/robots.txt",
+        ] {
+            assert!(
+                validate_url(&Url::parse(&format!("https://eng.sogang.ac.kr{path}")).unwrap())
+                    .is_ok(),
+                "{path}"
+            );
+        }
+        for path in [
+            "/adm",
+            "/login",
+            "/search",
+            "/board/unknown",
+            "/board/notice/0",
+            "/board/notice/1/private",
+            "/download/0",
+            "/download/708/nested",
+            "/files/token/page.html",
+            "/files/token/nested/image.png",
+            "/files/token/a%2fimage.png",
+            "/assets/js/site.js",
+        ] {
+            assert!(
+                validate_url(&Url::parse(&format!("https://eng.sogang.ac.kr{path}")).unwrap())
+                    .is_err(),
+                "{path}"
+            );
+        }
     }
     #[tokio::test]
     async fn cancelled_request_never_starts_network_work() {

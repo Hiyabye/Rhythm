@@ -1,7 +1,7 @@
 use super::model::SourceDefinition;
 
 /// Stable identities follow the owner's public reference catalog. Catalog presence is
-/// not support: only the two families with verified article extraction are enabled.
+/// not support: each enabled family needs full article and local-resource verification.
 pub fn definitions() -> Vec<SourceDefinition> {
     let mut sources = Vec::new();
     let mut add = |id: &str,
@@ -49,14 +49,29 @@ pub fn definitions() -> Vec<SourceDefinition> {
         );
     }
     for (id, board, name) in [
-        ("academic", 1628, "학사공지"),
-        ("research", 1627, "연구공지"),
-        ("general", 1624, "일반공지"),
-        ("careers", 8290, "취업정보"),
-        ("newsletter", 1621, "뉴스레터"),
+        ("academic", "academic", "학사공지"),
+        ("research", "research", "연구공지"),
+        ("general", "notice", "일반공지"),
+        ("careers", "recruit", "취업정보"),
     ] {
-        add(&format!("eng-{id}"), name, "서강대학교 · 공과대학", "cms", format!("https://eng.sogang.ac.kr/front/cmsboardlist.do?bbsConfigFK={board}&siteId=eng&currentPage=1"), false);
+        add(
+            &format!("eng-{id}"),
+            name,
+            "서강대학교 · 공과대학",
+            "engineering",
+            format!("https://eng.sogang.ac.kr/board/{board}"),
+            true,
+        );
     }
+    add(
+        "eng-newsletter",
+        "뉴스레터",
+        "서강대학교 · 공과대학",
+        "cms",
+        "https://eng.sogang.ac.kr/front/cmsboardlist.do?bbsConfigFK=1621&siteId=eng&currentPage=1"
+            .into(),
+        false,
+    );
     for (id, path, name) in [
         ("news", "community/notice01.php", "학과소식"),
         ("general", "community/notice02.php", "일반공지"),

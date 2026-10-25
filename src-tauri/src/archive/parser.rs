@@ -4,6 +4,9 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use url::Url;
 
+#[path = "engineering.rs"]
+mod engineering;
+
 const PARSER_ERROR: &str = "학교 페이지 형식이 예상과 다릅니다. 기존 보관 자료는 유지됩니다.";
 fn invalid<T>() -> Result<T, String> {
     Err(PARSER_ERROR.into())
@@ -64,6 +67,15 @@ fn date(value: &str) -> Result<String, String> {
     } else {
         return invalid();
     };
+    if day.len() != 10
+        || day.as_bytes()[7] != b'-'
+        || day
+            .bytes()
+            .enumerate()
+            .any(|(index, byte)| !matches!(index, 4 | 7) && !byte.is_ascii_digit())
+    {
+        return invalid();
+    }
     let parts: Vec<_> = day.split('-').map(|v| v.parse::<u32>()).collect();
     if parts.len() != 3 || parts.iter().any(Result::is_err) {
         return invalid();
@@ -107,6 +119,9 @@ pub fn list_url(source: &SourceDefinition, page: u32) -> Result<Url, String> {
     if page == 0 || !source.supported {
         return invalid();
     }
+    if source.family == "engineering" {
+        return engineering::list_url(source, page);
+    }
     if source.id == "sogang-academic" {
         let mut url =
             Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData/boardList").unwrap();
@@ -135,6 +150,9 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
     if !source.supported || !positive(&entry.external_id) {
         return invalid();
     }
+    if source.family == "engineering" {
+        return engineering::detail_url(source, entry);
+    }
     if source.id == "sogang-academic" {
         let mut url = Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData").unwrap();
         url.query_pairs_mut()
@@ -159,7 +177,9 @@ pub fn listing(source: &SourceDefinition, page: u32, body: &str) -> Result<Listi
     if body.len() > 4 * 1024 * 1024 || page == 0 || !source.supported {
         return invalid();
     }
-    if source.id == "sogang-academic" {
+    if source.family == "engineering" {
+        engineering::listing(source, page, body)
+    } else if source.id == "sogang-academic" {
         main_listing(page, body)
     } else {
         computing_listing(source, page, body)
@@ -180,6 +200,7 @@ fn main_listing(page: u32, body: &str) -> Result<ListingPage, String> {
     if data["pageNum"].as_u64() != Some(page as u64)
         || data["pageSize"].as_u64() != Some(50)
         || rows.len() > 100
+        || (total > 0 && u64::from(pages) != total.div_ceil(50))
         || (total > 0 && (pages == 0 || page > pages || rows.is_empty()))
         || (total == 0 && (!rows.is_empty() || pages > 1))
     {
@@ -189,22 +210,43 @@ fn main_listing(page: u32, body: &str) -> Result<ListingPage, String> {
     if has_next != (page < pages) {
         return invalid();
     }
-    let mut seen = HashSet::new();
+    let mut seen = HashMap::new();
     let mut entries = Vec::new();
     for row in rows {
         if row["configId"].as_u64() != Some(2) {
             return invalid();
         }
         let external_id = id(&row["pkId"])?;
-        required_string(row, "title")?;
-        date(required_string(row, "regDate")?)?;
-        if seen.insert(external_id.clone()) {
+        let title = normalize(required_string(row, "title")?);
+        let published = date(required_string(row, "regDate")?)?;
+        let pinned = match row["isTop"].as_str() {
+            Some("Y") => true,
+            Some("N") => false,
+            _ => return invalid(),
+        };
+        let identity = (title, published, pinned);
+        if let Some(previous) = seen.insert(external_id.clone(), identity.clone()) {
+            if !pinned || previous != identity {
+                return invalid();
+            }
+        } else {
             entries.push(ListingEntry {
                 url: main_canonical(&external_id).into(),
                 external_id,
-                pinned: row["isTop"].as_str() == Some("Y"),
+                pinned,
             });
         }
+    }
+    // Some list renderers repeat identical pins. Count logical rows, but reject
+    // truncated payloads and conflicting duplicates rather than completing history.
+    if entries.len() > 50
+        || (total > 0 && data["size"].as_u64() != Some(entries.len() as u64))
+        || (total == 0
+            && data
+                .get("size")
+                .is_some_and(|size| size.as_u64() != Some(0)))
+    {
+        return invalid();
     }
     Ok(ListingPage {
         entries,
@@ -350,6 +392,9 @@ pub fn article(
     if body.len() > 4 * 1024 * 1024 {
         return invalid();
     }
+    if source.family == "engineering" {
+        return engineering::article(source, entry, body);
+    }
     let (title, author, category, published_at, modified_at, content, mut resources) =
         if source.id == "sogang-academic" {
             let value: Value = serde_json::from_str(body).map_err(|_| PARSER_ERROR)?;
@@ -451,9 +496,7 @@ pub fn article(
             )
         };
     let (body_html, body_text, inline) = sanitize(&content, &entry.url)?;
-    resources.extend(inline);
-    let mut seen = HashSet::new();
-    resources.retain(|r| seen.insert(r.url.clone()));
+    merge_inline_resources(&mut resources, inline);
     if resources.len() > 200
         || (body_text.is_empty() && !resources.iter().any(|r| r.kind == "image"))
     {
@@ -474,6 +517,19 @@ pub fn article(
         etag: None,
         last_modified: None,
     })
+}
+// One URL needs only one download. When also referenced by <img>, preserve its
+// image role so the reader hydrates it rather than treating it as attachment-only.
+fn merge_inline_resources(resources: &mut Vec<ResourceInput>, inline: Vec<ResourceInput>) {
+    for image in inline {
+        if let Some(existing) = resources.iter_mut().find(|r| r.url == image.url) {
+            existing.kind = "image".into();
+        } else {
+            resources.push(image);
+        }
+    }
+    let mut seen = HashSet::new();
+    resources.retain(|r| seen.insert(r.url.clone()));
 }
 fn filename(url: &Url) -> String {
     url.query_pairs()
@@ -685,6 +741,30 @@ fn computing_files(
         return invalid();
     }
     let end = closing(array, 0, b'[', b']')?;
+    // News uses a public route ID distinct from DETAIL.SN for some articles.
+    // Keep the public identity, but bind file parents to the verified internal ID.
+    let internal_id = if let Some(detail) = data.find("DETAIL:") {
+        let object = data[detail + "DETAIL:".len()..].trim_start();
+        if !object.starts_with('{') {
+            return invalid();
+        }
+        let end = closing(object, 0, b'{', b'}')?;
+        let fields = object_fields(&object[1..end])?;
+        let internal = scalar(fields.get("SN").ok_or(PARSER_ERROR)?, &aliases)?;
+        if !positive(&internal) {
+            return invalid();
+        }
+        if internal != entry.external_id {
+            let route = scalar_field(data, "routePath", &aliases)?;
+            let url = Url::parse(&entry.url).map_err(|_| PARSER_ERROR)?;
+            if !url.path().starts_with("/ko/community/news/detail/") || route != url.path() {
+                return invalid();
+            }
+        }
+        internal
+    } else {
+        entry.external_id.clone()
+    };
     let mut resources = Vec::new();
     for object in split(&array[1..end], b',')? {
         let object = object.trim();
@@ -694,11 +774,7 @@ fn computing_files(
         if !object.starts_with('{') || !object.ends_with('}') {
             return invalid();
         }
-        let mut fields = HashMap::new();
-        for field in split(&object[1..object.len() - 1], b',')? {
-            let (key, value) = field.split_once(':').ok_or(PARSER_ERROR)?;
-            fields.insert(key.trim(), value.trim());
-        }
+        let fields = object_fields(&object[1..object.len() - 1])?;
         let get = |key: &str| -> Result<String, String> {
             scalar(fields.get(key).ok_or(PARSER_ERROR)?, &aliases)
         };
@@ -706,7 +782,7 @@ fn computing_files(
         let saved = get("SAVE_FILE_NAME")?;
         let name = get("FILE_NAME")?;
         let parent = get("PARENT_SEQ")?;
-        if parent != entry.external_id
+        if parent != internal_id
             || !names.contains(&name)
             || !path.starts_with("community/")
             || !path.ends_with(&format!("/{}/", entry.external_id))
@@ -740,6 +816,45 @@ fn computing_files(
         return invalid();
     }
     Ok(resources)
+}
+fn object_fields(value: &str) -> Result<HashMap<&str, &str>, String> {
+    let mut fields = HashMap::new();
+    for field in split(value, b',')? {
+        let (key, value) = field.split_once(':').ok_or(PARSER_ERROR)?;
+        if fields.insert(key.trim(), value.trim()).is_some() {
+            return invalid();
+        }
+    }
+    Ok(fields)
+}
+fn scalar_field(
+    data: &str,
+    key: &str,
+    aliases: &HashMap<String, String>,
+) -> Result<String, String> {
+    let marker = format!("{key}:");
+    let start = data.find(&marker).ok_or(PARSER_ERROR)? + marker.len();
+    let rest = data[start..].trim_start();
+    let end = if rest.starts_with('"') {
+        let mut escaped = false;
+        let mut end = None;
+        for (index, byte) in rest.bytes().enumerate().skip(1) {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                end = Some(index + 1);
+                break;
+            }
+        }
+        end.ok_or(PARSER_ERROR)?
+    } else {
+        rest.bytes()
+            .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$'))
+            .count()
+    };
+    scalar(&rest[..end], aliases)
 }
 fn nuxt_data(body: &str) -> Result<(&str, HashMap<String, String>), String> {
     let marker = "window.__NUXT__=(function(";

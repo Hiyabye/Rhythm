@@ -11,8 +11,8 @@
   --sidebar: #f0eee7;
   --surface: #fffefa;
   --text: #283b31;
-  --secondary: #70796f;
-  --muted: #858b81;
+  --secondary: #5f6b60;
+  --muted: #636e62;
   --line: #e2e4db;
   --accent: #344c43;
   --accent-text: #fffefa;
@@ -79,7 +79,7 @@ a {
   text-decoration: none;
 }
 
-button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible {
+button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,.reader-body:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 4px;
 }
