@@ -1,18 +1,18 @@
 # Design — Quiet Intelligence
 
-Rhythm is a personal command center, not a chatbot-first dashboard. v0.2 makes actual local notices useful without AI, a model or an internet connection; v0.2.1 strengthens failure recovery, keyboard use and readability without redesigning the interface. Empty space communicates missing information; fictional notices and fabricated activity do not fill it.
+Rhythm is an information-first personal command center, not a chatbot dashboard. v0.3 adds local analysis beside the trustworthy archive, without making a model or internet access a prerequisite for reading. The v0.2.1 recovery, keyboard and reader boundaries remain. Empty states communicate unavailable analysis; fictional summaries and fabricated activity do not fill them.
 
 ## Korean-first navigation
 
 Main navigation remains **오늘 · 받은 소식 · 탐색 · 보관함 · 설정**. Labels, feedback and application-facing errors use natural Korean; product identifiers and model names stay recognizable.
 
-| View | v0.2 behavior |
+| View | v0.3 behavior |
 | --- | --- |
-| 오늘 | Actual archived/unread/saved/new-notice counts and recent local notices. Historical imports are excluded from the new-notice count. No generated briefing or relevance ranking. |
-| 받은 소식 | Paginated local notices with unread indicators, source/date/category metadata, filters and save controls. |
+| 오늘 | Actual archive counts plus bounded recent stored summaries and extracted dates when available. No personalized relevance ranking or fabricated briefing. |
+| 받은 소식 | Paginated notices with unread/source/date/original-category metadata, filters and save controls; compact AI summary/category only where results exist. |
 | 탐색 | Explicit local title/body search, mixed Korean/English/numeric terms, plain-text snippets and highlighted matches. |
 | 보관함 | User-saved notices, independent of extension enablement. Saving does not mean every attachment was downloaded. |
-| 설정 | Existing preferences plus extension opt-in, grouped source subscriptions, manual collection and progress/error controls. |
+| 설정 | Existing preferences/source controls plus model catalog/inventory, first-run setup, runtime recovery, AI processing preferences and queue controls. |
 
 `App.svelte` centralizes navigation, clears stale hash/scroll position and focuses main content. `ArchiveView.svelte` resets filters when changing sections, tracks asynchronous search generations and returns visible focus to the opened row on reader close, or to the list heading if that row disappeared. Saved/unread filters clamp to the last valid page after state changes, including late automatic read writes. Browser previews clearly identify desktop-only behavior and disable local operations rather than showing simulated persistence.
 
@@ -44,7 +44,21 @@ Actions distinguish **과거 자료 가져오기 / 이어받기** from **새 소
 
 Historical collection can be cancelled and resumed. Limited, interrupted or failed work is not labeled complete. “Public historical pages complete” does not mean every attachment succeeded. The initial incremental seed is recent historical material, not a flood of new announcements. Incremental checks revisit recent/pinned records and discover newer records; they do not promise a full audit of every old edit.
 
-Disabling requests cancellation and waits for in-flight work, hides source controls and leaves stored text, resources, search and saved items accessible. The UI does not present notifications, AI summaries, automatic scheduling or energy-aware crawling as operational.
+Disabling requests cancellation and waits for in-flight work, hides source controls and leaves stored text, resources, search and saved items accessible. The UI does not present notifications, automatic collection/scheduling or energy-aware crawling as operational. AI analysis is independent of collection and remains available for downloaded records when the extension is disabled.
+
+## Local intelligence surfaces
+
+First-run setup is a nonblocking app-shell banner with **로컬 AI 설정하기 / 나중에**. It never hides the archive or starts a weight download by itself. Settings shows OS/architecture/RAM/disk estimates, catalog provenance/license/size, installation progress, cancellation/retry, selected versus loaded model and recovery feedback. Compatibility labels distinguish verified, experimental and unsupported artifacts; experimental entries cannot be installed with one click. The current Qwen3.5 catalog remains experimental pending actual verification, so setup may need to be resumed later or use an existing compatible local file.
+
+Model selection does not imply loaded memory. **선택한 모델 불러오기**, **모델 메모리 해제** and engine restart are separate actions. External GGUF registration explicitly references a full path without copying; reference removal never deletes external bytes. Managed deletion requires a second confirmation and says that documents/analyses remain. Setup completion performs a real short inference rather than treating download success as health.
+
+The revision-keyed `AnalysisPanel.svelte` sits beside the reader header/body without replacing original content. It distinguishes intentional empty/no-model, pending/running, failure/retry, cached success, older model/configuration and partial input. Analyze/regenerate/cancel controls do not disable reading or saving. Existing results are accessible without the generating model. Old successful output remains visible when regeneration fails, and history retains model provenance.
+
+Short summary and central AI category lead; detailed summary, extracted facts/dates and expandable **원문 근거** follow. AI classification is labeled separately from the original board category. Extracted dates are informational, not official calendar events. Partial results show processed/total character counts and warn that the rest of the notice was not analyzed. Generated fields render as escaped text, not HTML; evidence validation is not a promise of semantic accuracy.
+
+Today shows only actual recent stored analyses, at most five previews. Other lists use compact optional indicators without requiring every item to be processed; search continues showing original matching snippets. Analysis lookup failures do not hide archive content. There is no conversational transcript, glowing AI decoration, personalized “you must do this” claim, automatic calendar action or notification.
+
+**AI 처리** defaults to explicit-only. The optional recent mode and per-open-session cap remain small; advanced controls expose output length rather than dozens of sampling parameters. A queue lists status, failure and cancellation. Model/backend/native-quality verification is separate from UI implementation; see [AI evaluation](AI_EVALUATION.md).
 
 ## Typography and layout
 
@@ -52,7 +66,7 @@ Pretendard Variable is imported locally through the `pretendard` npm package in 
 
 Hierarchy comes from type size/weight, whitespace and alignment. A stable left sidebar anchors navigation. Settings uses an internal section list and restrained content column; archive lists and reader share the same surfaces. At narrower widths sidebar labels yield to icon navigation and controls reflow. Native window controls and a minimum window size are retained. The reader region is keyboard-focusable, has a Korean label/visible outline and scrolls wide content with horizontal arrows. Narrow native macOS reading and browser WebKit/Chromium 640 px/200% wide-table containment were checked; full cross-platform native coverage remains open.
 
-Styles live in `src/app.css`; reusable symbols are in `src/lib/Icon.svelte`. Tailwind CSS is integrated, while semantic component classes define the visual system.
+Shared styles live in `src/app.css`, with AI surfaces in `src/lib/ai.css`; reusable symbols are in `src/lib/Icon.svelte`. Tailwind CSS is integrated, while semantic component classes define the visual system.
 
 ## Color
 
@@ -67,9 +81,9 @@ Light mode uses a near-white main surface (`#FAF9F6`) and warmer sidebar (`#F0EE
 
 ## Interaction and accessibility boundaries
 
-Theme selection applies immediately, persists through Rust and reverts on save failure; system mode follows OS preference. Energy profiles remain stored preferences without scheduling effects. Effects are short and reduced-motion styles are included.
+Theme selection applies immediately, persists through Rust and reverts on save failure; system mode follows OS preference. Energy profiles now control app-open analysis budgets and idle model release, not collection scheduling. Eco starts no automatic analysis; Balanced and Performance allow bounded, opt-in recent work while the window is focused. Effects are short and reduced-motion styles are included.
 
-The interface includes labels, icon-button names, native keyboard-operable controls, focus-visible outlines, a skip link and status/alert semantics. These are implementation properties, **not full accessibility conformance**. v0.2.1 adds compiled-frontend Chromium/WebKit tests for focus/keyboard scroll, settings/themes, failure states, reader markup and paging. Isolated native macOS checks additionally exercised source controls, read/save/search persistence, network-denied local images, corruption/repair, folder reveal, focusable content and narrow/light/dark layout. Full VoiceOver navigation and Windows/Linux webviews remain verification gates in [the roadmap](ROADMAP.md). Mocked IPC tests do not replace real Rust/native tests.
+The interface includes labels, icon-button names, native keyboard-operable controls, focus-visible outlines, a skip link and status/alert semantics. These are implementation properties, **not full accessibility conformance**. v0.2.1 adds compiled-frontend Chromium/WebKit tests for focus/keyboard scroll, settings/themes, failure states, reader markup and paging. Isolated native macOS checks additionally exercised source controls, read/save/search persistence, network-denied local images, corruption/repair, folder reveal, focusable content and narrow/light/dark layout. Full VoiceOver navigation and Windows/Linux webviews remain verification gates in [the roadmap](ROADMAP.md). The new AI browser cases cover setup, model controls, analysis/error/cancel/cache/partial states, escaped generated text and revision races using mocked IPC. Final v0.3 integrated/native verification remains in progress; browser offline mode does not prove native offline inference. Mocked IPC tests do not replace real Rust/native tests.
 
 ## Beat branding
 

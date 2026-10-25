@@ -13,6 +13,16 @@ export interface FixtureOptions {
   imageError?: boolean;
   imageDelay?: number;
   queryDelay?: number;
+  aiInstalled?: boolean;
+  aiResult?: boolean;
+  aiPartial?: boolean;
+  aiSetupNeeded?: boolean;
+  aiInstallError?: boolean;
+  aiInferenceError?: boolean;
+  aiDelay?: number;
+  aiText?: string;
+  revisions?: boolean;
+  aiResultLag?: boolean;
 }
 
 // Only the IPC boundary is faked: tests exercise the production Svelte build,
@@ -36,10 +46,15 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       last_error: null, next_page: 1, history_complete: false, status: 'idle', discovered: 0, archived: 0, failed: 0 }];
     const snapshot = { settings: { theme: 'light', energy_profile: 'eco', interests: '' },
       extensions: [{ id: 'sogang_notices', display_name: '서강대학교 공지', description: '학교 소식 보관', available: true, enabled: options.enabled ?? true }],
-      storage: { path: '/isolated/rhythm.sqlite3', bytes: 4096, schema_version: 2 },
+      storage: { path: '/isolated/rhythm.sqlite3', bytes: 4096, schema_version: 3 },
       worker: { state: 'ready', runtime_available: true, model: null, detail: null } };
     let sync = { running: false, source_id: null as string | null, mode: 'historical', page: 0, message: '수집 대기 중입니다.' };
-    const fixture = { options, entries, calls: [] as { command: string; args: any }[], sourceDelay: 0,
+    const model = (id = 'qwen35-4b') => ({ id, catalog_id: id, name: id === 'qwen35-4b' ? 'Qwen3.5 4B' : 'Qwen3.5 2B', ownership: 'managed', path: `models/${id}.gguf`, sha256: 'a'.repeat(64), expected_sha256: 'a'.repeat(64), expected_bytes: 2740937888, bytes: 2740937888, source_revision: 'pinned-revision', source_filename: `${id}.gguf`, status: 'installed', downloaded_bytes: 2740937888, resume_etag: null, error: null as string | null, created_at: '2026-10-24 12:00:00', updated_at: '2026-10-24 12:00:00' });
+    const analysis = (id: number, documentId: number, revisionId: number) => ({ id, job_id: id, document_id: documentId, revision_id: revisionId, task: 'notice_analysis', model_sha256: 'a'.repeat(64), prompt_version: 1, schema_version: 1, configuration_hash: 'b'.repeat(64), model_identity: { name: 'Qwen3.5 4B' }, result: { short_summary: options.aiText ?? '장학금 신청 일정과 제출 서류를 확인하세요.', summary: '대상 학생은 안내된 기간에 신청서를 제출해야 합니다.', category: '장학', uncertainty: 'clear', facts: [{ kind: 'deadline', label: '신청 마감', value: '2026년 10월 30일까지 신청', evidence: '2026년 10월 30일까지 신청서를 제출하세요.', date: '2026-10-30', uncertainty: 'clear' }] }, partial: options.aiPartial ?? false, processed_chars: 100, total_chars: options.aiPartial ? 10000 : 100, duration_ms: 1250, created_at: '2026-10-24 12:00:00' });
+    const ai = { catalog: ['qwen35-4b', 'qwen35-2b'].map((id) => ({ id, name: id === 'qwen35-4b' ? 'Qwen3.5 4B' : 'Qwen3.5 2B', parameters: id === 'qwen35-4b' ? '4B' : '2B', quantization: 'Q4_K_M', bytes: 2740937888, memory_bytes: 6000000000, description: '한국어 공지 분석용 로컬 모델', use_case: '균형 잡힌 공지 분석', repository: 'unsloth/Qwen3.5-4B-GGUF', revision: 'pinned-revision', filename: `${id}.gguf`, sha256: 'a'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null })), models: options.aiInstalled ? [model()] : [], preferences: { active_model_id: options.aiInstalled ? 'qwen35-4b' : null as string | null, setup_completed: !options.aiSetupNeeded, processing_mode: 'explicit', automatic_limit: 3, max_tokens: 1024 }, jobs: [] as any[], runtime: { state: 'ready', runtime_available: true, model: null as string | null, detail: null }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: 17179869184, disk_available_bytes: 27000000000, backend: 'cpu' }, busy: false };
+    const analyses = options.aiResult ? [analysis(1, 1, 1)] : [];
+    let resultLagUsed = false;
+    const fixture = { ai, analyses, options, entries, calls: [] as { command: string; args: any }[], sourceDelay: 0,
       stateDelay: 0, subscribeError: false, retryMessage: '자료를 내려받지 못했습니다. 연결을 확인해 주세요.' };
     Object.assign(window, { isTauri: true, __fixture: fixture, __TAURI_INTERNALS__: {
       invoke: async (command: string, args: any = {}) => {
@@ -51,6 +66,36 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             snapshot.settings = copy(args.settings); return copy(snapshot);
           case 'set_extension': snapshot.extensions[0].enabled = args.enabled; return copy(snapshot);
           case 'worker_status': return copy(snapshot.worker);
+          case 'ai_snapshot': return copy(ai);
+          case 'ai_recent': return copy(analyses.filter((result) => result.revision_id === 1));
+          case 'ai_results':
+            if (options.aiResultLag && !resultLagUsed && ai.jobs.some((job) => job.status === 'completed')) { resultLagUsed = true; return []; }
+            return copy(analyses.filter((result) => result.document_id === args.documentId && result.revision_id === args.revisionId).sort((a, b) => b.id - a.id));
+          case 'ai_install': {
+            let installed = ai.models.find((value) => value.id === args.catalogId);
+            if (!installed) { installed = model(args.catalogId); ai.models.push(installed); }
+            installed.status = 'downloading'; installed.downloaded_bytes = 1200000000; installed.bytes = 0; installed.error = null;
+            setTimeout(() => { if (installed!.status !== 'downloading') return; installed!.status = options.aiInstallError ? 'failed' : 'installed'; installed!.error = options.aiInstallError ? '모델 다운로드에 실패했습니다. 연결을 확인하고 이어받아 주세요.' : null; installed!.bytes = options.aiInstallError ? 0 : 2740937888; }, options.aiDelay ?? 1800);
+            return null;
+          }
+          case 'ai_cancel_download': ai.models.forEach((model) => { if (model.status === 'downloading') model.status = 'cancelled'; }); return null;
+          case 'ai_register': ai.models.push({ ...model('external-model'), catalog_id: null as any, ownership: 'external', path: args.path, name: '외부 로컬 모델' }); return null;
+          case 'ai_select': ai.preferences.active_model_id = args.id; ai.runtime.model = null; return null;
+          case 'ai_load': ai.runtime.model = ai.models.find((value) => value.id === ai.preferences.active_model_id)?.path ?? null; return null;
+          case 'ai_unload':
+          case 'ai_restart': ai.runtime.model = null; return null;
+          case 'ai_preferences': Object.assign(ai.preferences, args.preferences); return null;
+          case 'ai_remove': ai.models = ai.models.filter((model) => model.id !== args.id); if (ai.preferences.active_model_id === args.id) ai.preferences.active_model_id = null; return null;
+          case 'ai_analyze': {
+            const cached = analyses.find((result) => result.document_id === args.documentId && result.revision_id === args.revisionId);
+            if (cached && !args.regenerate) return { cached: copy(cached), job: null };
+            const generated = analysis(analyses.length + ai.jobs.length + 1, args.documentId, args.revisionId);
+            const job = { ...generated, model_identity: { name: 'Qwen3.5 4B' }, priority: 100, status: 'running', error: null as string | null, updated_at: '2026-10-24 12:00:00' };
+            ai.jobs.unshift(job);
+            setTimeout(() => { if (job.status !== 'running') return; job.status = options.aiInferenceError ? 'failed' : 'completed'; job.error = options.aiInferenceError ? '로컬 추론에 실패했습니다. 다시 요청해 주세요.' : null; if (!options.aiInferenceError) analyses.push(generated); }, options.aiDelay ?? 300);
+            return { cached: null, job: copy(job) };
+          }
+          case 'ai_cancel': { const job = ai.jobs.find((job) => job.id === args.id); if (job) job.status = 'cancelled'; return null; }
           case 'archive_sources': { const result = copy(sources); await wait(fixture.sourceDelay); return result; }
           case 'archive_summary': return { documents: entries.length, unread: entries.filter((x) => !x.is_read).length,
             saved: entries.filter((x) => x.saved).length, new_since_sync: 0, resource_bytes: 0 };
@@ -68,8 +113,8 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             const item = entries.find((entry) => entry.id === args.id);
             if (!item) throw '공지 없음';
             return { item: copy(item), canonical_url: 'https://computing.sogang.ac.kr/ko/community/news/detail/282',
-              body_html: options.body ?? '<p>보관된 한국어 본문입니다.</p>', body_text: '보관된 한국어 본문입니다.',
-              revision_id: 1, revisions: [{ id: 1, content_hash: 'abc', collected_at: '2026-10-24 12:00:00' }], resources: copy(options.resources ?? []) };
+              body_html: options.body ?? '<p>보관된 한국어 본문입니다.</p>', body_text: '보관된 한국어 본문입니다. 2026년 10월 30일까지 신청서를 제출하세요.',
+              revision_id: args.revisionId ?? 1, revisions: options.revisions ? [{ id: 1, content_hash: 'abc', collected_at: '2026-10-24 12:00:00' }, { id: 2, content_hash: 'def', collected_at: '2026-10-23 12:00:00' }] : [{ id: 1, content_hash: 'abc', collected_at: '2026-10-24 12:00:00' }], resources: copy(options.resources ?? []) };
           }
           case 'archive_state': {
             await wait(fixture.stateDelay);

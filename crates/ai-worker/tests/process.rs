@@ -98,6 +98,11 @@ fn executable_protocol_survives_bad_requests_and_exits_cleanly() {
     assert_eq!(responses[1]["result"]["healthy"], true);
     assert_eq!(responses[2]["result"]["engine"], "mistral.rs");
     assert_eq!(responses[2]["result"]["model"], Value::Null);
+    assert_eq!(responses[2]["result"]["loaded_backend"], Value::Null);
+    assert!(matches!(
+        responses[2]["result"]["build_backend"].as_str(),
+        Some("cpu" | "metal" | "cuda")
+    ));
     assert_eq!(responses[3]["ok"], false);
     assert_eq!(responses[4]["ok"], false);
     assert_eq!(responses[5]["result"]["shutdown"], true);
@@ -114,15 +119,18 @@ fn actual_local_inference() {
         .spawn()
         .unwrap();
     let mut input = child.stdin.take().unwrap();
-    writeln!(
-        input,
-        "{}",
-        json!({"version":1,"id":1,"method":"infer","params":{
-            "model_path":model,"prompt":"Say hello in one short sentence.","max_tokens":32
-        }})
-    )
-    .unwrap();
-    writeln!(input, "{}", json!({"version":1,"id":2,"method":"shutdown"})).unwrap();
+    for request in [
+        json!({"version":1,"id":1,"method":"load","params":{"model_path":model}}),
+        json!({"version":1,"id":2,"method":"status"}),
+        json!({"version":1,"id":3,"method":"infer","params":{
+            "model_path":model,"prompt":"한국어로 한 문장의 짧은 인사를 해 주세요.","max_tokens":32
+        }}),
+        json!({"version":1,"id":4,"method":"unload"}),
+        json!({"version":1,"id":5,"method":"status"}),
+        json!({"version":1,"id":6,"method":"shutdown"}),
+    ] {
+        writeln!(input, "{request}").unwrap();
+    }
     drop(input);
     let output = wait_with_deadline(child, Duration::from_secs(180));
     assert!(output.status.success());
@@ -133,18 +141,40 @@ fn actual_local_inference() {
         .collect();
     assert_eq!(
         responses.len(),
-        2,
+        6,
         "stdout must contain only protocol responses"
     );
-    assert_eq!(responses[1]["result"]["shutdown"], true);
-    let response = &responses[0];
+    for (index, response) in responses.iter().enumerate() {
+        assert_eq!(response["id"], index + 1);
+        assert_eq!(response["ok"], true, "{response}");
+    }
+    assert!(responses[0]["result"]["model"].is_string());
+    let backend = responses[0]["result"]["loaded_backend"].as_str().unwrap();
+    assert!(matches!(backend, "cpu" | "metal" | "cuda" | "unknown"));
+    if !cfg!(any(feature = "metal", feature = "cuda")) {
+        assert_eq!(backend, "cpu");
+    }
+    assert_eq!(
+        responses[0]["result"]["loaded_backend"],
+        responses[2]["result"]["loaded_backend"]
+    );
+    assert_eq!(
+        responses[0]["result"]["model"],
+        responses[1]["result"]["model"]
+    );
+    assert!(responses[3]["result"]["model"].is_null());
+    assert!(responses[3]["result"]["loaded_backend"].is_null());
+    assert!(responses[4]["result"]["model"].is_null());
+    assert!(responses[4]["result"]["loaded_backend"].is_null());
+    assert_eq!(responses[5]["result"]["shutdown"], true);
+    let response = &responses[2];
     assert_eq!(response["ok"], true, "{response}");
     assert!(!response["result"]["text"]
         .as_str()
         .unwrap()
         .trim()
         .is_empty());
-    println!("{}", response["result"]["text"]);
+    println!("{}", response["result"]);
 }
 
 #[test]

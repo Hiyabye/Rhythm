@@ -4,9 +4,10 @@
   import type { DocumentDetail, SyncStatus } from './types';
   import { archiveDate, archiveError, archiveSize, resourceStatus } from './archive-format';
   import Icon from './Icon.svelte';
+  import AnalysisPanel from './AnalysisPanel.svelte';
 
-  let { id, enabled, onclose, onchange }: {
-    id: number; enabled: boolean; onclose: () => void; onchange: () => void;
+  let { id, enabled, onclose, onchange, onaisettings }: {
+    id: number; enabled: boolean; onclose: () => void; onchange: () => void; onaisettings: () => void;
   } = $props();
   let detail = $state<DocumentDetail | null>(null);
   let loading = $state(true);
@@ -242,6 +243,7 @@
         </label>
       {/if}
     </header>
+    {#key detail.revision_id}<AnalysisPanel documentId={detail.item.id} revisionId={detail.revision_id} onsettings={onaisettings} {onchange} />{/key}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions (Wide document tables need an explicitly focusable keyboard scroll region.) -->
     <div class="reader-body" role="region" tabindex="0" aria-label="공지 본문 · 넓은 표는 좌우로 이동할 수 있습니다" onkeydown={scrollBody} use:explicitLinks>{@html safeHtml}</div>
     {#if !safeHtml && !loading}<div class="reader-plain">{detail.body_text}</div>{/if}

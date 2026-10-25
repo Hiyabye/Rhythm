@@ -21,7 +21,12 @@ struct AppState {
     archive: Arc<archive::sync::Controller>,
     network: archive::Client,
     registry: Registry,
-    worker: tokio::sync::Mutex<Worker>,
+    worker: Arc<tokio::sync::Mutex<Worker>>,
+    analysis: intelligence::analysis::Controller,
+    models: intelligence::models::Controller,
+    hardware: intelligence::models::Hardware,
+    ai_gate: tokio::sync::Mutex<()>,
+    maintenance_shutdown: Arc<std::sync::atomic::AtomicBool>,
 }
 #[derive(Serialize)]
 struct Snapshot {
@@ -35,7 +40,7 @@ fn storage_error(error: String) -> String {
     "로컬 데이터를 읽거나 저장하지 못했습니다. 저장 공간과 파일 권한을 확인해 주세요.".into()
 }
 async fn snapshot(state: &AppState) -> Result<Snapshot, String> {
-    let worker = state.worker.lock().await.status();
+    let worker = runtime_status(state);
     let store = state
         .store
         .lock()
@@ -84,9 +89,24 @@ async fn set_extension(
     }
     snapshot(&state).await
 }
+fn runtime_status(state: &AppState) -> WorkerStatus {
+    state
+        .worker
+        .try_lock()
+        .map(|mut w| w.status())
+        .unwrap_or(WorkerStatus {
+            state: "busy".into(),
+            runtime_available: true,
+            model: None,
+            detail: Some("로컬 AI 작업을 처리하고 있습니다.".into()),
+        })
+}
 #[tauri::command]
 async fn worker_status(state: tauri::State<'_, AppState>) -> Result<WorkerStatus, String> {
-    Ok(state.worker.lock().await.refresh().await)
+    match state.worker.try_lock() {
+        Ok(mut worker) => Ok(worker.refresh().await),
+        Err(_) => Ok(runtime_status(&state)),
+    }
 }
 fn main() {
     let app = tauri::Builder::default()
@@ -123,6 +143,8 @@ fn main() {
                 worker.refresh().await;
                 worker
             });
+            let hardware = intelligence::models::hardware(&data_root);
+            let maintenance_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
             app.manage(AppState {
                 _instance_lock: instance_lock,
                 store: Arc::new(Mutex::new(store)),
@@ -130,8 +152,17 @@ fn main() {
                 data_root,
                 archive,
                 network,
-                worker: tokio::sync::Mutex::new(worker),
+                worker: Arc::new(tokio::sync::Mutex::new(worker)),
+                analysis: intelligence::analysis::Controller::default(),
+                models: intelligence::models::Controller::default(),
+                hardware,
+                ai_gate: tokio::sync::Mutex::new(()),
+                maintenance_shutdown: maintenance_shutdown.clone(),
             });
+            tauri::async_runtime::spawn(intelligence::maintenance::run(
+                app.handle().clone(),
+                maintenance_shutdown,
+            ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -139,6 +170,21 @@ fn main() {
             save_settings,
             set_extension,
             worker_status,
+            intelligence::commands::ai_snapshot,
+            intelligence::commands::ai_install,
+            intelligence::commands::ai_cancel_download,
+            intelligence::commands::ai_register,
+            intelligence::commands::ai_select,
+            intelligence::commands::ai_load,
+            intelligence::commands::ai_unload,
+            intelligence::commands::ai_restart,
+            intelligence::commands::ai_remove,
+            intelligence::commands::ai_preferences,
+            intelligence::commands::ai_analyze,
+            intelligence::commands::ai_cancel,
+            intelligence::commands::ai_results,
+            intelligence::commands::ai_document_jobs,
+            intelligence::commands::ai_recent,
             archive::archive_sources,
             archive::archive_subscribe,
             archive::archive_summary,
@@ -160,9 +206,16 @@ fn main() {
             let Some(state) = handle.try_state::<AppState>() else {
                 return; // A rejected second launch never opened the store or worker.
             };
+            state
+                .maintenance_shutdown
+                .store(true, std::sync::atomic::Ordering::Release);
             state.registry.stop_all();
+            state.analysis.stop();
+            state.models.stop();
             tauri::async_runtime::block_on(async {
                 state.archive.wait().await;
+                state.analysis.wait().await;
+                state.models.wait().await;
                 state.worker.lock().await.shutdown().await;
             });
         }

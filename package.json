@@ -1,6 +1,6 @@
 {
   "name": "rhythm",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,6 +8,7 @@
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test:ui": "playwright test",
+    "test:desktop": "node --test tests/desktop.test.mjs",
     "tauri": "tauri",
     "desktop": "node scripts/desktop.mjs dev",
     "desktop:build": "node scripts/desktop.mjs build"

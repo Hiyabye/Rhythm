@@ -1,16 +1,18 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { ArchivePage, ArchiveSummary, DocumentItem, SourceInfo, SyncStatus } from './types';
+  import type { ArchivePage, ArchiveSummary, AiResult, DocumentItem, SourceInfo, SyncStatus } from './types';
   import { archiveDate, archiveError, archiveSize } from './archive-format';
   import DocumentReader from './DocumentReader.svelte';
   import Highlighted from './Highlighted.svelte';
   import Icon from './Icon.svelte';
 
-  let { page, desktop, enabled, onsettings }: { page: string; desktop: boolean; enabled: boolean; onsettings: () => void } = $props();
+  let { page, desktop, enabled, onsettings, onaisettings }: { page: string; desktop: boolean; enabled: boolean; onsettings: () => void; onaisettings: () => void } = $props();
   let result = $state<ArchivePage>({ items: [], total: 0, categories: [] });
   let summary = $state<ArchiveSummary | null>(null);
   let sources = $state<SourceInfo[]>([]);
+  let recentAnalyses = $state<AiResult[]>([]);
+  let aiError = $state('');
   let status = $state<SyncStatus | null>(null);
   let draft = $state('');
   let query = $state('');
@@ -78,6 +80,8 @@
       ]);
       if (active) { summary = counts; sources = catalog; status = sync; }
     } catch (reason) { if (active) error = archiveError(reason); }
+    try { const analyses = await invoke<AiResult[]>('ai_recent'); if (active) { recentAnalyses = analyses; aiError = ''; } }
+    catch (reason) { if (active) aiError = archiveError(reason); }
   }
 
   async function fetchPage(filters: { query: string; source_id: string | null; category: string | null; saved_only: boolean; unread_only: boolean; ascending: boolean; offset: number; limit: number }) {
@@ -169,11 +173,11 @@
 </script>
 
 {#if readerId !== null}
-  {#key readerId}<DocumentReader id={readerId} {enabled} onclose={closeReader} onchange={changed} />{/key}
+  {#key readerId}<DocumentReader id={readerId} {enabled} onclose={closeReader} onchange={changed} {onaisettings} />{/key}
 {:else}
   <section class="archive-view" aria-busy={loading}>
     {#if page === 'today'}
-      <div class="archive-intro"><span class="section-kicker">내 기기에 쌓이는 학교 소식</span><h2>오늘도, 필요한 소식부터.</h2><p>직접 보관한 공지를 차분히 살펴보세요. AI 분석이나 개인화 없이 실제 보관 현황을 보여드립니다.</p></div>
+      <div class="archive-intro"><span class="section-kicker">내 기기에 쌓이는 학교 소식</span><h2>오늘도, 필요한 소식부터.</h2><p>직접 보관한 공지와 이미 분석한 핵심을 차분히 살펴보세요. 개인화된 추천이 아닌, 로컬에 저장된 정보입니다.</p></div>
       <dl class="archive-statistics">
         <div><dt>보관된 공지</dt><dd>{summary?.documents ?? '—'}</dd></div>
         <div><dt>읽지 않은 공지</dt><dd>{summary?.unread ?? '—'}</dd></div>
@@ -181,6 +185,7 @@
         <div><dt>최근 동기화의 새 공지</dt><dd>{summary?.new_since_sync ?? '—'}</dd></div>
       </dl>
       <p class="footnote">과거 자료 가져오기는 새 공지 수에서 제외됩니다. 저장된 자료 {archiveSize(summary?.resource_bytes ?? 0)}.</p>
+      {#if recentAnalyses.length}<section class="ai-recent" aria-label="최근 분석한 소식"><div class="collection-heading"><h2>최근 분석한 소식</h2><span class="muted">저장된 AI 결과</span></div><ul>{#each recentAnalyses.slice(0, 5) as analysis}<li><button class="notice-open" onclick={() => { lastOpened = analysis.document_id; readerId = analysis.document_id; }}><span class="ai-tag">AI 분류 · {analysis.result.category}</span><strong>{analysis.result.short_summary}</strong>{#if analysis.partial}<span class="muted">일부 내용 분석</span>{/if}{#each analysis.result.facts.filter((fact) => fact.date).slice(0, 2) as fact}<span class="notice-meta">{fact.label} · {fact.date} · 원문에서 추출한 참고 일정</span>{/each}<span class="notice-meta">{analysis.model_identity.name ?? '로컬 모델'} · 원문과 근거 확인 →</span></button></li>{/each}</ul></section>{:else if aiError}<p class="footnote">저장된 AI 결과를 불러오지 못했습니다. 공지 목록은 계속 사용할 수 있습니다.</p>{/if}
     {/if}
     {#if status?.running}<div class="archive-sync-strip" role="status"><Icon name="refresh" size={16} /><span>{status.message}{#if status.page > 0} · {status.page}쪽{/if}</span><button class="text-button" onclick={onsettings}>설정에서 진행 확인</button></div>{/if}
     {#if page === 'search'}
@@ -203,10 +208,12 @@
     {#if result.items.length}
       <ul class="notice-list" aria-label="공지 목록">
         {#each result.items as item (item.id)}
+          {@const analysis = recentAnalyses.find((value) => value.document_id === item.id)}
           <li class:notice-unread={!item.is_read}>
             <button class="notice-open" id={`notice-${item.id}`} onclick={() => open(item)}>
               <span class="notice-title"><span class="notice-read-dot" aria-hidden="true"></span><Highlighted text={item.title} {query} /><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}</span></span>
               <span class="notice-meta"><span>{item.source_name}</span><time datetime={item.published_at}>{archiveDate(item.published_at)}</time>{#if item.category}<span>{item.category}</span>{/if}{#if item.historical}<span class="notice-history">과거 자료</span>{/if}</span>
+              {#if analysis && page !== 'search'}<span class="notice-ai-preview"><span class="ai-tag">AI · {analysis.result.category}</span> {analysis.result.short_summary}</span>{/if}
               {#if page === 'search' && item.snippet}<span class="notice-snippet"><Highlighted text={item.snippet} {query} /></span>{/if}
               {#if item.content_status === 'missing_resources'}<span class="notice-resource-warning">일부 첨부 자료 미저장</span>{/if}
             </button>

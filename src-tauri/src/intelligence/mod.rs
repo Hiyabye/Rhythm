@@ -1,6 +1,16 @@
+pub mod analysis;
+pub mod commands;
+#[cfg(test)]
+mod evaluation;
+pub mod maintenance;
+pub mod models;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{path::Path, process::Stdio};
+use std::{
+    path::{Path, PathBuf},
+    process::Stdio,
+};
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, ChildStdout, Command},
@@ -31,6 +41,19 @@ struct StatusPayload {
     // `model` is nullable, but must still be present in a protocol-v1 status.
     #[serde(deserialize_with = "Deserialize::deserialize")]
     model: Option<String>,
+    #[serde(default)]
+    build_backend: Option<String>,
+    #[serde(default)]
+    loaded_backend: Option<String>,
+}
+
+fn backend_name(backend: Option<&str>) -> &str {
+    match backend {
+        Some("cpu") => "CPU",
+        Some("metal") => "Metal",
+        Some("cuda") => "CUDA",
+        _ => "미확인",
+    }
 }
 
 async fn drain_diagnostics(mut reader: impl AsyncRead + Unpin, mut log: impl FnMut(&[u8])) {
@@ -46,6 +69,7 @@ async fn drain_diagnostics(mut reader: impl AsyncRead + Unpin, mut log: impl FnM
 }
 
 pub struct Worker {
+    executable: Option<PathBuf>,
     child: Option<Child>,
     input: Option<ChildStdin>,
     output: Option<BufReader<ChildStdout>>,
@@ -54,10 +78,13 @@ pub struct Worker {
 }
 impl Worker {
     pub fn launch(path: &Path) -> Self {
-        Self::launch_command(Command::new(path))
+        let mut worker = Self::launch_command(Command::new(path));
+        worker.executable = Some(path.to_owned());
+        worker
     }
     fn launch_command(mut command: Command) -> Self {
         let mut worker = Self {
+            executable: None,
             child: None,
             input: None,
             output: None,
@@ -96,12 +123,27 @@ impl Worker {
         worker
     }
     async fn request(&mut self, method: &str) -> Result<Value, String> {
+        self.request_params(method, Value::Null, Duration::from_secs(8))
+            .await
+    }
+    async fn request_params(
+        &mut self,
+        method: &str,
+        params: Value,
+        deadline: Duration,
+    ) -> Result<Value, String> {
         self.next_id += 1;
         let id = self.next_id;
         let operation = async {
             let input = self.input.as_mut().ok_or("AI 엔진이 실행 중이 아닙니다.")?;
             input
-                .write_all(format!("{}\n", json!({"version":1,"id":id,"method":method})).as_bytes())
+                .write_all(
+                    format!(
+                        "{}\n",
+                        json!({"version":1,"id":id,"method":method,"params":params})
+                    )
+                    .as_bytes(),
+                )
                 .await
                 .map_err(|_| "AI 엔진에 요청을 보내지 못했습니다.")?;
             input
@@ -125,14 +167,135 @@ impl Worker {
             }
             let response: Value = serde_json::from_slice(&line)
                 .map_err(|_| "AI 엔진 응답 형식이 올바르지 않습니다.")?;
-            if response["version"] != 1 || response["id"] != id || response["ok"] != true {
-                return Err("AI 엔진 요청을 처리하지 못했습니다.".into());
+            if response["version"] != 1 || response["id"] != id || !response["ok"].is_boolean() {
+                return Err("AI 엔진 응답의 프로토콜 정보가 올바르지 않습니다.".into());
+            }
+            if response["ok"] != true {
+                return Err(response["error"]
+                    .as_str()
+                    .unwrap_or("AI 엔진 요청을 처리하지 못했습니다.")
+                    .to_owned());
+            }
+            if !response["result"].is_object() {
+                return Err("AI 엔진 응답 내용이 올바르지 않습니다.".into());
             }
             Ok(response["result"].clone())
         };
-        timeout(Duration::from_secs(8), operation)
+        timeout(deadline, operation)
             .await
             .map_err(|_| "AI 엔진 응답 시간이 초과되었습니다.".to_string())?
+    }
+    pub async fn restart(&mut self) -> Result<WorkerStatus, String> {
+        self.terminate().await;
+        let path = self
+            .executable
+            .clone()
+            .ok_or("AI 엔진 실행 파일 경로가 없습니다.")?;
+        *self = Self::launch(&path);
+        let status = self.refresh().await;
+        if status.state != "ready" {
+            return Err(status
+                .detail
+                .unwrap_or_else(|| "AI 엔진을 다시 시작하지 못했습니다.".into()));
+        }
+        Ok(status)
+    }
+    async fn ensure_running(&mut self) -> Result<(), String> {
+        self.observe_exit();
+        if self.child.is_none() || self.input.is_none() {
+            self.restart().await?;
+        }
+        Ok(())
+    }
+    /// Inference is serial under the owning Tokio mutex. On cancellation, the
+    /// owner must drop this future then call `stop` before reusing the pipe.
+    pub async fn infer(
+        &mut self,
+        path: &Path,
+        prompt: &str,
+        max_tokens: u32,
+    ) -> Result<String, String> {
+        if prompt.trim().is_empty() || prompt.len() > 24 * 1024 || !(1..=4096).contains(&max_tokens)
+        {
+            return Err("분석 입력 또는 출력 길이가 허용 범위를 벗어났습니다.".into());
+        }
+        let path_text = path
+            .to_str()
+            .ok_or("모델 경로를 UTF-8로 읽을 수 없습니다.")?;
+        self.ensure_running().await?;
+        self.status.state = "busy".into();
+        let result = self
+            .request_params(
+                "infer",
+                json!({"model_path":path_text,"prompt":prompt,"max_tokens":max_tokens}),
+                Duration::from_secs(600),
+            )
+            .await
+            .and_then(|value| {
+                value["text"]
+                    .as_str()
+                    .filter(|text| !text.trim().is_empty())
+                    .map(|text| {
+                        (
+                            text.to_owned(),
+                            value["loaded_backend"].as_str().map(str::to_owned),
+                        )
+                    })
+                    .ok_or_else(|| "AI 엔진이 비어 있거나 잘못된 텍스트를 반환했습니다.".to_owned())
+            });
+        match &result {
+            Ok((_, backend)) => {
+                self.status.state = "ready".into();
+                self.status.model = Some(path.to_string_lossy().into_owned());
+                self.status.detail = Some(format!(
+                    "실제 불러온 백엔드: {} · GPU 사용률 측정값은 아닙니다.",
+                    backend_name(backend.as_deref())
+                ));
+            }
+            Err(error) => {
+                self.stop().await;
+                self.status.state = "failed".into();
+                self.status.detail = Some(error.clone());
+            }
+        }
+        result.map(|(text, _)| text)
+    }
+    pub async fn load(&mut self, path: &Path) -> Result<WorkerStatus, String> {
+        let path_text = path
+            .to_str()
+            .ok_or("모델 경로를 UTF-8로 읽을 수 없습니다.")?;
+        self.ensure_running().await?;
+        self.status.state = "loading".into();
+        if let Err(error) = self
+            .request_params(
+                "load",
+                json!({"model_path":path_text}),
+                Duration::from_secs(180),
+            )
+            .await
+        {
+            self.stop().await;
+            self.status.state = "failed".into();
+            self.status.detail = Some(error.clone());
+            return Err(error);
+        }
+        let status = self.refresh().await;
+        if status.state != "ready" || status.model.is_none() {
+            return Err(status
+                .detail
+                .unwrap_or_else(|| "모델을 불러오지 못했습니다.".into()));
+        }
+        Ok(status)
+    }
+    /// Reaping the process is the reliable memory-release boundary, including
+    /// allocations retained by an upstream runtime after a Model is dropped.
+    pub async fn unload(&mut self) -> Result<WorkerStatus, String> {
+        self.restart().await
+    }
+    pub async fn stop(&mut self) {
+        self.terminate().await;
+        self.status =
+            WorkerStatus::unavailable("AI 엔진이 중지되었습니다. 다음 요청 때 다시 시작합니다.");
     }
     pub async fn refresh(&mut self) -> WorkerStatus {
         let result = self.request("status").await.and_then(|value| {
@@ -148,8 +311,16 @@ impl Worker {
                 self.status = WorkerStatus {
                     state: "ready".into(),
                     runtime_available: result.runtime_available,
+                    detail: Some(format!(
+                        "빌드 백엔드: {} · 실제 불러온 백엔드: {} · GPU 사용률 측정값은 아닙니다.",
+                        backend_name(result.build_backend.as_deref()),
+                        if result.model.is_some() {
+                            backend_name(result.loaded_backend.as_deref())
+                        } else {
+                            "없음"
+                        }
+                    )),
                     model: result.model,
-                    detail: None,
                 };
             }
             Err(error) => {
@@ -171,6 +342,7 @@ impl Worker {
                 Ok(Some(_)) | Err(_) => {
                     self.input.take();
                     self.output.take();
+                    self.child.take();
                     self.status = WorkerStatus {
                         state: "failed".into(),
                         runtime_available: false,
@@ -244,6 +416,7 @@ fn main() {
         "null" => "null",
         "missing-runtime" => r#"{"engine":"mistral.rs","model":null}"#,
         "loaded" => r#"{"engine":"mistral.rs","runtime_available":true,"model":"/local/model.gguf"}"#,
+        "fallback" => r#"{"engine":"mistral.rs","runtime_available":true,"model":"/local/model.gguf","build_backend":"metal","loaded_backend":"cpu"}"#,
         "missing-model" => r#"{"engine":"mistral.rs","runtime_available":true}"#,
         "wrong-engine" => r#"{"engine":"other","runtime_available":true,"model":null}"#,
         "wrong-runtime" => r#"{"engine":"mistral.rs","runtime_available":"yes","model":null}"#,
@@ -343,6 +516,37 @@ fn main() {
         worker.terminate().await;
     }
     #[tokio::test]
+    async fn settings_status_distinguishes_accelerated_build_from_cpu_fallback() {
+        let mut worker = fake_worker("fallback");
+        let status = worker.refresh().await;
+        assert_eq!(status.state, "ready");
+        let detail = status.detail.unwrap();
+        assert!(detail.contains("빌드 백엔드: Metal"));
+        assert!(detail.contains("실제 불러온 백엔드: CPU"));
+        worker.terminate().await;
+    }
+    #[tokio::test]
+    async fn timed_out_or_cancelled_request_is_reaped_before_pipe_reuse() {
+        let mut worker = fake_worker("valid");
+        assert_eq!(worker.refresh().await.state, "ready");
+        let error = worker
+            .request_params("ping", Value::Null, Duration::from_millis(25))
+            .await
+            .unwrap_err();
+        assert!(error.contains("시간"));
+        worker.stop().await;
+        assert!(worker.child.is_none() && worker.input.is_none() && worker.output.is_none());
+        let mut worker = fake_worker("valid");
+        assert_eq!(worker.refresh().await.state, "ready");
+        tokio::select! {
+            result = worker.request("ping") => panic!("request finished before cancellation: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_millis(25)) => (),
+        }
+        worker.stop().await;
+        assert!(worker.child.is_none() && worker.input.is_none() && worker.output.is_none());
+    }
+
+    #[tokio::test]
     async fn missing_worker_does_not_crash_core() {
         let mut worker = Worker::launch(Path::new("/nonexistent/rhythm-ai-worker"));
         assert_eq!(worker.refresh().await.state, "failed");
@@ -358,8 +562,35 @@ fn main() {
         assert_eq!(worker.refresh().await.state, "ready");
         worker.child.as_mut().unwrap().kill().await.unwrap();
         assert_eq!(worker.status().state, "failed");
-        let mut worker = Worker::launch(Path::new(&path));
-        assert_eq!(worker.refresh().await.state, "ready");
+        // A later request restarts the crashed worker, without restarting the app.
+        assert_eq!(worker.restart().await.unwrap().state, "ready");
+        assert_eq!(worker.unload().await.unwrap().state, "ready");
+        worker.stop().await;
+        assert!(worker.child.is_none());
+        assert_eq!(worker.restart().await.unwrap().state, "ready");
+        assert!(worker.load(Path::new("/missing/model.gguf")).await.is_err());
+        assert!(
+            worker.child.is_none(),
+            "failed load must not poison a live pipe"
+        );
+        assert!(worker
+            .infer(Path::new("/missing/model.gguf"), "분석해 주세요.", 32)
+            .await
+            .is_err());
+        assert!(worker.child.is_none());
+        assert_eq!(worker.restart().await.unwrap().state, "ready");
+        let worker = std::sync::Arc::new(tokio::sync::Mutex::new(worker));
+        let mut tasks = Vec::new();
+        for _ in 0..4 {
+            let worker = worker.clone();
+            tasks.push(tokio::spawn(async move {
+                worker.lock().await.refresh().await.state
+            }));
+        }
+        for task in tasks {
+            assert_eq!(task.await.unwrap(), "ready");
+        }
+        let mut worker = worker.lock().await;
         worker.shutdown().await;
         assert!(worker.child.is_none());
     }

@@ -1,6 +1,6 @@
 [package]
 name = "rhythm-ai-worker"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.90"
 license = "MIT"
@@ -17,4 +17,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 filedescriptor = "0.8.3"
-mistralrs = { version = "=0.8.1", optional = true, default-features = false }
+# v0.9.1 is the first inspected release with native qwen35 GGUF text loading.
+mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git", rev = "11f255058573e085afe0a149f8a19cbd39aa1200", optional = true, default-features = false }

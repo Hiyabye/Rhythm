@@ -14,7 +14,7 @@ export interface Extension {
   enabled: boolean;
 }
 export interface WorkerStatus {
-  state: 'ready' | 'unavailable' | 'failed';
+  state: 'ready' | 'unavailable' | 'failed' | 'loading' | 'busy';
   runtime_available: boolean;
   model: string | null;
   detail: string | null;
@@ -84,6 +84,47 @@ export interface DocumentDetail {
   revision_id: number;
   revisions: RevisionInfo[];
   resources: ResourceRecord[];
+}
+export interface CatalogEntry {
+  id: string; name: string; parameters: string; quantization: string;
+  bytes: number; memory_bytes: number; description: string; use_case: string;
+  repository: string; revision: string; filename: string; sha256: string; license: string;
+  compatibility: 'verified' | 'experimental' | 'unsupported'; reason: string | null;
+}
+export interface AiModel {
+  id: string; catalog_id: string | null; name: string; ownership: 'managed' | 'external'; path: string;
+  sha256: string | null; expected_sha256: string | null; expected_bytes: number | null; bytes: number;
+  source_revision: string | null; source_filename: string | null; status: string;
+  downloaded_bytes: number; resume_etag: string | null; error: string | null; created_at: string; updated_at: string;
+}
+export interface AiPreferences {
+  active_model_id: string | null; setup_completed: boolean; processing_mode: 'explicit' | 'recent';
+  automatic_limit: number; max_tokens: number;
+}
+export interface AnalysisKey {
+  document_id: number; revision_id: number; task: string; model_sha256: string;
+  prompt_version: number; schema_version: number; configuration_hash: string;
+}
+export interface AiJob extends AnalysisKey {
+  id: number; model_identity: { name?: string }; priority: number; status: string; error: string | null;
+  duration_ms: number | null; created_at: string; updated_at: string;
+}
+export interface AnalysisFact {
+  kind: string; label: string; value: string; evidence: string; date: string | null;
+  uncertainty: 'clear' | 'ambiguous' | 'unknown';
+}
+export interface Analysis {
+  short_summary: string; summary: string; category: string;
+  uncertainty: 'clear' | 'ambiguous' | 'unknown'; facts: AnalysisFact[];
+}
+export interface AiResult extends AnalysisKey {
+  id: number; job_id: number; model_identity: { name?: string; sha256?: string; max_tokens?: number }; result: Analysis;
+  partial: boolean; processed_chars: number; total_chars: number; duration_ms: number; created_at: string;
+}
+export interface AiSnapshot {
+  catalog: CatalogEntry[]; models: AiModel[]; preferences: AiPreferences; jobs: AiJob[]; runtime: WorkerStatus;
+  hardware: { os: string; arch: string; ram_bytes: number; disk_available_bytes: number; backend: string };
+  busy: boolean;
 }
 export interface ArchiveQuery {
   query: string;

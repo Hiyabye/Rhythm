@@ -5,12 +5,16 @@ use std::path::{Path, PathBuf};
 mod archive;
 #[cfg(test)]
 mod archive_tests;
-const SCHEMA_VERSION: i64 = 2;
+pub mod intelligence;
+#[cfg(test)]
+mod intelligence_tests;
+const SCHEMA_VERSION: i64 = 3;
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
     let migrations = [
         include_str!("../../migrations/001_foundation.sql"),
         include_str!("../../migrations/002_archive.sql"),
+        include_str!("../../migrations/003_intelligence.sql"),
     ];
     for migration in migrations.iter().skip(version as usize) {
         let transaction = connection.transaction().map_err(|e| e.to_string())?;
@@ -73,6 +77,7 @@ impl Store {
             path: path.into(),
         };
         store.reset_interrupted()?;
+        store.reset_ai_interrupted()?;
         Ok(store)
     }
     pub fn settings(&self) -> Result<Settings, String> {
@@ -186,7 +191,7 @@ mod tests {
         let path = dir.path().join("db");
         Connection::open(&path)
             .unwrap()
-            .execute_batch("PRAGMA user_version=3")
+            .execute_batch("PRAGMA user_version=99")
             .unwrap();
         assert!(Store::open(&path).is_err());
     }
