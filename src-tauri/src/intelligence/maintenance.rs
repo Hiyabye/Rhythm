@@ -1,5 +1,5 @@
 //! Bounded maintenance while the application is open; not a background scheduler.
-use crate::{archive::model::ArchiveQuery, storage::intelligence::AiPreferences, AppState};
+use crate::{storage::intelligence::AiPreferences, AppState};
 use std::{
     collections::HashSet,
     sync::{
@@ -83,13 +83,6 @@ fn session_boundary(time: SystemTime) -> Option<String> {
         since_epoch.subsec_millis()
     ))
 }
-fn newly_collected(collected_at: &str, historical: bool, boundary: &str) -> bool {
-    !historical
-        && collected_at.len() == 24
-        && collected_at.ends_with('Z')
-        && collected_at > boundary
-}
-
 /// Start once after `AppState` is managed. The owner must set `shutdown=true` before
 /// stopping controllers/worker on exit. No task is started outside the app's lifetime.
 pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
@@ -99,6 +92,7 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
     let mut last_activity = Instant::now();
     let mut previous_model = None;
     let mut previous_job = None;
+    let mut previous_operation = 0;
     while !shutdown.load(Ordering::Acquire) {
         // No immediate startup inference. A model is loaded only by explicit setup,
         // explicit analysis, or the opt-in focused-window policy below.
@@ -113,6 +107,25 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
             .get_webview_window("main")
             .and_then(|window| window.is_focused().ok())
             .unwrap_or(false);
+        if state.analysis.running() || state.models.busy() {
+            last_activity = Instant::now();
+            continue;
+        }
+        // Read policy only after admission is serialized with user preference
+        // changes. A snapshot taken before this gate could admit work after opt-out.
+        // Never wait behind a user operation, and preserve its lock order.
+        let Ok(_gate) = state.ai_gate.try_lock() else {
+            last_activity = Instant::now();
+            continue;
+        };
+        if shutdown.load(Ordering::Acquire) || state.analysis.running() {
+            continue;
+        }
+        let operation = state.ai_operation.activity_generation();
+        if previous_operation != operation {
+            previous_operation = operation;
+            last_activity = Instant::now();
+        }
         let context = state.store.try_lock().ok().and_then(|store| {
             Some((
                 store.settings().ok()?.energy_profile,
@@ -130,18 +143,6 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
         if previous_job != newest_job {
             previous_job = newest_job;
             last_activity = Instant::now();
-        }
-        if state.analysis.running() || state.models.busy() {
-            last_activity = Instant::now();
-            continue;
-        }
-        // Never wait behind a user operation, and preserve its lock order.
-        let Ok(_gate) = state.ai_gate.try_lock() else {
-            last_activity = Instant::now();
-            continue;
-        };
-        if shutdown.load(Ordering::Acquire) || state.analysis.running() {
-            continue;
         }
         {
             let Ok(mut worker) = state.worker.try_lock() else {
@@ -167,9 +168,9 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
         let Some(boundary) = boundary.as_deref() else {
             continue;
         };
-        // Only inspect a small recent publication window. This is intentionally not
-        // a scan of all stored documents, and an old publication may be skipped.
-        let candidate = candidates(&state, boundary, &attempted);
+        // Bound recent ingestion/revision candidates, independent of publication
+        // order. Initial historical backfill and already-attempted work are excluded.
+        let candidate = candidates(&state, &preferences, boundary, &attempted);
         let Some((document, revision)) = candidate else {
             continue;
         };
@@ -197,43 +198,22 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
 
 fn candidates(
     state: &AppState,
+    preferences: &AiPreferences,
     boundary: &str,
     attempted: &HashSet<(i64, i64)>,
 ) -> Option<(i64, i64)> {
     let store = state.store.try_lock().ok()?;
-    let preferences = store.ai_preferences().ok()?;
     let model = store
         .ai_model(preferences.active_model_id.as_deref()?)
         .ok()??;
     if model.status != "installed" {
         return None;
     }
-    let page = store
-        .archive_query(&ArchiveQuery {
-            limit: Some(20),
-            ..Default::default()
-        })
-        .ok()?;
-    let jobs = store.ai_jobs(100).ok()?;
-    for item in page.items {
-        if !newly_collected(&item.collected_at, item.historical, boundary) {
-            continue;
-        }
-        let revision = store.document(item.id, None).ok()?.revision_id;
-        if attempted.contains(&(item.id, revision))
-            || jobs
-                .iter()
-                .any(|job| job.key.document_id == item.id && job.key.revision_id == revision)
-        {
-            continue;
-        }
-        let key =
-            super::analysis::key_for(item.id, revision, &model, preferences.max_tokens).ok()?;
-        if store.ai_cached_result(&key).ok()?.is_none() {
-            return Some((item.id, revision));
-        }
-    }
-    None
+    store
+        .ai_recent_candidates(boundary, 20)
+        .ok()?
+        .into_iter()
+        .find(|identity| !attempted.contains(identity))
 }
 
 #[cfg(test)]
@@ -273,7 +253,7 @@ mod tests {
         assert_eq!(automatic_budget("balanced", &p, true), 0);
     }
     #[test]
-    fn automatic_work_is_session_bounded_and_never_historical() {
+    fn automatic_work_is_session_bounded() {
         let mut p = preferences();
         p.automatic_limit = 1;
         assert_eq!(automatic_budget("balanced", &p, true), 1);
@@ -281,12 +261,6 @@ mod tests {
         assert_eq!(automatic_budget("performance", &p, true), 0);
         p.automatic_limit = u32::MAX;
         assert_eq!(automatic_budget("performance", &p, true), 20);
-        let start = "2026-10-25T12:00:00.500Z";
-        assert!(!newly_collected("2026-10-25T12:00:00.499Z", false, start));
-        assert!(!newly_collected(start, false, start));
-        assert!(!newly_collected("2026-10-25T12:00:00.501Z", true, start));
-        assert!(newly_collected("2026-10-25T12:00:00.501Z", false, start));
-        assert!(!newly_collected("invalid", false, start));
     }
     #[test]
     fn utc_boundary_and_residency_policy_are_deterministic() {

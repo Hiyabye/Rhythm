@@ -7,6 +7,9 @@ stderr; stdout carries only versioned JSON Lines IPC.
 
 ## Runtime and compatibility
 
+Current application/worker version is **0.3.1**. The worker protocol remains v1;
+application prompt versioning and stored-result schemas are separate contracts.
+
 The worker pins **mistral.rs v0.9.1**, upstream release commit
 [`11f255058573e085afe0a149f8a19cbd39aa1200`](https://github.com/EricLBuehler/mistral.rs/tree/11f255058573e085afe0a149f8a19cbd39aa1200).
 The published crates.io version remained 0.8.1 when inspected, so this is a commit-pinned
@@ -90,6 +93,27 @@ worker. Closing stdin or sending `shutdown` ends it.
 
 Existing `ping`, `status`, `infer`, and `shutdown` envelopes remain compatible; `load`
 and `unload` are additive. `infer` still loads/switches on demand when necessary.
+
+Analysis additionally negotiates the optional `analysis_json_v1` status capability and
+sends `"output_mode":"analysis_json_v1"` only to a supporting worker. Absent/null mode
+keeps ordinary text generation, including setup health checks. Unknown modes fail;
+callers cannot supply arbitrary grammars. Legacy workers remain usable for ordinary
+inference, but constrained analysis returns rebuild guidance without sending an unknown
+parameter or poisoning the existing pipe. Malformed supplied capability values fail
+validation and reap the child.
+
+The analysis mode uses the pinned runtime's existing `Constraint::JsonSchema` API with
+a static closed schema: five required output fields, the eight categories, qualitative
+uncertainty, and at most six facts containing exactly `kind`, `label`, `value` and
+nonnegative `evidence_id`. Keep this schema aligned with application generation ingress.
+The mode explicitly stops at `<|endoftext|>`: a real 2B trial otherwise produced complete
+JSON followed by repeated grammar-EOS tokens until the token limit. This is termination
+handling, not post-hoc trimming of invalid output. Output-limit/runtime failures can
+still prevent a complete JSON result. Source/date/time/link and duplicate validators,
+one bounded repair and cancellation remain application responsibilities. Grammar does
+not prove correct categories, current deadlines or preserved exclusions. See the
+[bounded A/B results](../../docs/AI_EVALUATION.md#bounded-schema-decoding-experiment).
+
 Model paths are canonical local `.gguf` files, with GGUF v2/v3 magic/version validation
 before passing them to mistral.rs. Full architecture/tensor validation occurs in the
 runtime. The previous model is dropped before another is loaded. Reuse requires the
@@ -98,15 +122,21 @@ this metadata check is not an integrity guarantee. The application independently
 checks the artifact SHA-256 and unloads on external-file re-registration.
 
 ```json
-{"version":1,"id":2,"ok":true,"result":{"engine":"mistral.rs","runtime_available":true,"model":null,"load_ms":0,"build_backend":"cpu","loaded_backend":null}}
-{"version":1,"id":4,"ok":true,"result":{"text":"실제 생성된 응답","model":"/absolute/path/model.gguf","load_ms":123,"loaded_backend":"cpu","generation_ms":456,"usage":{"completion_tokens":10}}}
+{"version":1,"id":2,"ok":true,"result":{"engine":"mistral.rs","runtime_available":true,"model":null,"load_ms":0,"build_backend":"cpu","loaded_backend":null,"analysis_json_v1":true}}
+{"version":1,"id":4,"ok":true,"result":{"text":"실제 생성된 응답","model":"/absolute/path/model.gguf","load_ms":123,"request_load_ms":0,"model_reused":true,"loaded_backend":"cpu","input_validation_ms":0,"request_preparation_ms":1,"generation_ms":456,"finish_reason":"stop","usage":{"completion_tokens":10}}}
 {"version":1,"id":4,"ok":false,"error":"한국어 오류 메시지"}
 ```
 
 The `usage` example is abbreviated: the runtime returns prompt/completion counts and
-its timing/throughput fields. These are measurements from that request, not advertised
-performance guarantees. `load`/`unload` return status; `ping` returns `healthy`, and
-`shutdown` returns `shutdown`.
+its timing/throughput fields. The parent preserves these as typed optional diagnostics
+through `infer_detailed` and capability-negotiated `infer_analysis`; `infer` remains a text-returning compatibility wrapper.
+`load_ms` is the historical last successful load duration, not this request's load cost.
+`request_load_ms` and `model_reused` distinguish loading from reuse (zero request load
+when reused). Input validation, request preparation, generation wall time, finish reason
+and upstream engine usage are separate fields; engine timings are not end-to-end app
+latency. Missing legacy metrics remain unknown, while malformed supplied metrics fail
+and reap the worker. These are request observations, not performance guarantees.
+`load`/`unload` return status; `ping` returns `healthy`, and `shutdown` returns `shutdown`.
 
 Inputs are nonempty and at most **24 KiB UTF-8**, outputs 1–4096 tokens (default 128),
 with one sequence and a 32,768-token maximum context. Prefix caching is disabled to
@@ -129,7 +159,11 @@ validated health check.
 Inference cancellation is **process cancellation**, not an in-band request queued behind
 inference: drop the pending future and call `Worker::stop().await` before any further
 pipe use. This cancels the current operation and releases its model memory. A subsequent
-request reloads once; normal completed requests reuse the worker/model. Application
+request reloads once; normal completed requests reuse the worker/model. The application's
+in-memory operation owner exposes load/setup/register phases and cancellation across
+Settings remounts. A cancelled blocking verifier is joined before releasing admission;
+cancellation during serial IPC stops/reaps the child. Setup completion is persisted only
+after its real inference succeeds. Application
 `unload` restarts the empty worker to guarantee the OS reclaims upstream allocations.
 The direct protocol `unload` drops the model; OS-level memory release is guaranteed only
 by reaping its process. Shutdown requests clean exit before forced termination; child
@@ -166,8 +200,8 @@ and lifecycle behavior, **not useful summary quality**. The fallback policy is t
 with deterministic loader failures; an actual unavailable-GPU-to-CPU transition was
 not forced. This baseline alone does not establish Qwen3.5 compatibility or quality.
 
-Separately, the pinned **Qwen3.5 2B and 4B Q4_K_M** artifacts each completed one useful
-synthetic Korean scholarship analysis through the actual application worker/controller/
+In the historical v0.3.0 baseline, the pinned **Qwen3.5 2B and 4B Q4_K_M** artifacts each
+completed one useful synthetic Korean scholarship analysis through the actual worker/controller/
 validation/Store path on this macOS arm64 Metal setup. Both produced correct classification
 and grounded deadline, persisted results, reused cache, isolated a new revision and read
 cached output after database reopen with the worker stopped. Debug load/complete-analysis
@@ -176,14 +210,34 @@ model integrity verification, not isolated generation. Post-load worker RSS samp
 **2,982,784 KiB** and **5,341,680 KiB**, not peak memory. Neither run establishes release
 performance, broad Korean quality, native UI operation or OS-enforced offline inference.
 
-The analysis layer now uses **prompt version 2 / stored schema 1**: generated facts select
-source-owned passage IDs, the backend supplies exact evidence and derives explicit supported
-dates, and one bounded validation repair attempt is allowed. Both final samples succeeded
-on their first attempt. This application contract is distinct from the worker's generic
-text protocol; see [`docs/AI_EVALUATION.md`](../../docs/AI_EVALUATION.md) for exact artifact
-revisions/digests, output details, measurements and remaining gates.
+Those baseline samples used **prompt version 2 / stored schema 1** and succeeded on their
+first attempt. Current v0.3.1 uses **prompt 3 / stored schema 1** with explicit `{id,text}`
+source objects. Generation ingress requires only `kind`, `label`, `value`, `evidence_id`
+per fact; the backend supplies exact evidence and conservatively derived dates/uncertainty.
+Literal date/time validation and one bounded repair remain. Long input selects exact
+head/tail/important ranges within 18 KiB of encoded source and a 24 KiB prompt. Selector
+v4 deduplicates exact repeated passages only over budget and separates structural table
+rows; it is not full-document understanding. Full model-file hashing remains mandatory;
+the parent enables approved `sha2` assembly only on macOS aarch64.
+
+The current local checkpoint passed **175 workspace Rust tests** (eight opt-in tests
+ignored), strict workspace Clippy, 86 mocked-IPC browser checks and five POSIX desktop
+checks, and built a debug macOS bundle. Separate isolated native 2B/Metal checks covered
+load/remount/cancel, setup cancellation during verification, successful real setup and
+OS-network-denied prompt-v3 regeneration. These are functional checks, not broad quality
+or release-performance guarantees. An initial 18-synthetic/six-public-archive case campaign
+per model completed, followed by an eight-synthetic/three-archive-per-model decoding A/B
+experiment. It improved completed jobs from 17/22 to 20/22 with similar single-case timings,
+so analysis now uses the negotiated constrained mode. Semantic mistakes remain, and the
+full 18-case campaign has not been repeated under the final default; neither grammar nor
+prompt changes prove those mistakes eliminated.
+
+These application contracts are distinct from the worker's generic text protocol; see
+[`docs/AI_EVALUATION.md`](../../docs/AI_EVALUATION.md) for exact artifact identities,
+measurements, final campaign outcomes and remaining gates. Transient diagnostics retain
+bounded timing/count reports without document or generated text; they are not persisted.
 
 Initial 4B CPU loading failed under then-current memory pressure before generation.
-Qwen3.5 CPU/CUDA, 9B (not downloaded), Windows/Linux runtime, complete native flows and
-release-optimized installers remain unverified. Do not infer those claims from Metal
-compilation, baseline generation or the single-case application evidence.
+Qwen3.5 CPU/CUDA, 9B (not downloaded), Windows/Linux runtime, complete native-flow coverage
+and release-optimized installer distribution remain unverified. Do not infer those claims
+from Metal compilation, baseline generation or the single-case application evidence.

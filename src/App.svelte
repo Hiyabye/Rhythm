@@ -155,7 +155,7 @@
         </button>
       {/each}
     </nav>
-    <div class="sidebar-bottom"><span class="local-dot"></span><span>내 기기에 머무는 정보</span><small>v0.3.0 · 로컬 인텔리전스</small></div>
+    <div class="sidebar-bottom"><span class="local-dot"></span><span>내 기기에 머무는 정보</span><small>v0.3.1 · 로컬 인텔리전스</small></div>
   </aside>
 
   <main id="main" tabindex="-1">
@@ -193,7 +193,7 @@
             <div class="privacy-note"><Icon name="lock" size={18} /><p>설정과 관심사는 로컬에 저장됩니다. 클라우드 추론, 원격 저장소, 사용 정보 수집을 사용하지 않습니다.</p></div>
             <div class="planned"><strong>백업 및 복원 · 향후 제공</strong><p>이 버전에는 백업과 복원 기능이 없습니다. 앱 업데이트 시에는 마이그레이션으로 기존 데이터를 유지합니다.</p></div>
           </section>
-          <section id="about" class="settings-section about-section"><div class="about-brand"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><h2>Rhythm</h2><span>0.3.0</span></div><p>나의 하루를 정돈하는 로컬 퍼스트 개인 커맨드 센터.</p><p class="muted">조용하게 연결하고, 나에게 중요한 것에 집중합니다.</p><div class="about-meta"><span>MIT 라이선스</span><span>github.com/Hiyabye/Rhythm</span></div></section>
+          <section id="about" class="settings-section about-section"><div class="about-brand"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><h2>Rhythm</h2><span>0.3.1</span></div><p>나의 하루를 정돈하는 로컬 퍼스트 개인 커맨드 센터.</p><p class="muted">조용하게 연결하고, 나에게 중요한 것에 집중합니다.</p><div class="about-meta"><span>MIT 라이선스</span><span>github.com/Hiyabye/Rhythm</span></div></section>
         </div>
       </div>
     {:else}

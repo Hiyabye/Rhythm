@@ -1,6 +1,6 @@
 [package]
 name = "rhythm"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 rust-version = "1.90"
 license = "MIT"
@@ -23,6 +23,11 @@ base64 = "0.22"
 tauri-plugin-opener = "2"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
+
+# sha2 0.10 otherwise uses its software compressor on ARM. Retain full-file
+# verification; enable the reviewed accelerator only on the tested Apple target.
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+sha2 = { version = "0.10", features = ["asm"] }
 
 [dev-dependencies]
 tempfile = "3"

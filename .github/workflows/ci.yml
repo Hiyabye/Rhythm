@@ -18,6 +18,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run test:desktop
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:ui
 

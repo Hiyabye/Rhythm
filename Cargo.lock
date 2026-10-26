@@ -6059,7 +6059,7 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rhythm"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64 0.22.1",
  "reqwest 0.12.28",
@@ -6080,7 +6080,7 @@ dependencies = [
 
 [[package]]
 name = "rhythm-ai-worker"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "filedescriptor",
  "mistralrs",
@@ -6805,6 +6805,16 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
  "digest",
+ "sha2-asm",
+]
+
+[[package]]
+name = "sha2-asm"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b845214d6175804686b2bd482bcffe96651bb2d1200742b712003504a2dac1ab"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

@@ -26,6 +26,7 @@ struct AppState {
     models: intelligence::models::Controller,
     hardware: intelligence::models::Hardware,
     ai_gate: tokio::sync::Mutex<()>,
+    ai_operation: intelligence::operations::Controller,
     maintenance_shutdown: Arc<std::sync::atomic::AtomicBool>,
 }
 #[derive(Serialize)]
@@ -157,6 +158,7 @@ fn main() {
                 models: intelligence::models::Controller::default(),
                 hardware,
                 ai_gate: tokio::sync::Mutex::new(()),
+                ai_operation: intelligence::operations::Controller::default(),
                 maintenance_shutdown: maintenance_shutdown.clone(),
             });
             tauri::async_runtime::spawn(intelligence::maintenance::run(
@@ -173,6 +175,8 @@ fn main() {
             intelligence::commands::ai_snapshot,
             intelligence::commands::ai_install,
             intelligence::commands::ai_cancel_download,
+            intelligence::commands::ai_cancel_operation,
+            intelligence::commands::ai_diagnostics,
             intelligence::commands::ai_register,
             intelligence::commands::ai_select,
             intelligence::commands::ai_load,
@@ -210,6 +214,7 @@ fn main() {
                 .maintenance_shutdown
                 .store(true, std::sync::atomic::Ordering::Release);
             state.registry.stop_all();
+            state.ai_operation.cancel();
             state.analysis.stop();
             state.models.stop();
             tauri::async_runtime::block_on(async {

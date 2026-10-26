@@ -121,10 +121,24 @@ export interface AiResult extends AnalysisKey {
   id: number; job_id: number; model_identity: { name?: string; sha256?: string; max_tokens?: number }; result: Analysis;
   partial: boolean; processed_chars: number; total_chars: number; duration_ms: number; created_at: string;
 }
+export interface AiOperation {
+  kind: 'load' | 'setup' | 'register';
+  phase: string;
+  elapsed_ms: number;
+  cancelling: boolean;
+}
+export interface AiDiagnostics {
+  job_id: number; phase: string; elapsed_ms: number;
+  stages_ms: Record<string, number>;
+  attempts: unknown[];
+}
 export interface AiSnapshot {
   catalog: CatalogEntry[]; models: AiModel[]; preferences: AiPreferences; jobs: AiJob[]; runtime: WorkerStatus;
   hardware: { os: string; arch: string; ram_bytes: number; disk_available_bytes: number; backend: string };
   busy: boolean;
+  operation?: AiOperation | null;
+  progress?: AiDiagnostics | null;
+  analysis_contract?: { prompt_version: number; schema_version: number; configuration_hash: string | null };
 }
 export interface ArchiveQuery {
   query: string;

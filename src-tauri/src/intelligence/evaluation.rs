@@ -24,6 +24,8 @@ struct Case {
     required_summary_terms: Vec<String>,
     note: String,
     #[serde(default)]
+    additional_deadlines: Vec<String>,
+    #[serde(default)]
     repeat_text: String,
     #[serde(default)]
     repeat_count: usize,
@@ -74,7 +76,7 @@ fn seed(store: &Store) {
         }])
         .unwrap();
 }
-fn installed_model(root: &Path, id: &str) -> AiModel {
+pub(super) fn installed_model(root: &Path, id: &str) -> AiModel {
     let entry = models::catalog()
         .into_iter()
         .find(|entry| entry.id == id)
@@ -119,12 +121,12 @@ fn configure(store: &Store, model: &AiModel) {
     preferences.max_tokens = 1024;
     store.ai_save_preferences(&preferences).unwrap();
 }
-fn report_path(id: &str) -> PathBuf {
+pub(super) fn report_path(id: &str) -> PathBuf {
     std::env::var_os("RHYTHM_AI_EVAL_REPORT")
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join(format!("rhythm-ai-evaluation-{id}.json")))
 }
-fn write_report(path: &Path, report: &Value) {
+pub(super) fn write_report(path: &Path, report: &Value) {
     std::fs::write(path, serde_json::to_vec_pretty(report).unwrap()).unwrap();
     eprintln!("Actual inference evaluation report: {}", path.display());
 }
@@ -144,7 +146,7 @@ fn worker_pid(path: &Path) -> Option<u32> {
                 .flatten()
         })
 }
-fn worker_rss_kib(path: &Path) -> Option<u64> {
+pub(super) fn worker_rss_kib(path: &Path) -> Option<u64> {
     let pid = worker_pid(path)?;
     let output = std::process::Command::new("/bin/ps")
         .args(["-o", "rss=", "-p", &pid.to_string()])
@@ -153,11 +155,36 @@ fn worker_rss_kib(path: &Path) -> Option<u64> {
     String::from_utf8_lossy(&output.stdout).trim().parse().ok()
 }
 async fn settle(controller: &analysis::Controller) {
-    tokio::time::timeout(Duration::from_secs(850), controller.wait())
+    tokio::time::timeout(Duration::from_secs(1500), controller.wait())
         .await
         .expect("controller exceeded bounded hash/load/inference deadline");
 }
+#[test]
+fn stored_result_screening_rechecks_shape_and_literal_source() {
+    let source = "재학생은 2026년 4월 30일까지 장학금을 신청하세요.";
+    let valid = json!({"short_summary":"재학생 장학금 신청 안내입니다.","summary":"재학생은 2026년 4월 30일까지 신청해야 합니다.","category":"장학","uncertainty":"clear","facts":[{"kind":"deadline","label":"신청 마감","value":"2026년 4월 30일","evidence":source,"date":"2026-04-30","uncertainty":"clear"}]});
+    assert_eq!(stored_result_checks(&valid, source), (true, true));
+    assert_eq!(
+        stored_result_checks(&valid, "다른 공지입니다."),
+        (true, false)
+    );
+    let mut bad_date = valid.clone();
+    bad_date["facts"][0]["date"] = json!("2026-05-01");
+    assert_eq!(stored_result_checks(&bad_date, source), (true, false));
+    let mut bad_shape = valid;
+    bad_shape["facts"] = json!("not an array");
+    assert_eq!(stored_result_checks(&bad_shape, source), (false, false));
+}
+pub(super) fn stored_result_checks(result: &Value, source: &str) -> (bool, bool) {
+    // Recheck the stored shape and exact source grounding independently of job
+    // completion. Neither check proves the model preserved the source's meaning.
+    let shape = serde_json::from_value::<analysis::Analysis>(result.clone()).is_ok();
+    let grounded = analysis::validate_output(&result.to_string(), source).is_ok();
+    (shape, grounded)
+}
 fn assess(case: &Case, result: &Value, partial: bool) -> Value {
+    let (schema_valid, literal_grounding_valid) =
+        stored_result_checks(result, &format!("{}\n\n{}", case.title, case.body()));
     let category_correct = result["category"].as_str() == Some(case.category.as_str());
     let summary = format!(
         "{} {}",
@@ -176,23 +203,38 @@ fn assess(case: &Case, result: &Value, partial: bool) -> Value {
         .filter(|fact| fact["kind"] == "deadline")
         .filter_map(|fact| fact["date"].as_str())
         .collect::<Vec<_>>();
-    let deadline_correct = match case.deadline.as_deref() {
-        Some(expected) => dates.contains(&expected),
-        None => dates.is_empty(),
-    };
+    let expected_dates = case
+        .deadline
+        .iter()
+        .chain(case.additional_deadlines.iter())
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let extra_deadline_dates = dates
+        .iter()
+        .filter(|date| !expected_dates.contains(date))
+        .collect::<Vec<_>>();
+    let missing_deadline_dates = expected_dates
+        .iter()
+        .filter(|date| !dates.contains(date))
+        .collect::<Vec<_>>();
+    let deadline_correct = extra_deadline_dates.is_empty() && missing_deadline_dates.is_empty();
     json!({"category_correct":category_correct,"deadline_correct":deadline_correct,
         "missing_summary_terms":missing_summary_terms,
-        "partial_disclosure_correct":case.id != "long" || partial,
+        "extra_deadline_dates":extra_deadline_dates,"missing_deadline_dates":missing_deadline_dates,
+        "schema_valid":schema_valid,"literal_grounding_valid":literal_grounding_valid,
+        "partial_disclosure_correct":!matches!(case.id.as_str(), "long" | "long_tail_correction") || partial,
         "human_review_required":true,"review_note":case.note})
 }
 
-async fn inference_entered(
-    controller: &analysis::Controller,
-    worker: &Arc<AsyncMutex<Worker>>,
-) -> bool {
+async fn inference_request_entered(controller: &analysis::Controller) -> bool {
     tokio::time::timeout(Duration::from_secs(300), async {
         loop {
-            if worker.try_lock().is_err() {
+            // This observes dispatched parent-side inference IPC, not an active
+            // model kernel. Mutex contention alone does not establish this phase.
+            if controller
+                .progress()
+                .is_some_and(|progress| progress.phase == "inference")
+            {
                 return true;
             }
             if !controller.running() {
@@ -231,8 +273,8 @@ async fn exercise_recovery(
         .unwrap()
         .job
         .unwrap();
-    if !inference_entered(controller, worker).await {
-        return json!({"recovered":false,"error":"cancel sample never reached worker inference"});
+    if !inference_request_entered(controller).await {
+        return json!({"recovered":false,"error":"cancel sample never reached inference IPC phase"});
     }
     controller.cancel(store, cancelled.id).unwrap();
     settle(controller).await;
@@ -261,8 +303,8 @@ async fn exercise_recovery(
         .unwrap()
         .job
         .unwrap();
-    if !inference_entered(controller, worker).await {
-        return json!({"recovered":false,"cancelled_status":cancelled_status,"error":"crash sample never reached inference"});
+    if !inference_request_entered(controller).await {
+        return json!({"recovered":false,"cancelled_status":cancelled_status,"error":"crash sample never reached inference IPC phase"});
     }
     let Some(pid) = worker_pid(executable) else {
         controller.cancel(store, crashed.id).unwrap();
@@ -303,20 +345,127 @@ async fn exercise_recovery(
         .unwrap()
         .unwrap()
         .status;
-    json!({"cancelled_status":cancelled_status,"prior_result_preserved":before == after_cancel,
+    json!({"interruption_boundary":"parent inference IPC phase; not proof of an active model kernel",
+        "cancelled_status":cancelled_status,"prior_result_preserved":before == after_cancel,
         "child_killed":killed,"crashed_status":crashed_status,"recovery_status":recovered_status,
         "recovered":cancelled_status == "cancelled" && before == after_cancel && killed && crashed_status == "failed" && recovered_status == "completed"})
+}
+
+/// Same artifact/document/configuration, cold model then forced warm regeneration and cache.
+/// Run both this parent test binary and the worker with --release for release comparisons.
+#[tokio::test]
+#[ignore = "real installed model and worker required; local bounded latency benchmark"]
+async fn actual_analysis_latency_benchmark() {
+    let executable = PathBuf::from(std::env::var_os("RHYTHM_WORKER_TEST_BIN").expect("worker"));
+    let root = PathBuf::from(std::env::var_os("RHYTHM_MODEL_EVAL_ROOT").expect("model root"));
+    let id = std::env::var("RHYTHM_MODEL_EVAL_ID").unwrap_or_else(|_| "qwen35-2b".into());
+    let model = installed_model(&root, &id);
+    let directory = tempfile::tempdir().unwrap();
+    let local_worker = directory.path().join("rhythm-benchmark-worker");
+    std::fs::copy(&executable, &local_worker).unwrap();
+    let store = Store::open(&directory.path().join("benchmark.sqlite3")).unwrap();
+    seed(&store);
+    configure(&store, &model);
+    let case = cases().into_iter().find(|c| c.id == "scholarship").unwrap();
+    let (document_id, _) = store
+        .upsert_article("ai-evaluation", &case.article(), false)
+        .unwrap();
+    let revision_id = store.document(document_id, None).unwrap().revision_id;
+    let store = Arc::new(Mutex::new(store));
+    let startup = Instant::now();
+    let worker = Arc::new(AsyncMutex::new(Worker::launch(&local_worker)));
+    let health = worker.lock().await.refresh().await;
+    let mut report = json!({"label":std::env::var("RHYTHM_AI_BENCH_LABEL").ok(),
+        "parent_debug_assertions":cfg!(debug_assertions),"worker":executable,"model":model,
+        "case":"scholarship","prompt_version":analysis::PROMPT_VERSION,
+        "schema_version":analysis::SCHEMA_VERSION,"max_tokens":1024,
+        "decoding_mode":analysis::decoding_mode(),
+        "startup_ms":startup.elapsed().as_millis(),"initial_runtime":health,"samples":[]});
+    let controller = analysis::Controller::default();
+    let mut failures = Vec::new();
+    for mode in ["cold", "warm"] {
+        let started = Instant::now();
+        let admitted = controller
+            .start(
+                store.clone(),
+                worker.clone(),
+                directory.path().into(),
+                document_id,
+                revision_id,
+                true,
+            )
+            .unwrap();
+        let job_id = admitted.job.unwrap().id;
+        tokio::time::timeout(Duration::from_secs(1500), controller.wait())
+            .await
+            .expect("bounded benchmark deadline");
+        let wall_ms = started.elapsed().as_millis();
+        let job = store.lock().unwrap().ai_job(job_id).unwrap().unwrap();
+        let results = store
+            .lock()
+            .unwrap()
+            .ai_document_results(document_id, Some(revision_id), 10)
+            .unwrap();
+        let mut sample = json!({"mode":mode,"wall_ms":wall_ms,"admission_ms":admitted.admission_ms,
+            "job":job,"diagnostics":controller.diagnostics(job_id),"worker_rss_kib":worker_rss_kib(&local_worker)});
+        if job.status == "completed" {
+            let result = results.first().unwrap();
+            sample["assessment"] = assess(&case, &result.result, result.partial);
+            sample["result"] = json!(result);
+            let cached_started = Instant::now();
+            let cached = controller
+                .start(
+                    store.clone(),
+                    worker.clone(),
+                    directory.path().into(),
+                    document_id,
+                    revision_id,
+                    false,
+                )
+                .unwrap();
+            sample["cached_wall_us"] = json!(cached_started.elapsed().as_micros());
+            sample["cache_lookup_ms"] = json!(cached.cache_lookup_ms);
+            assert_eq!(cached.cached.unwrap().id, result.id);
+            assert!(cached.job.is_none());
+        } else {
+            failures.push(format!("{mode}: {:?}", job.error));
+        }
+        report["samples"].as_array_mut().unwrap().push(sample);
+        write_report(&report_path(&id), &report);
+    }
+    let shutdown = Instant::now();
+    controller.stop();
+    controller.wait().await;
+    worker.lock().await.shutdown().await;
+    report["shutdown_ms"] = json!(shutdown.elapsed().as_millis());
+    report["failures"] = json!(failures);
+    write_report(&report_path(&id), &report);
+    assert!(failures.is_empty(), "{failures:?}");
 }
 
 #[test]
 fn reproducible_evaluation_fixtures_cover_required_shapes() {
     let cases = cases();
-    assert_eq!(cases.len(), 10);
+    assert_eq!(cases.len(), 18);
+    for original in [
+        "academic",
+        "scholarship",
+        "internship",
+        "competition",
+        "research",
+        "multiple_dates",
+        "no_deadline",
+        "long",
+        "complex_eligibility",
+        "ambiguous",
+    ] {
+        assert!(cases.iter().any(|case| case.id == original));
+    }
     let identities = cases
         .iter()
         .map(|case| &case.id)
         .collect::<std::collections::HashSet<_>>();
-    assert_eq!(identities.len(), 10);
+    assert_eq!(identities.len(), 18);
     for case in &cases {
         assert!(analysis::CATEGORIES.contains(&case.category.as_str()));
         assert!(!case.text.is_empty() && !case.required_summary_terms.is_empty());
@@ -376,6 +525,7 @@ async fn actual_qwen35_analysis_evaluation() {
         "backend_note":std::env::var("RHYTHM_AI_EVAL_BACKEND").unwrap_or_else(|_| "unreported; inspect worker build".into()),
         "fixture_provenance":"synthetic Korean notices, not collected university notices",
         "prompt_version":analysis::PROMPT_VERSION,"schema_version":analysis::SCHEMA_VERSION,
+        "decoding_mode":analysis::decoding_mode(),
         "max_tokens":1024,"samples":[],"native_ui_verified":false,
         "network_note":"test constructs no HTTP client; this alone is not OS-enforced network denial"
     });
@@ -394,7 +544,7 @@ async fn actual_qwen35_analysis_evaluation() {
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(2)
-        .clamp(1, 10);
+        .clamp(1, 18);
     let filter = std::env::var("RHYTHM_AI_EVAL_CASES").ok();
     let mut failures = Vec::new();
     let mut completed = Vec::new();
@@ -440,11 +590,13 @@ async fn actual_qwen35_analysis_evaluation() {
             )
         };
         let mut sample = json!({"case":case.id,"job":job,"wall_ms":started.elapsed().as_millis(),
+            "diagnostics":controller.diagnostics(job_id),
             "worker_rss_kib":worker_rss_kib(&local_worker)});
         if let Some(result) = results.first() {
             sample["assessment"] = assess(&case, &result.result, result.partial);
             sample["result"] = json!(result);
             // Cache works without launching inference; preserve the same validated result ID.
+            let cached_started = Instant::now();
             let cached = controller
                 .start(
                     store.clone(),
@@ -455,11 +607,14 @@ async fn actual_qwen35_analysis_evaluation() {
                     false,
                 )
                 .unwrap();
+            sample["cached_wall_us"] = json!(cached_started.elapsed().as_micros());
             assert!(cached.job.is_none());
             assert_eq!(cached.cached.unwrap().id, result.id);
             sample["cache_reused"] = json!(true);
             completed.push((document_id, revision_id, result.id));
-            if sample["assessment"]["category_correct"] != true
+            if sample["assessment"]["schema_valid"] != true
+                || sample["assessment"]["literal_grounding_valid"] != true
+                || sample["assessment"]["category_correct"] != true
                 || sample["assessment"]["deadline_correct"] != true
                 || sample["assessment"]["partial_disclosure_correct"] != true
                 || !sample["assessment"]["missing_summary_terms"]

@@ -142,7 +142,11 @@ fn active_jobs_and_document_history_are_independent_of_global_history_window() {
             .prompt_version,
         105
     );
-    assert_eq!(store.ai_document_jobs(1, 1, 1000).unwrap().len(), 100);
+    let local_history = store.ai_document_jobs(1, 1, 20).unwrap();
+    assert!(local_history.iter().any(|job| job.id == active.id));
+    assert!(local_history.iter().any(|job| job.id == pending.id));
+    assert_eq!(local_history.len(), 22);
+    assert_eq!(store.ai_document_jobs(1, 1, 1000).unwrap().len(), 102);
     assert_eq!(store.ai_document_jobs(2, 2, 10).unwrap()[0].id, other.id);
     assert!(store.ai_document_jobs(1, 2, 10).unwrap().is_empty());
     assert!(store.ai_document_jobs(1, 1, 0).unwrap().is_empty());
@@ -157,6 +161,276 @@ fn active_jobs_and_document_history_are_independent_of_global_history_window() {
         .unwrap();
     assert!(!store.ai_has_model_jobs(&active_key.model_sha256).unwrap());
     assert!(store.ai_active_jobs().unwrap().is_empty());
+    integrity(&store);
+}
+fn recent_article(
+    external_id: &str,
+    published_at: &str,
+    body: &str,
+) -> crate::archive::model::ArticleInput {
+    crate::archive::model::ArticleInput {
+        external_id: external_id.into(),
+        canonical_url: format!("https://www.sogang.ac.kr/notice/{external_id}"),
+        title: "분석할 공지".into(),
+        author: None,
+        category: None,
+        published_at: published_at.into(),
+        modified_at: None,
+        original: body.into(),
+        body_html: format!("<p>{body}</p>"),
+        body_text: body.into(),
+        resources: vec![],
+        etag: None,
+        last_modified: None,
+    }
+}
+fn recent_record(
+    store: &Store,
+    external_id: &str,
+    published_at: &str,
+    historical: bool,
+    collected_at: &str,
+) -> (i64, i64) {
+    let (id, _) = store
+        .upsert_article(
+            "test",
+            &recent_article(external_id, published_at, "신청 안내"),
+            historical,
+        )
+        .unwrap();
+    let revision = store.document(id, None).unwrap().revision_id;
+    store
+        .connection
+        .execute(
+            "UPDATE documents SET collected_at=?2 WHERE id=?1",
+            params![id, collected_at],
+        )
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "UPDATE document_revisions SET collected_at=?2 WHERE id=?1",
+            params![revision, collected_at],
+        )
+        .unwrap();
+    (id, revision)
+}
+#[test]
+fn recent_candidates_follow_ingestion_not_publication_and_exclude_startup_backfill() {
+    let (_directory, store) = database();
+    let boundary = "2026-10-25T12:00:00.500Z";
+    store.connection.execute_batch("UPDATE documents SET collected_at='2026-10-01T00:00:00.000Z'; UPDATE document_revisions SET collected_at='2026-10-01T00:00:00.000Z';").unwrap();
+    for index in 0..25 {
+        recent_record(
+            &store,
+            &format!("newer-publication-{index}"),
+            "2026-10-25",
+            false,
+            "2026-10-25T11:59:59.000Z",
+        );
+    }
+    let expected = recent_record(
+        &store,
+        "late-arrival",
+        "2025-01-01",
+        false,
+        "2026-10-25T12:00:00.501Z",
+    );
+    recent_record(
+        &store,
+        "backfill",
+        "2026-12-31",
+        true,
+        "2026-10-25T12:00:00.900Z",
+    );
+    recent_record(&store, "at-boundary", "2026-12-30", false, boundary);
+    assert_eq!(
+        store.ai_recent_candidates(boundary, 20).unwrap(),
+        [expected]
+    );
+    assert!(store.ai_recent_candidates(boundary, 0).unwrap().is_empty());
+    integrity(&store);
+}
+#[test]
+fn recent_candidates_include_meaningful_revisions_of_old_and_historical_documents() {
+    let (_directory, store) = database();
+    let boundary = "2026-10-25T12:00:00.500Z";
+    store.connection.execute_batch("UPDATE documents SET collected_at='2026-10-01T00:00:00.000Z'; UPDATE document_revisions SET collected_at='2026-10-01T00:00:00.000Z';").unwrap();
+    let mut expected = Vec::new();
+    for (external, historical) in [("old-arrival", false), ("old-history", true)] {
+        let (id, original_revision) = recent_record(
+            &store,
+            external,
+            "2025-01-01",
+            historical,
+            "2026-10-01T00:00:00.000Z",
+        );
+        let old_attempt = store
+            .ai_enqueue(
+                &AnalysisKey {
+                    document_id: id,
+                    revision_id: original_revision,
+                    ..key()
+                },
+                &json!({}),
+                1,
+            )
+            .unwrap();
+        store
+            .ai_finish_job(old_attempt.id, "failed", None, None)
+            .unwrap();
+        let changed = recent_article(
+            external,
+            "2025-01-01",
+            "정정: 신청 마감은 2026년 10월 30일입니다.",
+        );
+        assert!(store.upsert_article("test", &changed, false).unwrap().1);
+        let revision = store.document(id, None).unwrap().revision_id;
+        assert_ne!(revision, original_revision);
+        store
+            .connection
+            .execute(
+                "UPDATE document_revisions SET collected_at='2026-10-25T12:00:00.600Z' WHERE id=?1",
+                [revision],
+            )
+            .unwrap();
+        assert_eq!(
+            store.document(id, None).unwrap().item.historical,
+            historical
+        );
+        // A validator/timestamp-only check does not create another revision.
+        assert!(!store.upsert_article("test", &changed, false).unwrap().1);
+        assert_eq!(store.document(id, None).unwrap().revision_id, revision);
+        expected.insert(0, (id, revision));
+    }
+    recent_record(
+        &store,
+        "fresh-backfill",
+        "2026-12-31",
+        true,
+        "2026-10-25T12:00:00.900Z",
+    );
+    assert_eq!(store.ai_recent_candidates(boundary, 20).unwrap(), expected);
+    integrity(&store);
+}
+#[test]
+fn recent_candidates_never_retry_cached_failed_cancelled_or_active_revisions() {
+    let (_directory, mut store) = database();
+    let boundary = "2026-10-25T12:00:00.500Z";
+    store.connection.execute_batch("UPDATE documents SET collected_at='2026-10-01T00:00:00.000Z'; UPDATE document_revisions SET collected_at='2026-10-01T00:00:00.000Z';").unwrap();
+    let candidate_key = |(document_id, revision_id)| AnalysisKey {
+        document_id,
+        revision_id,
+        ..key()
+    };
+    let cached = recent_record(
+        &store,
+        "cached",
+        "2025-01-01",
+        false,
+        "2026-10-25T12:00:00.600Z",
+    );
+    let job = store
+        .ai_enqueue(&candidate_key(cached), &json!({}), 100)
+        .unwrap();
+    store.ai_claim_next().unwrap().unwrap();
+    store
+        .ai_complete_job(job.id, &json!({"summary":"저장된 결과"}), false, 1, 1, 1)
+        .unwrap();
+    let first_job = job.id;
+    for status in ["failed", "cancelled", "stale"] {
+        let identity = recent_record(
+            &store,
+            status,
+            "2025-01-01",
+            false,
+            "2026-10-25T12:00:00.600Z",
+        );
+        let job = store
+            .ai_enqueue(&candidate_key(identity), &json!({}), 100)
+            .unwrap();
+        store.ai_finish_job(job.id, status, None, None).unwrap();
+    }
+    let running = recent_record(
+        &store,
+        "running",
+        "2025-01-01",
+        false,
+        "2026-10-25T12:00:00.600Z",
+    );
+    let running_job = store
+        .ai_enqueue(&candidate_key(running), &json!({}), 100)
+        .unwrap();
+    assert_eq!(store.ai_claim_next().unwrap().unwrap().id, running_job.id);
+    let pending = recent_record(
+        &store,
+        "pending",
+        "2025-01-01",
+        false,
+        "2026-10-25T12:00:00.600Z",
+    );
+    store
+        .ai_enqueue(&candidate_key(pending), &json!({}), 100)
+        .unwrap();
+    for version in 10..120 {
+        let noise = store
+            .ai_enqueue(
+                &AnalysisKey {
+                    prompt_version: version,
+                    ..key()
+                },
+                &json!({}),
+                1,
+            )
+            .unwrap();
+        store.ai_finish_job(noise.id, "failed", None, None).unwrap();
+    }
+    assert!(store
+        .ai_jobs(100)
+        .unwrap()
+        .iter()
+        .all(|job| job.id != first_job));
+    let untouched = recent_record(
+        &store,
+        "unprocessed",
+        "2024-01-01",
+        false,
+        "2026-10-25T12:00:00.600Z",
+    );
+    assert_eq!(
+        store.ai_recent_candidates(boundary, 20).unwrap(),
+        [untouched]
+    );
+    assert!(store
+        .ai_cached_result(&candidate_key(cached))
+        .unwrap()
+        .is_some());
+    integrity(&store);
+}
+#[test]
+fn recent_candidate_window_is_bounded_and_has_stable_ingestion_order() {
+    let (_directory, store) = database();
+    let boundary = "2026-10-25T12:00:00.500Z";
+    store.connection.execute_batch("UPDATE documents SET collected_at='2026-10-01T00:00:00.000Z'; UPDATE document_revisions SET collected_at='2026-10-01T00:00:00.000Z';").unwrap();
+    let mut identities = Vec::new();
+    for index in 0..105 {
+        identities.push(recent_record(
+            &store,
+            &format!("candidate-{index}"),
+            "2025-01-01",
+            false,
+            "2026-10-25T12:00:00.600Z",
+        ));
+    }
+    identities.reverse();
+    assert_eq!(
+        store.ai_recent_candidates(boundary, 3).unwrap(),
+        identities[..3]
+    );
+    assert_eq!(
+        store.ai_recent_candidates(boundary, 1000).unwrap(),
+        identities[..100]
+    );
     integrity(&store);
 }
 #[test]

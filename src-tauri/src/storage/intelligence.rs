@@ -309,18 +309,54 @@ impl Store {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
     }
+    /// Limit terminal history without hiding any active work for this revision.
     pub fn ai_document_jobs(
         &self,
         document_id: i64,
         revision_id: i64,
         limit: u32,
     ) -> Result<Vec<AiJob>, String> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         self.connection
             .prepare(&format!(
-                "SELECT {JOB_COLUMNS} FROM ai_jobs WHERE document_id=?1 AND revision_id=?2 ORDER BY id DESC LIMIT ?3"
+                "SELECT {JOB_COLUMNS} FROM ai_jobs WHERE document_id=?1 AND revision_id=?2
+                 AND (status IN ('pending','running') OR id IN (
+                     SELECT id FROM ai_jobs WHERE document_id=?1 AND revision_id=?2
+                     AND status NOT IN ('pending','running') ORDER BY id DESC LIMIT ?3
+                 )) ORDER BY id DESC"
             ))
             .map_err(|e| e.to_string())?
             .query_map(params![document_id, revision_id, limit.min(100)], job_row)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+    /// Latest revisions received after this session began, not latest publications.
+    /// Initial historical backfill is excluded, but a meaningful later revision is
+    /// eligible even if the document was originally historical. Any prior attempt
+    /// suppresses automatic reanalysis/retry; explicit requests remain independent.
+    pub fn ai_recent_candidates(
+        &self,
+        boundary: &str,
+        limit: u32,
+    ) -> Result<Vec<(i64, i64)>, String> {
+        self.connection
+            .prepare(
+                "SELECT d.id,r.id FROM documents d
+                 JOIN document_revisions r ON r.id=(
+                     SELECT MAX(latest.id) FROM document_revisions latest WHERE latest.document_id=d.id
+                 )
+                 WHERE r.collected_at>?1
+                   AND (d.historical=0 OR EXISTS(
+                       SELECT 1 FROM document_revisions earlier WHERE earlier.document_id=d.id AND earlier.id<r.id
+                   ))
+                   AND NOT EXISTS(SELECT 1 FROM ai_jobs j WHERE j.document_id=d.id AND j.revision_id=r.id)
+                 ORDER BY r.collected_at DESC,r.id DESC LIMIT ?2",
+            )
+            .map_err(|e| e.to_string())?
+            .query_map(params![boundary, limit.min(100)], |row| Ok((row.get(0)?, row.get(1)?)))
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())

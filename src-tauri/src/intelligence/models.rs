@@ -57,6 +57,12 @@ pub fn hardware(root: &Path) -> Hardware {
         backend: "작업 프로세스 빌드에 따름 · 가속 사용 여부 미확인",
     }
 }
+/// Refresh free disk without repeating the physical-RAM platform probe.
+/// Call from a blocking task, outside SQLite/worker locks.
+pub fn refresh_disk_space(mut hardware: Hardware, root: &Path) -> Hardware {
+    hardware.disk_available_bytes = available_space(root).unwrap_or(0);
+    hardware
+}
 fn ram_bytes() -> u64 {
     #[cfg(target_os = "macos")]
     {
@@ -840,7 +846,12 @@ fn validate_gguf(file: &mut File, size: u64) -> Result<(), String> {
     }
     Err("GGUF 모델 아키텍처를 찾지 못했습니다.".into())
 }
-pub async fn register(store: Arc<Mutex<Store>>, path: PathBuf) -> Result<AiModel, String> {
+pub async fn register(
+    store: Arc<Mutex<Store>>,
+    path: PathBuf,
+    cancel: Arc<AtomicBool>,
+) -> Result<AiModel, String> {
+    check_cancel(&cancel)?;
     if !path.is_absolute() || path.extension().is_none_or(|e| e != "gguf") {
         return Err("기존 GGUF 파일의 전체 경로를 입력해 주세요.".into());
     }
@@ -851,10 +862,11 @@ pub async fn register(store: Arc<Mutex<Store>>, path: PathBuf) -> Result<AiModel
         return Err("일반 GGUF 파일을 선택해 주세요.".into());
     }
     let copy = path.clone();
-    let (hash, bytes) =
-        tokio::task::spawn_blocking(move || verify_file(&copy, None, &AtomicBool::new(false)))
-            .await
-            .map_err(|_| "기존 모델 파일 검증이 중단되었습니다.")??;
+    let token = cancel.clone();
+    let (hash, bytes) = tokio::task::spawn_blocking(move || verify_file(&copy, None, &token))
+        .await
+        .map_err(|_| "기존 모델 파일 검증이 중단되었습니다.")??;
+    check_cancel(&cancel)?;
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -915,22 +927,65 @@ pub async fn remove(
     })?;
     if model.ownership == "managed" {
         let full = managed_path(&root, &model.path)?;
-        for file in [full.clone(), full.with_extension("part")] {
-            match tokio::fs::remove_file(file).await {
-                Ok(()) => (),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-                Err(_) => {
-                    return Err("모델 파일을 삭제하지 못했습니다. 권한을 확인해 주세요.".into())
+        // Ancillary cleanup can fail independently (for example immutable flags).
+        // Never remove good installed weights before that failure is known.
+        if let Err(error) = tokio::fs::remove_file(full.with_extension("part")).await {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                return Err("모델 파일을 삭제하지 못했습니다. 권한을 확인해 주세요.".into());
+            }
+        }
+        // Filesystem and SQLite cannot share a transaction. Make the inventory
+        // unavailable before unlinking, so even a later database failure/crash
+        // cannot leave missing weights marked installed. Preserve provenance.
+        let mut missing = model.clone();
+        missing.status = "missing".into();
+        missing.downloaded_bytes = 0;
+        missing.resume_etag = None;
+        missing.error = Some(
+            "모델 삭제가 완료되지 않았습니다. 다시 삭제하거나 설치 상태를 확인해 주세요.".into(),
+        );
+        with_store(&store, |s| s.ai_upsert_model(&missing)).map_err(|error| {
+            eprintln!("Model removal state: {error}");
+            "모델 목록을 갱신하지 못해 삭제를 중단했습니다. 저장 공간과 파일 권한을 확인해 주세요."
+                .to_owned()
+        })?;
+        if let Err(error) = tokio::fs::remove_file(full).await {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                // No weights were removed. Restore availability when the store
+                // permits it; otherwise leave the conservative missing state.
+                if let Err(error) = with_store(&store, |s| s.ai_upsert_model(&model)) {
+                    eprintln!("Model removal reconciliation: {error}");
+                    return Err("모델 파일을 삭제하지 못했고 목록 상태도 복원하지 못했습니다. 파일 권한과 설치 상태를 확인해 주세요.".into());
                 }
+                return Err("모델 파일을 삭제하지 못했습니다. 권한을 확인해 주세요.".into());
             }
         }
     }
-    with_store(&store, |s| s.ai_remove_model(&id))
+    with_store(&store, |s| s.ai_remove_model(&id)).map_err(|error| {
+        eprintln!("Model inventory removal: {error}");
+        if model.ownership == "managed" {
+            "모델 파일은 삭제했지만 목록에서 제거하지 못했습니다. 다시 삭제하거나 설치해 주세요."
+                .into()
+        } else {
+            "모델 등록 정보를 제거하지 못했습니다. 외부 모델 파일은 삭제하지 않았습니다. 저장 공간과 파일 권한을 확인해 주세요.".into()
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sha256_target_features_preserve_standard_known_answers() {
+        assert_eq!(
+            format!("{:x}", Sha256::digest(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(vec![b'a'; 1_000_000])),
+            "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
+        );
+    }
     fn gguf(architecture: &str) -> Vec<u8> {
         let mut bytes = b"GGUF".to_vec();
         bytes.extend(3u32.to_le_bytes());
@@ -1199,11 +1254,23 @@ mod tests {
         let (dir, store, _, bytes) = fixture();
         let path = dir.path().join("existing.gguf");
         std::fs::write(&path, bytes).unwrap();
-        let model = register(store.clone(), path.clone()).await.unwrap();
+        let model = register(
+            store.clone(),
+            path.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap();
         assert_eq!(model.ownership, "external");
         assert_eq!(model.path, path.canonicalize().unwrap().to_str().unwrap());
         assert!(!dir.path().join("models").exists());
-        let again = register(store.clone(), path.clone()).await.unwrap();
+        let again = register(
+            store.clone(),
+            path.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap();
         assert_eq!(again.id, model.id);
         assert_eq!(store.lock().unwrap().ai_models().unwrap().len(), 1);
         assert!(
@@ -1211,13 +1278,39 @@ mod tests {
                 .await
                 .is_err()
         );
+        let connection = rusqlite::Connection::open(dir.path().join("rhythm.sqlite3")).unwrap();
+        connection.execute_batch("CREATE TRIGGER refuse_external_delete BEFORE DELETE ON ai_models BEGIN SELECT RAISE(ABORT, 'simulated inventory failure'); END;").unwrap();
+        let error = remove(store.clone(), dir.path().into(), model.id.clone(), true)
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("외부 모델 파일은 삭제하지 않았습니다"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), gguf("qwen35"));
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .ai_model(&model.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "installed"
+        );
+        connection
+            .execute_batch("DROP TRIGGER refuse_external_delete;")
+            .unwrap();
+        drop(connection);
         remove(store.clone(), dir.path().into(), model.id, true)
             .await
             .unwrap();
         assert!(path.exists());
         assert!(store.lock().unwrap().ai_models().unwrap().is_empty());
         std::fs::write(&path, gguf("unsupported")).unwrap();
-        assert!(register(store, path).await.is_err());
+        assert!(register(store, path, Arc::new(AtomicBool::new(false)))
+            .await
+            .is_err());
     }
     #[tokio::test]
     async fn managed_delete_clears_files_but_rejects_active_and_path_escape() {
@@ -1257,6 +1350,188 @@ mod tests {
             .unwrap();
             assert!(managed_path(dir.path(), "models/evil.gguf").is_err());
         }
+    }
+    #[tokio::test]
+    async fn invalid_partial_path_preserves_installed_weights_and_inventory() {
+        let (dir, store, entry, bytes) = fixture();
+        let mut model = inventory(&entry);
+        install(
+            &store,
+            dir.path(),
+            &entry,
+            &mut model,
+            &Arc::new(AtomicBool::new(false)),
+            &Fake::new(bytes.clone()),
+        )
+        .await
+        .unwrap();
+        let full = dir.path().join(&model.path);
+        std::fs::create_dir(full.with_extension("part")).unwrap();
+        let error = remove(store.clone(), dir.path().into(), model.id.clone(), true)
+            .await
+            .unwrap_err();
+        // managed_path rejects directories/symlinks before any unlink occurs.
+        assert!(error.contains("외부 경로"), "{error}");
+        assert_eq!(std::fs::read(&full).unwrap(), bytes);
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .ai_model(&model.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "installed"
+        );
+    }
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn ancillary_unlink_failure_does_not_delete_installed_weights() {
+        struct ClearImmutable(PathBuf);
+        impl Drop for ClearImmutable {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("/usr/bin/chflags")
+                    .arg("nouchg")
+                    .arg(&self.0)
+                    .status();
+            }
+        }
+        let (dir, store, entry, bytes) = fixture();
+        let mut model = inventory(&entry);
+        install(
+            &store,
+            dir.path(),
+            &entry,
+            &mut model,
+            &Arc::new(AtomicBool::new(false)),
+            &Fake::new(bytes.clone()),
+        )
+        .await
+        .unwrap();
+        let full = dir.path().join(&model.path);
+        let partial = full.with_extension("part");
+        std::fs::write(&partial, b"stale partial").unwrap();
+        let clear_partial = ClearImmutable(partial.clone());
+        let output = std::process::Command::new("/usr/bin/chflags")
+            .arg("uchg")
+            .arg(&partial)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let error = remove(store.clone(), dir.path().into(), model.id.clone(), true)
+            .await
+            .unwrap_err();
+        assert!(error.contains("권한"), "{error}");
+        assert_eq!(std::fs::read(&full).unwrap(), bytes);
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .ai_model(&model.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "installed"
+        );
+        // A failure on the final artifact itself restores the installed record.
+        drop(clear_partial);
+        let _clear_full = ClearImmutable(full.clone());
+        assert!(std::process::Command::new("/usr/bin/chflags")
+            .arg("uchg")
+            .arg(&full)
+            .status()
+            .unwrap()
+            .success());
+        let error = remove(store.clone(), dir.path().into(), model.id.clone(), true)
+            .await
+            .unwrap_err();
+        assert!(error.contains("권한"), "{error}");
+        assert_eq!(std::fs::read(&full).unwrap(), bytes);
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .ai_model(&model.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "installed"
+        );
+    }
+    #[tokio::test]
+    async fn unavailable_inventory_cannot_be_saved_before_unlink_preserves_weights() {
+        let (dir, store, entry, bytes) = fixture();
+        let mut model = inventory(&entry);
+        install(
+            &store,
+            dir.path(),
+            &entry,
+            &mut model,
+            &Arc::new(AtomicBool::new(false)),
+            &Fake::new(bytes.clone()),
+        )
+        .await
+        .unwrap();
+        let connection = rusqlite::Connection::open(dir.path().join("rhythm.sqlite3")).unwrap();
+        connection.execute_batch("CREATE TRIGGER refuse_model_update BEFORE UPDATE ON ai_models BEGIN SELECT RAISE(ABORT, 'simulated inventory write failure'); END;").unwrap();
+        assert!(
+            remove(store.clone(), dir.path().into(), model.id.clone(), true)
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read(dir.path().join(&model.path)).unwrap(), bytes);
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .ai_model(&model.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "installed"
+        );
+    }
+    #[tokio::test]
+    async fn failed_inventory_delete_records_missing_weights_and_can_be_retried() {
+        let (dir, store, entry, bytes) = fixture();
+        let mut model = inventory(&entry);
+        install(
+            &store,
+            dir.path(),
+            &entry,
+            &mut model,
+            &Arc::new(AtomicBool::new(false)),
+            &Fake::new(bytes),
+        )
+        .await
+        .unwrap();
+        let connection = rusqlite::Connection::open(dir.path().join("rhythm.sqlite3")).unwrap();
+        connection.execute_batch("CREATE TRIGGER refuse_model_delete BEFORE DELETE ON ai_models BEGIN SELECT RAISE(ABORT, 'simulated inventory failure'); END;").unwrap();
+        let error = remove(store.clone(), dir.path().into(), model.id.clone(), true)
+            .await
+            .unwrap_err();
+        assert!(!dir.path().join(&model.path).exists());
+        let remaining = store.lock().unwrap().ai_model(&model.id).unwrap().unwrap();
+        assert_eq!(remaining.status, "missing", "{error}");
+        assert_eq!(remaining.downloaded_bytes, 0);
+        assert!(remaining
+            .error
+            .as_deref()
+            .is_some_and(|message| message.contains("삭제")));
+        assert_eq!(remaining.sha256, model.sha256);
+        assert_eq!(remaining.expected_sha256, model.expected_sha256);
+        connection
+            .execute_batch("DROP TRIGGER refuse_model_delete;")
+            .unwrap();
+        drop(connection);
+        remove(store.clone(), dir.path().into(), model.id.clone(), true)
+            .await
+            .unwrap();
+        assert!(store.lock().unwrap().ai_model(&model.id).unwrap().is_none());
     }
     #[tokio::test]
     async fn model_removal_rejects_active_artifact_beyond_global_history_window() {
@@ -1339,10 +1614,30 @@ mod tests {
             .unwrap()
             .ai_finish_job(active.id, "cancelled", None, None)
             .unwrap();
+        let saved = {
+            let mut s = store.lock().unwrap();
+            let key = s.ai_job(active.id).unwrap().unwrap().key;
+            let attempt = s.ai_enqueue(&key, &json!({"id":model.id}), 1).unwrap();
+            assert_eq!(s.ai_claim_next().unwrap().unwrap().id, attempt.id);
+            s.ai_complete_job(attempt.id, &json!({"summary":"기존 분석"}), false, 5, 5, 10)
+                .unwrap();
+            s.ai_document_results(key.document_id, Some(key.revision_id), 10)
+                .unwrap()
+                .remove(0)
+        };
         remove(store.clone(), dir.path().into(), model.id, true)
             .await
             .unwrap();
         assert!(!dir.path().join(model.path).exists());
+        let results = store
+            .lock()
+            .unwrap()
+            .ai_document_results(saved.key.document_id, Some(saved.key.revision_id), 10)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, saved.id);
+        assert_eq!(results[0].result, saved.result);
+        assert_eq!(results[0].key.model_sha256, saved.key.model_sha256);
     }
     #[test]
     fn truncated_and_unsupported_gguf_rejected() {

@@ -5,6 +5,11 @@
   background: var(--surface);
 }
 .ai-setup { margin-bottom: 20px; }
+.ai-operation { padding: 14px 16px; margin: 16px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow-wrap: anywhere; }
+.ai-operation h3 { font-size: 13px; margin: 0 0 6px; }
+.ai-operation p { margin: 6px 0; }
+.ai-operation button { margin-top: 8px; }
+.ai-operation [role="status"] { color: var(--text); font-variant-numeric: tabular-nums; }
 .ai-setup p, .ai-model-option p, .ai-installed p, .ai-register p, .ai-analysis p { line-height: 1.8; font-size: 12px; }
 .ai-setup-banner { flex-wrap: wrap; }
 .ai-model-option, .ai-installed { padding: 22px 0; border-bottom: 1px solid var(--line); min-width: 0; }

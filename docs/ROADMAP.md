@@ -107,7 +107,7 @@ Implemented corrections:
 
 ## v0.3.0 — Local Intelligence
 
-**Status: implemented and locally verified on macOS/Metal; broader quality, platform and distribution gates remain open.** Version metadata is 0.3.0, but that does not complete the release gates below. Collectors and released migrations remain unchanged.
+**Historical v0.3.0 status: implemented and locally verified on macOS/Metal; broader quality, platform and distribution gates remain open.** Its version metadata was 0.3.0; the current v0.3.1 refinement is recorded separately below. Collectors and released migrations remain unchanged.
 
 Implemented:
 
@@ -133,7 +133,37 @@ Implemented:
 - [ ] Full focus/automatic-admission native coverage and separately timed shutdown during active loader kernels/setup generation. Deterministic maintenance/exit tests are not every native interleaving.
 - [ ] Windows/Linux CPU runtime and CUDA verification; no v0.3 remote CI success or distribution result is claimed.
 
-Long documents currently use an explicitly partial prefix rather than chunk-and-merge. No automatic history analysis, personal ranking/memory, cloud inference, vision, attachment-text extraction, notifications, tray scheduler or new connectors are included. Earlier archive/platform/accessibility limitations remain. **Linux distribution remains blocked by glib 0.18.5 / RUSTSEC-2024-0429**, without suppression or incompatible forced upgrades.
+At v0.3.0, long documents used an explicitly partial prefix rather than chunk-and-merge. No automatic history analysis, personal ranking/memory, cloud inference, vision, attachment-text extraction, notifications, tray scheduler or new connectors are included. Earlier archive/platform/accessibility limitations remain. **Linux distribution remains blocked by glib 0.18.5 / RUSTSEC-2024-0429**, without suppression or incompatible forced upgrades.
+
+## v0.3.1 — Local Intelligence refinement
+
+**Status: refinement implemented and bounded model comparisons completed; broader semantic-quality and distribution gates remain open.** Version metadata is 0.3.1. The two-process architecture, schema 3, released migrations and archive behavior remain; no v0.4 personalization is added.
+
+Implemented:
+
+- Prompt **3**, stored schema **1**, with explicit `{id,text}` evidence objects and generation facts restricted to `kind`, `label`, `value`, `evidence_id`. Historical results remain readable. Literal date/time checks preserve digit boundaries, reject unsupported clock/date combinations and do not fill missing years. Cache-versioned clock rules recognize explicit Korean and English AM/PM markers, reject conflicting periods and avoid treating date/minute digits as extra hours. One bounded repair remains; literal grounding does not establish semantic entailment.
+- Selector-versioned head/tail/important passage selection within **18 KiB** of encoded source and a **24 KiB** full prompt. Selector v4 admits exact repeated text only once for over-budget input; full-fit input retains all occurrences. Structural table rows remain separate source units. Exact source ranges, partial counts and omitted-interval warnings remain; no chunk-and-merge or full-document claim.
+- Transient typed stage/token diagnostics, separating complete pipeline, per-request loading/reuse and upstream engine measurements. At most 20 terminal reports live in memory, without document/generated text or database migration. Approved `sha2` assembly acceleration is limited to macOS aarch64; complete-file integrity checks remain mandatory. See [AI evaluation](AI_EVALUATION.md) for measured comparisons rather than extrapolating debug timings.
+- Capability-negotiated `analysis_json_v1` decoding for analysis, adopted after a bounded real-artifact A/B test. A static closed worker schema limits fields/types/enums and six facts; default setup stays ordinary text. Mode-aware cache identity, legacy-pipe compatibility, strict grounding and one repair remain. No new dependency or arbitrary grammar API.
+- Backend-owned load/setup/register phases, elapsed time and cancellation across Settings remounts. Cancellation joins verification or reaps interrupted IPC before releasing admission; setup persists only after successful real inference. Additive `ai_cancel_operation` and `ai_diagnostics` commands; no persistent operation job kinds.
+- Revision-scoped job queries retain all active work plus bounded terminal history; reader warnings compare model/prompt/schema/configuration identity. Successful refreshes clear transient read errors. Hardware guidance distinguishes physical RAM from available memory and refreshes disk capacity.
+- Managed removal cleans partial files before weights, persists `missing` inventory before unlink and reconciles failures without deleting external model bytes or saved analyses. Failed removal does not reselect missing weights.
+- Optional recent processing uses a bounded latest-revision collection-time query under serialized preference admission, not a publication-newest window. It includes session-new nonhistorical arrivals and meaningful revisions of historical records; initial backfill, startup history and previously attempted revisions remain excluded. Session caps and explicit-only default remain; this does not redefine persisted pending-job draining.
+
+Evidence at the current checkpoint:
+
+- [x] **161 application + 10 worker unit + 4 worker process = 175** locked workspace tests passed; eight opt-in tests ignored. Strict workspace Clippy, Rustfmt and zero Svelte errors/warnings passed. The focused analysis suite has **33 passing tests**.
+- [x] **86 Chromium/WebKit** mocked-IPC checks and **five POSIX desktop-orchestration** checks passed. Ubuntu CI now invokes desktop-script tests; this is configuration, not a new remote CI result.
+- [x] A macOS debug app bundle built. In the isolated `io.github.hiyabye.rhythm.v031validation` profile, actual 2B/Metal loading survived Settings remount and was cancelled; setup cancellation during verification left completion false, then a real short-inference setup succeeded.
+- [x] An OS-network-denied native restart displayed the archived notice/cached result, warned about the older analysis contract and completed prompt-v3/selector-v4 regeneration (**49,530 ms**, one debug functional observation, not a performance comparison). Read/saved state remained set; SQLite integrity was `ok` and foreign-key checks were empty.
+- [x] Completed an initial **18 synthetic + six existing public-archive notices per model** campaign for 2B/4B and inspected failure examples against their sources. It exposed category errors, obsolete deadlines, reversed exclusions and omitted table deadlines; successful schema/grounding is not a semantic pass.
+- [x] A same-input **eight synthetic + three selected public notices per model** A/B experiment improved completed jobs **17/22 → 20/22** with constrained decoding. Single-case cold/warm timings were similar. Adoption preserves validators/one repair; exact settings, denominators and remaining errors are in [AI evaluation](AI_EVALUATION.md#bounded-schema-decoding-experiment). Full-file hashing and cache/mode isolation were regression-tested.
+- [ ] Broader final-mode semantic acceptance and independent human review remain open. The complete 18-case campaign has not been repeated under the adopted default. Do not treat structure/grounding acceptance, expected-term matching or the small A/B sample as a general factual-quality score. Source-derived reports remain local and uncommitted.
+- [ ] Native automatic-admission/focus coverage, separately timed active-kernel shutdown/setup cancellation, full VoiceOver use and Windows/Linux/CUDA/9B inference remain open. No signing, release-optimized installer distribution, push or publication is claimed.
+
+### Linux dependency recheck — 2026-10-26
+
+The [glib advisory RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html) still affects locked **glib 0.18.5**; fixed versions start at 0.20.0. GTK **0.19.0**, using gtk-rs-core 0.22, is now published, so permanent GTK3 abandonment is not the current explanation. However, locked **Tauri 2.12.5 / Wry 0.57.1** still require GTK 0.18. [Wry's coordinated GTK upgrade #1843](https://github.com/tauri-apps/wry/pull/1843) remains open, awaits Tao/WebKit/JavaScriptCore changes and raises the proposed MSRV to 1.92. No compatible fixed public update was found. Linux distribution remains blocked; no audit suppression, forced incompatible upgrade, vendoring or transitive reachability claim is introduced.
 
 ## v0.4.0 — Personalization
 
