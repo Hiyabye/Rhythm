@@ -1,5 +1,42 @@
 export type Theme = 'system' | 'light' | 'dark';
 export type EnergyProfile = 'eco' | 'balanced' | 'performance';
+export interface PersonalizationProfile {
+  university: string;
+  department: string;
+  study_level: string;
+}
+export interface PersonalInterest {
+  id: number;
+  name: string;
+  aliases: string[];
+  priority: number;
+  polarity: 'positive' | 'negative';
+  origin: 'explicit' | 'learned';
+  evidence_count: number;
+  evidence_summary: string | null;
+  updated_at: string;
+}
+export interface PersonalizationSnapshot {
+  profile: PersonalizationProfile;
+  interests: PersonalInterest[];
+  learning_enabled: boolean;
+}
+export interface PersonalizedRecommendation {
+  item: DocumentItem;
+  reasons: string[];
+  feedback: string | null;
+}
+export interface PersonalizationRecommendations {
+  items: PersonalizedRecommendation[];
+  has_preferences: boolean;
+}
+export interface PersonalInterestInput {
+  id: number | null;
+  name: string;
+  aliases: string[];
+  priority: number;
+  polarity: 'positive' | 'negative';
+}
 
 export interface Settings {
   theme: Theme;

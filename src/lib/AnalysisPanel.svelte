@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import contract from './analysis-contract.json' with { type: 'json' };
   import type { AiJob, AiResult, AiSnapshot } from './types';
   import { archiveDate, archiveError } from './archive-format';
 
@@ -21,6 +22,8 @@
   let activeHash = $derived(data?.models.find((model) => model.id === data?.preferences.active_model_id)?.sha256);
   let outdated = $derived(Boolean(current && ((activeHash && current.model_sha256 !== activeHash)
     || (data && current.model_identity.max_tokens !== undefined && current.model_identity.max_tokens !== data.preferences.max_tokens)
+    || current.prompt_version !== contract.prompt_version
+    || current.schema_version !== contract.schema_version
     || (data?.analysis_contract && (current.prompt_version !== data.analysis_contract.prompt_version
       || current.schema_version !== data.analysis_contract.schema_version
       || (data.analysis_contract.configuration_hash && current.configuration_hash !== data.analysis_contract.configuration_hash))))));

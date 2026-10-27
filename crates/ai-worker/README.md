@@ -7,7 +7,7 @@ stderr; stdout carries only versioned JSON Lines IPC.
 
 ## Runtime and compatibility
 
-Current application/worker version is **0.3.1**. The worker protocol remains v1;
+Current application/worker version is **0.4.0**. The worker protocol remains v1;
 application prompt versioning and stored-result schemas are separate contracts.
 
 The worker pins **mistral.rs v0.9.1**, upstream release commit

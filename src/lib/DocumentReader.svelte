@@ -16,11 +16,16 @@
   let localResourceErrors = $state<Record<number, string>>({});
   let error = $state('');
   let feedback = $state('');
+  let documentFeedback = $state<string | null>(null);
   let safeHtml = $state('');
   let selectedRevision = $state('');
   let heading = $state<HTMLHeadingElement>();
   let generation = 0;
   let disposed = false;
+  let feedbackGeneration = 0;
+  let feedbackWriteGeneration = 0;
+  let busyGeneration = 0;
+  let pendingFeedbackDocumentId: number | null = null;
 
   onMount(() => {
     void load(null, true);
@@ -38,18 +43,31 @@
         }
       }).catch((reason) => { error = archiveError(reason); resourceBusy = false; });
     }, 1000);
-    return () => { disposed = true; generation++; window.removeEventListener('keydown', key); window.clearInterval(timer); };
+    return () => {
+      disposed = true;
+      generation++;
+      feedbackGeneration++;
+      feedbackWriteGeneration++;
+      busyGeneration++;
+      pendingFeedbackDocumentId = null;
+      window.removeEventListener('keydown', key);
+      window.clearInterval(timer);
+    };
   });
 
   async function load(revisionId: number | null, markRead = false) {
     const request = ++generation;
+    const documentId = id;
+    const feedbackRequest = ++feedbackGeneration;
+    const writeGeneration = feedbackWriteGeneration;
+    const feedbackWritePending = pendingFeedbackDocumentId === documentId;
     loading = true;
     error = '';
     try {
-      const result = await invoke<DocumentDetail>('archive_document', { id, revisionId });
-      if (disposed || request !== generation) return;
+      const result = await invoke<DocumentDetail>('archive_document', { id: documentId, revisionId });
+      if (disposed || request !== generation || documentId !== id) return;
       const rendered = await localHtml(result, request);
-      if (disposed || request !== generation) return;
+      if (disposed || request !== generation || documentId !== id) return;
       detail = result;
       selectedRevision = String(result.revision_id);
       safeHtml = rendered.html;
@@ -59,20 +77,30 @@
       // A failed preference/state write must never make readable archival text
       // unavailable (for example when the disk is full or becomes read-only).
       if (markRead && !result.item.is_read) {
+        const busyRequest = ++busyGeneration;
         busy = true;
         try {
-          await invoke('archive_state', { id, isRead: true, saved: null });
+          await invoke('archive_state', { id: documentId, isRead: true, saved: null });
           // A user can return before this write completes. Refresh the parent
           // even then so an unread-only list cannot retain the just-read row.
           onchange();
-          if (disposed || request !== generation) return;
+          if (disposed || request !== generation || documentId !== id) return;
           detail.item.is_read = true;
         } catch (reason) {
-          if (!disposed && request === generation) error = archiveError(reason);
-        } finally { if (!disposed && request === generation) busy = false; }
+          if (!disposed && request === generation && documentId === id) error = archiveError(reason);
+        } finally { if (!disposed && busyRequest === busyGeneration) busy = false; }
       }
-    } catch (reason) { if (!disposed && request === generation) error = archiveError(reason); }
-    finally { if (!disposed && request === generation) loading = false; }
+    } catch (reason) { if (!disposed && request === generation && documentId === id) error = archiveError(reason); }
+    if (!feedbackWritePending) {
+      try {
+        const savedFeedback = await invoke<string | null>('personalization_get_feedback', { documentId });
+        if (!disposed && request === generation && documentId === id
+          && feedbackRequest === feedbackGeneration && writeGeneration === feedbackWriteGeneration) {
+          documentFeedback = savedFeedback;
+        }
+      } catch { /* Feedback controls remain usable if a read fails. */ }
+    }
+    if (!disposed && request === generation) loading = false;
   }
 
   async function localHtml(document: DocumentDetail, request: number): Promise<{ html: string; errors: Record<number, string> }> {
@@ -184,16 +212,40 @@
 
   async function updateState(field: 'is_read' | 'saved') {
     if (!detail || busy) return;
+    const request = ++busyGeneration;
+    const documentId = id;
     busy = true;
     error = '';
     try {
       const value = !detail.item[field];
-      await invoke('archive_state', { id, isRead: field === 'is_read' ? value : null, saved: field === 'saved' ? value : null });
+      await invoke('archive_state', { id: documentId, isRead: field === 'is_read' ? value : null, saved: field === 'saved' ? value : null });
+      onchange();
+      if (disposed || request !== busyGeneration || documentId !== id || !detail) return;
       detail.item[field] = value;
       feedback = field === 'saved' ? value ? '보관함에 저장했습니다.' : '보관함에서 해제했습니다.' : value ? '읽음으로 표시했습니다.' : '읽지 않음으로 표시했습니다.';
+    } catch (reason) {
+      if (!disposed && request === busyGeneration && documentId === id) error = archiveError(reason);
+    } finally { if (!disposed && request === busyGeneration) busy = false; }
+  }
+  async function setDocumentFeedback(value: string | null) {
+    if (busy) return;
+    const request = ++feedbackWriteGeneration;
+    const documentId = id;
+    const busyRequest = ++busyGeneration;
+    pendingFeedbackDocumentId = documentId;
+    busy = true; error = ''; feedback = '';
+    try {
+      const savedFeedback = await invoke<string | null>('personalization_set_feedback', { documentId, feedback: value });
       onchange();
-    } catch (reason) { error = archiveError(reason); }
-    finally { busy = false; }
+      if (disposed || request !== feedbackWriteGeneration || documentId !== id) return;
+      documentFeedback = savedFeedback;
+      feedback = documentFeedback ? '피드백을 저장했습니다. 언제든 취소하거나 바꿀 수 있습니다.' : '피드백을 취소했습니다.';
+    } catch (reason) {
+      if (!disposed && request === feedbackWriteGeneration && documentId === id) error = archiveError(reason);
+    } finally {
+      if (request === feedbackWriteGeneration && pendingFeedbackDocumentId === documentId) pendingFeedbackDocumentId = null;
+      if (!disposed && busyRequest === busyGeneration) busy = false;
+    }
   }
 
   async function retry(resourceId: number) {
@@ -233,6 +285,12 @@
         <button class="button secondary small" disabled={busy} aria-pressed={detail.item.is_read} onclick={() => updateState('is_read')}>{detail.item.is_read ? '읽지 않음으로 표시' : '읽음으로 표시'}</button>
         <button class="button secondary small" disabled={busy} aria-pressed={detail.item.saved} onclick={() => updateState('saved')}><Icon name="bookmark" size={16} />{detail.item.saved ? '저장 해제' : '보관함에 저장'}</button>
         <button class="text-button" onclick={() => external(detail!.canonical_url)}>학교 원문 열기 ↗</button>
+      </div>
+      <div class="reader-actions" role="group" aria-label="관심 피드백">
+        <span>이 공지가 도움이 되었나요?</span>
+        <button class="button secondary small" aria-pressed={documentFeedback === 'interested'} disabled={busy} onclick={() => void setDocumentFeedback(documentFeedback === 'interested' ? null : 'interested')}>관심 있어요</button>
+        <button class="button secondary small" aria-pressed={documentFeedback === 'not_interested'} disabled={busy} onclick={() => void setDocumentFeedback(documentFeedback === 'not_interested' ? null : 'not_interested')}>관심 없어요</button>
+        {#if documentFeedback}<button class="text-button" disabled={busy} onclick={() => void setDocumentFeedback(null)}>피드백 취소</button>{/if}
       </div>
       <p class="archive-local-status">본문은 로컬에 보관되어 있습니다. {detail.resources.some((item) => localResourceErrors[item.id]) ? '일부 로컬 자료가 없거나 손상되었을 수 있습니다. 아래에서 확인하거나 다시 내려받아 주세요.' : detail.resources.every((item) => item.status === 'downloaded') ? '연결된 자료도 모두 저장되어 있습니다.' : '일부 자료는 로컬에 없습니다. 아래에서 상태를 확인하세요.'}</p>
       {#if detail.revisions.length > 1}

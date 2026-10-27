@@ -2,12 +2,12 @@
 
 ## Scope and architecture
 
-Rhythm is a Korean-first, local-first Tauri 2 desktop command center. Read `docs/ARCHITECTURE.md` before changing component boundaries and `docs/ROADMAP.md` before adding product scope. Current implementation is v0.3.1 Local Intelligence refinement: the hardened manual Sogang archive plus model management, persistent local analysis, bounded passage selection and app-open energy controls. Targeted macOS/Metal native checks have passed; broader quality/platform/distribution verification remains open. Implementation or schema acceptance is not proof of useful Qwen3.5 output. Collector provenance is in `docs/COLLECTOR_COMPARISON.md`; exact model/evaluation status is in `docs/AI_EVALUATION.md`. No persistent background scheduler, notifications, external web crawler or cloud service is implemented.
+Rhythm is a Korean-first, local-first Tauri 2 desktop command center. Read `docs/ARCHITECTURE.md` before changing component boundaries and `docs/ROADMAP.md` before adding product scope. Current implementation is v0.4.0 Personalization: the hardened manual Sogang archive, optional local AI and deterministic, explainable per-user recommendations with persistent preferences and bounded local learning. AI semantic quality, broader platform and distribution verification remain separate gates. Collector provenance is in `docs/COLLECTOR_COMPARISON.md`; exact model/evaluation status is in `docs/AI_EVALUATION.md`. No persistent background scheduler, notifications, external web crawler or cloud service is implemented.
 
-- `src/`: Svelte 5 runes, TypeScript and Tailwind/custom CSS. `App.svelte` owns navigation/settings; `lib/ArchiveView.svelte`, `DocumentReader.svelte` and `SourceSettings.svelte` own archive surfaces; `AiSettings.svelte` and revision-keyed `AnalysisPanel.svelte` own AI management/results. `lib/types.ts` mirrors command payloads.
+- `src/`: Svelte 5 runes, TypeScript and Tailwind/custom CSS. `App.svelte` owns navigation/settings; `lib/ArchiveView.svelte`, `DocumentReader.svelte` and `SourceSettings.svelte` own archive surfaces; `PersonalizationSettings.svelte` manages profile/interests/memory; `AiSettings.svelte` and revision-keyed `AnalysisPanel.svelte` own AI management/results. `lib/types.ts` mirrors command payloads.
 - `src-tauri/src/main.rs`: Tauri command registration, application state/startup/exit; `core/mod.rs` owns the data-directory lock and platform menu.
 - `src-tauri/src/archive/`: shared record models, catalog, independent native parsers, constrained HTTPS/TLS, manual job controller and archive commands. `fixtures/README.md` and `certificates/README.md` document source/certificate provenance.
-- `src-tauri/src/storage/`: rusqlite settings/archive/AI inventory/job/result APIs, FTS and upgrade tests; ordered migrations are in `src-tauri/migrations/`.
+- `src-tauri/src/storage/`: rusqlite settings/archive/personalization/AI inventory/job/result APIs, FTS and upgrade tests; ordered migrations through `004_personalization.sql` are in `src-tauri/migrations/`.
 - `src-tauri/src/extensions/`: built-in metadata, registry and lifecycle; opt-in is separate from subscriptions/support.
 - `src-tauri/src/intelligence/`: worker client, `models.rs`/pinned `catalog.json`, single `analysis.rs` queue, transient `operations.rs` owner, Tauri `commands.rs` and app-open `maintenance.rs`. Synthetic evaluation fixtures/tests are `evaluation.json`/`evaluation.rs`; opt-in read-only local-archive evaluation is `archived_evaluation.rs`. Collection never waits for AI.
 - `crates/ai-worker/`: isolated mistral.rs runtime and JSON-lines executable. Read its `README.md` before worker/inference changes.
@@ -43,7 +43,7 @@ For core real-worker lifecycle/crash-isolation tests, build the worker and set `
 
 Direct Cargo worker builds default to CPU inference with mistral.rs v0.9.1 pinned to release commit `11f255058573e085afe0a149f8a19cbd39aa1200`; this inspected release adds the required `qwen35` GGUF route. Desktop scripts prefer Metal on Apple Silicon only when the existing compiler probe succeeds; otherwise CPU. `RHYTHM_AI_BACKEND=cpu|metal|cuda` overrides selection. Apple Metal Toolchain was installed with explicit approval. Pinned Qwen3.5 2B/4B Q4_K_M produced useful structured Korean output on Metal; this does not verify CPU/CUDA, 9B or other platforms. Do not install toolchains or download weights implicitly. See `crates/ai-worker/README.md` and `docs/AI_EVALUATION.md`.
 
-### Intelligence verification and invariants
+### Intelligence and personalization verification and invariants
 
 Focused deterministic checks:
 
@@ -55,6 +55,8 @@ cargo test --locked -p rhythm intelligence::maintenance
 cargo test --locked -p rhythm intelligence::commands
 cargo test --locked -p rhythm intelligence::operations
 cargo test --locked -p rhythm-ai-worker
+cargo test --locked -p rhythm storage::personalization_tests
+cargo test --locked -p rhythm ranking_candidate_retrieval_is_bounded -- --nocapture
 ```
 
 Normal tests must not download weights. The explicitly ignored `real_curated_model_install` exercises the production downloader with a pinned experimental entry only for validation. With approved weight/disk budget, set `RHYTHM_MODEL_INSTALL_ID` and `RHYTHM_MODEL_INSTALL_DIR` to a dedicated test directory. Never target production app data. Use `RHYTHM_MODEL_EVAL_ROOT`/`RHYTHM_MODEL_EVAL_ID`, `RHYTHM_WORKER_TEST_BIN` and `RHYTHM_AI_EVAL_REPORT` for ignored `actual_qwen35_analysis_evaluation`; details and bounds are in `docs/AI_EVALUATION.md`. Build the specified worker executable explicitly before running process tests; a prior test or feature build may leave a different backend/lifecycle binary at the same path.
@@ -70,6 +72,18 @@ Normal tests must not download weights. The explicitly ignored `real_curated_mod
 - Long-input handling uses selector-versioned exact source ranges from head/tail/important passages, not chunk-and-merge or complete-document understanding. Selector v4 deduplicates exact repeated passage text only when input exceeds the budget; full-fit input retains all occurrences. Keep structural table rows separate and dates/times intact. Record/display actual selected character counts and partial status. Source bound is 18 KiB including JSON objects/escaping within a 24 KiB prompt. No binary-attachment extraction or remote refetch for analysis.
 - `ai_snapshot` exposes transient operation/analysis phases, elapsed time and the analysis contract; `ai_cancel_operation` cancels command-owned work and `ai_diagnostics` reads bounded local timing/count metrics. Diagnostics retain at most 20 terminal reports, contain no document/generated text and are not persisted. Missing legacy worker metrics remain unknown; historical `load_ms`, per-request load/reuse, engine timings and end-to-end wall time are different measurements. Refresh disk capacity without implying physical RAM is available memory.
 - Maintenance runs only while the app is open. Explicit-only is default; read opt-in preferences under `ai_gate` before admission. Recent analysis requires focus/setup/model and considers at most 20 eligible latest revisions ordered by collection time after session startup. Include session-new nonhistorical arrivals and meaningful revisions, including changes to historical documents; exclude initial historical backfill, startup history and revisions with any prior attempt. Session caps remain; persisted pending-queue draining is separate. Eco starts no automatic work; idle model limits are 30/120/600 seconds for Eco/Balanced/Performance. Do not claim battery detection or full recent-ingestion coverage.
+
+### Personalization invariants
+
+- Schema 4 appends `004_personalization.sql`; never rewrite released migrations. Preserve legacy `settings.interests` on upgrade and clear it only on explicit personalization reset. Interest/provenance/feedback stays in SQLite and never enters network calls or diagnostics.
+- Ranking is deterministic and bounded; it must work without installed/loaded AI or network access. AI-generated categories, summaries and extracted dates never create ranking urgency or personalized reasons. Keep signal weights, candidate caps, tie-breaking and diversity behavior aligned with `docs/ARCHITECTURE.md`.
+- Current document feedback is one idempotent row per document. `interested` and save are deliberate evidence; read/open/search are not. Learning requires two distinct supporting documents, deduplicates `(topic,document,kind)`, expires evidence after 180 days and obeys the learning switch. Recompute after changed feedback/save state and at the next snapshot at least daily for expiry; do not rescan unchanged evidence on every view. Negative feedback stays document-scoped; it must not unsubscribe, hide categories or create inferred dislike.
+- Explicit interests are never replaced by learned ones. Editing a learned memory promotes it to explicit. Canonical explicit aliases suppress duplicate learned rows. Removing a learned memory records its current activity-sequence baseline so unchanged retained evidence cannot recreate it. Reset removes personalization state but preserves archive, saved/read state and AI results.
+- Match known Korean/English terms through bounded aliases, not a large ontology. New explicit/learned interests and aliases retain the backend caps. Recommendation explanations must derive from score contributions.
+- `source_extensions` links source identity to extension ownership. A mapped source is excluded from new recommendations when its preference is absent or disabled; its archive, feedback and saved state remain accessible. Re-enabling restores history without duplicating evidence.
+- `documents.last_revision_at` changes only for meaningful revisions. Initial historical backfill must not gain freshness from collection time. Candidate retrieval uses fixed bounded indexed slices and never transfers the full archive to Svelte.
+- Learned topics are derived only from document titles and original categories, never body text or AI output. Keep obvious Korean/English sensitive-term exclusions in place; the denylist is lexical, not semantic.
+- `src/lib/analysis-contract.json` is the UI fixture source for current prompt/schema versions; Rust parity is regression-tested. Older contract fixtures must be named explicitly and must not become the default.
 
 ### Archive verification
 

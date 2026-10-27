@@ -6059,7 +6059,7 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rhythm"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "reqwest 0.12.28",
@@ -6080,7 +6080,7 @@ dependencies = [
 
 [[package]]
 name = "rhythm-ai-worker"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "filedescriptor",
  "mistralrs",

@@ -5,6 +5,7 @@
   import ArchiveView from './lib/ArchiveView.svelte';
   import SourceSettings from './lib/SourceSettings.svelte';
   import AiSettings from './lib/AiSettings.svelte';
+  import PersonalizationSettings from './lib/PersonalizationSettings.svelte';
   import './lib/ai.css';
   import { archiveError as message } from './lib/archive-format';
   import type { EnergyProfile, Settings, Snapshot, Theme, WorkerStatus, AiSnapshot } from './lib/types';
@@ -38,7 +39,6 @@
   let error = $state('');
   let notice = $state('');
   let desktop = $state(false);
-  let interestDraft = $state('');
   let setupNeeded = $state(false);
   let noticesEnabled = $derived(snapshot?.extensions.some((extension) => extension.id === 'sogang_notices' && extension.enabled) ?? false);
   let theme = $state<Theme>('system');
@@ -88,7 +88,6 @@
     try {
       snapshot = await invoke<Snapshot>('get_snapshot');
       theme = snapshot.settings.theme;
-      interestDraft = snapshot.settings.interests;
       try { setupNeeded = !(await invoke<AiSnapshot>('ai_snapshot')).preferences.setup_completed; }
       catch { /* AI availability must not prevent archive access. Settings exposes recovery. */ }
     } catch (reason) {
@@ -155,7 +154,7 @@
         </button>
       {/each}
     </nav>
-    <div class="sidebar-bottom"><span class="local-dot"></span><span>내 기기에 머무는 정보</span><small>v0.3.1 · 로컬 인텔리전스</small></div>
+    <div class="sidebar-bottom"><span class="local-dot"></span><span>내 기기에 머무는 정보</span><small>v0.4.0 · 로컬 인텔리전스</small></div>
   </aside>
 
   <main id="main" tabindex="-1">
@@ -180,20 +179,16 @@
             {#if noticesEnabled}<SourceSettings enabled={noticesEnabled} />{:else}<p class="footnote">서강대학교 공지를 켜면 정보원을 구독하고 자료를 가져올 수 있습니다. 꺼도 이미 보관한 공지와 구독 설정은 유지됩니다.</p>{/if}
           </section>
           <AiSettings {desktop} onsetup={() => setupNeeded = false} />
-          <section id="personalization" class="settings-section"><div class="section-heading"><h2>개인화</h2><p>어떤 소식에 관심이 있는지 직접 기록해 두세요.</p></div>
-            <label class="field-label" for="interests">나의 관심사</label><textarea id="interests" bind:value={interestDraft} disabled={!snapshot || busy} maxlength="4000" rows="4" placeholder="예: 컴퓨터 비전, 장학금, 학부 연구 참여"></textarea>
-            <div class="field-footer"><span>관심사는 이 기기에만 저장됩니다.</span><button class="button small" disabled={!snapshot || busy || interestDraft === snapshot.settings.interests} onclick={() => save({ interests: interestDraft })}>{busy ? '저장 중…' : '관심사 저장'}</button></div>
-            <div class="planned"><strong>취향과 기억 · 향후 제공</strong><p>자동 취향 학습과 개인 기억 관리는 아직 제공되지 않습니다. 현재 관심사는 추천이나 순위에 반영되지 않습니다.</p></div>
-          </section>
+          <PersonalizationSettings {desktop} />
           <section id="notifications" class="settings-section"><div class="section-heading"><h2>알림</h2><p>중요한 소식이 생기면, 필요한 순간에만.</p></div><div class="planned"><strong>알림 설정 · 향후 제공</strong><p>이 버전은 시스템 알림을 보내지 않습니다. 알림 종류와 수신 시간 설정은 v0.5.0에서 제공할 예정입니다.</p></div></section>
           <section id="energy" class="settings-section"><div class="section-heading"><h2>성능 및 전원</h2><p>기기에 맞는 작업 방식을 선택하세요.</p></div><div class="energy-options" role="group" aria-label="에너지 프로필">{#each energyProfiles as option}<button disabled={!snapshot || busy} class:selected={snapshot?.settings.energy_profile === option.id} aria-pressed={snapshot?.settings.energy_profile === option.id} onclick={() => save({ energy_profile: option.id })}><span class="option-title">{option.label}{#if snapshot?.settings.energy_profile === option.id}<Icon name="check" size={17} />{/if}</span><span>{option.description}</span></button>{/each}</div><p class="footnote">AI는 한 번에 한 공지만 분석합니다. 절전에서는 직접 요청을 우선하며, 모델 유지와 최근 공지의 소량 처리는 선택한 프로필과 AI 처리 설정을 따릅니다. 앱 종료 후 백그라운드 처리는 하지 않습니다.</p></section>
           <section id="data" class="settings-section"><div class="section-heading"><h2>데이터 및 개인정보</h2><p>내 정보는 내 기기에. 클라우드 계정이나 동기화가 필요하지 않습니다.</p></div>
             <div class="setting-row"><div><h3>로컬 데이터베이스</h3><p>SQLite · {snapshot ? `스키마 버전 ${snapshot.storage.schema_version}` : '앱에서 확인 가능'}</p></div><span class="value">{snapshot ? storageSize(snapshot.storage.bytes) : '—'}</span></div>
             <div class="storage-path"><span>저장 위치</span><code>{snapshot?.storage.path ?? '데스크톱 앱에서 확인할 수 있습니다.'}</code></div>
-            <div class="privacy-note"><Icon name="lock" size={18} /><p>설정과 관심사는 로컬에 저장됩니다. 클라우드 추론, 원격 저장소, 사용 정보 수집을 사용하지 않습니다.</p></div>
+            <div class="privacy-note"><Icon name="lock" size={18} /><p>프로필, 관심 분야, 피드백과 학습 근거는 로컬 SQLite에만 저장합니다. 클라우드 추론, 원격 저장소, 사용 정보 수집을 사용하지 않습니다.</p></div>
             <div class="planned"><strong>백업 및 복원 · 향후 제공</strong><p>이 버전에는 백업과 복원 기능이 없습니다. 앱 업데이트 시에는 마이그레이션으로 기존 데이터를 유지합니다.</p></div>
           </section>
-          <section id="about" class="settings-section about-section"><div class="about-brand"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><h2>Rhythm</h2><span>0.3.1</span></div><p>나의 하루를 정돈하는 로컬 퍼스트 개인 커맨드 센터.</p><p class="muted">조용하게 연결하고, 나에게 중요한 것에 집중합니다.</p><div class="about-meta"><span>MIT 라이선스</span><span>github.com/Hiyabye/Rhythm</span></div></section>
+          <section id="about" class="settings-section about-section"><div class="about-brand"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><h2>Rhythm</h2><span>0.4.0</span></div><p>나의 하루를 정돈하는 로컬 퍼스트 개인 커맨드 센터.</p><p class="muted">조용하게 연결하고, 나에게 중요한 것에 집중합니다.</p><div class="about-meta"><span>MIT 라이선스</span><span>github.com/Hiyabye/Rhythm</span></div></section>
         </div>
       </div>
     {:else}

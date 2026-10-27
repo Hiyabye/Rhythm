@@ -3,6 +3,7 @@ mod archive;
 mod core;
 mod extensions;
 mod intelligence;
+mod personalization;
 mod storage;
 use extensions::{ExtensionInfo, Registry};
 use intelligence::{Worker, WorkerStatus};
@@ -14,9 +15,9 @@ use std::{
 use storage::{Settings, StorageInfo, Store};
 use tauri::Manager;
 
-struct AppState {
+pub(crate) struct AppState {
     _instance_lock: std::fs::File,
-    store: Arc<Mutex<Store>>,
+    pub(crate) store: Arc<Mutex<Store>>,
     data_root: PathBuf,
     archive: Arc<archive::sync::Controller>,
     network: archive::Client,
@@ -168,6 +169,15 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            personalization::personalization_get,
+            personalization::personalization_save_profile,
+            personalization::personalization_save_interest,
+            personalization::personalization_remove_interest,
+            personalization::personalization_set_learning,
+            personalization::personalization_reset,
+            personalization::personalization_get_feedback,
+            personalization::personalization_set_feedback,
+            personalization::personalization_recommendations,
             get_snapshot,
             save_settings,
             set_extension,

@@ -133,6 +133,16 @@ impl Store {
         &self,
         definitions: &[SourceDefinition],
     ) -> Result<Vec<SourceInfo>, String> {
+        self.catalog_for_extension("sogang_notices", definitions)
+    }
+    pub(crate) fn catalog_for_extension(
+        &self,
+        extension_id: &str,
+        definitions: &[SourceDefinition],
+    ) -> Result<Vec<SourceInfo>, String> {
+        if !valid_id(extension_id) {
+            return Err("확장 정보원 정의를 확인해 주세요.".into());
+        }
         let transaction = self
             .connection
             .unchecked_transaction()
@@ -145,6 +155,13 @@ impl Store {
                 return Err("정보원 정의를 확인해 주세요.".into());
             }
             transaction.execute("INSERT INTO sources(id,name,organization,description,url,family,supported) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET name=excluded.name,organization=excluded.organization,description=excluded.description,url=excluded.url,family=excluded.family,supported=excluded.supported",params![definition.id,definition.name,definition.organization,definition.description,definition.url,definition.family,definition.supported]).map_err(|e|e.to_string())?;
+            transaction
+                .execute(
+                    "INSERT INTO source_extensions(source_id,extension_id) VALUES(?1,?2)
+                 ON CONFLICT(source_id) DO UPDATE SET extension_id=excluded.extension_id",
+                    params![definition.id, extension_id],
+                )
+                .map_err(|e| e.to_string())?;
         }
         transaction.commit().map_err(|e| e.to_string())?;
         self.sources()
@@ -311,6 +328,16 @@ impl Store {
             .map_err(|e| e.to_string())?;
         transaction.execute("INSERT INTO document_revisions(document_id,canonical_url,title,author,category,published_at,modified_at,original,body_html,body_text,content_hash) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![id,article.canonical_url,article.title,article.author,article.category,article.published_at,article.modified_at,article.original,article.body_html,article.body_text,hash]).map_err(|e|e.to_string())?;
         let revision_id = transaction.last_insert_rowid();
+        if existing.is_some() {
+            transaction
+                .execute(
+                    "UPDATE documents SET last_revision_at=(
+                        SELECT collected_at FROM document_revisions WHERE id=?2
+                     ) WHERE id=?1",
+                    params![id, revision_id],
+                )
+                .map_err(|e| e.to_string())?;
+        }
         transaction
             .execute(
                 "INSERT OR IGNORE INTO document_state(document_id) VALUES(?1)",
@@ -478,7 +505,85 @@ impl Store {
         is_read: Option<bool>,
         saved: Option<bool>,
     ) -> Result<(), String> {
-        require_changed(self.connection.execute(&format!("UPDATE document_state SET is_read=COALESCE(?2,is_read),saved=COALESCE(?3,saved),read_at=CASE WHEN ?2 THEN {NOW} WHEN ?2=0 THEN NULL ELSE read_at END,saved_at=CASE WHEN ?3 THEN {NOW} WHEN ?3=0 THEN NULL ELSE saved_at END WHERE document_id=?1"),params![id,is_read,saved]).map_err(|e|e.to_string())?)
+        let tx = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let was_saved = if saved.is_some() {
+            tx.query_row(
+                "SELECT saved FROM document_state WHERE document_id=?1",
+                [id],
+                |row| row.get::<_, bool>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or("보관된 항목을 찾을 수 없습니다.")?
+        } else {
+            false
+        };
+        let saved_changed = saved.is_some_and(|value| value != was_saved);
+        let activity_sequence = if saved_changed {
+            Some(super::personalization::next_activity_sequence(&tx)?)
+        } else {
+            None
+        };
+        require_changed(
+            tx.execute(
+                &format!(
+                    "UPDATE document_state SET
+                     is_read=COALESCE(?2,is_read),
+                     saved=COALESCE(?3,saved),
+                     read_at=CASE WHEN ?2 THEN {NOW} WHEN ?2=0 THEN NULL ELSE read_at END,
+                     saved_at=CASE WHEN ?3=1 AND saved=0 THEN {NOW}
+                                   WHEN ?3=0 THEN NULL ELSE saved_at END
+                     WHERE document_id=?1"
+                ),
+                params![id, is_read, saved],
+            )
+            .map_err(|e| e.to_string())?,
+        )?;
+        if saved == Some(false) {
+            tx.execute(
+                "DELETE FROM personalization_evidence WHERE document_id=?1 AND kind='saved'",
+                [id],
+            )
+            .map_err(|e| e.to_string())?;
+        } else if saved == Some(true) && !was_saved {
+            let learning_enabled: bool = tx
+                .query_row(
+                    "SELECT learning_enabled FROM personalization_profile WHERE id=1",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if learning_enabled {
+                let (title, category): (String, Option<String>) = tx
+                    .query_row(
+                        "SELECT title,category FROM documents WHERE id=?1",
+                        [id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(|e| e.to_string())?;
+                let topics = super::personalization::topics(&title, category.as_deref());
+                if !topics.is_empty() {
+                    let sequence = activity_sequence
+                        .ok_or_else(|| "저장 활동 순서를 확인할 수 없습니다.".to_string())?;
+                    for topic in topics {
+                        tx.execute(
+                            "INSERT OR IGNORE INTO personalization_evidence(topic,document_id,kind,activity_sequence)
+                             VALUES(?1,?2,'saved',?3)",
+                            params![topic, id, sequence],
+                        )
+                        .map_err(|e| e.to_string())?;
+                    }
+                }
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        if saved_changed {
+            self.recompute_learned()?;
+        }
+        Ok(())
     }
     pub(crate) fn resource(&self, id: i64) -> Result<ResourceRecord, String> {
         self.connection

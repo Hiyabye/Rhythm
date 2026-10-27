@@ -59,7 +59,7 @@ fn schema_one_upgrade_preserves_every_preference() {
             .unwrap();
     }
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.info().unwrap().schema_version, 3);
+    assert_eq!(store.info().unwrap().schema_version, 4);
     assert_eq!(store.settings().unwrap().theme, "dark");
     assert_eq!(store.settings().unwrap().energy_profile, "eco");
     assert_eq!(store.settings().unwrap().interests, "컴퓨터 보안 · 장학금");
@@ -68,7 +68,7 @@ fn schema_one_upgrade_preserves_every_preference() {
     drop(store);
     assert_eq!(
         Store::open(&path).unwrap().info().unwrap().schema_version,
-        3
+        4
     );
 }
 #[test]
@@ -178,6 +178,17 @@ fn revisions_deduplicate_content_but_preserve_changes_and_user_state() {
     );
     let (id, changed) = store.upsert_article("one", &original, true).unwrap();
     assert!(changed);
+    assert_eq!(
+        store
+            .connection
+            .query_row(
+                "SELECT last_revision_at FROM documents WHERE id=?1",
+                [id],
+                |row| row.get::<_, Option<String>>(0)
+            )
+            .unwrap(),
+        None
+    );
     store
         .set_document_state(id, Some(true), Some(true))
         .unwrap();
@@ -191,6 +202,17 @@ fn revisions_deduplicate_content_but_preserve_changes_and_user_state() {
     );
     assert_eq!(store.document(id, None).unwrap().revisions.len(), 1);
     assert_eq!(
+        store
+            .connection
+            .query_row(
+                "SELECT last_revision_at FROM documents WHERE id=?1",
+                [id],
+                |row| row.get::<_, Option<String>>(0)
+            )
+            .unwrap(),
+        None
+    );
+    assert_eq!(
         store.validators("one", "123").unwrap().unwrap().0,
         Some("new-validator".into())
     );
@@ -201,6 +223,23 @@ fn revisions_deduplicate_content_but_preserve_changes_and_user_state() {
         (id, true)
     );
     let current = store.document(id, None).unwrap();
+    let last_revision: Option<String> = store
+        .connection
+        .query_row(
+            "SELECT last_revision_at FROM documents WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let latest_collected: String = store
+        .connection
+        .query_row(
+            "SELECT collected_at FROM document_revisions WHERE id=?1",
+            [current.revision_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(last_revision.as_deref(), Some(latest_collected.as_str()));
     assert_eq!(current.revisions.len(), 2);
     assert!(current.item.is_read && current.item.saved);
     assert!(current.item.historical);
@@ -656,7 +695,7 @@ fn released_schema_two_reopen_preserves_archive_preferences_and_checkpoint() {
     assert_archive_integrity(&store);
     drop(store);
     let reopened = Store::open(&path).unwrap();
-    assert_eq!(reopened.info().unwrap().schema_version, 3);
+    assert_eq!(reopened.info().unwrap().schema_version, 4);
     assert_eq!(
         reopened
             .connection

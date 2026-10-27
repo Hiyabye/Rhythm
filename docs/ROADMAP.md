@@ -167,7 +167,19 @@ The [glib advisory RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-202
 
 ## v0.4.0 — Personalization
 
-Planned: user-controlled persistent memory, explicit preferences/feedback, explainable relevance ranking and personalized recommendations. Existing interest text is stored only; automatic learning/ranking is not implemented.
+Implemented: schema 4 adds an optional profile, structured explicit/learned interests, idempotent document feedback, bounded evidence and source-extension mappings while preserving v0.3.1 archive, saved/read state and AI results. Today now shows deterministic, ranked local recommendations with score-derived Korean explanations, current cached summaries where available, feedback controls and a nonpersonalized cold start; inbox, search and saved-item browsing remain intact.
+
+Ranking uses bounded SQLite/FTS5 candidates and documented fixed signal weights; it does not call an LLM, use generated deadlines/categories, or require a model or network. Positive feedback and deliberate saves on at least two documents may create bounded inferred topics; negative feedback stays on one document. Learning is inspectable, editable, reversible, suppressible and disableable. Source-specific extension enablement controls recommendation eligibility, not archive retention. Source-verified deadline ranking is not implemented because no validated deadline contract exists.
+
+A single macOS debug-profile recommendation call measured 335.96 ms for 2,003 synthetic documents and 32 explicit interests; fixture creation was outside the timer. This is not a release-build or user-archive performance guarantee. Detailed weights, candidate bounds and known limits are in [architecture](ARCHITECTURE.md#schema-4-personalization-and-ranking).
+
+### v0.4 verification
+
+- Rustfmt and strict locked Clippy passed. The locked workspace suite passed **210 tests** with **8 ignored**; the actual CPU worker binary was configured for process-integration tests.
+- `npm run check` reported **0 errors and 0 warnings**; `npm run build`, **5 desktop orchestration tests**, and **130 Chromium/WebKit UI tests** passed. Current prompt-v3/schema-1 fixture behavior and explicit stale prompt-v2 behavior were both tested. Playwright mocks only the Tauri IPC boundary.
+- The v3→v4 migration regression preserved legacy interests verbatim, archived documents/revisions/resources, read/saved state, source subscriptions, model inventory and prior AI results. Migration imports canonical Korean/English aliases, including legacy tab/CR whitespace.
+- A macOS debug app was built without a bundle in isolated app ID `io.github.hiyabye.rhythm.v040validation2` and launched inside a network-denying sandbox. Cold start showed an empty, nonpersonalized Today; an optional profile and interest persisted after restart. Six synthetic records were then added only to that isolated database. With no model installed and networking denied, native Today ranked them, explained matches, opened a record, persisted save/feedback, reversed feedback and reflected changes. Two distinct positive documents created inspectable learned interests; after deleting an earlier inferred term, adding new feedback and restarting, that deleted term remained absent while the new inferred memory persisted. With learning disabled, new positive feedback still persisted for its document without producing topic evidence; the disabled setting persisted after shutdown. This is synthetic local workflow evidence, not a live-source or model-quality test.
+- No v0.4 remote CI run or Windows/Linux native runtime verification was performed. Existing Windows/Linux verification limits and the Linux `glib 0.18.5` / `RUSTSEC-2024-0429` distribution gate remain.
 
 ## v0.5.0 — Proactive operation
 

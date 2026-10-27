@@ -8,13 +8,17 @@ mod archive_tests;
 pub mod intelligence;
 #[cfg(test)]
 mod intelligence_tests;
-const SCHEMA_VERSION: i64 = 3;
+pub mod personalization;
+#[cfg(test)]
+mod personalization_tests;
+const SCHEMA_VERSION: i64 = 4;
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
     let migrations = [
         include_str!("../../migrations/001_foundation.sql"),
         include_str!("../../migrations/002_archive.sql"),
         include_str!("../../migrations/003_intelligence.sql"),
+        include_str!("../../migrations/004_personalization.sql"),
     ];
     for migration in migrations.iter().skip(version as usize) {
         let transaction = connection.transaction().map_err(|e| e.to_string())?;

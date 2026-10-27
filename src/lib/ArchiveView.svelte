@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { ArchivePage, ArchiveSummary, AiResult, DocumentItem, SourceInfo, SyncStatus } from './types';
+  import type { AiSnapshot, ArchivePage, ArchiveSummary, AiResult, DocumentItem, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
+  import analysisContract from './analysis-contract.json' with { type: 'json' };
   import { archiveDate, archiveError, archiveSize } from './archive-format';
   import DocumentReader from './DocumentReader.svelte';
   import Highlighted from './Highlighted.svelte';
@@ -13,6 +14,10 @@
   let sources = $state<SourceInfo[]>([]);
   let recentAnalyses = $state<AiResult[]>([]);
   let aiError = $state('');
+  let aiSnapshot = $state<AiSnapshot | null>(null);
+  let recommendations = $state<PersonalizedRecommendation[]>([]);
+  let hasPreferences = $state(false);
+  let recommendationError = $state('');
   let status = $state<SyncStatus | null>(null);
   let draft = $state('');
   let query = $state('');
@@ -31,7 +36,9 @@
   let listHeading = $state<HTMLHeadingElement>();
   let active = true;
   let requestId = 0;
+  let pendingRecommendationFeedback = $state<Record<number, boolean>>({});
   const pageSize = 30;
+  let recommendationRequest = 0;
 
   $effect(() => {
     const currentPage = page;
@@ -59,6 +66,16 @@
     if (desktop) void refreshContext();
   });
 
+  $effect(() => {
+    const currentPage = page;
+    const isDesktop = desktop;
+    const archiveRevision = revision;
+    if (currentPage === 'today' && isDesktop) {
+      void archiveRevision;
+      void loadRecommendations();
+    }
+  });
+
   onMount(() => {
     let wasRunning = false;
     const timer = window.setInterval(() => {
@@ -80,8 +97,60 @@
       ]);
       if (active) { summary = counts; sources = catalog; status = sync; }
     } catch (reason) { if (active) error = archiveError(reason); }
-    try { const analyses = await invoke<AiResult[]>('ai_recent'); if (active) { recentAnalyses = analyses; aiError = ''; } }
-    catch (reason) { if (active) aiError = archiveError(reason); }
+    try {
+      const analyses = await invoke<AiResult[]>('ai_recent');
+      if (active) { recentAnalyses = analyses; aiError = ''; }
+    } catch (reason) { if (active) aiError = archiveError(reason); }
+    try {
+      const snapshot = await invoke<AiSnapshot>('ai_snapshot');
+      if (active) aiSnapshot = snapshot;
+    } catch { if (active) aiSnapshot = null; }
+  }
+  function currentSummary(documentId: number): AiResult | null {
+    const analysis = recentAnalyses.find((value) => value.document_id === documentId);
+    const contract = aiSnapshot?.analysis_contract;
+    if (!analysis || !aiSnapshot || !contract || !contract.configuration_hash) return null;
+    if (contract.prompt_version !== analysisContract.prompt_version || contract.schema_version !== analysisContract.schema_version) return null;
+    if (analysis.prompt_version !== contract.prompt_version
+      || analysis.schema_version !== contract.schema_version
+      || analysis.configuration_hash !== contract.configuration_hash) return null;
+    const activeModel = aiSnapshot.models.find((model) => model.id === aiSnapshot?.preferences.active_model_id);
+    if (activeModel?.sha256 && analysis.model_sha256 !== activeModel.sha256) return null;
+    if (analysis.model_identity.max_tokens !== undefined
+      && analysis.model_identity.max_tokens !== aiSnapshot.preferences.max_tokens) return null;
+    return analysis;
+  }
+  async function loadRecommendations() {
+    const request = ++recommendationRequest;
+    recommendationError = '';
+    try {
+      const result = await invoke<PersonalizationRecommendations>('personalization_recommendations', { limit: 8 });
+      if (!active || request !== recommendationRequest) return;
+      recommendations = result.items;
+      hasPreferences = result.has_preferences;
+    } catch (reason) {
+      if (active && request === recommendationRequest) {
+        recommendations = [];
+        hasPreferences = false;
+        recommendationError = archiveError(reason);
+      }
+    }
+  }
+
+  async function setRecommendationFeedback(recommendation: PersonalizedRecommendation, feedbackValue: string | null) {
+    const id = recommendation.item.id;
+    if (pendingRecommendationFeedback[id]) return;
+    pendingRecommendationFeedback = { ...pendingRecommendationFeedback, [id]: true };
+    recommendationError = '';
+    try {
+      const feedback = await invoke<string | null>('personalization_set_feedback', { documentId: id, feedback: feedbackValue });
+      recommendations = recommendations.map((item) => item.item.id === id ? { ...item, feedback } : item);
+      await loadRecommendations();
+    } catch (reason) {
+      recommendationError = archiveError(reason);
+    } finally {
+      pendingRecommendationFeedback = { ...pendingRecommendationFeedback, [id]: false };
+    }
   }
 
   async function fetchPage(filters: { query: string; source_id: string | null; category: string | null; saved_only: boolean; unread_only: boolean; ascending: boolean; offset: number; limit: number }) {
@@ -177,7 +246,7 @@
 {:else}
   <section class="archive-view" aria-busy={loading}>
     {#if page === 'today'}
-      <div class="archive-intro"><span class="section-kicker">내 기기에 쌓이는 학교 소식</span><h2>오늘도, 필요한 소식부터.</h2><p>직접 보관한 공지와 이미 분석한 핵심을 차분히 살펴보세요. 개인화된 추천이 아닌, 로컬에 저장된 정보입니다.</p></div>
+      <div class="archive-intro"><span class="section-kicker">내 기기에 쌓이는 학교 소식</span><h2>오늘도, 필요한 소식부터.</h2><p>직접 보관한 공지와 이미 분석한 핵심을 차분히 살펴보세요. {hasPreferences ? '관심사와 보관 행동을 바탕으로 정렬한 추천입니다.' : '아직 개인화 선호가 없어 최근 공지부터 보여드립니다.'}</p></div>
       <dl class="archive-statistics">
         <div><dt>보관된 공지</dt><dd>{summary?.documents ?? '—'}</dd></div>
         <div><dt>읽지 않은 공지</dt><dd>{summary?.unread ?? '—'}</dd></div>
@@ -185,7 +254,73 @@
         <div><dt>최근 동기화의 새 공지</dt><dd>{summary?.new_since_sync ?? '—'}</dd></div>
       </dl>
       <p class="footnote">과거 자료 가져오기는 새 공지 수에서 제외됩니다. 저장된 자료 {archiveSize(summary?.resource_bytes ?? 0)}.</p>
-      {#if recentAnalyses.length}<section class="ai-recent" aria-label="최근 분석한 소식"><div class="collection-heading"><h2>최근 분석한 소식</h2><span class="muted">저장된 AI 결과</span></div><ul>{#each recentAnalyses.slice(0, 5) as analysis}<li><button class="notice-open" onclick={() => { lastOpened = analysis.document_id; readerId = analysis.document_id; }}><span class="ai-tag">AI 분류 · {analysis.result.category}</span><strong>{analysis.result.short_summary}</strong>{#if analysis.partial}<span class="muted">일부 내용 분석</span>{/if}{#each analysis.result.facts.filter((fact) => fact.date).slice(0, 2) as fact}<span class="notice-meta">{fact.label} · {fact.date} · 원문에서 추출한 참고 일정</span>{/each}<span class="notice-meta">{analysis.model_identity.name ?? '로컬 모델'} · 원문과 근거 확인 →</span></button></li>{/each}</ul></section>{:else if aiError}<p class="footnote">저장된 AI 결과를 불러오지 못했습니다. 공지 목록은 계속 사용할 수 있습니다.</p>{/if}
+      {#if recommendationError}<p role="alert" class="archive-error">{recommendationError}</p>{/if}
+      {#if recommendations.length}
+        <section class="ai-recent" aria-label="오늘의 추천">
+          <div class="collection-heading">
+            <h2>나를 위한 소식</h2>
+            <span class="muted">{hasPreferences ? '관심 설정과 저장·피드백을 반영한 추천' : '최근 공지 · 개인화 시작 전'}</span>
+            {#if !hasPreferences}<button class="text-button" onclick={onsettings}>관심 분야 설정</button>{/if}
+          </div>
+          <ul>
+            {#each recommendations as recommendation (recommendation.item.id)}
+              {@const analysis = currentSummary(recommendation.item.id)}
+              <li>
+                <button class="notice-open" onclick={() => void open(recommendation.item)}>
+                  <strong>{recommendation.item.title}</strong>
+                  <span class="notice-meta">
+                    {recommendation.item.source_name} · {archiveDate(recommendation.item.published_at)}
+                    {#if recommendation.item.category} · {recommendation.item.category}{/if}
+                    · {recommendation.item.is_read ? '읽음' : '읽지 않음'} · {recommendation.item.saved ? '보관함에 저장' : '미저장'}
+                  </span>
+                  {#each recommendation.reasons as reason}<span class="notice-meta">{reason}</span>{/each}
+                  {#if analysis}
+                    <span class="notice-ai-preview">저장된 AI 요약{analysis.partial ? ' · 일부 분석' : ''} · {analysis.result.short_summary}</span>
+                  {/if}
+                  {#if recommendation.feedback}
+                    <span class="notice-meta">내 피드백: {recommendation.feedback === 'interested' ? '관심 있음' : '관심 없음'}</span>
+                  {/if}
+                </button>
+                <div class="recommendation-actions" role="group" aria-label={`${recommendation.item.title} 추천 피드백`}>
+                  <button class="button secondary small" aria-pressed={recommendation.feedback === 'interested'} disabled={pendingRecommendationFeedback[recommendation.item.id]} onclick={() => void setRecommendationFeedback(recommendation, recommendation.feedback === 'interested' ? null : 'interested')}>관심 있어요</button>
+                  <button class="button secondary small" aria-pressed={recommendation.feedback === 'not_interested'} disabled={pendingRecommendationFeedback[recommendation.item.id]} onclick={() => void setRecommendationFeedback(recommendation, recommendation.feedback === 'not_interested' ? null : 'not_interested')}>관심 없어요</button>
+                </div>
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {:else if !recommendationError}
+        <div class="recommendation-empty">
+          <p>{enabled ? hasPreferences ? '관심 분야와 맞는 소식을 아직 찾지 못했습니다.' : '개인화 전에는 최근 공지를 표시합니다. 관심사를 설정하면 추천에 반영됩니다.' : '확장 기능을 끄면 새 추천은 표시하지 않습니다. 기존 공지는 받은 소식과 탐색에서 계속 볼 수 있습니다.'}</p>
+          {#if !hasPreferences}<button class="text-button" onclick={onsettings}>관심 분야 설정</button>{/if}
+        </div>
+      {/if}
+      {#if recentAnalyses.length}
+        <section class="ai-recent" aria-label="최근 분석한 소식">
+          <div class="collection-heading"><h2>최근 분석한 소식</h2><span class="muted">저장된 AI 결과 · 추천 순위에는 영향 없음</span></div>
+          <ul>
+            {#each recentAnalyses.slice(0, 5) as analysis}
+              {@const currentContract = currentSummary(analysis.document_id)?.id === analysis.id}
+              <li>
+                <button class="notice-open" onclick={() => { lastOpened = analysis.document_id; readerId = analysis.document_id; }}>
+                  <span class="ai-tag">AI 분류 · {analysis.result.category} · {currentContract ? '현재 계약' : '이전 계약'}</span>
+                  <strong>{analysis.result.short_summary}</strong>
+                  {#if !currentContract}<span class="notice-meta">현재 분석 설정과 다를 수 있습니다 · 원문과 근거 확인</span>{/if}
+                  {#if analysis.partial}<span class="muted">일부 내용 분석</span>{/if}
+                  {#if currentContract}
+                    {#each analysis.result.facts.filter((fact) => fact.date).slice(0, 2) as fact}
+                      <span class="notice-meta">{fact.label} · {fact.date} · 원문에서 추출한 참고 일정</span>
+                    {/each}
+                  {/if}
+                  <span class="notice-meta">{analysis.model_identity.name ?? '로컬 모델'} · 원문과 근거 확인 →</span>
+                </button>
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {:else if aiError}
+        <p class="footnote">저장된 AI 결과를 불러오지 못했습니다. 공지 목록은 계속 사용할 수 있습니다.</p>
+      {/if}
     {/if}
     {#if status?.running}<div class="archive-sync-strip" role="status"><Icon name="refresh" size={16} /><span>{status.message}{#if status.page > 0} · {status.page}쪽{/if}</span><button class="text-button" onclick={onsettings}>설정에서 진행 확인</button></div>{/if}
     {#if page === 'search'}

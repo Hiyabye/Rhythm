@@ -48,6 +48,9 @@
 .ai-recent li { border-bottom: 1px solid var(--line); }
 .ai-recent .notice-open { width: 100%; display: grid; gap: 7px; padding: 16px 0; text-align: left; }
 .ai-recent strong { font-size: 13px; font-weight: 500; }
+.recommendation-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 0 14px; }
+.recommendation-empty { display: grid; justify-items: start; gap: 6px; padding: 14px 0; color: var(--secondary); font-size: 12px; }
+.recommendation-empty p { margin: 0; line-height: 1.8; }
 .notice-ai-preview { display: block; color: var(--secondary); font-size: 11px; line-height: 1.8; margin-top: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 900px) {
   .ai-analysis { padding: 16px; }

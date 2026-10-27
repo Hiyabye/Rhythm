@@ -1,20 +1,31 @@
 # Design — Quiet Intelligence
 
-Rhythm is an information-first personal command center, not a chatbot dashboard. v0.3 adds local analysis beside the trustworthy archive, without making a model or internet access a prerequisite for reading. v0.3.1 refines preparation feedback, cancellation, revision-local status and partial-source guidance without adding personalization. The v0.2.1 recovery, keyboard and reader boundaries remain. Empty states communicate unavailable analysis; fictional summaries and fabricated activity do not fill them.
+Rhythm is an information-first personal command center, not a chatbot dashboard. v0.3 made local analysis an optional layer beside the archive; v0.3.1 refined processing reliability. v0.4 adds user-controlled local profile, reversible feedback and explainable deterministic recommendations without making a model or internet access a prerequisite. Empty states distinguish cold start from tailored results; fictional summaries and fabricated activity do not fill them. The v0.2.1 recovery, keyboard and reader boundaries remain.
 
 ## Korean-first navigation
 
 Main navigation remains **오늘 · 받은 소식 · 탐색 · 보관함 · 설정**. Labels, feedback and application-facing errors use natural Korean; product identifiers and model names stay recognizable.
 
-| View | v0.3 behavior |
+| View | v0.4 behavior |
 | --- | --- |
-| 오늘 | Actual archive counts plus bounded recent stored summaries and extracted dates when available. No personalized relevance ranking or fabricated briefing. |
-| 받은 소식 | Paginated notices with unread/source/date/original-category metadata, filters and save controls; compact AI summary/category only where results exist. |
+| 오늘 | Recent ranked notices with grounded reasons; cold-start recent items are explicitly not personalized. Stored current AI summaries are optional and do not influence ranking. |
+| 받은 소식 | Full paginated chronological archive with unread/source/date/original-category filters and save controls. Recommendations never silently replace the inbox. |
 | 탐색 | Explicit local title/body search, mixed Korean/English/numeric terms, plain-text snippets and highlighted matches. |
-| 보관함 | User-saved notices, independent of extension enablement. Saving does not mean every attachment was downloaded. |
-| 설정 | Existing preferences/source controls plus model catalog/inventory, first-run setup, runtime recovery, AI processing preferences and queue controls. |
+| 보관함 | User-saved notices, independent of extension enablement. Saving contributes only bounded local evidence and does not make attachments available automatically. |
+| 설정 | Profile, explicit interests and priority, learned memory/evidence, learning control/reset, source controls, model catalog and AI processing preferences. |
 
 `App.svelte` centralizes navigation, clears stale hash/scroll position and focuses main content. `ArchiveView.svelte` resets filters when changing sections, tracks asynchronous search generations and returns visible focus to the opened row on reader close, or to the list heading if that row disappeared. Saved/unread filters clamp to the last valid page after state changes, including late automatic read writes. Browser previews clearly identify desktop-only behavior and disable local operations rather than showing simulated persistence.
+
+
+## Personalized Today and memory
+
+Today requests a bounded set of recommendations from Rust/SQLite. The quiet list shows title, source, publication date, source category, read/saved state, an optional valid current AI summary, and only the deterministic reasons that contributed to its score. Interest feedback can be reversed on the row; the same controls appear in the reader. Recommendations never require an analysis and opening a notice does not start inference.
+
+With no profile or interactions, Today labels the list as recent notices before personalization and links directly to interest settings. Explicit interest matches, explicit negative topics, profile matches, current feedback, saves, source subscription, freshness and meaningful revision recency affect ranking. Historical initial backfill receives no freshness reward; AI-generated dates and classifications do not rank notices. A modest two-pass source cap reduces same-source repetition without changing scores. The received-news list and search continue to expose the full archive.
+
+Profile entries and explicit topics are clearly separated from learned topics. Only repeated positive feedback on or saving of different notices can create a learned topic; opening, reading and searching do not. The bounded topic extractor uses titles and original categories, not full bodies or AI output, and rejects a short list of obvious Korean/English sensitive terms; this lexical protection is not semantic classification. A document-level negative mark applies only to that notice. Settings displays the evidence count/action, allows editing a learned topic as explicit, deleting it, disabling learning or resetting personalization. Evidence expires after 180 days; deleting a topic records a sequence baseline so unchanged older activity alone cannot recreate it. These operations do not change subscriptions, saved state or archived content.
+
+All profile, preference, feedback and evidence data remain in local SQLite. There is no LLM call, embedding service, remote ranking, notification or background work in this path. Ranking reasons are emitted alongside the exact scoring signals, not generated from free-form model output.
 
 ## Archive list and search
 
@@ -56,7 +67,7 @@ The revision-keyed `AnalysisPanel.svelte` sits beside the reader header/body wit
 
 Short summary and central AI category lead; detailed summary, extracted facts/dates and expandable **원문 근거** follow. AI classification is labeled separately from the original board category. Extracted dates are informational, not official calendar events. Partial results show actual selected/total character counts and warn that omitted intervals may contain important information. Long input selects bounded exact head/tail/important passages, deduplicating exact repeated text only when over budget and keeping structural table rows as separate evidence units. This is not complete-document understanding or chunk-and-merge. Generated fields render as escaped text, not HTML; evidence validation is not a promise of semantic accuracy.
 
-Today shows only actual recent stored analyses, at most five previews. Other lists use compact optional indicators without requiring every item to be processed; search continues showing original matching snippets. Analysis lookup failures do not hide archive content. There is no conversational transcript, glowing AI decoration, personalized “you must do this” claim, automatic calendar action or notification.
+Today’s recommendation list is independent of AI analysis. A separate section shows at most five real stored analyses, with their contract age labeled; the list remains usable if analysis lookup fails or no model is installed. Other archive rows use compact optional analysis indicators without requiring every item to be processed; search continues showing original matching snippets. There is no conversational transcript, glowing AI decoration, personalized “you must do this” claim, automatic calendar action or notification.
 
 **AI 처리** defaults to explicit-only. The optional recent mode and per-open-session cap remain small. Candidates follow latest-revision collection time rather than publication date: new nonhistorical arrivals and meaningful revisions, including updates to historically collected documents, may qualify; initial backfill, startup history and previously attempted revisions do not. Advanced controls expose output length rather than dozens of sampling parameters. A queue lists status, failure and cancellation. Model/backend/native-quality verification is separate from UI implementation; see [AI evaluation](AI_EVALUATION.md).
 

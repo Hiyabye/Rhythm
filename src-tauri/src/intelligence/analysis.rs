@@ -2622,4 +2622,11 @@ fn main() {{
         model.path = "../model.gguf".into();
         assert!(verified_path(directory.path(), &model, &Cancellation::default()).is_err());
     }
+    #[test]
+    fn shared_analysis_contract_matches_rust_versions() {
+        let contract: serde_json::Value =
+            serde_json::from_str(include_str!("../../../src/lib/analysis-contract.json")).unwrap();
+        assert_eq!(contract["prompt_version"], PROMPT_VERSION);
+        assert_eq!(contract["schema_version"], SCHEMA_VERSION);
+    }
 }

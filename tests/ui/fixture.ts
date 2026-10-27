@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
-import type { AiOperation, DocumentItem, ResourceRecord } from '../../src/lib/types';
+import analysisContract from '../../src/lib/analysis-contract.json' with { type: 'json' };
+import type { AiOperation, DocumentItem, PersonalInterest, ResourceRecord } from '../../src/lib/types';
 
 export interface FixtureOptions {
   count?: number;
@@ -25,14 +26,20 @@ export interface FixtureOptions {
   aiResultLag?: boolean;
   aiLoadDelay?: number;
   aiSetupDelay?: number;
-  aiOldPrompt?: boolean;
   aiLowResources?: boolean;
+  analysisContract?: 'current' | 'prompt-v2';
+  initialInterests?: PersonalInterest[];
+  feedbackWriteDelay?: number;
+  profileSaveDelay?: number;
+  interestSaveDelay?: number;
+  interestRemovalDelay?: number;
+  personalizationResetDelay?: number;
 }
 
 // Only the IPC boundary is faked: tests exercise the production Svelte build,
 // DOM reconstruction, reactivity and browser keyboard/layout behavior.
 export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
-  await page.addInitScript((options) => {
+  await page.addInitScript(({ options, contract }: { options: FixtureOptions; contract: typeof analysisContract }) => {
     const copy = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
     const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const entries: DocumentItem[] = Array.from({ length: options.count ?? 2 }, (_, index) => ({
@@ -50,16 +57,41 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       last_error: null, next_page: 1, history_complete: false, status: 'idle', discovered: 0, archived: 0, failed: 0 }];
     const snapshot = { settings: { theme: 'light', energy_profile: 'eco', interests: '' },
       extensions: [{ id: 'sogang_notices', display_name: '서강대학교 공지', description: '학교 소식 보관', available: true, enabled: options.enabled ?? true }],
-      storage: { path: '/isolated/rhythm.sqlite3', bytes: 4096, schema_version: 3 },
+      storage: { path: '/isolated/rhythm.sqlite3', bytes: 4096, schema_version: 4 },
       worker: { state: 'ready', runtime_available: true, model: null, detail: null } };
     let sync = { running: false, source_id: null as string | null, mode: 'historical', page: 0, message: '수집 대기 중입니다.' };
     const model = (id = 'qwen35-4b') => ({ id, catalog_id: id, name: id === 'qwen35-4b' ? 'Qwen3.5 4B' : 'Qwen3.5 2B', ownership: 'managed', path: `models/${id}.gguf`, sha256: 'a'.repeat(64), expected_sha256: 'a'.repeat(64), expected_bytes: 2740937888, bytes: 2740937888, source_revision: 'pinned-revision', source_filename: `${id}.gguf`, status: 'installed', downloaded_bytes: 2740937888, resume_etag: null, error: null as string | null, created_at: '2026-10-24 12:00:00', updated_at: '2026-10-24 12:00:00' });
-    const analysis = (id: number, documentId: number, revisionId: number) => ({ id, job_id: id, document_id: documentId, revision_id: revisionId, task: 'notice_analysis', model_sha256: 'a'.repeat(64), prompt_version: options.aiOldPrompt ? 1 : 2, schema_version: 1, configuration_hash: 'b'.repeat(64), model_identity: { name: 'Qwen3.5 4B' }, result: { short_summary: options.aiText ?? '장학금 신청 일정과 제출 서류를 확인하세요.', summary: '대상 학생은 안내된 기간에 신청서를 제출해야 합니다.', category: '장학', uncertainty: 'clear', facts: [{ kind: 'deadline', label: '신청 마감', value: '2026년 10월 30일까지 신청', evidence: '2026년 10월 30일까지 신청서를 제출하세요.', date: '2026-10-30', uncertainty: 'clear' }] }, partial: options.aiPartial ?? false, processed_chars: 100, total_chars: options.aiPartial ? 10000 : 100, duration_ms: 1250, created_at: '2026-10-24 12:00:00' });
-    const ai = { catalog: ['qwen35-4b', 'qwen35-2b'].map((id) => ({ id, name: id === 'qwen35-4b' ? 'Qwen3.5 4B' : 'Qwen3.5 2B', parameters: id === 'qwen35-4b' ? '4B' : '2B', quantization: 'Q4_K_M', bytes: 2740937888, memory_bytes: 6000000000, description: '한국어 공지 분석용 로컬 모델', use_case: '균형 잡힌 공지 분석', repository: 'unsloth/Qwen3.5-4B-GGUF', revision: 'pinned-revision', filename: `${id}.gguf`, sha256: 'a'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null })), models: options.aiInstalled ? [model()] : [], preferences: { active_model_id: options.aiInstalled ? 'qwen35-4b' : null as string | null, setup_completed: !options.aiSetupNeeded, processing_mode: 'explicit', automatic_limit: 3, max_tokens: 1024 }, jobs: [] as any[], runtime: { state: 'ready', runtime_available: true, model: null as string | null, detail: null }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, operation: null as AiOperation | null, progress: null as any, analysis_contract: { prompt_version: 2, schema_version: 1, configuration_hash: 'b'.repeat(64) } };
+    const analysis = (id: number, documentId: number, revisionId: number) => ({
+      id, job_id: id, document_id: documentId, revision_id: revisionId, task: 'notice_analysis',
+      model_sha256: 'a'.repeat(64),
+      prompt_version: options.analysisContract === 'prompt-v2' ? 2 : contract.prompt_version,
+      schema_version: contract.schema_version,
+      configuration_hash: 'b'.repeat(64),
+      model_identity: { name: 'Qwen3.5 4B' },
+      result: {
+        short_summary: options.aiText ?? '장학금 신청 일정과 제출 서류를 확인하세요.',
+        summary: '대상 학생은 안내된 기간에 신청서를 제출해야 합니다.',
+        category: '장학', uncertainty: 'clear',
+        facts: [{
+          kind: 'deadline', label: '신청 마감', value: '2026년 10월 30일까지 신청',
+          evidence: '2026년 10월 30일까지 신청서를 제출하세요.',
+          date: '2026-10-30', uncertainty: 'clear',
+        }],
+      },
+      partial: options.aiPartial ?? false,
+      processed_chars: 100,
+      total_chars: options.aiPartial ? 10000 : 100,
+      duration_ms: 1250,
+      created_at: '2026-10-24 12:00:00',
+    });
+    const ai = { catalog: ['qwen35-4b', 'qwen35-2b'].map((id) => ({ id, name: id === 'qwen35-4b' ? 'Qwen3.5 4B' : 'Qwen3.5 2B', parameters: id === 'qwen35-4b' ? '4B' : '2B', quantization: 'Q4_K_M', bytes: 2740937888, memory_bytes: 6000000000, description: '한국어 공지 분석용 로컬 모델', use_case: '균형 잡힌 공지 분석', repository: 'unsloth/Qwen3.5-4B-GGUF', revision: 'pinned-revision', filename: `${id}.gguf`, sha256: 'a'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null })), models: options.aiInstalled ? [model()] : [], preferences: { active_model_id: options.aiInstalled ? 'qwen35-4b' : null as string | null, setup_completed: !options.aiSetupNeeded, processing_mode: 'explicit', automatic_limit: 3, max_tokens: 1024 }, jobs: [] as any[], runtime: { state: 'ready', runtime_available: true, model: null as string | null, detail: null }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, operation: null as AiOperation | null, progress: null as any, analysis_contract: { prompt_version: contract.prompt_version, schema_version: contract.schema_version, configuration_hash: 'b'.repeat(64) } };
     const analyses = options.aiResult ? [analysis(1, 1, 1)] : [];
+    let personalization = { profile: { university: '', department: '', study_level: '' }, interests: copy(options.initialInterests ?? []), learning_enabled: true };
+    const documentFeedback = new Map<number, string>();
     let resultLagUsed = false;
     const fixture = { ai, analyses, options, entries, calls: [] as { command: string; args: any }[], sourceDelay: 0,
-      stateDelay: 0, subscribeError: false, snapshotFailures: 0, resultsFailures: 0, documentJobs: [] as any[], retryMessage: '자료를 내려받지 못했습니다. 연결을 확인해 주세요.' };
+      stateDelay: 0, subscribeError: false, snapshotFailures: 0, resultsFailures: 0, documentJobs: [] as any[], retryMessage: '자료를 내려받지 못했습니다. 연결을 확인해 주세요.',
+      completeSync: () => { sync = { ...sync, running: false, message: '가져오기를 마쳤습니다.' }; } };
     let operationStarted = 0;
     let analysisStarted = 0;
     async function operation(kind: AiOperation['kind'], delay: number) {
@@ -80,6 +112,58 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             snapshot.settings = copy(args.settings); return copy(snapshot);
           case 'set_extension': snapshot.extensions[0].enabled = args.enabled; return copy(snapshot);
           case 'worker_status': return copy(snapshot.worker);
+          case 'personalization_get': return copy(personalization);
+          case 'personalization_save_profile':
+            await wait(options.profileSaveDelay ?? 0);
+            personalization.profile = copy(args.profile); return copy(personalization);
+          case 'personalization_save_interest': {
+            await wait(options.interestSaveDelay ?? 0);
+            const interest = args.interest;
+            const id = interest.id ?? Math.max(0, ...personalization.interests.map((item) => item.id)) + 1;
+            const existing = personalization.interests.find((item) => item.id === id);
+            const value = { id, name: interest.name, aliases: interest.aliases, priority: interest.priority, polarity: interest.polarity ?? 'positive', origin: 'explicit' as const, evidence_count: 0, evidence_summary: null, updated_at: '2026-10-27' };
+            if (existing) Object.assign(existing, value); else personalization.interests.push(value);
+            return copy(personalization);
+          }
+          case 'personalization_remove_interest':
+            await wait(options.interestRemovalDelay ?? 0);
+            personalization.interests = personalization.interests.filter((item) => item.id !== args.id); return copy(personalization);
+          case 'personalization_set_learning': personalization.learning_enabled = args.enabled; return copy(personalization);
+          case 'personalization_reset': {
+            await wait(options.personalizationResetDelay ?? 0);
+            personalization = { profile: { university: '', department: '', study_level: '' }, interests: [], learning_enabled: true };
+            snapshot.settings.interests = '';
+            documentFeedback.clear();
+            return copy(personalization);
+          }
+          case 'personalization_get_feedback':
+            if (options.feedbackReadDelay) await wait(options.feedbackReadDelay);
+            return documentFeedback.get(args.documentId) ?? null;
+          case 'personalization_set_feedback':
+            await wait(options.feedbackWriteDelay ?? 0);
+            if (args.feedback) documentFeedback.set(args.documentId, args.feedback); else documentFeedback.delete(args.documentId);
+            return documentFeedback.get(args.documentId) ?? null;
+          case 'personalization_recommendations': {
+            const hasPreferences = Boolean(personalization.interests.length || personalization.profile.university
+              || personalization.profile.department || personalization.profile.study_level
+              || entries.some((item) => item.saved) || documentFeedback.size || sources.some((source) => source.subscribed));
+            const items = options.enabled === false ? [] : entries.slice(0, args.limit).map((item) => {
+              const searchable = `${item.title} ${item.category ?? ''} ${item.snippet}`.toLowerCase();
+              const reasons = hasPreferences ? personalization.interests
+                .filter((interest) => [interest.name, ...interest.aliases].some((term) => searchable.includes(term.toLowerCase())))
+                .map((interest) => interest.polarity === 'negative'
+                  ? `덜 보고 싶은 분야 ‘${interest.name}’ 관련 공지`
+                  : `관심 분야 ‘${interest.name}’에 맞는 공지`) : [];
+              if (sources.find((source) => source.id === item.source_id)?.subscribed) reasons.push('구독 중인 정보원');
+              const feedback = documentFeedback.get(item.id) ?? null;
+              if (feedback === 'interested') reasons.push('관심 표시한 공지');
+              if (feedback === 'not_interested') reasons.push('관심 없음 표시한 공지');
+              if (item.saved) reasons.push('저장한 공지');
+              if (hasPreferences && !reasons.length) reasons.push('관심사 일치 신호가 없어 게시일 기준으로 보조 정렬');
+              return { item: copy(item), reasons, feedback };
+            });
+            return { items, has_preferences: hasPreferences };
+          }
           case 'ai_snapshot': {
             if (fixture.snapshotFailures > 0) { fixture.snapshotFailures -= 1; throw '모델 정보를 일시적으로 확인하지 못했습니다.'; }
             if (ai.operation) ai.operation.elapsed_ms = Date.now() - operationStarted;
@@ -170,7 +254,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         }
       },
     } });
-  }, options);
+  }, { options, contract: analysisContract });
 }
 
 export async function callCount(page: Page, command: string) {
