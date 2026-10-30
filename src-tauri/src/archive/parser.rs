@@ -495,10 +495,20 @@ pub fn article(
                 resources,
             )
         };
-    let (body_html, body_text, inline) = sanitize(&content, &entry.url)?;
+    let (mut body_html, mut body_text, inline) = sanitize(&content, &entry.url)?;
     merge_inline_resources(&mut resources, inline);
+    let unsupported_iframe_body = source.id == "sogang-academic"
+        && body_text.is_empty()
+        && !resources.iter().any(|r| r.kind == "image")
+        && iframe_only(&content);
+    if unsupported_iframe_body {
+        body_html.clear();
+        body_text.clear();
+    }
     if resources.len() > 200
-        || (body_text.is_empty() && !resources.iter().any(|r| r.kind == "image"))
+        || (body_text.is_empty()
+            && !resources.iter().any(|r| r.kind == "image")
+            && !unsupported_iframe_body)
     {
         return invalid();
     }
@@ -511,6 +521,7 @@ pub fn article(
         published_at,
         modified_at,
         original: body.into(),
+        unsupported_body: unsupported_iframe_body,
         body_html,
         body_text,
         resources,
@@ -565,6 +576,24 @@ fn escape(value: &str) -> String {
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
 }
+fn iframe_only(content: &str) -> bool {
+    let fragment = Html::parse_fragment(content);
+    let mut found = false;
+    for child in fragment.root_element().children() {
+        if let Some(text) = child.value().as_text() {
+            if !text.trim().is_empty() {
+                return false;
+            }
+        } else if let Some(element) = ElementRef::wrap(child) {
+            if element.value().name() != "iframe" {
+                return false;
+            }
+            found = true;
+        }
+    }
+    found
+}
+
 fn sanitize(content: &str, base: &str) -> Result<(String, String, Vec<ResourceInput>), String> {
     let fragment = Html::parse_fragment(content);
     let mut html = String::new();

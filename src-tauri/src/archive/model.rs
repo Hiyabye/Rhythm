@@ -41,6 +41,7 @@ pub struct ArticleInput {
     pub published_at: String,
     pub modified_at: Option<String>,
     pub original: String,
+    pub unsupported_body: bool,
     pub body_html: String,
     pub body_text: String,
     pub resources: Vec<ResourceInput>,

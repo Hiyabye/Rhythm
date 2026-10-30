@@ -43,6 +43,80 @@ export interface Settings {
   energy_profile: EnergyProfile;
   interests: string;
 }
+export type NotificationSensitivity = 'important' | 'interested' | 'all';
+export interface QuietHours { enabled: boolean; start: string; end: string }
+export interface ProactiveSettings {
+  close_to_background: boolean;
+  launch_at_login: boolean;
+  start_hidden: boolean;
+  scheduler_enabled: boolean;
+  scheduler_paused: boolean;
+  /** 0 selects the energy-profile default; 15..720 selects an explicit interval in minutes. */
+  scheduler_interval_minutes: number;
+  scheduler_retry_minutes: number;
+  notifications_enabled: boolean;
+  notification_sensitivity: NotificationSensitivity;
+  quiet_hours: QuietHours;
+  updated_at: string;
+}
+export interface SchedulerStatus {
+  enabled: boolean;
+  paused: boolean;
+  interval_minutes: number;
+  retry_minutes: number;
+  notifications_enabled: boolean;
+  notification_sensitivity: NotificationSensitivity;
+  quiet_hours: QuietHours;
+  pending_events: number;
+  due_tasks: number;
+  next_task_at: string | null;
+  last_run_at: string | null;
+  last_outcome: 'success' | 'partial' | 'failure' | 'skipped' | 'cancelled' | null;
+  last_error: string | null;
+  consecutive_failures: number;
+}
+export type ProactiveEventState = 'pending' | 'claimed' | 'attempted' | 'deferred' | 'delivered' | 'suppressed' | 'failed';
+export interface ProactiveHistoryItem {
+  id: number;
+  document_id: number;
+  revision_id: number;
+  event_type: 'new' | 'revision';
+  state: ProactiveEventState;
+  attempt_count: number;
+  claimed_at: string | null;
+  last_attempt_at: string | null;
+  deferred_until: string | null;
+  delivered_at: string | null;
+  error: string | null;
+  reason: string | null;
+  created_at: string;
+  updated_at: string;
+  title: string;
+  category: string | null;
+  source_id: string;
+}
+export interface ProactiveSnapshot {
+  settings: ProactiveSettings;
+  scheduler: SchedulerStatus;
+  history: ProactiveHistoryItem[];
+  notification_permission: 'unknown';
+  pending_activation: ProactiveActivation | null;
+}
+export type NotificationAuthorization = 'granted' | 'denied' | 'not_determined' | 'unknown' | 'unavailable';
+export interface LifecycleStatus {
+  close_to_background: boolean;
+  start_hidden: boolean;
+  launch_at_login: boolean;
+  autostart_enabled: boolean | null;
+  tray_available: boolean;
+}
+export interface ProactiveActivation {
+  event_id: number;
+  document_id: number;
+  revision_id: number;
+  attempt_count: number;
+  event_ids: number[];
+}
 export interface Extension {
   id: string;
   display_name: string;
@@ -61,6 +135,7 @@ export interface Snapshot {
   extensions: Extension[];
   storage: { path: string; bytes: number; schema_version: number };
   worker: WorkerStatus;
+  proactive: ProactiveSettings;
 }
 export interface SourceInfo {
   id: string;

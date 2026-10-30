@@ -321,6 +321,7 @@ pub(super) fn article(
         published_at,
         modified_at: None,
         original: body.into(),
+        unsupported_body: false,
         body_html,
         body_text,
         resources,

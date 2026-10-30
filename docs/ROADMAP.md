@@ -183,11 +183,61 @@ A single macOS debug-profile recommendation call measured 335.96 ms for 2,003 sy
 
 ## v0.5.0 — Proactive operation
 
-Planned: persistent background execution, native notifications and scheduling, extending v0.3's limited app-open energy/admission policy with verified battery-aware behavior. Disabling extensions must cancel their collection work/notifications without deleting data.
+**Status: implemented and automated-verified; isolated native macOS checks passed, and Windows/Linux runtime, real login registration and release distribution remain open gates.** Schema 5 adds opt-in lifecycle preferences, per-source scheduled tasks, notification baseline/dedupe/events and incremental-seed completion state. Existing schema migrations remain unchanged. Implementation and individual observations below do not establish reliable native delivery, live scheduling or cross-platform readiness.
+
+Implemented:
+
+- In-process scheduler ticks every 15 seconds while the app process runs. Optional per-source tasks use incremental sync only, for supported subscribed sources while the archive extension is enabled. Scheduling can be paused; persisted task and scheduler state includes last outcome, retry/error and next-run metadata. Interval `0` (default) follows Eco/Balanced/Performance profiles at 60/30/15 minutes. Explicit intervals range from 15 minutes to 12 hours and remain exact even when set to 60 minutes. Retry interval is configurable from 5–120 minutes.
+- Local lifecycle controls for tray-dependent close-to-background, OS login launch and hidden login launch. Each setting defaults off; autostart status reads OS registration rather than assuming saved intent. Hidden start applies to login launches; direct launch stays visible.
+- Opt-in native notification request with sensitivity policies, local-time quiet hours, bounded digest delivery, rate limit and event history. Sensitivity uses personalized score thresholds/explicit interest matches; negative feedback and negative-interest matches suppress all modes.
+- Revision baseline and event dedupe prevent replaying pre-upgrade archive rows and initial historical seed rows. Later meaningful revisions may qualify, including revisions to an older historically imported document. Event history stores identifiers and state, not copied notice bodies; clearing visible history does not clear dedupe.
+- Persistent delivery states distinguish pending, claimed, attempted, deferred, delivered, suppressed and failed. OS sender handoff is `attempted`, not proof of display; macOS records `delivered` only after native activation response, and Windows/Linux rely on plugin action callbacks. The UI queries macOS authorization status and requests authorization only on explicit user action, using native UserNotifications. macOS uses the async `mac-usernotifications` 0.3.1 sender; Windows/Linux retain the Tauri notification plugin sender. The prompt and authorized status were observed in an isolated signed debug app; other targets show permission as unavailable/unknown. Failures have bounded attempts/backoff and stale-claim recovery.
+- Scheduler and notification operation has no AI dependency. AI inputs, profile and personalization evidence remain local; notification display text is sent to the OS notification provider. Disabling the archive extension removes scheduled source eligibility while preserving archived data.
+- Work is process-bound: no OS wake alarm, no operation while the computer sleeps, and no work after process exit. On process restart, persisted due state can be reconsidered when the scheduler next runs.
+
+### Observed v0.5 evidence and remaining gates
+
+- [x] The bounded live/offline test imported **10 documents**, downloaded **12 resources**, recorded **2 missing resources** and **8,149,764 local bytes**. It reopened the database offline and verified stored local state. Every source was deliberately partial; these counts are one bounded observation, not a permanent expectation, complete history, or general source reliability claim.
+- [x] A later bounded run against main-board entry `551681` (iframe-only body) exercised the current conservative behavior: metadata is retained, sanitized body fields remain empty, and neither the iframe nor its content is fetched or rendered. The reader reports the unsupported body and offers the original reference; existing readable content is not replaced. Repeated metadata-only observations are allowed. This one entry does not establish broader source reliability.
+- [x] An ad-hoc-signed isolated macOS debug app displayed the UserNotifications authorization prompt; the user granted access and the app read the authorized status. Authorization alone does not establish notification delivery.
+- [x] In isolated synthetic macOS tests, a user saw and clicked one notification; Accessibility Inspector matched its archived title/body and SQLite recorded one delivered event with attempt 1. After restart, its single dedupe row remained and no duplicate was observed. A separate quiet-hours test deferred three synthetic events with zero attempts; after simulated quiet-hour end, the user saw and clicked a grouped alert, Accessibility Inspector showed its history, and SQLite recorded two included events delivered while the third remained deferred by the rate limit. These observations establish those synthetic interactions only—not live-source delivery or repeatable production behavior.
+- [x] A bounded native scheduler run with the app window hidden archived one article from each of two supported subscribed sources. The sources ran seconds apart while a synthetic alert awaited response. A temporary debug-only cap (one page and one detail per source) intentionally stopped each run; both source tasks were recorded as failed and history remained incomplete. This is evidence of bounded execution and partial archive state, not successful full scheduled sync. The temporary cap has been removed; production has no debug testing override.
+- [x] An offline scheduler attempt recorded a network failure and persisted a 15-minute source retry backoff. This verifies failure/backoff persistence only, not successful live scheduled collection.
+- [x] With the app stopped between extension changes, disabling and re-enabling the archive extension retained both source subscriptions and all 13 stored documents; SQLite integrity was `ok`.
+- [x] Login registration was simulated under a separate temporary HOME: the login item plist was created and then removed, and launching with `--autostart` while hidden-start was enabled produced zero windows. This does not verify actual user login registration or a real login launch.
+- [ ] Establish successful and repeatable native notification display/delivery with event/action correlation for notifications generated from live-source data; synthetic interaction, permission authorization and handoff alone are insufficient.
+- [ ] Verify successful live scheduled collection, recovery/cancellation and timer behavior across restart and sleep/wake. The bounded hidden-window run ended in test-limit failures; the offline run verifies only persisted failure/backoff.
+- [ ] Verify actual installed login registration and login launch, plus tray/hidden-launch behavior on each target OS; a temporary-HOME simulation is not a real login test.
+- [ ] Verify Windows/Linux native runtime, full accessibility and release installers/signing. Do not infer these from macOS observations or mocked-IPC checks.
+
+The iframe-only path was exercised in a bounded live run for the observed entry, but that does not establish general source reliability or full-history coverage.
+
+### Verification status
+
+- [x] `cargo fmt --all --check` and strict locked workspace Clippy passed on the final tree. The serial locked workspace suite with the real CPU worker configured passed **259 tests with 8 ignored**, including the real-worker lifecycle/crash-isolation case (it does not early-return when `RHYTHM_WORKER_TEST_BIN` is set). Frontend results were `npm run check` with **0 errors and 0 warnings**, a production build, **154 mocked-IPC UI tests** and **5 desktop orchestration tests**. These checks do not verify native OS behavior.
+- [x] Automated coverage for schema 5 now includes populated-schema upgrade, rollback and newer-schema rejection, default-off settings, task reconciliation and outcomes, failure/retry/claim-expiry, quiet-hour deferral and release, sensitivity suppression, dedupe across reopen and history clearing, bounded history, and notification delivery/action state. The desktop orchestration tests cover worker staging and backend selection; no release installer was produced for this checkpoint.
+- [ ] Actual installed login registration and a real user login launch remain unverified. Isolated macOS checks observed tray installation, close-to-background hiding with zero windows, tray restore, app-menu quit with worker exit, and a duplicate launch restoring the existing window; the temporary-HOME plist simulation and hidden `--autostart` launch do not establish an actual user login.
+- [ ] Native notification activation was user-observed only in isolated synthetic macOS checks: one event was confirmed by Accessibility Inspector and SQLite and remained deduplicated after restart; the separate quiet-hours digest delivered two of three events while the third was rate-limited. Live-source delivery and repeatable production behavior remain unverified. Sleep/wake and timer catch-up are also unverified.
+- [ ] Successful live scheduled collection remains unverified. The hidden-window bounded run archived one document per source but each task failed at the temporary test cap and left history incomplete; the separate offline run persisted failure/backoff only. The test override has been removed; production contains no debug testing override.
+- [ ] Windows and Linux native runtime, notification/lifecycle differences, accessibility, release installers/signing and cross-platform scheduler behavior: unverified.
+- [ ] Linux distribution is blocked by `glib 0.18.5` / RUSTSEC-2024-0429 in the current GTK3/WebKit/Tauri dependency graph. Locked Tauri 2.12.5/Wry 0.57.1 require GTK 0.18; fixed glib 0.20 is not currently a compatible update. Wry's coordinated GTK upgrade remains open, depends on Tao/WebKit/JavaScriptCore changes and proposes Rust 1.92 MSRV. Security checks remain enabled; no forced incompatible version, vendored backport or reachability claim is used. See the Linux recheck above and [architecture](ARCHITECTURE.md#packaging-and-verification-boundaries).
+
+No assertion of repeatable production delivery from live-source data, sleeping-machine scheduling, cross-platform behavior or release readiness is made. The isolated synthetic macOS interactions above were user-observed and correlated with AX/SQLite evidence.
+
 
 ## v0.9.0 — Integration and distribution readiness
 
-Planned: integration testing, usability refinement, installer/updater work, resource/error recovery validation and distribution readiness. GitHub Releases and Tauri distribution are the intended direction; publishing/updating is not an operational service today.
+**Future scope; not implemented or verified.** This milestone is reserved for release-readiness work, not a promise that current platform gaps will be resolved automatically.
+
+Planned scope:
+
+- End-to-end integration and failure/recovery coverage across schema upgrades, interrupted archive and notification jobs, process restart, dedupe/history retention, extension disablement and lifecycle transitions.
+- Native usability/accessibility refinement across supported operating systems, including keyboard/screen-reader checks, permission-denied flows, notification open routing, tray/login behavior and sleep/wake limitations.
+- Validate archive resource recovery, storage/backup guidance, actionable errors, and AI worker/model recovery without losing archived user data.
+- Resolve platform dependency and packaging blockers before making distribution claims; verify reproducible target-specific installers, signing/notarization requirements, upgrade/migration behavior and uninstall/data-retention behavior.
+- Design and validate updater behavior and GitHub Releases/Tauri distribution, including signatures, rollback/error handling and privacy/support documentation. Publishing/updating is not an operational service today.
+
+Each platform remains pending until its native build, interaction, install/upgrade and failure-recovery criteria have been observed; CI compilation alone is not runtime or distribution verification.
 
 ## v1.0.0 — Stable release
 

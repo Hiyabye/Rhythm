@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import analysisContract from '../../src/lib/analysis-contract.json' with { type: 'json' };
-import type { AiOperation, DocumentItem, PersonalInterest, ResourceRecord } from '../../src/lib/types';
+import type { AiOperation, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation } from '../../src/lib/types';
 
 export interface FixtureOptions {
   count?: number;
@@ -10,7 +10,7 @@ export interface FixtureOptions {
   settingsError?: boolean;
   enabled?: boolean;
   body?: string;
-  resources?: ResourceRecord[];
+  unsupportedBody?: boolean;
   imageError?: boolean;
   imageDelay?: number;
   queryDelay?: number;
@@ -34,6 +34,14 @@ export interface FixtureOptions {
   interestSaveDelay?: number;
   interestRemovalDelay?: number;
   personalizationResetDelay?: number;
+  proactiveSaveError?: boolean;
+  proactiveClearError?: boolean;
+  lifecycleError?: boolean;
+  schedulerError?: boolean;
+  pendingActivation?: ProactiveActivation;
+  notificationAuthorization?: string;
+  notificationRequestResult?: string;
+  notificationRequestError?: boolean;
 }
 
 // Only the IPC boundary is faked: tests exercise the production Svelte build,
@@ -55,10 +63,30 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     { id: 'unsupported-board', name: '미검증 게시판', organization: '다른 학과', description: '아직 검증되지 않은 게시판',
       url: 'https://example.invalid', family: 'cms', supported: false, subscribed: false, last_attempt: null, last_success: null,
       last_error: null, next_page: 1, history_complete: false, status: 'idle', discovered: 0, archived: 0, failed: 0 }];
+    const proactiveSettings: ProactiveSettings = { close_to_background: false, launch_at_login: false, start_hidden: false,
+      scheduler_enabled: false, scheduler_paused: false, scheduler_interval_minutes: 0, scheduler_retry_minutes: 15,
+      notifications_enabled: false, notification_sensitivity: 'important',
+      quiet_hours: { enabled: false, start: '22:00', end: '07:00' }, updated_at: '2026-10-27T12:00:00Z' };
+    const scheduler = { enabled: false, paused: false, interval_minutes: 60, retry_minutes: 15,
+      notifications_enabled: false, notification_sensitivity: 'important', quiet_hours: copy(proactiveSettings.quiet_hours),
+      pending_events: 1, due_tasks: 0, next_task_at: null as string | null, last_run_at: '2026-10-27T12:00:00Z',
+      last_outcome: options.schedulerError ? 'failure' as string : 'success' as string, last_error: options.schedulerError ? '자동 동기화에 실패했습니다.' : null as string | null, consecutive_failures: options.schedulerError ? 1 : 0 };
+    let history: ProactiveHistoryItem[] = [{ id: 12, document_id: 1, revision_id: 1, event_type: 'new', state: 'attempted',
+      attempt_count: 1, claimed_at: null, last_attempt_at: '2026-10-27T12:00:00Z', deferred_until: null,
+      delivered_at: null, error: null, reason: null, created_at: '2026-10-27T12:00:00Z',
+      updated_at: '2026-10-27T12:00:01Z', title: entries[0]?.title ?? '한국어 공지 01', category: '장학', source_id: 'computing-updates' }];
+    let pendingActivation = options.pendingActivation ? copy(options.pendingActivation) : null;
+    let notificationAuthorization = options.notificationAuthorization ?? 'not_determined';
+    const proactiveSnapshot = (consumeActivation = false) => {
+      const snapshot = { settings: copy(proactiveSettings), scheduler: copy(scheduler), history: copy(history),
+        notification_permission: 'unknown' as const, pending_activation: copy(pendingActivation) };
+      if (consumeActivation) pendingActivation = null;
+      return snapshot;
+    };
     const snapshot = { settings: { theme: 'light', energy_profile: 'eco', interests: '' },
       extensions: [{ id: 'sogang_notices', display_name: '서강대학교 공지', description: '학교 소식 보관', available: true, enabled: options.enabled ?? true }],
-      storage: { path: '/isolated/rhythm.sqlite3', bytes: 4096, schema_version: 4 },
-      worker: { state: 'ready', runtime_available: true, model: null, detail: null } };
+      storage: { path: '/isolated/rhythm.sqlite3', bytes: 4096, schema_version: 5 },
+      worker: { state: 'ready', runtime_available: true, model: null, detail: null }, proactive: copy(proactiveSettings) };
     let sync = { running: false, source_id: null as string | null, mode: 'historical', page: 0, message: '수집 대기 중입니다.' };
     const model = (id = 'qwen35-4b') => ({ id, catalog_id: id, name: id === 'qwen35-4b' ? 'Qwen3.5 4B' : 'Qwen3.5 2B', ownership: 'managed', path: `models/${id}.gguf`, sha256: 'a'.repeat(64), expected_sha256: 'a'.repeat(64), expected_bytes: 2740937888, bytes: 2740937888, source_revision: 'pinned-revision', source_filename: `${id}.gguf`, status: 'installed', downloaded_bytes: 2740937888, resume_etag: null, error: null as string | null, created_at: '2026-10-24 12:00:00', updated_at: '2026-10-24 12:00:00' });
     const analysis = (id: number, documentId: number, revisionId: number) => ({
@@ -89,8 +117,16 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     let personalization = { profile: { university: '', department: '', study_level: '' }, interests: copy(options.initialInterests ?? []), learning_enabled: true };
     const documentFeedback = new Map<number, string>();
     let resultLagUsed = false;
+    let lifecycle = { close_to_background: false, start_hidden: false, launch_at_login: false, autostart_enabled: false as boolean | null, tray_available: true };
+    const callbacks = new Map<number, (event: { event: string; id: number; payload: unknown }) => void>();
+    let callbackId = 0;
+    let eventId = 0;
+    let notificationHandler: number | null = null;
     const fixture = { ai, analyses, options, entries, calls: [] as { command: string; args: any }[], sourceDelay: 0,
       stateDelay: 0, subscribeError: false, snapshotFailures: 0, resultsFailures: 0, documentJobs: [] as any[], retryMessage: '자료를 내려받지 못했습니다. 연결을 확인해 주세요.',
+      emitNotification: (payload: { event_id: number; document_id: number; revision_id: number }) => {
+        if (notificationHandler !== null) callbacks.get(notificationHandler)?.({ event: 'proactive://notification-clicked', id: eventId, payload: { ...copy(payload), attempt_count: 1, event_ids: [payload.event_id] } });
+      },
       completeSync: () => { sync = { ...sync, running: false, message: '가져오기를 마쳤습니다.' }; } };
     let operationStarted = 0;
     let analysisStarted = 0;
@@ -102,11 +138,57 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         if (current.cancelling) throw 'AI 작업을 취소했습니다.';
       } finally { if (ai.operation === current) ai.operation = null; }
     }
-    Object.assign(window, { isTauri: true, __fixture: fixture, __TAURI_INTERNALS__: {
+    Object.assign(window, { isTauri: true, __fixture: fixture, __TAURI_EVENT_PLUGIN_INTERNALS__: {
+      unregisterListener: (_event: string, _id: number) => { notificationHandler = null; },
+    }, __TAURI_INTERNALS__: {
+      transformCallback: (callback: (event: { event: string; id: number; payload: unknown }) => void) => {
+        const id = ++callbackId;
+        callbacks.set(id, callback);
+        return id;
+      },
       invoke: async (command: string, args: any = {}) => {
         fixture.calls.push({ command, args: copy(args) });
         switch (command) {
+          case 'plugin:event|listen':
+            notificationHandler = args.handler;
+            eventId += 1;
+            return eventId;
+          case 'plugin:event|unlisten': notificationHandler = null; return null;
+          case 'notification_authorization': return notificationAuthorization;
+          case 'notification_request_permission':
+            if (options.notificationRequestError) throw '알림 권한 요청을 사용할 수 없습니다.';
+            notificationAuthorization = options.notificationRequestResult ?? 'authorized';
+            return notificationAuthorization;
           case 'get_snapshot': return copy(snapshot);
+          case 'proactive_snapshot': return copy(proactiveSnapshot(true));
+          case 'proactive_history': return copy(history.slice(0, args.limit ?? 200));
+          case 'proactive_save':
+            if (options.proactiveSaveError) throw '백그라운드 설정을 저장하지 못했습니다.';
+            Object.assign(proactiveSettings, copy(args.settings));
+            Object.assign(scheduler, { enabled: proactiveSettings.scheduler_enabled, paused: proactiveSettings.scheduler_paused,
+              interval_minutes: proactiveSettings.scheduler_interval_minutes === 0 ? 60 : proactiveSettings.scheduler_interval_minutes,
+              notifications_enabled: proactiveSettings.notifications_enabled,
+              notification_sensitivity: proactiveSettings.notification_sensitivity, quiet_hours: copy(proactiveSettings.quiet_hours) });
+            snapshot.proactive = copy(proactiveSettings);
+            return copy(proactiveSnapshot());
+          case 'proactive_clear_history':
+            if (options.proactiveClearError) throw '알림 기록을 비우지 못했습니다.';
+            history = [];
+            return copy(proactiveSnapshot());
+          case 'lifecycle_status': return copy(lifecycle);
+          case 'lifecycle_set_close_to_background':
+          case 'lifecycle_set_start_hidden':
+          case 'lifecycle_set_launch_at_login': {
+            if (options.lifecycleError) throw '운영체제 시작 설정을 바꾸지 못했습니다.';
+            if (command === 'lifecycle_set_close_to_background' && args.enabled && !lifecycle.tray_available) throw '메뉴 막대 아이콘을 사용할 수 없습니다.';
+            const field = command === 'lifecycle_set_close_to_background' ? 'close_to_background'
+              : command === 'lifecycle_set_start_hidden' ? 'start_hidden' : 'launch_at_login';
+            lifecycle[field] = args.enabled;
+            if (field === 'launch_at_login') lifecycle.autostart_enabled = args.enabled;
+            proactiveSettings[field] = args.enabled;
+            snapshot.proactive = copy(proactiveSettings);
+            return copy(lifecycle);
+          }
           case 'save_settings':
             if (options.settingsError) throw '설정을 저장하지 못했습니다.';
             snapshot.settings = copy(args.settings); return copy(snapshot);
@@ -222,9 +304,19 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'archive_document': {
             const item = entries.find((entry) => entry.id === args.id);
             if (!item) throw '공지 없음';
-            return { item: copy(item), canonical_url: 'https://computing.sogang.ac.kr/ko/community/news/detail/282',
-              body_html: options.body ?? '<p>보관된 한국어 본문입니다.</p>', body_text: '보관된 한국어 본문입니다. 2026년 10월 30일까지 신청서를 제출하세요.',
-              revision_id: args.revisionId ?? 1, revisions: options.revisions ? [{ id: 1, content_hash: 'abc', collected_at: '2026-10-24 12:00:00' }, { id: 2, content_hash: 'def', collected_at: '2026-10-23 12:00:00' }] : [{ id: 1, content_hash: 'abc', collected_at: '2026-10-24 12:00:00' }], resources: copy(options.resources ?? []) };
+            const unsupported = options.unsupportedBody && (args.revisionId ?? 2) === 2;
+            return { item: copy(item), canonical_url: options.unsupportedBody
+              ? 'https://www.sogang.ac.kr/notice/original/551681'
+              : 'https://computing.sogang.ac.kr/ko/community/news/detail/282',
+              body_html: unsupported ? '' : options.body ?? '<p>보관된 한국어 본문입니다.</p>',
+              body_text: unsupported ? '' : '보관된 한국어 본문입니다. 2026년 10월 30일까지 신청서를 제출하세요.',
+              revision_id: args.revisionId ?? (options.unsupportedBody ? 2 : 1),
+              revisions: options.unsupportedBody
+                ? [{ id: 2, content_hash: 'def', collected_at: '2026-10-24 12:00:00' }, { id: 1, content_hash: 'abc', collected_at: '2026-10-23 12:00:00' }]
+                : options.revisions
+                  ? [{ id: 1, content_hash: 'abc', collected_at: '2026-10-24 12:00:00' }, { id: 2, content_hash: 'def', collected_at: '2026-10-23 12:00:00' }]
+                  : [{ id: 1, content_hash: 'abc', collected_at: '2026-10-24 12:00:00' }],
+              resources: copy(options.resources ?? []) };
           }
           case 'archive_state': {
             await wait(fixture.stateDelay);

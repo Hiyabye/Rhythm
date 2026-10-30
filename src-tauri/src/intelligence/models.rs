@@ -1562,6 +1562,7 @@ mod tests {
                 published_at: "2026-01-01".into(),
                 modified_at: None,
                 original: "original".into(),
+                unsupported_body: false,
                 body_html: "<p>신청 안내</p>".into(),
                 body_text: "신청 안내".into(),
                 resources: Vec::new(),

@@ -11,7 +11,10 @@ mod intelligence_tests;
 pub mod personalization;
 #[cfg(test)]
 mod personalization_tests;
-const SCHEMA_VERSION: i64 = 4;
+pub mod proactive;
+#[cfg(test)]
+mod proactive_tests;
+const SCHEMA_VERSION: i64 = 5;
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
     let migrations = [
@@ -19,6 +22,7 @@ fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
         include_str!("../../migrations/002_archive.sql"),
         include_str!("../../migrations/003_intelligence.sql"),
         include_str!("../../migrations/004_personalization.sql"),
+        include_str!("../../migrations/005_proactive.sql"),
     ];
     for migration in migrations.iter().skip(version as usize) {
         let transaction = connection.transaction().map_err(|e| e.to_string())?;

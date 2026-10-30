@@ -1,6 +1,6 @@
 [package]
 name = "rhythm"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.90"
 license = "MIT"
@@ -10,7 +10,7 @@ description = "Local-first personal command center"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tokio = { version = "1", features = ["process", "io-util", "time", "sync", "rt-multi-thread", "macros", "fs", "net"] }
 rusqlite = { version = "0.38", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
@@ -20,7 +20,10 @@ scraper = "0.24"
 sha2 = "0.10"
 url = "2"
 base64 = "0.22"
+tauri-plugin-autostart = "2.7"
+tauri-plugin-notification = "2.7"
 tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
 
@@ -28,6 +31,11 @@ webpki-roots = "1"
 # verification; enable the reviewed accelerator only on the tested Apple target.
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 sha2 = { version = "0.10", features = ["asm"] }
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2-user-notifications = { version = "0.3.2", features = ["block2", "UNUserNotificationCenter", "UNNotificationSettings"] }
+mac-usernotifications = "=0.3.1"
+
 
 [dev-dependencies]
 tempfile = "3"

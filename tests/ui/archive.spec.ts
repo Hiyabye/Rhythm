@@ -20,6 +20,38 @@ test('read-state write failure does not hide a successfully archived article', a
   await expect(page.getByRole('alert')).toContainText('읽음 상태를 저장하지 못했습니다');
   await expect(page.getByRole('button', { name: '읽음으로 표시', exact: true })).toHaveAttribute('aria-pressed', 'false');
 });
+test('iframe-only archive revision explains unsupported body without embedding it and keeps earlier text', async ({ page }) => {
+  const remoteRequests: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().includes('sogang.ac.kr')) remoteRequests.push(request.url());
+  });
+  await mockDesktop(page, { unsupportedBody: true });
+  await page.goto('/');
+  await page.locator('#notice-1').click();
+
+  await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 01');
+  await expect(page.getByRole('status').filter({ hasText: '본문 미지원' })).toContainText('본문은 로컬에 보관되지 않았습니다');
+  await expect(page.locator('.archive-local-status')).toContainText('본문은 지원되지 않아 로컬에 보관되지 않았습니다');
+  await expect(page.locator('.archive-local-status')).not.toContainText('본문은 로컬에 보관되어 있습니다');
+  await expect(page.locator('.archive-local-status')).not.toContainText('연결된 자료도 모두 저장되어 있습니다');
+  expect(remoteRequests).toEqual([]);
+  await expect(page.locator('iframe')).toHaveCount(0);
+  await expect(page.locator('.reader-body')).toHaveCount(0);
+
+  const original = page.getByRole('button', { name: '학교 원문 열기' });
+  await expect(original).toBeVisible();
+  await original.click();
+  await expect.poll(() => page.evaluate(() => {
+    const fixture = (window as Window & { __fixture: { calls: Array<{ command: string; args: Record<string, unknown> }> } }).__fixture;
+    return fixture.calls.find((call) => call.command === 'archive_open_original')?.args.url;
+  })).toBe('https://www.sogang.ac.kr/notice/original/551681');
+
+  await page.getByLabel('보관 이력').selectOption('1');
+  await expect(page.locator('.reader-body')).toContainText('보관된 한국어 본문입니다.');
+  await expect(page.getByRole('status').filter({ hasText: '본문 미지원' })).toHaveCount(0);
+  await expect(page.locator('iframe')).toHaveCount(0);
+});
+
 
 test('removing last saved item from page two returns to the last valid page', async ({ page }) => {
   await mockDesktop(page, { count: 31, saved: true });

@@ -421,6 +421,98 @@ async fn incremental_sync_only_revises_meaningful_changes_and_preserves_user_sta
 }
 
 #[tokio::test]
+async fn iframe_only_article_is_archived_but_cannot_replace_existing_readable_revision() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![551681]]);
+    *fake.changed.lock().unwrap() = HashMap::from([(
+        551681,
+        "<iframe src='https://embed.example.test/video'></iframe>".into(),
+    )]);
+    let controller = Controller::new();
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    let item = items(&store).into_iter().next().unwrap();
+    let initial = with_store(&store, |s| s.document(item.id, None)).unwrap();
+    assert!(initial.body_html.is_empty());
+    assert!(initial.body_text.is_empty());
+    assert_eq!(initial.revisions.len(), 1);
+    let original = with_store(&store, |s| s.latest_original(item.id)).unwrap();
+    assert!(original.contains("iframe"));
+    assert!(initial.item.title.ends_with("551681"));
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "incremental",
+        Budget::default(),
+    )
+    .await;
+    let repeated = with_store(&store, |s| s.document(item.id, None)).unwrap();
+    assert_eq!(repeated.revisions.len(), 1);
+    assert!(repeated.body_html.is_empty());
+    fake.changed
+        .lock()
+        .unwrap()
+        .insert(551681, "<p>읽을 수 있는 기존 본문</p>".into());
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "incremental",
+        Budget::default(),
+    )
+    .await;
+    let readable = with_store(&store, |s| s.document(item.id, None)).unwrap();
+    assert!(readable.body_text.contains("읽을 수 있는 기존 본문"));
+    assert_eq!(readable.revisions.len(), 2);
+    let good_revision = readable.revisions[0].id;
+    let readable_original = with_store(&store, |s| s.latest_original(item.id)).unwrap();
+    fake.changed.lock().unwrap().insert(
+        551681,
+        "<iframe src='https://embed.example.test/changed'></iframe>".into(),
+    );
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "incremental",
+        Budget::default(),
+    )
+    .await;
+    let after = with_store(&store, |s| s.document(item.id, None)).unwrap();
+    assert!(after.body_text.contains("읽을 수 있는 기존 본문"));
+    assert_eq!(after.revisions.len(), 2);
+    assert_eq!(after.revisions[0].id, good_revision);
+    assert_eq!(
+        with_store(&store, |s| s.latest_original(item.id)).unwrap(),
+        readable_original
+    );
+    assert_eq!(
+        with_store(&store, |s| Ok(s.source(MAIN)?.status)).unwrap(),
+        "failed"
+    );
+    assert!(!original.is_empty());
+    assert!(!fake
+        .paths()
+        .iter()
+        .any(|url| url.contains("embed.example.test")));
+}
+
+#[tokio::test]
 async fn conditional_recheck_keeps_revision_and_sends_saved_validator() {
     let (dir, store) = setup(&[MAIN]);
     let fake = Fake::new(vec![vec![7]]);
@@ -855,6 +947,39 @@ async fn bounded_budgets_never_claim_complete_history() {
     );
 }
 
+#[tokio::test]
+async fn article_budget_does_not_mask_prior_article_failure() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![1, 2]]);
+    fake.failed.lock().unwrap().insert(1);
+
+    run(
+        &Controller::new(),
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget {
+            articles: Some(1),
+            pages: None,
+        },
+    )
+    .await;
+
+    let source = with_store(&store, |s| s.source(MAIN)).unwrap();
+    assert_eq!(source.status, "failed");
+    assert_eq!(source.failed, 1);
+    assert_eq!(source.archived, 0);
+    assert_eq!(source.next_page, 1);
+    assert!(!source.history_complete);
+    assert!(source
+        .last_error
+        .unwrap()
+        .contains("모의 학교 서버 연결 실패"));
+    assert!(items(&store).is_empty());
+}
+
 #[test]
 fn single_job_admission_rejects_concurrent_reservations() {
     let controller = Controller::new();
@@ -946,10 +1071,158 @@ async fn first_incremental_seeds_three_pages_without_calling_old_records_new() {
     assert_eq!(summary.documents, 4);
     assert_eq!(summary.new_since_sync, 0);
     assert!(items(&store).iter().all(|item| item.historical));
+    assert!(with_store(&store, |s| s.seed_complete(MAIN)).unwrap());
     let source = with_store(&store, |s| s.source(MAIN)).unwrap();
     assert!(!source.history_complete);
     assert_eq!(source.next_page, 1);
     assert!(!fake.paths().iter().any(|url| url.contains("pageNum=4")));
+}
+
+#[tokio::test]
+async fn interrupted_initial_seed_resumes_historical_and_keeps_later_items_eligible() {
+    let (dir, store) = setup(&[MAIN]);
+    let gate = Arc::new(Gate {
+        id: 2,
+        entered: Notify::new(),
+        release: Notify::new(),
+    });
+    let mut gated = Fake::new(vec![vec![1, 2], vec![1, 3], vec![1, 4], vec![1, 5]]);
+    gated.gate = Some(gate.clone());
+    let gated = Arc::new(gated);
+    let controller = Controller::new();
+    let task = {
+        let controller = controller.clone();
+        let gated = gated.clone();
+        let store = store.clone();
+        let root = dir.path().to_owned();
+        tokio::spawn(async move {
+            controller
+                .execute(
+                    &store,
+                    &root,
+                    &*gated,
+                    sources(&store, &[MAIN]),
+                    "incremental",
+                    Budget::default(),
+                )
+                .await
+        })
+    };
+    gate.entered.notified().await;
+    controller.cancel();
+    gate.release.notify_one();
+    assert!(task.await.unwrap().is_err());
+    assert!(!with_store(&store, |s| s.seed_complete(MAIN)).unwrap());
+    assert!(
+        !with_store(&store, |s| s.source(MAIN))
+            .unwrap()
+            .history_complete
+    );
+    assert_eq!(
+        with_store(&store, |s| s.source(MAIN)).unwrap().status,
+        "cancelled"
+    );
+
+    // The restart must keep treating the unfinished bootstrap as historical
+    // even though the first interrupted run already stored some documents.
+    let resumed = Fake::new(vec![vec![1, 2], vec![1, 3], vec![1, 4], vec![1, 5]]);
+    run(
+        &Controller::new(),
+        &store,
+        dir.path(),
+        &resumed,
+        &[MAIN],
+        "incremental",
+        Budget::default(),
+    )
+    .await;
+    assert!(with_store(&store, |s| s.seed_complete(MAIN)).unwrap());
+    assert!(
+        !with_store(&store, |s| s.source(MAIN))
+            .unwrap()
+            .history_complete
+    );
+    assert_eq!(items(&store).len(), 4);
+    assert!(items(&store).iter().all(|item| item.historical));
+    assert_eq!(
+        with_store(&store, |s| s.archive_summary())
+            .unwrap()
+            .new_since_sync,
+        0
+    );
+    assert!(!resumed.paths().iter().any(|url| url.contains("pageNum=4")));
+
+    // Only after the seed is durably complete may a genuinely new record be
+    // reported as newly published.
+    let later = Fake::new(vec![vec![1, 2, 6], vec![1, 3], vec![1, 4], vec![1, 5]]);
+    run(
+        &Controller::new(),
+        &store,
+        dir.path(),
+        &later,
+        &[MAIN],
+        "incremental",
+        Budget::default(),
+    )
+    .await;
+    let fresh = items(&store)
+        .into_iter()
+        .find(|item| item.title.ends_with(" 6"))
+        .unwrap();
+    assert!(!fresh.historical);
+    assert_eq!(
+        with_store(&store, |s| s.archive_summary())
+            .unwrap()
+            .new_since_sync,
+        1
+    );
+}
+
+#[tokio::test]
+async fn failed_initial_seed_stays_pending_until_a_safe_completion() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![1, 2], vec![1, 3], vec![1, 4], vec![1, 5]]);
+    fake.failed.lock().unwrap().insert(3);
+    run(
+        &Controller::new(),
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "incremental",
+        Budget::default(),
+    )
+    .await;
+    let source = with_store(&store, |s| s.source(MAIN)).unwrap();
+    assert_eq!(source.status, "failed");
+    assert!(!source.history_complete);
+    assert!(!with_store(&store, |s| s.seed_complete(MAIN)).unwrap());
+
+    fake.failed.lock().unwrap().clear();
+    run(
+        &Controller::new(),
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "incremental",
+        Budget::default(),
+    )
+    .await;
+    assert!(with_store(&store, |s| s.seed_complete(MAIN)).unwrap());
+    assert!(
+        !with_store(&store, |s| s.source(MAIN))
+            .unwrap()
+            .history_complete
+    );
+    assert_eq!(items(&store).len(), 4);
+    assert!(items(&store).iter().all(|item| item.historical));
+    assert_eq!(
+        with_store(&store, |s| s.archive_summary())
+            .unwrap()
+            .new_since_sync,
+        0
+    );
 }
 
 #[tokio::test]
@@ -1212,7 +1485,25 @@ async fn bounded_live_import_and_offline_reopen() {
     let mut local_bytes = 0;
     for item in items(&offline) {
         let detail = with_store(&offline, |s| s.document(item.id, None)).unwrap();
-        assert!(!detail.body_text.is_empty());
+        let has_image = detail
+            .resources
+            .iter()
+            .any(|resource| resource.kind == "image");
+        assert!(!detail.body_html.contains("<iframe"));
+        if detail.body_html.is_empty() && detail.body_text.is_empty() && !has_image {
+            assert_eq!(item.source_id, MAIN);
+            let original = with_store(&offline, |s| s.latest_original(item.id)).unwrap();
+            let response: Value = serde_json::from_str(&original).unwrap();
+            let content = response["data"]["content"].as_str().unwrap();
+            assert!(content.contains("<iframe"));
+            assert!(!content.contains("<script"));
+            assert!(!content.contains("<img"));
+        } else {
+            assert!(
+                !detail.body_text.is_empty() || has_image,
+                "readable live notice must retain text or an image"
+            );
+        }
         let term = detail
             .item
             .title

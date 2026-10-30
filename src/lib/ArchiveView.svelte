@@ -8,7 +8,7 @@
   import Highlighted from './Highlighted.svelte';
   import Icon from './Icon.svelte';
 
-  let { page, desktop, enabled, onsettings, onaisettings }: { page: string; desktop: boolean; enabled: boolean; onsettings: () => void; onaisettings: () => void } = $props();
+  let { page, desktop, enabled, activation, onactivationhandled, onsettings, onaisettings }: { page: string; desktop: boolean; enabled: boolean; activation: { document_id: number; revision_id: number; event_id: number } | null; onactivationhandled: () => void; onsettings: () => void; onaisettings: () => void } = $props();
   let result = $state<ArchivePage>({ items: [], total: 0, categories: [] });
   let summary = $state<ArchiveSummary | null>(null);
   let sources = $state<SourceInfo[]>([]);
@@ -32,6 +32,7 @@
   let pendingSaves = $state<Record<number, boolean>>({});
   let restoreListFocus = false;
   let readerId = $state<number | null>(null);
+  let readerRevisionId = $state<number | null>(null);
   let revision = $state(0);
   let listHeading = $state<HTMLHeadingElement>();
   let active = true;
@@ -44,6 +45,7 @@
     const currentPage = page;
     void currentPage;
     readerId = null;
+    readerRevisionId = null;
     lastOpened = 0;
     restoreListFocus = false;
     draft = '';
@@ -53,6 +55,17 @@
     unread = false;
     ascending = false;
     offset = 0;
+  });
+
+  $effect(() => {
+    const target = activation;
+    if (!target || !desktop) return;
+    // Notification payloads use the stable document/revision/event identifiers,
+    // never titles or transient list positions.
+    lastOpened = target.document_id;
+    readerRevisionId = target.revision_id;
+    readerId = target.document_id;
+    onactivationhandled();
   });
   $effect(() => {
     const filters = { query, source_id: source || null, category: category || null,
@@ -214,8 +227,8 @@
   }
 
   function closeReader() {
-    restoreListFocus = true;
     readerId = null;
+    readerRevisionId = null;
     changed();
   }
   async function focusList() {
@@ -229,6 +242,7 @@
   let lastOpened = 0;
   async function open(item: DocumentItem) {
     lastOpened = item.id;
+    readerRevisionId = null;
     readerId = item.id;
     await tick();
     window.scrollTo({ top: 0, behavior: 'instant' });
@@ -242,7 +256,7 @@
 </script>
 
 {#if readerId !== null}
-  {#key readerId}<DocumentReader id={readerId} {enabled} onclose={closeReader} onchange={changed} {onaisettings} />{/key}
+  {#key `${readerId}:${readerRevisionId ?? ''}`}<DocumentReader id={readerId} initialRevisionId={readerRevisionId} {enabled} onclose={closeReader} onchange={changed} {onaisettings} />{/key}
 {:else}
   <section class="archive-view" aria-busy={loading}>
     {#if page === 'today'}

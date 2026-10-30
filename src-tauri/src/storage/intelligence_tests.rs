@@ -177,6 +177,7 @@ fn recent_article(
         published_at: published_at.into(),
         modified_at: None,
         original: body.into(),
+        unsupported_body: false,
         body_html: format!("<p>{body}</p>"),
         body_text: body.into(),
         resources: vec![],
@@ -436,7 +437,7 @@ fn recent_candidate_window_is_bounded_and_has_stable_ingestion_order() {
 #[test]
 fn populated_schema_two_upgrade_preserves_archive_and_settings() {
     let (directory, store) = database();
-    assert_eq!(store.info().unwrap().schema_version, 4);
+    assert_eq!(store.info().unwrap().schema_version, 5);
     assert_eq!(store.settings().unwrap().theme, "dark");
     assert_eq!(store.settings().unwrap().energy_profile, "eco");
     assert_eq!(store.settings().unwrap().interests, "장학");

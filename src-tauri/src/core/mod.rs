@@ -1,3 +1,5 @@
+pub mod lifecycle;
+
 /// Own the application-data directory before recovering interrupted jobs. OS file
 /// locks are released on process termination, so a crash leaves no stale lease.
 pub fn lock_data_dir(root: &std::path::Path) -> Result<std::fs::File, String> {

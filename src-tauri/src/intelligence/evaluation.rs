@@ -52,6 +52,7 @@ impl Case {
             published_at: "2026-01-01".into(),
             modified_at: None,
             original: body.clone(),
+            unsupported_body: false,
             body_html: "<p>합성 평가 자료</p>".into(),
             body_text: body,
             resources: vec![],

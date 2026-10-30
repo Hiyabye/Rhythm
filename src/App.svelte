@@ -1,14 +1,16 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
+  import { listen } from '@tauri-apps/api/event';
   import Icon from './lib/Icon.svelte';
   import ArchiveView from './lib/ArchiveView.svelte';
   import SourceSettings from './lib/SourceSettings.svelte';
   import AiSettings from './lib/AiSettings.svelte';
   import PersonalizationSettings from './lib/PersonalizationSettings.svelte';
+  import ProactiveSettings from './lib/ProactiveSettings.svelte';
   import './lib/ai.css';
   import { archiveError as message } from './lib/archive-format';
-  import type { EnergyProfile, Settings, Snapshot, Theme, WorkerStatus, AiSnapshot } from './lib/types';
+  import type { EnergyProfile, Settings, Snapshot, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot } from './lib/types';
 
   const navigation = [
     { id: 'today', label: '오늘', caption: '나에게 필요한 하루의 흐름' },
@@ -18,9 +20,9 @@
     { id: 'settings', label: '설정', caption: '나의 방식으로 Rhythm을 조율하세요' },
   ];
   const categories = [
-    ['general', '일반'], ['extensions', '확장 기능'], ['ai', 'AI 모델'],
+    ['general', '일반'], ['background', '백그라운드'], ['extensions', '확장 기능'], ['ai', 'AI 모델'],
     ['ai-processing', 'AI 처리'], ['personalization', '개인화'], ['notifications', '알림'],
-    ['energy', '성능 및 전원'], ['data', '데이터 및 개인정보'], ['about', '정보'],
+    ['notification-history', '알림 기록'], ['energy', '성능 및 전원'], ['data', '데이터 및 개인정보'], ['about', '정보'],
   ];
   const themes: { id: Theme; label: string; icon: string }[] = [
     { id: 'light', label: '라이트', icon: 'today' },
@@ -39,6 +41,9 @@
   let error = $state('');
   let notice = $state('');
   let desktop = $state(false);
+  let proactiveActivation = $state<ProactiveActivation | null>(null);
+  let handledActivationEventId = 0;
+  let handledActivationAt = 0;
   let setupNeeded = $state(false);
   let noticesEnabled = $derived(snapshot?.extensions.some((extension) => extension.id === 'sogang_notices' && extension.enabled) ?? false);
   let theme = $state<Theme>('system');
@@ -53,13 +58,29 @@
   });
 
   onMount(() => {
+    desktop = isTauri();
     const media = window.matchMedia('(prefers-color-scheme: dark)');
+    let mounted = true;
+    let unlistenNotification: (() => void) | undefined;
     systemDark = media.matches;
     const update = () => { systemDark = media.matches; };
     media.addEventListener('change', update);
-    desktop = isTauri();
-    if (desktop) void load();
-    else loading = false;
+    if (desktop) {
+      void listen<ProactiveActivation>('proactive://notification-clicked', (event) => {
+        handleProactiveActivation(event.payload);
+      }).then((unlisten) => {
+        if (mounted) {
+          unlistenNotification = unlisten;
+          void load();
+        } else unlisten();
+      }).catch((reason) => {
+        if (mounted) {
+          void load().then(() => {
+            if (mounted) error = `알림 클릭 기능을 시작하지 못했습니다: ${message(reason)}`;
+          });
+        }
+      });
+    } else loading = false;
     const healthTimer = window.setInterval(() => {
       if (desktop && snapshot && page === 'settings' && !busy) {
         void invoke<WorkerStatus>('worker_status').then((status) => {
@@ -68,6 +89,8 @@
       }
     }, 5000);
     return () => {
+      mounted = false;
+      unlistenNotification?.();
       media.removeEventListener('change', update);
       window.clearInterval(healthTimer);
     };
@@ -82,12 +105,30 @@
     document.getElementById('main')?.focus({ preventScroll: true });
   }
 
+  function handleProactiveActivation(payload: ProactiveActivation) {
+    if (!Number.isSafeInteger(payload.document_id) || payload.document_id <= 0
+      || !Number.isSafeInteger(payload.revision_id) || payload.revision_id <= 0
+      || !Number.isSafeInteger(payload.event_id) || payload.event_id <= 0
+      || !Number.isSafeInteger(payload.attempt_count) || payload.attempt_count < 0) return;
+    const now = Date.now();
+    if (handledActivationEventId === payload.event_id && now - handledActivationAt < 1500) return;
+    handledActivationEventId = payload.event_id;
+    handledActivationAt = now;
+    const eventIds = Array.isArray(payload.event_ids)
+      ? payload.event_ids.filter((id) => Number.isSafeInteger(id) && id > 0) : [payload.event_id];
+    void openProactiveDocument(payload.document_id, payload.revision_id, payload.event_id, payload.attempt_count, eventIds);
+  }
+
   async function load() {
     loading = true;
     error = '';
     try {
       snapshot = await invoke<Snapshot>('get_snapshot');
       theme = snapshot.settings.theme;
+      try {
+        const proactive = await invoke<ProactiveSnapshot>('proactive_snapshot');
+        if (proactive.pending_activation) handleProactiveActivation(proactive.pending_activation);
+      } catch { /* The archive remains usable if proactive state is unavailable. */ }
       try { setupNeeded = !(await invoke<AiSnapshot>('ai_snapshot')).preferences.setup_completed; }
       catch { /* AI availability must not prevent archive access. Settings exposes recovery. */ }
     } catch (reason) {
@@ -135,6 +176,25 @@
     document.getElementById('ai')?.querySelector('h2')?.focus({ preventScroll: true });
   }
 
+  async function openProactiveDocument(documentId: number, revisionId: number, eventId: number, attemptCount = 1, eventIds: number[] = [eventId]) {
+    if (eventIds.length > 1) {
+      proactiveActivation = null;
+      await navigate('settings');
+      await tick();
+      const history = document.getElementById('notification-history');
+      history?.scrollIntoView({ block: 'start', behavior: 'instant' });
+      history?.querySelector('h2')?.focus({ preventScroll: true });
+      return;
+    }
+    proactiveActivation = { document_id: documentId, revision_id: revisionId, event_id: eventId, attempt_count: attemptCount, event_ids: eventIds };
+    page = 'inbox';
+    notice = '';
+    history.replaceState(null, '', location.pathname + location.search);
+    await tick();
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    document.getElementById('main')?.focus({ preventScroll: true });
+  }
+
   function storageSize(bytes: number) {
     return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   }
@@ -154,7 +214,7 @@
         </button>
       {/each}
     </nav>
-    <div class="sidebar-bottom"><span class="local-dot"></span><span>내 기기에 머무는 정보</span><small>v0.4.0 · 로컬 인텔리전스</small></div>
+    <div class="sidebar-bottom"><span class="local-dot"></span><span>내 기기에 머무는 정보</span><small>v0.5.0 · 로컬 능동 알림</small></div>
   </aside>
 
   <main id="main" tabindex="-1">
@@ -172,7 +232,7 @@
           <section id="general" class="settings-section"><div class="section-heading"><h2>일반</h2><p>편안하게 집중할 수 있는 환경을 만드세요.</p></div>
             <div class="setting-row"><div><h3>화면 테마</h3><p>시스템 설정에 맞추거나 직접 선택하세요.</p></div><div class="segmented" role="group" aria-label="화면 테마">{#each themes as option}<button disabled={!snapshot || busy} class:selected={theme === option.id} aria-pressed={theme === option.id} onclick={() => save({ theme: option.id })}><Icon name={option.icon} size={16} />{option.label}</button>{/each}</div></div>
             <div class="setting-row"><div><h3>앱 언어</h3><p>Rhythm은 한국어로 함께합니다.</p></div><span class="value">한국어</span></div>
-            <div class="setting-row"><div><h3>시작과 종료</h3><p>마지막으로 저장한 설정으로 시작하며, 창을 닫으면 앱도 종료됩니다.</p></div></div>
+            <div class="setting-row"><div><h3>시작과 종료</h3><p>백그라운드 실행, 로그인 시 자동 시작과 시작 창 표시를 설정할 수 있습니다.</p></div></div>
           </section>
           <section id="extensions" class="settings-section"><div class="section-heading"><h2>확장 기능</h2><p>필요한 정보원만 선택하세요. 꺼도 저장된 정보는 지워지지 않습니다.</p></div>
             {#if snapshot}{#each snapshot.extensions as extension}<div class="extension-row"><div class="extension-symbol"><Icon name="inbox" size={22} /></div><div class="extension-description"><h3>{extension.display_name}</h3><p>{extension.description}</p><span class="availability">{extension.available ? '사용 가능 · 수동 동기화' : '현재 사용할 수 없습니다'}</span></div><button class="switch" class:on={extension.enabled} role="switch" aria-checked={extension.enabled} aria-label={`${extension.display_name} 사용 설정`} disabled={busy} onclick={() => toggleExtension(extension.id, !extension.enabled)}><span></span></button></div>{/each}{:else}<p class="muted">{loading ? '확장 기능을 불러오는 중입니다.' : '데스크톱 앱에서 등록된 확장 기능을 확인할 수 있습니다.'}</p>{/if}
@@ -180,8 +240,8 @@
           </section>
           <AiSettings {desktop} onsetup={() => setupNeeded = false} />
           <PersonalizationSettings {desktop} />
-          <section id="notifications" class="settings-section"><div class="section-heading"><h2>알림</h2><p>중요한 소식이 생기면, 필요한 순간에만.</p></div><div class="planned"><strong>알림 설정 · 향후 제공</strong><p>이 버전은 시스템 알림을 보내지 않습니다. 알림 종류와 수신 시간 설정은 v0.5.0에서 제공할 예정입니다.</p></div></section>
-          <section id="energy" class="settings-section"><div class="section-heading"><h2>성능 및 전원</h2><p>기기에 맞는 작업 방식을 선택하세요.</p></div><div class="energy-options" role="group" aria-label="에너지 프로필">{#each energyProfiles as option}<button disabled={!snapshot || busy} class:selected={snapshot?.settings.energy_profile === option.id} aria-pressed={snapshot?.settings.energy_profile === option.id} onclick={() => save({ energy_profile: option.id })}><span class="option-title">{option.label}{#if snapshot?.settings.energy_profile === option.id}<Icon name="check" size={17} />{/if}</span><span>{option.description}</span></button>{/each}</div><p class="footnote">AI는 한 번에 한 공지만 분석합니다. 절전에서는 직접 요청을 우선하며, 모델 유지와 최근 공지의 소량 처리는 선택한 프로필과 AI 처리 설정을 따릅니다. 앱 종료 후 백그라운드 처리는 하지 않습니다.</p></section>
+          <ProactiveSettings {desktop} onopen={openProactiveDocument} />
+          <section id="energy" class="settings-section"><div class="section-heading"><h2>성능 및 전원</h2><p>기기에 맞는 작업 방식을 선택하세요.</p></div><div class="energy-options" role="group" aria-label="에너지 프로필">{#each energyProfiles as option}<button disabled={!snapshot || busy} class:selected={snapshot?.settings.energy_profile === option.id} aria-pressed={snapshot?.settings.energy_profile === option.id} onclick={() => save({ energy_profile: option.id })}><span class="option-title">{option.label}{#if snapshot?.settings.energy_profile === option.id}<Icon name="check" size={17} />{/if}</span><span>{option.description}</span></button>{/each}</div><p class="footnote">AI는 한 번에 한 공지만 분석합니다. 절전에서는 직접 요청을 우선하며, 모델 유지와 최근 공지의 소량 처리는 선택한 프로필과 AI 처리 설정을 따릅니다. 자동 동기화는 켜 둔 경우 앱이 실행 중일 때 동작하며, 앱을 종료하면 멈춥니다.</p></section>
           <section id="data" class="settings-section"><div class="section-heading"><h2>데이터 및 개인정보</h2><p>내 정보는 내 기기에. 클라우드 계정이나 동기화가 필요하지 않습니다.</p></div>
             <div class="setting-row"><div><h3>로컬 데이터베이스</h3><p>SQLite · {snapshot ? `스키마 버전 ${snapshot.storage.schema_version}` : '앱에서 확인 가능'}</p></div><span class="value">{snapshot ? storageSize(snapshot.storage.bytes) : '—'}</span></div>
             <div class="storage-path"><span>저장 위치</span><code>{snapshot?.storage.path ?? '데스크톱 앱에서 확인할 수 있습니다.'}</code></div>
@@ -192,7 +252,7 @@
         </div>
       </div>
     {:else}
-      <ArchiveView {page} {desktop} enabled={noticesEnabled} onsettings={() => navigate('settings')} onaisettings={aiSettings} />
+      <ArchiveView {page} {desktop} enabled={noticesEnabled} activation={proactiveActivation} onactivationhandled={() => proactiveActivation = null} onsettings={() => navigate('settings')} onaisettings={aiSettings} />
     {/if}
     <footer class="page-footer"><span>Rhythm</span><span>조용하게, 나의 리듬으로.</span></footer>
   </main>

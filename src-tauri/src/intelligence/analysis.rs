@@ -2073,6 +2073,7 @@ mod tests {
                     published_at: "2026-04-01".into(),
                     modified_at: None,
                     original: SOURCE.into(),
+                    unsupported_body: false,
                     body_html: "<p>장학 안내</p>".into(),
                     body_text: SOURCE.into(),
                     resources: vec![],

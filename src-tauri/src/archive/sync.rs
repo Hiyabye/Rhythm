@@ -274,16 +274,11 @@ impl Controller {
         resource_bytes: &mut u64,
     ) -> Result<(), String> {
         let historical = mode == "historical";
-        let seed = !historical
-            && with_store(store, |s| {
-                s.archive_query(&ArchiveQuery {
-                    source_id: Some(current.definition.id.clone()),
-                    limit: Some(1),
-                    ..Default::default()
-                })
-            })?
-            .total
-                == 0;
+        // The durable flag, not the current document count, decides whether the
+        // initial bootstrap is still owed. A cancelled or failed seed leaves it
+        // unset, so later incremental runs keep marking historical pages as
+        // historical instead of reporting them as newly published notices.
+        let seed = !historical && !with_store(store, |s| s.seed_complete(&current.definition.id))?;
         if historical && current.history_complete {
             persist(store, current, "completed", None, true)?;
             return Ok(());
@@ -378,6 +373,13 @@ impl Controller {
                     }
                 }
                 if budget.articles.is_some_and(|max| processed >= max) {
+                    if !errors.is_empty() {
+                        return Err(format!(
+                            "원문 {}건을 보관하지 못했습니다. 같은 페이지에서 이어집니다. {}",
+                            errors.len(),
+                            errors[0]
+                        ));
+                    }
                     persist(store,current,"limited",Some("개발 검증용 제한으로 일부만 가져왔습니다. 전체 이력은 아직 완료되지 않았습니다."),false)?;
                     return Ok(());
                 }
@@ -431,6 +433,16 @@ impl Controller {
                                 std::str::from_utf8(&bytes)
                                     .map_err(|_| "공지 본문 문자 인코딩을 지원하지 않습니다.")?,
                             )?;
+                            let replaces_readable = match existing_id {
+                                Some(id) => with_store(store, |s| s.has_readable_content(id))?,
+                                None => false,
+                            };
+                            if replaces_readable && article.unsupported_body {
+                                return Err(
+                                    "기존 원문을 읽을 수 없는 iframe 본문으로 대체하지 않았습니다."
+                                        .into(),
+                                );
+                            }
                             article.etag = etag;
                             article.last_modified = last_modified;
                             let (id, _) = with_store(store, |s| {
@@ -477,12 +489,20 @@ impl Controller {
                 if historical {
                     current.history_complete = true;
                 }
+                // Reaching the last page safely also established the initial
+                // frontier, whether through the bounded seed or a manual import.
+                if historical || seed {
+                    mark_seed_complete(store, &definition.id)?;
+                }
                 persist(store, current, "completed", None, true)?;
                 return Ok(());
             }
             // The three-page edit window must not truncate discovery of a larger
             // burst. Only regular records (never repeated pins) establish a frontier.
             if !historical && page >= 3 && (seed || (known_regular_frontier && all_regular_known)) {
+                if seed {
+                    mark_seed_complete(store, &definition.id)?;
+                }
                 persist(store, current, "completed", None, true)?;
                 return Ok(());
             }
@@ -520,6 +540,9 @@ impl Controller {
         }
         Ok(())
     }
+}
+fn mark_seed_complete(store: &SharedStore, source: &str) -> Result<(), String> {
+    with_store(store, |s| s.mark_seed_complete(source))
 }
 fn persist(
     store: &SharedStore,

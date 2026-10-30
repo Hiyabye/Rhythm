@@ -85,6 +85,7 @@ fn read_samples(path: &Path, ids: &[i64]) -> Result<Vec<ArchivedSample>, String>
                             published_at: row.get(8)?,
                             modified_at: row.get(9)?,
                             original: row.get(10)?,
+                            unsupported_body: false,
                             body_html: row.get(11)?,
                             body_text: row.get(12)?,
                             // The selected text is evaluated, never attachment extraction/refetch.

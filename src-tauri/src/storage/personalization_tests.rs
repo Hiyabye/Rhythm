@@ -367,7 +367,7 @@ fn v3_upgrade_preserves_archive_settings_and_ai_data_and_imports_interests() {
             .unwrap(),
         "sogang_notices"
     );
-    assert_eq!(store.info().unwrap().schema_version, 4);
+    assert_eq!(store.info().unwrap().schema_version, 5);
 
     store.personalization_reset().unwrap();
     assert_eq!(store.settings().unwrap().interests, "");
@@ -1577,4 +1577,319 @@ fn short_korean_interest_finds_old_category_matches_outside_recent_candidates() 
         .reasons
         .iter()
         .any(|reason| reason.contains("관심 분야 ‘장학’")));
+}
+
+#[test]
+fn notification_score_outlives_recommendation_limits_and_reuses_ranking_reasons() {
+    let (_directory, store) = store();
+    save_interest(&store, "장학", 4);
+    // Four days keeps the freshness bonus at (30 - 4) / 5 = 5 across the
+    // UTC-day boundary that a notification scheduler also observes.
+    let fresh = date_offset(4);
+    let fresh_at = format!("{fresh}T09:00:00Z");
+    // Older explicit-interest match (24 points: 12 + priority 4 * 3) plus enough
+    // fresher matches (24 + 5 freshness points) to push document 2 past a small
+    // recommendation limit without changing its own score.
+    for id in 10..40 {
+        add_document(
+            &store,
+            id,
+            &format!("새 장학 소식 {id}"),
+            "장학",
+            &fresh,
+            &fresh_at,
+            false,
+        );
+    }
+
+    let recommendations = store.personalization_recommendations(5).unwrap();
+    assert!(!recommendations
+        .items
+        .iter()
+        .any(|recommendation| recommendation.item.id == 2));
+    let newest = recommendations
+        .items
+        .iter()
+        .find(|recommendation| recommendation.item.id == 39)
+        .unwrap();
+
+    let unmatched_by_limit = store
+        .personalization_notification_score(2)
+        .unwrap()
+        .unwrap();
+    assert_eq!(unmatched_by_limit.document_id, 2);
+    assert_eq!(unmatched_by_limit.score, 24);
+    assert_eq!(
+        unmatched_by_limit.reasons,
+        vec!["관심 분야 ‘장학’에 맞는 공지".to_string()]
+    );
+
+    // The same document scored by both paths keeps identical score-bearing
+    // reasons; only list-level notes are recommendation-only.
+    let listed = store
+        .personalization_notification_score(39)
+        .unwrap()
+        .unwrap();
+    assert_eq!(listed.score, 29);
+    assert_eq!(listed.reasons, newest.reasons);
+    assert!(listed.reasons.iter().any(|reason| reason == "최근 게시"));
+}
+
+#[test]
+fn notification_score_is_cold_start_deterministic_and_reason_free() {
+    let (_directory, store) = store();
+    let recent = date_offset(4);
+    add_document(
+        &store,
+        5,
+        "새 소식",
+        "행사",
+        &recent,
+        &format!("{recent}T09:00:00Z"),
+        false,
+    );
+
+    let first = store
+        .personalization_notification_score(5)
+        .unwrap()
+        .unwrap();
+    let second = store
+        .personalization_notification_score(5)
+        .unwrap()
+        .unwrap();
+    // Five freshness points from (30 - 4) / 5; no personalization signal exists,
+    // so ranking reasons stay empty exactly like cold-start recommendation items.
+    assert_eq!(first.score, 5);
+    assert!(!first.has_preferences);
+    assert!(first.reasons.is_empty());
+    assert!(first.positive_interest_matches.is_empty());
+    assert!(!first.explicit_interest_match);
+    assert!(first.negative_interest_matches.is_empty());
+    assert!(first.feedback.is_none());
+    assert!(!first.positive_feedback);
+    assert!(!first.negative_feedback);
+    assert_eq!(first.document_id, 5);
+    assert_eq!(first.score, second.score);
+    assert_eq!(first.reasons, second.reasons);
+
+    let historical = store
+        .personalization_notification_score(1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(historical.score, 0);
+    assert!(historical.reasons.is_empty());
+}
+
+#[test]
+fn notification_score_exposes_interest_and_feedback_state() {
+    let (_directory, store) = store();
+    save_interest(&store, "장학", 4);
+
+    let matched = store
+        .personalization_notification_score(2)
+        .unwrap()
+        .unwrap();
+    assert_eq!(matched.score, 24);
+    assert_eq!(
+        matched.reasons,
+        vec!["관심 분야 ‘장학’에 맞는 공지".to_string()]
+    );
+    assert_eq!(matched.positive_interest_matches, vec!["장학"]);
+    assert!(matched.explicit_interest_match);
+    assert!(matched.negative_interest_matches.is_empty());
+    assert!(matched.feedback.is_none());
+    assert!(!matched.positive_feedback);
+    assert!(!matched.negative_feedback);
+
+    // A recent "not interested" rating floors the score instead of hiding the
+    // document, and the state is visible to a conservative notification policy.
+    store
+        .personalization_set_feedback(2, Some("not_interested"))
+        .unwrap();
+    let suppressed = store
+        .personalization_notification_score(2)
+        .unwrap()
+        .unwrap();
+    assert_eq!(suppressed.feedback.as_deref(), Some("not_interested"));
+    assert!(suppressed.negative_feedback);
+    assert!(!suppressed.positive_feedback);
+    assert_eq!(suppressed.score, -40);
+    assert!(suppressed
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("관심 없음")));
+    assert_eq!(suppressed.positive_interest_matches, vec!["장학"]);
+
+    store.personalization_reset().unwrap();
+    store
+        .personalization_save_interest(&PersonalInterestInput {
+            id: None,
+            name: "장학".into(),
+            aliases: vec![],
+            priority: 5,
+            polarity: "negative".into(),
+        })
+        .unwrap();
+    let disliked = store
+        .personalization_notification_score(2)
+        .unwrap()
+        .unwrap();
+    // Negative explicit interest: -(12 + 5 * 3) on an otherwise historical item.
+    assert_eq!(disliked.score, -27);
+    assert_eq!(disliked.negative_interest_matches, vec!["장학"]);
+    assert!(disliked.positive_interest_matches.is_empty());
+    assert!(!disliked.explicit_interest_match);
+    assert!(disliked
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("덜 보고 싶은 분야 ‘장학’")));
+    assert!(!disliked.negative_feedback);
+}
+
+#[test]
+fn notification_scores_are_ordered_deduplicated_and_respect_source_toggles() {
+    let (_directory, store) = store();
+    store.subscribe("one", true).unwrap();
+    let subscribed = store
+        .personalization_notification_score(1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(subscribed.score, 2);
+    assert_eq!(subscribed.reasons, vec!["구독 중인 정보원".to_string()]);
+    assert!(subscribed.has_preferences);
+
+    let batch = store
+        .personalization_notification_scores(&[3, 1, 3, 999])
+        .unwrap();
+    assert_eq!(
+        batch
+            .iter()
+            .map(|score| score.document_id)
+            .collect::<Vec<_>>(),
+        vec![3, 1]
+    );
+    assert!(batch.iter().all(|score| score.score == 2));
+    assert_eq!(
+        store
+            .personalization_notification_scores(&[1, 2, 3])
+            .unwrap()
+            .len(),
+        3
+    );
+
+    store.set_enabled("test_extension", false).unwrap();
+    assert!(store
+        .personalization_notification_score(1)
+        .unwrap()
+        .is_none());
+    assert!(store
+        .personalization_notification_scores(&[1, 2, 3])
+        .unwrap()
+        .is_empty());
+
+    store.set_enabled("test_extension", true).unwrap();
+    assert_eq!(
+        store
+            .personalization_notification_scores(&[1, 1, 1])
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn notification_reasons_omit_list_ordering_notes() {
+    let (_directory, store) = store();
+    store
+        .personalization_save_profile(&PersonalizationProfile {
+            university: "다른대학교".into(),
+            department: String::new(),
+            study_level: String::new(),
+        })
+        .unwrap();
+
+    let unmatched = store
+        .personalization_notification_score(1)
+        .unwrap()
+        .unwrap();
+    assert!(unmatched.has_preferences);
+    assert_eq!(unmatched.score, 0);
+    assert!(unmatched.reasons.is_empty());
+    assert!(unmatched.positive_interest_matches.is_empty());
+
+    let recommendation = store.personalization_recommendations(3).unwrap();
+    let item = recommendation
+        .items
+        .iter()
+        .find(|recommendation| recommendation.item.id == 1)
+        .unwrap();
+    assert!(item
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("보조 정렬")));
+}
+
+#[test]
+fn notification_score_batch_is_bounded() {
+    let (_directory, store) = store();
+    for id in 100..360 {
+        add_document(
+            &store,
+            id,
+            &format!("일반 공지 {id}"),
+            "일반",
+            "2020-01-01",
+            "2020-01-01T00:00:00Z",
+            true,
+        );
+    }
+    let ids = (100..360).collect::<Vec<i64>>();
+    let scores = store.personalization_notification_scores(&ids).unwrap();
+    assert_eq!(scores.len(), 256);
+    assert_eq!(scores.first().unwrap().document_id, 100);
+    assert_eq!(scores.last().unwrap().document_id, 355);
+    assert!(scores.iter().all(|score| score.document_id >= 100));
+}
+
+#[test]
+fn notification_score_reaches_documents_outside_every_recommendation_pool() {
+    let (_directory, store) = store();
+    save_interest(&store, "장학", 4);
+    add_document(
+        &store,
+        4,
+        "다른 행사 소식",
+        "행사",
+        "2020-01-01",
+        "2020-01-01T12:00:00Z",
+        true,
+    );
+    let tx = store.connection.unchecked_transaction().unwrap();
+    // 600 fresher, non-matching notices keep document 4 out of the 500-document
+    // recency pool and every other bounded candidate union.
+    for id in 10..610 {
+        tx.execute(
+            "INSERT INTO documents(id,source_id,external_id,canonical_url,title,category,published_at,collected_at,body_html,body_text,content_hash,historical)
+             VALUES(?1,'one',?2,?3,'일반 공지','일반','2021-01-01','2021-01-01T00:00:00Z','본문','본문','hash',1)",
+            params![id, id.to_string(), format!("https://example.edu/{id}")],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+
+    let recommendations = store.personalization_recommendations(100).unwrap();
+    assert!(recommendations
+        .items
+        .iter()
+        .all(|recommendation| recommendation.item.id != 4));
+
+    let score = store
+        .personalization_notification_score(4)
+        .unwrap()
+        .unwrap();
+    assert_eq!(score.document_id, 4);
+    assert!(score.has_preferences);
+    assert_eq!(score.score, 0);
+    assert!(score.reasons.is_empty());
+    assert!(score.positive_interest_matches.is_empty());
 }

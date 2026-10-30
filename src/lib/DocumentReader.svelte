@@ -6,8 +6,8 @@
   import Icon from './Icon.svelte';
   import AnalysisPanel from './AnalysisPanel.svelte';
 
-  let { id, enabled, onclose, onchange, onaisettings }: {
-    id: number; enabled: boolean; onclose: () => void; onchange: () => void; onaisettings: () => void;
+  let { id, initialRevisionId = null, enabled, onclose, onchange, onaisettings }: {
+    id: number; initialRevisionId?: number | null; enabled: boolean; onclose: () => void; onchange: () => void; onaisettings: () => void;
   } = $props();
   let detail = $state<DocumentDetail | null>(null);
   let loading = $state(true);
@@ -18,7 +18,7 @@
   let feedback = $state('');
   let documentFeedback = $state<string | null>(null);
   let safeHtml = $state('');
-  let selectedRevision = $state('');
+  let selectedRevision = $state<number | null>(null);
   let heading = $state<HTMLHeadingElement>();
   let generation = 0;
   let disposed = false;
@@ -28,7 +28,7 @@
   let pendingFeedbackDocumentId: number | null = null;
 
   onMount(() => {
-    void load(null, true);
+    void load(initialRevisionId, true);
     const key = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !(event.target instanceof HTMLSelectElement)) onclose();
     };
@@ -62,6 +62,8 @@
     const writeGeneration = feedbackWriteGeneration;
     const feedbackWritePending = pendingFeedbackDocumentId === documentId;
     loading = true;
+    detail = null;
+    safeHtml = '';
     error = '';
     try {
       const result = await invoke<DocumentDetail>('archive_document', { id: documentId, revisionId });
@@ -69,7 +71,7 @@
       const rendered = await localHtml(result, request);
       if (disposed || request !== generation || documentId !== id) return;
       detail = result;
-      selectedRevision = String(result.revision_id);
+      selectedRevision = result.revision_id;
       safeHtml = rendered.html;
       localResourceErrors = rendered.errors;
       await tick();
@@ -292,19 +294,27 @@
         <button class="button secondary small" aria-pressed={documentFeedback === 'not_interested'} disabled={busy} onclick={() => void setDocumentFeedback(documentFeedback === 'not_interested' ? null : 'not_interested')}>관심 없어요</button>
         {#if documentFeedback}<button class="text-button" disabled={busy} onclick={() => void setDocumentFeedback(null)}>피드백 취소</button>{/if}
       </div>
-      <p class="archive-local-status">본문은 로컬에 보관되어 있습니다. {detail.resources.some((item) => localResourceErrors[item.id]) ? '일부 로컬 자료가 없거나 손상되었을 수 있습니다. 아래에서 확인하거나 다시 내려받아 주세요.' : detail.resources.every((item) => item.status === 'downloaded') ? '연결된 자료도 모두 저장되어 있습니다.' : '일부 자료는 로컬에 없습니다. 아래에서 상태를 확인하세요.'}</p>
+      <p class="archive-local-status">{#if detail.body_html === '' && detail.body_text === ''}
+        본문은 지원되지 않아 로컬에 보관되지 않았습니다.{#if detail.resources.length} {detail.resources.some((item) => localResourceErrors[item.id]) ? '일부 로컬 자료가 없거나 손상되었을 수 있습니다. 아래에서 확인하거나 다시 내려받아 주세요.' : detail.resources.every((item) => item.status === 'downloaded') ? '연결된 자료도 모두 저장되어 있습니다.' : '일부 자료는 로컬에 없습니다. 아래에서 상태를 확인하세요.'}{/if}
+      {:else}
+        본문은 로컬에 보관되어 있습니다. {detail.resources.some((item) => localResourceErrors[item.id]) ? '일부 로컬 자료가 없거나 손상되었을 수 있습니다. 아래에서 확인하거나 다시 내려받아 주세요.' : detail.resources.every((item) => item.status === 'downloaded') ? '연결된 자료도 모두 저장되어 있습니다.' : '일부 자료는 로컬에 없습니다. 아래에서 상태를 확인하세요.'}
+      {/if}</p>
       {#if detail.revisions.length > 1}
         <label class="revision-label">보관 이력
-          <select bind:value={selectedRevision} onchange={() => load(Number(selectedRevision))} disabled={loading}>
+          <select bind:value={selectedRevision} onchange={() => { if (selectedRevision !== null) void load(selectedRevision); }} disabled={loading}>
             {#each detail.revisions as revision, index}<option value={revision.id}>{archiveDate(revision.collected_at, true)} · 버전 {detail.revisions.length - index}</option>{/each}
           </select>
         </label>
       {/if}
     </header>
     {#key detail.revision_id}<AnalysisPanel documentId={detail.item.id} revisionId={detail.revision_id} onsettings={onaisettings} {onchange} />{/key}
-    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions (Wide document tables need an explicitly focusable keyboard scroll region.) -->
-    <div class="reader-body" role="region" tabindex="0" aria-label="공지 본문 · 넓은 표는 좌우로 이동할 수 있습니다" onkeydown={scrollBody} use:explicitLinks>{@html safeHtml}</div>
-    {#if !safeHtml && !loading}<div class="reader-plain">{detail.body_text}</div>{/if}
+    {#if detail.body_html === '' && detail.body_text === ''}
+      <p class="reader-plain" role="status"><strong>본문 미지원</strong> · 이 공지의 본문은 로컬에 보관되지 않았습니다. 학교 원문을 열어 확인해 주세요.</p>
+    {:else}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions (Wide document tables need an explicitly focusable keyboard scroll region.) -->
+      <div class="reader-body" role="region" tabindex="0" aria-label="공지 본문 · 넓은 표는 좌우로 이동할 수 있습니다" onkeydown={scrollBody} use:explicitLinks>{@html safeHtml}</div>
+      {#if !safeHtml && !loading}<div class="reader-plain">{detail.body_text}</div>{/if}
+    {/if}
     {#if detail.resources.length}
       <section class="reader-resources" aria-labelledby="resource-heading">
         <h3 id="resource-heading">첨부 자료 및 이미지 <span class="muted">{detail.resources.length}</span></h3>

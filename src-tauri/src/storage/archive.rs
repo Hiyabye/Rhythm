@@ -248,6 +248,32 @@ impl Store {
             .optional()
             .map_err(|e| e.to_string())
     }
+    pub(crate) fn has_readable_content(&self, document_id: i64) -> Result<bool, String> {
+        self.connection
+            .query_row(
+                "SELECT d.body_html<>'' OR d.body_text<>'' OR EXISTS(
+                    SELECT 1 FROM resources r
+                    WHERE r.document_id=d.id
+                      AND r.revision_id=(SELECT MAX(id) FROM document_revisions WHERE document_id=d.id)
+                      AND r.kind='image'
+                 )
+                 FROM documents d WHERE d.id=?1",
+                [document_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(test)]
+    pub(crate) fn latest_original(&self, document_id: i64) -> Result<String, String> {
+        self.connection
+            .query_row(
+                "SELECT original FROM document_revisions
+                 WHERE document_id=?1 ORDER BY id DESC LIMIT 1",
+                [document_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())
+    }
     pub(crate) fn validators(
         &self,
         source: &str,
@@ -272,6 +298,11 @@ impl Store {
         historical: bool,
     ) -> Result<(i64, bool), String> {
         let source = self.source(source_id)?;
+        let empty_body = article.body_text.trim().is_empty() && article.body_html.trim().is_empty();
+        let invalid_unsupported_body = article.unsupported_body
+            && (source_id != "sogang-academic"
+                || !empty_body
+                || article.resources.iter().any(|r| r.kind == "image"));
         if !source.definition.supported
             || !valid_id(&article.external_id)
             || article.title.trim().is_empty()
@@ -282,9 +313,8 @@ impl Store {
             || !public_url(&article.canonical_url)
             || article.published_at.trim().is_empty()
             || article.resources.len() > 256
-            || (article.body_text.trim().is_empty()
-                && article.body_html.trim().is_empty()
-                && article.resources.is_empty())
+            || invalid_unsupported_body
+            || (empty_body && article.resources.is_empty() && !article.unsupported_body)
         {
             return Err("공지의 식별자, 본문 또는 크기를 확인해 주세요.".into());
         }

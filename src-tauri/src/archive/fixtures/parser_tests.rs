@@ -250,6 +250,40 @@ fn explicit_empty_boards_and_duplicate_main_pins_are_handled() {
     .is_err());
 }
 #[test]
+fn iframe_only_main_articles_are_explicitly_empty_but_other_empty_results_fail() {
+    let source = source("sogang-academic");
+    let entry = ListingEntry {
+        external_id: "551681".into(),
+        url: main_canonical("551681").to_string(),
+        pinned: false,
+    };
+    let mut value: Value = serde_json::from_str(include_str!("main-detail.json")).unwrap();
+    value["data"]["pkId"] = 551681.into();
+    value["data"]["content"] =
+        r#"<iframe src="https://embed.example.test/video"></iframe> <iframe src="/other"></iframe>"#
+            .into();
+    let archived = article(&source, &entry, &value.to_string()).unwrap();
+    assert!(archived.body_html.is_empty());
+    assert!(archived.body_text.is_empty());
+    assert!(archived.resources.is_empty());
+    assert!(archived.original.contains("iframe"));
+    assert!(archived.unsupported_body);
+    value["data"]["content"] =
+        r#"<p>안내 내용</p><iframe src="https://embed.example.test/video"></iframe>"#.into();
+    let mixed = article(&source, &entry, &value.to_string()).unwrap();
+    assert!(mixed.body_text.contains("안내 내용"));
+    assert!(!mixed.body_html.contains("<iframe"));
+
+    for content in [
+        "",
+        "<script>alert(1)</script>",
+        "<script>alert(1)</script><iframe src='https://evil.test'></iframe>",
+    ] {
+        value["data"]["content"] = content.into();
+        assert!(article(&source, &entry, &value.to_string()).is_err());
+    }
+}
+#[test]
 fn untrusted_html_cannot_execute_or_fetch_remote_content_and_preserves_structure() {
     let input = r#"<h2 onclick="evil()">장학금</h2><p>컴퓨터 <b>연구</b></p><script>alert(1)</script><svg onload="evil()"><text>bad</text></svg><iframe src="https://evil.test"></iframe><a href="javascript:evil()">위험</a><a href="/ko/test?q=&quot;x&quot;">원문</a><img src="/web/file/editor/image.png" onerror="evil()" alt="공지 그림"><table style="background:url(https://evil.test)"><tr><td colspan="2" onclick="evil()">학사 &amp; AI</td></tr></table>"#;
     let (html, plain, resources) = sanitize(
