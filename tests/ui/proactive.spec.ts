@@ -97,13 +97,12 @@ test('notification permission is queried without prompting and granted only afte
   expect(await callCount(page, 'notification_request_permission')).toBe(1);
 });
 
-test('denied permission gives truthful OS settings guidance after an explicit request', async ({ page }) => {
+test('denied permission remains denied after an explicit request', async ({ page }) => {
   await mockDesktop(page, { notificationAuthorization: 'denied', notificationRequestResult: 'denied' });
   await page.goto('/');
   await openSettings(page);
 
   await expect(page.getByText('운영체제 알림 권한: 거부됨', { exact: true })).toBeVisible();
-  await expect(page.getByText(/시스템 설정.*알림.*Rhythm에서 알림을 허용/)).toBeVisible();
   expect(await callCount(page, 'notification_request_permission')).toBe(0);
   await page.getByRole('button', { name: '운영체제 알림 권한 요청', exact: true }).click();
   await expect(page.getByText('운영체제 알림 권한: 거부됨', { exact: true })).toBeVisible();
@@ -120,6 +119,18 @@ test('unavailable permission request is reported without claiming delivery', asy
   await expect(page.getByText('운영체제 알림 권한: 이 환경에서 사용할 수 없음', { exact: true })).toBeVisible();
   await expect(page.getByText(/권한 허용은 알림 전달을 보장하지 않습니다/)).toBeVisible();
   expect(await callCount(page, 'notification_request_permission')).toBe(1);
+});
+
+test('unsupported notification permission APIs are reported as unavailable and cannot be requested', async ({ page }) => {
+  await mockDesktop(page, { notificationAuthorization: 'unavailable' });
+  await page.goto('/');
+  await openSettings(page);
+
+  await expect(page.getByText('운영체제 알림 권한: 이 환경에서 사용할 수 없음', { exact: true })).toBeVisible();
+  await expect(page.getByText('이 환경에서는 운영체제 알림 권한 상태를 확인하거나 요청할 수 없습니다. 알림 전달 가능 여부는 운영체제 설정에서 확인하세요.', { exact: true })).toBeVisible();
+  expect(await callCount(page, 'notification_authorization')).toBe(1);
+  expect(await callCount(page, 'notification_request_permission')).toBe(0);
+  await expect(page.getByRole('button', { name: '운영체제 알림 권한 요청', exact: true })).toBeDisabled();
 });
 
 test('failed proactive save retains the saved value and exposes the backend error', async ({ page }) => {

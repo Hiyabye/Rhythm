@@ -34,6 +34,38 @@ const MAX_REASON_CHARS: usize = 200;
 const MAX_ERROR_CHARS: usize = 500;
 const MAX_TASK_ID_CHARS: usize = 128;
 
+/// Advance the persisted rate-window clock monotonically, then discard rows
+/// older than every supported query window. A wall-clock rollback therefore
+/// pauses aging instead of resurrecting deleted attempts.
+fn advance_delivery_clock(connection: &Connection) -> Result<String, String> {
+    connection
+        .execute(
+            &format!(
+                "INSERT INTO proactive_delivery_clock(id,max_observed_at) VALUES(1,{NOW})
+                 ON CONFLICT(id) DO UPDATE SET
+                   max_observed_at=MAX(proactive_delivery_clock.max_observed_at,
+                                       excluded.max_observed_at)"
+            ),
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    let watermark: String = connection
+        .query_row(
+            "SELECT max_observed_at FROM proactive_delivery_clock WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    connection
+        .execute(
+            "DELETE FROM proactive_delivery_attempts
+             WHERE attempted_at<strftime('%Y-%m-%dT%H:%M:%fZ',?1,'-604800 seconds')",
+            [&watermark],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(watermark)
+}
+
 const SETTINGS_COLUMNS: &str = "close_to_background,launch_at_login,start_hidden,\
 scheduler_enabled,scheduler_paused,scheduler_interval_minutes,scheduler_retry_minutes,\
 notifications_enabled,notification_sensitivity,quiet_hours_enabled,\
@@ -911,26 +943,127 @@ impl Store {
         Ok(changed as u32)
     }
 
-    /// Distinct events whose most recent delivery attempt started within the
-    /// window (persisted, restart-safe; a retried event counts once). Use this
-    /// before claiming a new delivery to enforce a notification rate limit.
+    /// Counts durable per-handoff records in the requested rolling window.
     pub fn proactive_recent_delivery_attempts(&self, window_seconds: u64) -> Result<u32, String> {
         if window_seconds == 0 || window_seconds > MAX_RATE_WINDOW_SECONDS {
             return Err("알림 속도 제한 기간을 확인해 주세요.".into());
         }
-        let count: i64 = self
+        let transaction = self
             .connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let watermark = advance_delivery_clock(&transaction)?;
+        let count: i64 = transaction
             .query_row(
-                "SELECT COUNT(*) FROM proactive_events
-                 WHERE last_attempt_at IS NOT NULL
-                   AND last_attempt_at>=strftime(
-                     '%Y-%m-%dT%H:%M:%fZ','now','-'||?1||' seconds'
-                   )",
-                [window_seconds as i64],
+                "SELECT COUNT(*) FROM proactive_delivery_attempts
+                 WHERE attempted_at>=strftime(
+                     '%Y-%m-%dT%H:%M:%fZ',?1,'-'||?2||' seconds'
+                 )",
+                params![watermark, window_seconds as i64],
                 |row| row.get(0),
             )
             .map_err(|e| e.to_string())?;
+        transaction.commit().map_err(|e| e.to_string())?;
         u32::try_from(count).map_err(|_| "알림 시도를 확인할 수 없습니다.".into())
+    }
+
+    /// Atomically reserves the actual handoff boundary for a claimed batch.
+    /// A successful reservation is durable before calling the OS sender; after
+    /// a crash, a reserved-but-unsent notice is conservatively counted.
+    pub fn proactive_reserve_delivery_attempts(
+        &self,
+        events: &[(i64, u32)],
+    ) -> Result<bool, String> {
+        if events.is_empty() {
+            return Ok(true);
+        }
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let mut identities = std::collections::HashSet::with_capacity(events.len());
+        let mut additions = 0_i64;
+        for (id, attempt) in events {
+            if !identities.insert((*id, *attempt)) || !(1..=MAX_DELIVERY_ATTEMPTS).contains(attempt)
+            {
+                return Err("알림 전달 시도 상태가 올바르지 않습니다.".into());
+            }
+            let event = event_by_id(&transaction, *id)?;
+            if event.state != ProactiveEventState::Claimed || event.attempt_count != *attempt {
+                return Err("알림 전달 상태가 이미 변경되었습니다.".into());
+            }
+            let exists: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(
+                       SELECT 1 FROM proactive_delivery_attempts
+                       WHERE document_id=?1 AND revision_id=?2 AND event_type=?3
+                         AND attempt_number=?4
+                     )",
+                    params![
+                        event.document_id,
+                        event.revision_id,
+                        event.event_type,
+                        *attempt
+                    ],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if !exists {
+                additions += 1;
+            }
+        }
+        let watermark = advance_delivery_clock(&transaction)?;
+        let current: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM proactive_delivery_attempts
+                 WHERE attempted_at>=strftime(
+                   '%Y-%m-%dT%H:%M:%fZ',?1,'-600 seconds'
+                 )",
+                [&watermark],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if current + additions > MAX_DELIVERY_ATTEMPTS as i64 {
+            transaction.commit().map_err(|e| e.to_string())?;
+            return Ok(false);
+        }
+        for (id, attempt) in events {
+            let event = event_by_id(&transaction, *id)?;
+            transaction
+                .execute(
+                    "INSERT OR IGNORE INTO proactive_delivery_attempts(
+                       document_id,revision_id,event_type,attempt_number,attempted_at
+                     ) VALUES(?1,?2,?3,?4,?5)",
+                    params![
+                        event.document_id,
+                        event.revision_id,
+                        event.event_type,
+                        *attempt,
+                        watermark
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
+            transaction
+                .execute(
+                    "UPDATE proactive_events SET
+                       last_attempt_at=(
+                         SELECT attempted_at FROM proactive_delivery_attempts
+                         WHERE document_id=?2 AND revision_id=?3 AND event_type=?4
+                           AND attempt_number=?5
+                       ),updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                     WHERE id=?1",
+                    params![
+                        id,
+                        event.document_id,
+                        event.revision_id,
+                        event.event_type,
+                        *attempt
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        transaction.commit().map_err(|e| e.to_string())?;
+        Ok(true)
     }
 
     /// Pending/deferred events whose deferral elapsed, plus claimed attempts
@@ -966,8 +1099,9 @@ impl Store {
             .map_err(|e| e.to_string())
     }
 
-    /// Starts the next delivery attempt for a due event, returning the row
-    /// whose `attempt_count` fences all completion calls.
+    /// Claims a due event and increments its retry fence. This is not yet a
+    /// rate-limited delivery attempt; that is durably reserved immediately
+    /// before the OS handoff.
     pub fn proactive_claim_due_event(&self, id: i64) -> Result<ProactiveEvent, String> {
         let transaction = self
             .connection
@@ -1009,7 +1143,7 @@ impl Store {
                 &format!(
                     "UPDATE proactive_events SET
                      state='claimed',attempt_count=attempt_count+1,
-                     claimed_at={NOW},last_attempt_at={NOW},
+                     claimed_at={NOW},
                      deferred_until=NULL,error=NULL,updated_at={NOW}
                      WHERE id=?1 AND attempt_count=?2 AND state=?3"
                 ),
@@ -1027,64 +1161,108 @@ impl Store {
     /// Records that a notification was handed to the OS but no receipt was
     /// observed. Terminal and honest: use this instead of `mark_delivered`
     /// when the platform cannot confirm display.
+    pub fn proactive_mark_attempted_batch(
+        &self,
+        events: &[(i64, u32)],
+    ) -> Result<Vec<ProactiveEvent>, String> {
+        if events.is_empty() {
+            return Ok(Vec::new());
+        }
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        for (id, attempt) in events {
+            let changed = transaction
+                .execute(
+                    &format!(
+                        "UPDATE proactive_events SET
+                         state='attempted',delivered_at=NULL,deferred_until=NULL,
+                         error=NULL,updated_at={NOW}
+                         WHERE id=?1 AND attempt_count=?2 AND state='claimed'"
+                    ),
+                    params![id, *attempt as i64],
+                )
+                .map_err(|e| e.to_string())?;
+            if changed == 0 {
+                return Err("알림 전달 상태가 이미 변경되었습니다.".into());
+            }
+        }
+        prune_history(&transaction)?;
+        let attempted = events
+            .iter()
+            .map(|(id, _)| event_by_id(&transaction, *id))
+            .collect::<Result<Vec<_>, _>>()?;
+        transaction.commit().map_err(|e| e.to_string())?;
+        Ok(attempted)
+    }
+
+    /// Records that a notification was handed to the OS but no receipt was
+    /// observed. Terminal and honest: use this instead of `mark_delivered`
+    /// when the platform cannot confirm display.
+    #[cfg(test)]
     pub fn proactive_mark_attempted(
         &self,
         id: i64,
         attempt: u32,
     ) -> Result<ProactiveEvent, String> {
+        self.proactive_mark_attempted_batch(&[(id, attempt)])?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "알림 전달 상태가 이미 변경되었습니다.".into())
+    }
+
+    /// Records confirmed display for a batch atomically. Every event must still
+    /// be claimed/attempted at the matching attempt; one stale item rolls back
+    /// the whole batch so history cannot describe a partially activated digest.
+    pub fn proactive_mark_delivered_batch(
+        &self,
+        events: &[(i64, u32)],
+    ) -> Result<Vec<ProactiveEvent>, String> {
+        if events.is_empty() {
+            return Ok(Vec::new());
+        }
         let transaction = self
             .connection
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
-        let changed = transaction
-            .execute(
-                &format!(
-                    "UPDATE proactive_events SET
-                     state='attempted',delivered_at=NULL,deferred_until=NULL,
-                     error=NULL,updated_at={NOW}
-                     WHERE id=?1 AND attempt_count=?2 AND state='claimed'"
-                ),
-                params![id, attempt as i64],
-            )
-            .map_err(|e| e.to_string())?;
-        if changed == 0 {
-            return Err("알림 전달 상태가 이미 변경되었습니다.".into());
+        for (id, attempt) in events {
+            let changed = transaction
+                .execute(
+                    &format!(
+                        "UPDATE proactive_events SET
+                         state='delivered',delivered_at={NOW},deferred_until=NULL,
+                         error=NULL,updated_at={NOW}
+                         WHERE id=?1 AND attempt_count=?2 AND state IN ('claimed','attempted')"
+                    ),
+                    params![id, *attempt as i64],
+                )
+                .map_err(|e| e.to_string())?;
+            if changed == 0 {
+                return Err("알림 전달 상태가 이미 변경되었습니다.".into());
+            }
         }
         prune_history(&transaction)?;
-        let event = event_by_id(&transaction, id)?;
+        let delivered = events
+            .iter()
+            .map(|(id, _)| event_by_id(&transaction, *id))
+            .collect::<Result<Vec<_>, _>>()?;
         transaction.commit().map_err(|e| e.to_string())?;
-        Ok(event)
+        Ok(delivered)
     }
 
     /// Records a confirmed display. Also promotes an `attempted` event when
     /// the platform confirms the receipt later.
+    #[cfg(test)]
     pub fn proactive_mark_delivered(
         &self,
         id: i64,
         attempt: u32,
     ) -> Result<ProactiveEvent, String> {
-        let transaction = self
-            .connection
-            .unchecked_transaction()
-            .map_err(|e| e.to_string())?;
-        let changed = transaction
-            .execute(
-                &format!(
-                    "UPDATE proactive_events SET
-                     state='delivered',delivered_at={NOW},deferred_until=NULL,
-                     error=NULL,updated_at={NOW}
-                     WHERE id=?1 AND attempt_count=?2 AND state IN ('claimed','attempted')"
-                ),
-                params![id, attempt as i64],
-            )
-            .map_err(|e| e.to_string())?;
-        if changed == 0 {
-            return Err("알림 전달 상태가 이미 변경되었습니다.".into());
-        }
-        prune_history(&transaction)?;
-        let event = event_by_id(&transaction, id)?;
-        transaction.commit().map_err(|e| e.to_string())?;
-        Ok(event)
+        self.proactive_mark_delivered_batch(&[(id, attempt)])?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "알림 전달 상태가 이미 변경되었습니다.".into())
     }
 
     /// Marks an event as suppressed. A claimed event requires its fencing
@@ -1158,9 +1336,18 @@ impl Store {
                 &format!(
                     "UPDATE proactive_events SET
                      state='deferred',
+                     attempt_count=CASE WHEN EXISTS(
+                       SELECT 1 FROM proactive_delivery_attempts a
+                       WHERE a.document_id=proactive_events.document_id
+                         AND a.revision_id=proactive_events.revision_id
+                         AND a.event_type=proactive_events.event_type
+                         AND a.attempt_number=proactive_events.attempt_count
+                     ) THEN attempt_count ELSE attempt_count-1 END,
+                     claimed_at=NULL,
                      deferred_until=strftime('%Y-%m-%dT%H:%M:%fZ','now','+'||?3||' minutes'),
                      reason=?4,error=NULL,updated_at={NOW}
-                     WHERE id=?1 AND attempt_count=?2 AND state='claimed'"
+                     WHERE id=?1 AND attempt_count=?2 AND state='claimed'
+                       AND attempt_count>0"
                 ),
                 params![id, attempt as i64, minutes as i64, reason],
             )

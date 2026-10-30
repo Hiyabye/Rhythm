@@ -2,16 +2,19 @@ use super::{model::*, network, parser};
 use crate::storage::Store;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     future::Future,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
 };
+use tokio::sync::Notify;
 use url::Url;
 
+#[cfg(test)]
+pub use super::network::Fetch;
 pub type SharedStore = Arc<Mutex<Store>>;
 const ARTICLE_LIMIT: usize = 4 * 1024 * 1024;
 const FILE_LIMIT: usize = 20 * 1024 * 1024;
@@ -68,6 +71,16 @@ pub struct Controller {
     busy: AtomicBool,
     cancel: AtomicBool,
     status: Mutex<SyncStatus>,
+    next_task_id: AtomicU64,
+    task_outcomes: Mutex<HashMap<u64, Option<TaskOutcome>>>,
+    admission: Mutex<()>,
+    active_task_id: AtomicU64,
+    task_notifications: Mutex<HashMap<u64, Arc<Notify>>>,
+}
+#[derive(Clone, Debug)]
+pub struct TaskOutcome {
+    pub result: Result<(), String>,
+    pub cancelled: bool,
 }
 impl Controller {
     pub fn new() -> Arc<Self> {
@@ -81,6 +94,11 @@ impl Controller {
                 page: 0,
                 message: "동기화 대기 중".into(),
             }),
+            next_task_id: AtomicU64::new(1),
+            task_outcomes: Mutex::new(HashMap::new()),
+            admission: Mutex::new(()),
+            active_task_id: AtomicU64::new(0),
+            task_notifications: Mutex::new(HashMap::new()),
         })
     }
     pub fn status(&self) -> Result<SyncStatus, String> {
@@ -88,6 +106,23 @@ impl Controller {
             .lock()
             .map(|s| s.clone())
             .map_err(|_| "동기화 상태를 확인하지 못했습니다.".into())
+    }
+    pub fn take_task_outcome(&self, task_id: u64) -> Result<Option<TaskOutcome>, String> {
+        let mut outcomes = self
+            .task_outcomes
+            .lock()
+            .map_err(|_| "동기화 결과를 확인하지 못했습니다.")?;
+        match outcomes.get(&task_id) {
+            Some(Some(_)) => {
+                let outcome = outcomes.remove(&task_id).flatten();
+                if let Ok(mut notifications) = self.task_notifications.lock() {
+                    notifications.remove(&task_id);
+                }
+                Ok(outcome)
+            }
+            Some(None) => Ok(None),
+            None => Err("동기화 작업을 찾을 수 없습니다.".into()),
+        }
     }
     fn update(&self, source_id: Option<String>, mode: &str, page: u32, message: &str) {
         if let Ok(mut status) = self.status.lock() {
@@ -103,16 +138,47 @@ impl Controller {
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Release);
     }
+    pub fn cancel_task(&self, task_id: u64) -> Result<bool, String> {
+        let _admission = self
+            .admission
+            .lock()
+            .map_err(|_| "동기화를 중단하지 못했습니다.")?;
+        if self.active_task_id.load(Ordering::Acquire) == task_id {
+            self.cancel.store(true, Ordering::Release);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+    pub async fn task_completion_notified(&self, task_id: u64) -> Result<(), String> {
+        let notify = self
+            .task_notifications
+            .lock()
+            .map_err(|_| "동기화 완료 상태를 확인할 수 없습니다.")?
+            .get(&task_id)
+            .cloned()
+            .ok_or_else(|| "동기화 작업을 찾을 수 없습니다.".to_string())?;
+        notify.notified().await;
+        Ok(())
+    }
     pub async fn wait(&self) {
         while self.busy.load(Ordering::Acquire) {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
     }
     fn reserve(&self) -> Result<(), String> {
+        self.reserve_task(0)
+    }
+    fn reserve_task(&self, task_id: u64) -> Result<(), String> {
+        let _admission = self
+            .admission
+            .lock()
+            .map_err(|_| "동기화를 시작할 수 없습니다.")?;
         self.busy
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| "다른 동기화가 진행 중입니다. 완료하거나 중단한 뒤 시도해 주세요.")?;
         self.cancel.store(false, Ordering::Release);
+        self.active_task_id.store(task_id, Ordering::Release);
         Ok(())
     }
     fn finish(&self, message: String) {
@@ -122,6 +188,57 @@ impl Controller {
         }
         self.busy.store(false, Ordering::Release);
     }
+    fn finish_task(&self, task_id: u64, outcome: TaskOutcome, message: String) {
+        let Ok(_admission) = self.admission.lock() else {
+            let _ = self.active_task_id.compare_exchange(
+                task_id,
+                0,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            self.finish(message);
+            self.notify_task_completion(task_id);
+            return;
+        };
+        let cancelled = outcome.result.is_err() && self.cancel.load(Ordering::Acquire);
+        let outcome = TaskOutcome {
+            result: outcome.result,
+            cancelled,
+        };
+        if let Ok(mut outcomes) = self.task_outcomes.lock() {
+            if let Some(result) = outcomes.get_mut(&task_id) {
+                *result = Some(outcome);
+            }
+            if let Ok(mut status) = self.status.lock() {
+                status.running = false;
+                status.message = message;
+            }
+            let _ = self.active_task_id.compare_exchange(
+                task_id,
+                0,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            self.notify_task_completion(task_id);
+            self.busy.store(false, Ordering::Release);
+        } else {
+            self.finish(message);
+            let _ = self.active_task_id.compare_exchange(
+                task_id,
+                0,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            self.notify_task_completion(task_id);
+        }
+    }
+    fn notify_task_completion(&self, task_id: u64) {
+        if let Ok(notifications) = self.task_notifications.lock() {
+            if let Some(notify) = notifications.get(&task_id) {
+                notify.notify_one();
+            }
+        }
+    }
     pub fn start(
         self: &Arc<Self>,
         store: SharedStore,
@@ -130,10 +247,38 @@ impl Controller {
         ids: Option<Vec<String>>,
         mode: String,
     ) -> Result<SyncStatus, String> {
+        let (status, task_id) = self.start_tracked(store, root, client, ids, mode)?;
+        if let Ok(mut outcomes) = self.task_outcomes.lock() {
+            outcomes.remove(&task_id);
+        }
+        if let Ok(mut notifications) = self.task_notifications.lock() {
+            notifications.remove(&task_id);
+        }
+        Ok(status)
+    }
+    pub fn start_tracked(
+        self: &Arc<Self>,
+        store: SharedStore,
+        root: PathBuf,
+        client: network::Client,
+        ids: Option<Vec<String>>,
+        mode: String,
+    ) -> Result<(SyncStatus, u64), String> {
+        self.start_tracked_with_transport(store, root, client, ids, mode)
+    }
+    pub fn start_tracked_with_transport<T: Transport + Clone + 'static>(
+        self: &Arc<Self>,
+        store: SharedStore,
+        root: PathBuf,
+        transport: T,
+        ids: Option<Vec<String>>,
+        mode: String,
+    ) -> Result<(SyncStatus, u64), String> {
         if !["historical", "incremental"].contains(&mode.as_str()) {
             return Err("동기화 방식을 확인해 주세요.".into());
         }
         // The same lock serializes extension disabling and job admission.
+        let task_id = self.next_task_id.fetch_add(1, Ordering::AcqRel);
         let sources = with_store(&store, |s| {
             ensure_active(s, &AtomicBool::new(false))?;
             let sources: Vec<_> = s
@@ -156,21 +301,51 @@ impl Controller {
             }) {
                 return Err("지원되는 구독 정보원을 선택해 주세요.".into());
             }
-            self.reserve()?;
+            self.reserve_task(task_id)?;
             Ok(sources)
         })?;
+        self.task_outcomes
+            .lock()
+            .map_err(|_| "동기화 결과를 기록할 수 없습니다.")?
+            .insert(task_id, None);
+        self.task_notifications
+            .lock()
+            .map_err(|_| "동기화 완료 상태를 기록할 수 없습니다.")?
+            .insert(task_id, Arc::new(Notify::new()));
+        let source_ids = sources
+            .iter()
+            .map(|source| source.definition.id.clone())
+            .collect::<Vec<_>>();
         self.update(None, &mode, 0, "동기화를 준비하고 있습니다.");
         let controller = self.clone();
         tauri::async_runtime::spawn(async move {
-            let outcome = controller
-                .execute(&store, &root, &client, sources, &mode, Budget::default())
+            let mut outcome = controller
+                .execute(&store, &root, &transport, sources, &mode, Budget::default())
                 .await;
-            controller.finish(match outcome {
+            if outcome.is_ok() {
+                outcome = match with_store(&store, |store| {
+                    Ok(source_ids.iter().all(|id| {
+                        store
+                            .source(id)
+                            .is_ok_and(|source| source.status == "completed")
+                    }))
+                }) {
+                    Ok(true) => Ok(()),
+                    Ok(false) => Err("정보원 동기화가 안전한 제한으로 완료되지 않았습니다.".into()),
+                    Err(error) => Err(error),
+                };
+            }
+            let task_outcome = TaskOutcome {
+                result: outcome.clone(),
+                cancelled: outcome.is_err() && controller.cancel.load(Ordering::Acquire),
+            };
+            let message = match &outcome {
                 Ok(()) => "동기화 작업이 끝났습니다. 정보원별 결과를 확인해 주세요.".into(),
-                Err(e) => e,
-            });
+                Err(error) => error.clone(),
+            };
+            controller.finish_task(task_id, task_outcome, message);
         });
-        self.status()
+        Ok((self.status()?, task_id))
     }
     pub fn retry(
         self: &Arc<Self>,
@@ -224,6 +399,7 @@ impl Controller {
         budget: Budget,
     ) -> Result<(), String> {
         let mut resource_bytes = 0;
+        let mut failures = Vec::new();
         for source in sources {
             active(store, &self.cancel)?;
             let mut current = source.clone();
@@ -258,9 +434,15 @@ impl Controller {
                 if cancelled {
                     return Err(error);
                 }
+                failures.push(format!("{}: {error}", current.definition.name));
+                continue;
             }
         }
-        Ok(())
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join(" "))
+        }
     }
     #[allow(clippy::too_many_arguments)] // One source run shares a bounded transport and resource budget.
     async fn source<T: Transport>(

@@ -224,6 +224,23 @@ The iframe-only path was exercised in a bounded live run for the observed entry,
 
 No assertion of repeatable production delivery from live-source data, sleeping-machine scheduling, cross-platform behavior or release readiness is made. The isolated synthetic macOS interactions above were user-observed and correlated with AX/SQLite evidence.
 
+## v0.5.1 — Proactive operation hardening
+
+- The schema-6 migration preserves schema-5 notification events and adds a bounded, history-independent handoff-attempt ledger. Known schema-5 attempts are reconstructed conservatively; cleared pre-upgrade history cannot be recovered. A reserved slot may be consumed by a crash before the OS handoff.
+- Locked workspace tests passed 268 tests with eight ignored, with the debug worker configured for its process integration test. Strict workspace Clippy and Rustfmt passed; Svelte diagnostics reported zero errors/warnings, the frontend build and five desktop orchestration tests passed, and 156 Chromium/WebKit mocked-IPC UI runs passed. These are not Windows/Linux runtime or native-notification evidence.
+- A controlled scheduler/controller test used two source-fixture pages without a collection cap, persisted success and a later next run, and completed a second run without duplicate documents. It does not establish real-source or native scheduler success.
+- In an isolated `io.github.hiyabye.rhythm.v051validation` profile, a macOS Apple Silicon CPU debug bundle reported version 0.5.1, opened an empty schema-6 database with `integrity_check=ok`, showed a native 1180×800 window, hid on Cmd-H and restored on reopening. Cmd-Q stopped both app and worker. This bundle preceded the final scheduler race corrections; it is not evidence for those corrections or notification delivery.
+- After the scheduler fixes, a rebuilt isolated CPU debug bundle again opened an onscreen 1180×800 native window and an empty schema-6 database; integrity was `ok`. Cmd-Q stopped the app and worker and released the data lock. This final-build smoke did not run a live source or notification.
+- A separate bounded official-source archive/offline-reopen run imported one article per supported source: 10 documents, 12 downloaded resources, two missing resources and 8,149,764 local bytes. All source histories remained deliberately partial. This was manual bounded collection, not successful unattended scheduled sync.
+- An isolated native v0.5.1 CPU debug bundle subscribed only Engineering academic and enabled the scheduler while the app was stopped. The live listing had five records. After 16m12s, normal incremental collection recorded five discovered/archived, zero failed and a successful source task; its next execution advanced by 15 minutes. All five were initial historical seed records, `seed_complete=1`, `history_complete=0`, and SQLite integrity was `ok`. No artificial cap or synthetic documents were used. This bundle preceded the final scheduler race corrections; new/modified notification delivery and the final build's live behavior remain unverified.
+- On the same M1 Pro / 16 GiB host, the isolated CPU debug app sampled 0.1% / 130,800 KB and 0.0% / 143,056 KB CPU/RSS; its worker sampled 11,920 KB and 11,904 KB RSS. These are two process samples, not energy or sustained-idle measurements.
+- Repeatable native notifications, actual login launch, actual sleep/wake, long-duration resource use, Windows/Linux runtime and accessibility remain unverified. The scheduler services notifications on its existing single owner while an archive import runs; native verification of that behavior remains open.
+
+The v0.5.0 remote [CI run 41066818296](https://github.com/Hiyabye/Rhythm/actions/runs/41066818296) succeeded on macOS, but the Ubuntu UI job failed in Playwright and the Windows and Ubuntu desktop jobs failed at strict Clippy. Public annotations contain only exit codes; detailed logs were inaccessible (HTTP 403), so the failure causes are not established. This is not a passing three-platform run.
+
+The Linux distribution gate remains: the locked Linux dependency tree contains `glib 0.18.5`, and [Wry's coordinated GTK upgrade](https://github.com/tauri-apps/wry/pull/1843) is still open and depends on companion upgrades. The current CI workflow runs build, lint and tests, but does not itself run a Rust advisory scan.
+
+
 
 ## v0.9.0 — Integration and distribution readiness
 

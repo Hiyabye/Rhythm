@@ -463,3 +463,298 @@ async fn pending_notification_responses_are_bounded_nonblocking_and_cancelled_on
     assert!(!response_tasks.is_full());
     assert!(!callback_ran.load(Ordering::Acquire));
 }
+#[test]
+fn final_notification_gate_defers_when_notifications_were_disabled_after_claim() {
+    use crate::storage::{
+        proactive::{ProactiveClaim, ProactiveEventKey, ProactiveEventState},
+        Store,
+    };
+    use rusqlite::Connection;
+    use std::sync::{Arc, Mutex};
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("rhythm.db");
+    let store = Store::open(&path).unwrap();
+    let mut settings = store.proactive_settings().unwrap();
+    settings.notifications_enabled = true;
+    settings.notification_sensitivity = NotificationSensitivity::All;
+    store.proactive_save_settings(&settings).unwrap();
+
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO sources(id,name,organization,description,url,family,supported,subscribed)
+             VALUES('one','테스트 정보원','기관','설명','https://example.edu/','main',1,1)",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO documents(
+                 id,source_id,external_id,canonical_url,title,published_at,historical,
+                 body_html,body_text,content_hash
+             ) VALUES(1,'one','1','https://example.edu/1','공지','2026-01-01T00:00:00Z',
+                      0,'<p>본문</p>','본문','hash')",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO document_revisions(
+                 document_id,canonical_url,title,published_at,original,body_html,body_text,content_hash
+             ) VALUES(1,'https://example.edu/1','공지','2026-01-01T00:00:00Z',
+                      '{}','<p>본문</p>','본문','hash')",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let (event_id, _) = match store
+        .proactive_claim_event(&ProactiveEventKey {
+            document_id: 1,
+            revision_id: 1,
+            event_type: ProactiveEventKind::New,
+        })
+        .unwrap()
+    {
+        ProactiveClaim::Claimed {
+            event_id,
+            attempt_count,
+        } => (event_id, attempt_count),
+        _ => panic!("expected the fresh event to be claimed"),
+    };
+    let claimed = store.proactive_claim_due_event(event_id).unwrap();
+    let candidate = store.proactive_event_candidate(event_id).unwrap();
+    let item = DeliveryItem {
+        event_id,
+        document_id: candidate.document_id,
+        revision_id: candidate.revision_id,
+        source_id: candidate.source_id,
+        source_name: candidate.source_name,
+        kind: candidate.event_type,
+        title: candidate.title,
+        attempt_count: claimed.attempt_count,
+    };
+
+    settings.notifications_enabled = false;
+    store.proactive_save_settings(&settings).unwrap();
+    let shared = Arc::new(Mutex::new(store));
+    assert!(scheduler::revalidate_delivery_batch(&shared, vec![item])
+        .unwrap()
+        .is_empty());
+    let event = shared.lock().unwrap().proactive_event(event_id).unwrap();
+    assert_eq!(event.state, ProactiveEventState::Deferred);
+    assert_eq!(event.attempt_count, 0);
+    assert_eq!(
+        shared
+            .lock()
+            .unwrap()
+            .proactive_recent_delivery_attempts(600)
+            .unwrap(),
+        0
+    );
+}
+
+#[derive(Clone, Default)]
+struct SchedulerTransport {
+    pages: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+}
+
+impl crate::archive::sync::Transport for SchedulerTransport {
+    async fn fetch(
+        &self,
+        url: &url::Url,
+        _validators: Option<(Option<String>, Option<String>)>,
+        _limit: usize,
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<crate::archive::sync::Fetch, String> {
+        use crate::archive::sync::Fetch;
+        let body = |bytes: Vec<u8>, mime: &str| {
+            Ok(Fetch::Body {
+                bytes,
+                mime: Some(mime.into()),
+                etag: None,
+                last_modified: None,
+            })
+        };
+        if url.path() == "/robots.txt" {
+            return body(b"User-agent: *\nAllow: /\n".to_vec(), "text/plain");
+        }
+        if url.path().ends_with("/boardList") {
+            let page = url
+                .query_pairs()
+                .find(|(key, _)| key == "pageNum")
+                .ok_or("missing pageNum")?
+                .1
+                .parse::<u32>()
+                .map_err(|error| error.to_string())?;
+            self.pages.lock().unwrap().push(page);
+            let mut list: serde_json::Value =
+                serde_json::from_str(include_str!("../archive/fixtures/main-list-exact.json"))
+                    .unwrap();
+            let mut row = list["data"]["list"][0].clone();
+            row["pkId"] = serde_json::json!(900_000 + page);
+            row["title"] = serde_json::json!(format!("통합 검증 공지 {page}"));
+            row["isTop"] = serde_json::json!("N");
+            list["data"]["list"] = serde_json::json!([row]);
+            list["data"]["pageNum"] = serde_json::json!(page);
+            list["data"]["pages"] = serde_json::json!(2);
+            list["data"]["total"] = serde_json::json!(51);
+            list["data"]["size"] = serde_json::json!(1);
+            list["data"]["hasNextPage"] = serde_json::json!(page == 1);
+            return body(list.to_string().into_bytes(), "application/json");
+        }
+        if url.path() == "/api/api/v1/mainKo/BbsData" {
+            let id = url
+                .query_pairs()
+                .find(|(key, _)| key == "pkId")
+                .ok_or("missing pkId")?
+                .1
+                .parse::<u64>()
+                .map_err(|error| error.to_string())?;
+            let mut detail: serde_json::Value =
+                serde_json::from_str(include_str!("../archive/fixtures/main-detail.json")).unwrap();
+            detail["data"]["pkId"] = serde_json::json!(id);
+            detail["data"]["title"] = serde_json::json!(format!("통합 검증 공지 {id}"));
+            detail["data"]["content"] = serde_json::json!(format!("<p>장학금 연구 안내 {id}</p>"));
+            return body(detail.to_string().into_bytes(), "application/json");
+        }
+        Err(format!("unexpected fixture request: {url}"))
+    }
+}
+
+#[tokio::test]
+async fn scheduled_controller_imports_multiple_fixture_pages_and_runs_again() {
+    use crate::{
+        archive::{self, sync::Controller},
+        storage::{
+            proactive::{ProactiveOutcome, ProactiveTaskInput},
+            Store,
+        },
+    };
+    use rusqlite::Connection;
+    use std::sync::{Arc, Mutex};
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("rhythm.sqlite3");
+    let store = Store::open(&path).unwrap();
+    store.catalog(&archive::definitions()).unwrap();
+    store.set_enabled("sogang_notices", true).unwrap();
+    store.subscribe("sogang-academic", true).unwrap();
+    let mut settings = store.proactive_settings().unwrap();
+    settings.scheduler_enabled = true;
+    settings.scheduler_paused = false;
+    settings.notifications_enabled = false;
+    store.proactive_save_settings(&settings).unwrap();
+    let task_id = "source:sogang-academic";
+    store
+        .proactive_save_task(&ProactiveTaskInput {
+            task_id: task_id.into(),
+            interval_minutes: 15,
+            enabled: true,
+        })
+        .unwrap();
+    Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE proactive_tasks SET next_run_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE task_id=?1",
+            [task_id],
+        )
+        .unwrap();
+
+    let shared = Arc::new(Mutex::new(store));
+    let controller = Controller::new();
+    let transport = SchedulerTransport::default();
+    let (stop_sender, mut stop) = tokio::sync::watch::channel(false);
+    let _keep_stop = stop_sender;
+    let due = shared.lock().unwrap().proactive_due_tasks().unwrap();
+    assert_eq!(due.len(), 1);
+    let first = scheduler::run_scheduled_task(
+        &shared,
+        &controller,
+        directory.path(),
+        &transport,
+        &due[0],
+        &mut stop,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        first,
+        ProactiveOutcome::Success,
+        "{:?}",
+        controller.status().unwrap()
+    );
+    let completed = shared
+        .lock()
+        .unwrap()
+        .proactive_task(task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(completed.last_outcome, Some(ProactiveOutcome::Success));
+    assert!(!shared
+        .lock()
+        .unwrap()
+        .proactive_due_tasks()
+        .unwrap()
+        .iter()
+        .any(|task| task.task_id == task_id));
+
+    Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE proactive_tasks SET next_run_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE task_id=?1",
+            [task_id],
+        )
+        .unwrap();
+    let due_again = shared.lock().unwrap().proactive_due_tasks().unwrap();
+    let second = scheduler::run_scheduled_task(
+        &shared,
+        &controller,
+        directory.path(),
+        &transport,
+        &due_again[0],
+        &mut stop,
+    )
+    .await
+    .unwrap();
+    assert_eq!(second, ProactiveOutcome::Success);
+    assert_eq!(
+        shared
+            .lock()
+            .unwrap()
+            .archive_query(&crate::archive::model::ArchiveQuery::default())
+            .unwrap()
+            .total,
+        2
+    );
+    let (_, completed_job) = controller
+        .start_tracked_with_transport(
+            shared.clone(),
+            directory.path().to_path_buf(),
+            transport.clone(),
+            Some(vec!["sogang-academic".into()]),
+            "incremental".into(),
+        )
+        .unwrap();
+    controller.wait().await;
+    let (_, later_job) = controller
+        .start_tracked_with_transport(
+            shared.clone(),
+            directory.path().to_path_buf(),
+            transport.clone(),
+            Some(vec!["sogang-academic".into()]),
+            "incremental".into(),
+        )
+        .unwrap();
+    let preserved = scheduler::cancel_or_take_scheduled_outcome(&controller, completed_job)
+        .await
+        .unwrap()
+        .expect("completed job outcome must survive a lost cancellation");
+    assert!(preserved.result.is_ok());
+    assert!(!preserved.cancelled);
+    controller.wait().await;
+    let later_outcome = controller.take_task_outcome(later_job).unwrap().unwrap();
+    assert!(later_outcome.result.is_ok());
+    assert_eq!(transport.pages.lock().unwrap().len(), 8);
+}

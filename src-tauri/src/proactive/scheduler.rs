@@ -6,7 +6,7 @@ use crate::{
     },
     storage::{
         proactive::{
-            ProactiveClaim, ProactiveEventKey, ProactiveOutcome, ProactiveSettings,
+            ProactiveClaim, ProactiveEventKey, ProactiveOutcome, ProactiveSettings, ProactiveTask,
             ProactiveTaskInput, SchedulerOutcome,
         },
         Settings, Store,
@@ -109,13 +109,16 @@ impl Scheduler {
                         return;
                     }
                     if let Some(activation) = notification::action_activation(action) {
+                        let attempts = activation.event_attempts.to_vec();
+                        let Ok(store_guard) = store.lock() else {
+                            return;
+                        };
+                        if let Err(error) = store_guard.proactive_mark_delivered_batch(&attempts) {
+                            eprintln!("Proactive notification activation: {error}");
+                            return;
+                        }
                         if let Ok(mut pending) = pending_activation.lock() {
                             *pending = Some(activation.clone());
-                        }
-                        if let Ok(store) = store.lock() {
-                            for (event_id, attempt_count) in &activation.event_attempts {
-                                let _ = store.proactive_mark_delivered(*event_id, *attempt_count);
-                            }
                         }
                         let handle = app.clone();
                         if let Err(error) = app.run_on_main_thread(move || {
@@ -319,42 +322,117 @@ pub(super) fn can_admit_task(
 ) -> bool {
     !stop_requested(stop) && task_is_active(prefs, extension_enabled, subscribed)
 }
+pub(super) async fn cancel_or_take_scheduled_outcome(
+    archive: &Arc<Controller>,
+    task_id: u64,
+) -> Result<Option<sync::TaskOutcome>, String> {
+    if archive.cancel_task(task_id)? {
+        archive.task_completion_notified(task_id).await?;
+    }
+    archive.take_task_outcome(task_id)
+}
+
 async fn wait_scheduled_job(
     store: &sync::SharedStore,
     archive: &Arc<Controller>,
+    task_id: u64,
     source_id: &str,
     stop: &mut watch::Receiver<bool>,
-) -> Result<bool, String> {
+) -> Result<Option<sync::TaskOutcome>, String> {
+    let mut recheck = tokio::time::interval(Duration::from_secs(1));
     loop {
+        if let Some(outcome) = archive.take_task_outcome(task_id)? {
+            return Ok(Some(outcome));
+        }
         if stop_requested(stop) {
-            archive.cancel();
-            archive.wait().await;
-            return Ok(true);
+            return cancel_or_take_scheduled_outcome(archive, task_id).await;
         }
         tokio::select! {
-            _ = archive.wait() => return Ok(false),
             changed = stop.changed() => {
                 if changed.is_err() || *stop.borrow() {
-                    archive.cancel();
-                    archive.wait().await;
-                    return Ok(true);
+                    return cancel_or_take_scheduled_outcome(archive, task_id).await;
                 }
             }
-            _ = tokio::time::sleep(Duration::from_secs(1)) => {
+            _ = recheck.tick() => {
                 let active = with_store(store, |store| {
                     let settings = store.proactive_settings()?;
                     let extension = store.enabled("sogang_notices")?;
-                    let subscribed = store.sources()?.into_iter().any(|source| source.definition.id == source_id && source.subscribed);
+                    let subscribed = store.sources()?.into_iter().any(|source| {
+                        source.definition.id == source_id && source.subscribed
+                    });
                     Ok(task_is_active(&settings, extension, subscribed))
                 })?;
                 if !active {
-                    archive.cancel();
-                    archive.wait().await;
-                    return Ok(true);
+                    return cancel_or_take_scheduled_outcome(archive, task_id).await;
+                }
+            }
+            _ = archive.task_completion_notified(task_id) => {}
+        }
+    }
+}
+
+pub(super) async fn run_scheduled_task<T: sync::Transport + Clone + 'static>(
+    store: &sync::SharedStore,
+    archive: &Arc<Controller>,
+    root: &Path,
+    transport: &T,
+    task: &ProactiveTask,
+    stop: &mut watch::Receiver<bool>,
+) -> Result<ProactiveOutcome, String> {
+    let source_id = task.task_id.strip_prefix("source:").unwrap_or("");
+    let (prefs, enabled, subscribed) = with_store(store, |store| {
+        let prefs = store.proactive_settings()?;
+        let extension_enabled = store.enabled("sogang_notices")?;
+        let subscribed = store
+            .sources()?
+            .into_iter()
+            .any(|source| source.definition.id == source_id && source.subscribed);
+        Ok((prefs, extension_enabled, subscribed))
+    })?;
+    let outcome = if stop_requested(stop) || !task_is_active(&prefs, enabled, subscribed) {
+        ProactiveOutcome::Cancelled
+    } else {
+        match archive.start_tracked_with_transport(
+            store.clone(),
+            root.to_path_buf(),
+            transport.clone(),
+            Some(vec![source_id.to_string()]),
+            "incremental".into(),
+        ) {
+            Ok((_, task_id)) => {
+                match wait_scheduled_job(store, archive, task_id, source_id, stop).await? {
+                    None => ProactiveOutcome::Cancelled,
+                    Some(result) if result.cancelled => ProactiveOutcome::Cancelled,
+                    Some(result) if result.result.is_ok() => ProactiveOutcome::Success,
+                    Some(_) => ProactiveOutcome::Failure,
+                }
+            }
+            Err(error) if error.contains("다른 동기화") => ProactiveOutcome::Skipped,
+            Err(_) => {
+                let active = with_store(store, |store| {
+                    let prefs = store.proactive_settings()?;
+                    let enabled = store.enabled("sogang_notices")?;
+                    let subscribed = store
+                        .sources()?
+                        .into_iter()
+                        .any(|source| source.definition.id == source_id && source.subscribed);
+                    Ok(task_is_active(&prefs, enabled, subscribed))
+                })?;
+                if active {
+                    ProactiveOutcome::Failure
+                } else {
+                    ProactiveOutcome::Cancelled
                 }
             }
         }
-    }
+    };
+    let error = (outcome == ProactiveOutcome::Failure).then_some("정보원 동기화에 실패했습니다.");
+    with_store(store, |store| {
+        store
+            .proactive_record_task_outcome(&task.task_id, outcome, error)
+            .map(|_| ())
+    })?;
+    Ok(outcome)
 }
 
 async fn cycle(
@@ -376,6 +454,7 @@ async fn cycle(
         let mut failures = 0;
         let mut successes = 0;
         let mut cancelled = 0;
+        let mut notification_error = None;
         let mut skipped = 0;
         for task in &due {
             if stop_requested(stop) {
@@ -386,70 +465,24 @@ async fn cycle(
                 .strip_prefix("source:")
                 .unwrap_or("")
                 .to_string();
-            let (current_prefs, enabled, subscribed, prior_attempt) = with_store(store, |store| {
-                let prefs = store.proactive_settings()?;
-                let extension_enabled = store.enabled("sogang_notices")?;
-                let sources = store.sources()?;
-                let source = sources
-                    .iter()
-                    .find(|source| source.definition.id == source_id);
-                Ok((
-                    prefs,
-                    extension_enabled,
-                    source.is_some_and(|source| source.subscribed),
-                    source.and_then(|source| source.last_attempt.clone()),
-                ))
-            })?;
-            if !can_admit_task(stop, &current_prefs, enabled, subscribed) {
-                break;
+            let mut task_stop = stop.clone();
+            let (outcome, discovery_error) = wait_for_scheduled_task_and_notifications(
+                run_scheduled_task(store, archive, root, network, task, &mut task_stop),
+                store,
+                app,
+                notifications,
+                stop,
+            )
+            .await?;
+            if notification_error.is_none() {
+                notification_error = discovery_error;
             }
-            if stop_requested(stop) {
-                break;
-            }
-            let outcome = match archive.start(
-                store.clone(),
-                root.to_path_buf(),
-                network.clone(),
-                Some(vec![source_id.clone()]),
-                "incremental".into(),
-            ) {
-                Ok(_) => {
-                    let cancelled = wait_scheduled_job(store, archive, &source_id, stop).await?;
-                    if cancelled || stop_requested(stop) {
-                        ProactiveOutcome::Cancelled
-                    } else {
-                        if archive.status()?.message.contains("중단") {
-                            ProactiveOutcome::Cancelled
-                        } else {
-                            let latest = with_store(store, |store| store.sources())?
-                                .into_iter()
-                                .find(|source| source.definition.id == source_id);
-                            if latest.is_some_and(|source| {
-                                source.last_attempt != prior_attempt && source.last_error.is_some()
-                            }) {
-                                ProactiveOutcome::Failure
-                            } else {
-                                ProactiveOutcome::Success
-                            }
-                        }
-                    }
-                }
-                Err(error) if error.contains("다른 동기화") => ProactiveOutcome::Skipped,
-                Err(_) => ProactiveOutcome::Failure,
-            };
             match outcome {
                 ProactiveOutcome::Failure => failures += 1,
                 ProactiveOutcome::Success => successes += 1,
                 ProactiveOutcome::Cancelled => cancelled += 1,
                 ProactiveOutcome::Skipped => skipped += 1,
             }
-            let error =
-                (outcome == ProactiveOutcome::Failure).then_some("정보원 동기화에 실패했습니다.");
-            with_store(store, |store| {
-                store
-                    .proactive_record_task_outcome(&task.task_id, outcome, error)
-                    .map(|_| ())
-            })?;
             if stop_requested(stop) {
                 break;
             }
@@ -489,6 +522,9 @@ async fn cycle(
                     .map(|_| ())
             })?;
         }
+        if let Some(error) = notification_error {
+            return Err(error);
+        }
     }
     if !stop_requested(stop) {
         let (current, _) = settings(store)?;
@@ -497,6 +533,44 @@ async fn cycle(
         }
     }
     Ok(())
+}
+
+async fn wait_for_scheduled_task_and_notifications<F>(
+    task: F,
+    store: &sync::SharedStore,
+    app: &AppHandle,
+    notifications: &mut NotificationState,
+    stop: &mut watch::Receiver<bool>,
+) -> Result<(ProactiveOutcome, Option<String>), String>
+where
+    F: Future<Output = Result<ProactiveOutcome, String>>,
+{
+    tokio::pin!(task);
+    let mut notification_error = None;
+    let mut notification_tick =
+        tokio::time::interval_at(tokio::time::Instant::now() + WAKE_INTERVAL, WAKE_INTERVAL);
+    loop {
+        tokio::select! {
+            result = &mut task => {
+                return result.map(|outcome| (outcome, notification_error));
+            }
+            _ = notification_tick.tick() => {
+                match settings(store) {
+                    Ok((prefs, _)) if should_discover_notifications(&prefs) => {
+                        if let Err(error) =
+                            discover_and_deliver(store, &prefs, app, notifications, stop).await
+                        {
+                            notification_error.get_or_insert(error);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        notification_error.get_or_insert(error);
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub(super) fn quiet_end_delay_minutes(
@@ -517,6 +591,83 @@ pub(super) fn should_discover_notifications(prefs: &ProactiveSettings) -> bool {
 
 pub(super) fn available_notification_slots(recent_attempts: u32) -> usize {
     notification::RATE_LIMIT.saturating_sub(recent_attempts) as usize
+}
+
+pub(super) fn revalidate_delivery_batch(
+    store: &sync::SharedStore,
+    items: Vec<DeliveryItem>,
+) -> Result<Vec<DeliveryItem>, String> {
+    let store = store
+        .lock()
+        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
+    let prefs = store.proactive_settings()?;
+    let local_minutes = store.proactive_local_minutes()?;
+    let quiet_delay = quiet_end_delay_minutes(&prefs.quiet_hours, local_minutes);
+    if !prefs.notifications_enabled || quiet_delay.is_some() {
+        let minutes = quiet_delay.unwrap_or(1);
+        for item in items {
+            store.proactive_defer_event(
+                item.event_id,
+                item.attempt_count,
+                minutes,
+                Some(if prefs.notifications_enabled {
+                    "조용한 시간에는 알림을 보내지 않습니다."
+                } else {
+                    "알림이 꺼져 있어 나중에 다시 확인합니다."
+                }),
+            )?;
+        }
+        return Ok(Vec::new());
+    }
+    let mut eligible = Vec::with_capacity(items.len());
+    for mut item in items {
+        let candidate = store.proactive_event_candidate(item.event_id)?;
+        let score = store.personalization_notification_score(item.document_id)?;
+        if !candidate.source_active
+            || score
+                .as_ref()
+                .is_none_or(|score| !notification::eligible(prefs.notification_sensitivity, score))
+        {
+            let reason = if !candidate.source_active {
+                "정보원 구독 또는 확장 기능이 꺼져 있습니다.".to_string()
+            } else {
+                score
+                    .as_ref()
+                    .map(|score| score.reasons.join(", "))
+                    .filter(|reason| !reason.is_empty())
+                    .unwrap_or_else(|| "현재 알림 기준에 맞지 않습니다.".into())
+            };
+            store.proactive_suppress_event(
+                item.event_id,
+                Some(item.attempt_count),
+                Some(&reason),
+            )?;
+            continue;
+        }
+        item.source_id = candidate.source_id;
+        item.source_name = candidate.source_name;
+        item.title = candidate.title;
+        eligible.push(item);
+    }
+    if eligible.is_empty() {
+        return Ok(eligible);
+    }
+    let attempts = eligible
+        .iter()
+        .map(|item| (item.event_id, item.attempt_count))
+        .collect::<Vec<_>>();
+    if !store.proactive_reserve_delivery_attempts(&attempts)? {
+        for item in &eligible {
+            store.proactive_defer_event(
+                item.event_id,
+                item.attempt_count,
+                1,
+                Some("알림 전송 한도에 도달해 나중에 다시 확인합니다."),
+            )?;
+        }
+        return Ok(Vec::new());
+    }
+    Ok(eligible)
 }
 
 async fn discover_and_deliver(
@@ -660,40 +811,22 @@ async fn discover_and_deliver(
     if deliver.is_empty() {
         return Ok(());
     }
-    // Quiet end is wall-clock based; recheck after asynchronous permission lookup and
-    // candidate processing so a timezone/DST transition cannot permit quiet-hour delivery.
-    let (latest_prefs, _) = settings(store)?;
-    let quiet_delay = with_store(store, |store| {
-        let local_minutes = store.proactive_local_minutes()?;
-        Ok(quiet_end_delay_minutes(
-            &latest_prefs.quiet_hours,
-            local_minutes,
-        ))
-    })?;
-    if let Some(minutes) = quiet_delay {
-        for item in deliver {
-            with_store(store, |store| {
-                store.proactive_defer_event(
-                    item.event_id,
-                    item.attempt_count,
-                    minutes,
-                    Some("조용한 시간에는 알림을 보내지 않습니다."),
-                )?;
-                Ok(())
-            })?;
-        }
+    // Re-read the complete delivery policy and current source/document state under
+    // one lock immediately before handing the digest to the operating system.
+    let deliver = revalidate_delivery_batch(store, deliver)?;
+    if deliver.is_empty() {
         return Ok(());
     }
     #[cfg(not(target_os = "macos"))]
     match notification::show_digest(app, &deliver) {
         Ok(()) => {
-            for item in deliver {
-                with_store(store, |store| {
-                    store
-                        .proactive_mark_attempted(item.event_id, item.attempt_count)
-                        .map(|_| ())
-                })?;
-            }
+            let attempts = deliver
+                .iter()
+                .map(|item| (item.event_id, item.attempt_count))
+                .collect::<Vec<_>>();
+            with_store(store, |store| {
+                store.proactive_mark_attempted_batch(&attempts).map(|_| ())
+            })?;
         }
         Err(error) => {
             for item in deliver {
@@ -708,13 +841,13 @@ async fn discover_and_deliver(
     #[cfg(target_os = "macos")]
     match notification::show_digest(app, &deliver).await {
         Ok(Some(handle)) => {
-            for item in &deliver {
-                with_store(store, |store| {
-                    store
-                        .proactive_mark_attempted(item.event_id, item.attempt_count)
-                        .map(|_| ())
-                })?;
-            }
+            let attempts = deliver
+                .iter()
+                .map(|item| (item.event_id, item.attempt_count))
+                .collect::<Vec<_>>();
+            with_store(store, |store| {
+                store.proactive_mark_attempted_batch(&attempts).map(|_| ())
+            })?;
             let store = store.clone();
             let app = app.clone();
             let pending_activation = notifications.pending_activation.clone();
@@ -740,18 +873,15 @@ async fn discover_and_deliver(
                             && response.close_reason != Some(CloseReason::Expired)
                         {
                             if let Some(activation) = notification::activation_for_items(&deliver) {
-                                for (event_id, attempt_count) in &activation.event_attempts {
-                                    if !accepting_callbacks.load(Ordering::Acquire) {
-                                        return;
-                                    }
-                                    if let Err(error) = with_store(&store, |store| {
-                                        store
-                                            .proactive_mark_delivered(*event_id, *attempt_count)
-                                            .map(|_| ())
-                                    }) {
-                                        eprintln!("Proactive notification activation: {error}");
-                                        return;
-                                    }
+                                if !accepting_callbacks.load(Ordering::Acquire) {
+                                    return;
+                                }
+                                let attempts = activation.event_attempts.to_vec();
+                                if let Err(error) = with_store(&store, |store| {
+                                    store.proactive_mark_delivered_batch(&attempts).map(|_| ())
+                                }) {
+                                    eprintln!("Proactive notification activation: {error}");
+                                    return;
                                 }
                                 if !accepting_callbacks.load(Ordering::Acquire) {
                                     return;

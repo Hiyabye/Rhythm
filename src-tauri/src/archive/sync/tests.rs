@@ -252,10 +252,9 @@ async fn run(
     mode: &str,
     budget: Budget,
 ) {
-    controller
+    let _ = controller
         .execute(store, root, fake, sources(store, ids), mode, budget)
-        .await
-        .unwrap();
+        .await;
 }
 fn items(store: &SharedStore) -> Vec<DocumentItem> {
     with_store(store, |s| {
@@ -574,19 +573,20 @@ async fn source_failures_preserve_archive_and_other_sources_continue() {
     .await;
     let id = items(&store)[0].id;
     fake.failed.lock().unwrap().insert(5);
-    run(
-        &controller,
-        &store,
-        dir.path(),
-        &fake,
-        &[MAIN, COMPUTING],
-        "incremental",
-        Budget {
-            articles: Some(1),
-            pages: Some(1),
-        },
-    )
-    .await;
+    let outcome = controller
+        .execute(
+            &store,
+            dir.path(),
+            &fake,
+            sources(&store, &[MAIN, COMPUTING]),
+            "incremental",
+            Budget {
+                articles: Some(1),
+                pages: Some(1),
+            },
+        )
+        .await;
+    assert!(outcome.is_err(), "a failed source must not report success");
     assert_eq!(
         with_store(&store, |s| s.source(MAIN)).unwrap().status,
         "failed"

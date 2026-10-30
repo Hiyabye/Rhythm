@@ -174,6 +174,96 @@ fn version_four_database(path: &Path) {
         .unwrap();
 }
 
+fn version_five_database(path: &Path) {
+    version_four_database(path);
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute_batch(include_str!("../../migrations/005_proactive.sql"))
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO proactive_dedupe(document_id,revision_id,event_type)
+             VALUES(1,1,'new')",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO proactive_events(
+                id,document_id,revision_id,event_type,state,attempt_count,last_attempt_at
+             ) VALUES(7,1,1,'new','failed',2,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+            [],
+        )
+        .unwrap();
+}
+
+#[test]
+fn schema_six_upgrade_conservatively_migrates_populated_schema_five_attempts() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("rhythm.db");
+    version_five_database(&path);
+
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, 6);
+    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 2);
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM proactive_events WHERE id=7"),
+        1
+    );
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM proactive_dedupe"), 1);
+    store
+        .connection
+        .execute("DELETE FROM proactive_events", [])
+        .unwrap();
+    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 2);
+    drop(store);
+
+    let reopened = Store::open(&path).unwrap();
+    assert_eq!(reopened.info().unwrap().schema_version, 6);
+    assert_eq!(reopened.proactive_recent_delivery_attempts(600).unwrap(), 2);
+}
+
+#[test]
+fn failed_schema_six_migration_rolls_back_without_touching_schema_five_data() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("rhythm.db");
+    version_five_database(&path);
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE proactive_delivery_attempts(sentinel TEXT);")
+        .unwrap();
+
+    assert!(Store::open(&path).is_err());
+
+    let connection = Connection::open(&path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        5
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM proactive_events WHERE id=7",
+                [],
+                |row| { row.get::<_, i64>(0) }
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM proactive_delivery_attempts",
+                [],
+                |row| { row.get::<_, i64>(0) }
+            )
+            .unwrap(),
+        0
+    );
+}
+
 #[test]
 fn migration_five_is_additive_and_keeps_version_four_data() {
     let directory = tempfile::tempdir().unwrap();
@@ -181,7 +271,7 @@ fn migration_five_is_additive_and_keeps_version_four_data() {
     version_four_database(&path);
 
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.info().unwrap().schema_version, 5);
+    assert_eq!(store.info().unwrap().schema_version, 6);
     assert_eq!(store.settings().unwrap().theme, "dark");
     assert_eq!(store.settings().unwrap().energy_profile, "eco");
     assert_eq!(store.archive_summary().unwrap().documents, 2);
@@ -223,7 +313,7 @@ fn migration_five_is_additive_and_keeps_version_four_data() {
 
     drop(store);
     let reopened = Store::open(&path).unwrap();
-    assert_eq!(reopened.info().unwrap().schema_version, 5);
+    assert_eq!(reopened.info().unwrap().schema_version, 6);
     assert_eq!(reopened.proactive_baseline().unwrap(), 2);
     assert_eq!(reopened.archive_summary().unwrap().documents, 2);
 }
@@ -517,7 +607,7 @@ fn delivery_attempts_are_fenced_and_terminal_after_three_failures() {
     let deferred = store
         .proactive_defer_event(event.id, 1, 30, Some("quiet hours"))
         .unwrap();
-    assert_eq!(deferred.state, ProactiveEventState::Deferred);
+    assert_eq!(deferred.attempt_count, 0);
     assert!(deferred.deferred_until.is_some());
     assert!(!store
         .proactive_due_events(10)
@@ -539,12 +629,12 @@ fn delivery_attempts_are_fenced_and_terminal_after_three_failures() {
         .iter()
         .any(|due| due.id == event.id));
     let claimed = store.proactive_claim_due_event(event.id).unwrap();
-    assert_eq!(claimed.attempt_count, 2);
+    assert_eq!(claimed.attempt_count, 1);
     let retry = store
-        .proactive_fail_delivery(event.id, 2, "전달 실패")
+        .proactive_fail_delivery(event.id, 1, "전달 실패")
         .unwrap();
     assert_eq!(retry.state, ProactiveEventState::Pending);
-    assert_eq!(retry.attempt_count, 2);
+    assert_eq!(retry.attempt_count, 1);
     assert_eq!(retry.error.as_deref(), Some("전달 실패"));
     assert!(retry.deferred_until.is_some());
 
@@ -560,14 +650,79 @@ fn delivery_attempts_are_fenced_and_terminal_after_three_failures() {
             .proactive_claim_due_event(event.id)
             .unwrap()
             .attempt_count,
+        2
+    );
+    let second_failure = store
+        .proactive_fail_delivery(event.id, 2, "전달 실패")
+        .unwrap();
+    assert_eq!(second_failure.state, ProactiveEventState::Pending);
+    assert_eq!(second_failure.attempt_count, 2);
+    store
+        .connection
+        .execute(
+            "UPDATE proactive_events SET deferred_until='2000-01-01T00:00:00Z' WHERE id=?1",
+            [event.id],
+        )
+        .unwrap();
+    assert_eq!(
+        store
+            .proactive_claim_due_event(event.id)
+            .unwrap()
+            .attempt_count,
         3
     );
+
     let failed = store
         .proactive_fail_delivery(event.id, 3, "전달 실패")
         .unwrap();
     assert_eq!(failed.state, ProactiveEventState::Failed);
     assert!(store.proactive_claim_due_event(event.id).is_err());
     assert!(store.proactive_due_events(10).unwrap().is_empty());
+}
+#[test]
+fn claimed_deferral_refunds_only_unreserved_attempt_and_keeps_handoff_fence() {
+    let (_directory, store) = store();
+    add_source(&store, "one");
+    let revision = add_document(&store, 1, "one", false);
+    let first = claimed_event(&store, &key(1, revision, ProactiveEventKind::New));
+    assert_eq!(
+        store
+            .proactive_defer_event(first.id, first.attempt_count, 30, None)
+            .unwrap()
+            .attempt_count,
+        0
+    );
+
+    store
+        .connection
+        .execute(
+            "UPDATE proactive_events SET deferred_until='2000-01-01T00:00:00Z' WHERE id=?1",
+            [first.id],
+        )
+        .unwrap();
+    let second = store.proactive_claim_due_event(first.id).unwrap();
+    assert_eq!(second.attempt_count, 1);
+    assert!(store
+        .proactive_reserve_delivery_attempts(&[(second.id, second.attempt_count)])
+        .unwrap());
+    let deferred_after_handoff = store
+        .proactive_defer_event(second.id, second.attempt_count, 30, None)
+        .unwrap();
+    assert_eq!(deferred_after_handoff.attempt_count, 1);
+    assert!(store
+        .proactive_defer_event(second.id, second.attempt_count, 30, None)
+        .is_err());
+
+    store
+        .connection
+        .execute(
+            "UPDATE proactive_events SET deferred_until='2000-01-01T00:00:00Z' WHERE id=?1",
+            [first.id],
+        )
+        .unwrap();
+    let third = store.proactive_claim_due_event(first.id).unwrap();
+    assert_eq!(third.attempt_count, 2);
+    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 1);
 }
 
 #[test]
@@ -620,8 +775,8 @@ fn quiet_hour_deferral_preserves_zero_attempts_across_reopen_then_delivery_claim
     assert_eq!(due[0].attempt_count, 0);
     let claimed = store.proactive_claim_due_event(event_id).unwrap();
     assert_eq!(claimed.attempt_count, 1);
-    assert!(claimed.last_attempt_at.is_some());
-    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 1);
+    assert!(claimed.last_attempt_at.is_none());
+    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 0);
 }
 
 #[test]
@@ -734,7 +889,7 @@ fn quiet_hours_changes_release_only_quiet_deferred_events_across_reopen() {
     let due = store.proactive_due_events(10).unwrap();
     assert!(due.iter().any(|event| event.id == disabled_id));
     assert!(!due.iter().any(|event| event.id == failure_id));
-    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 1);
+    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 0);
 }
 
 #[test]
@@ -1023,7 +1178,7 @@ fn candidates_keep_disabled_extension_revisions_for_suppression() {
 }
 
 #[test]
-fn recent_delivery_attempts_persist_and_honor_the_window() {
+fn recent_delivery_attempts_persist_exact_handoffs_across_retries_and_restart() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("rhythm.db");
     let event_id;
@@ -1034,13 +1189,15 @@ fn recent_delivery_attempts_persist_and_honor_the_window() {
         let identity = key(1, revision, ProactiveEventKind::New);
         let event = claimed_event(&store, &identity);
         event_id = event.id;
+        assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 0);
+        assert!(store
+            .proactive_reserve_delivery_attempts(&[(event.id, event.attempt_count)])
+            .unwrap());
         assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 1);
-        // Re-claiming the same identity is not another attempt.
         assert!(matches!(
             store.proactive_claim_event(&identity).unwrap(),
             ProactiveClaim::Duplicate { .. }
         ));
-        assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 1);
         store
             .proactive_mark_delivered(event_id, event.attempt_count)
             .unwrap();
@@ -1054,11 +1211,143 @@ fn recent_delivery_attempts_persist_and_honor_the_window() {
     store
         .connection
         .execute(
-            "UPDATE proactive_events SET last_attempt_at='2000-01-01T00:00:00Z' WHERE id=?1",
-            [event_id],
+            "UPDATE proactive_delivery_attempts
+             SET attempted_at='2000-01-01T00:00:00Z'",
+            [],
         )
         .unwrap();
     assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 0);
+}
+
+#[test]
+fn rate_reservation_is_atomic_bounded_and_independent_of_event_history() {
+    let (_directory, store) = store();
+    add_source(&store, "one");
+    let mut events = Vec::new();
+    for id in 1..=4 {
+        let revision = add_document(&store, id, "one", false);
+        events.push(claimed_event(
+            &store,
+            &key(id, revision, ProactiveEventKind::New),
+        ));
+    }
+    let first_three = events[..3]
+        .iter()
+        .map(|event| (event.id, event.attempt_count))
+        .collect::<Vec<_>>();
+    assert!(store
+        .proactive_reserve_delivery_attempts(&first_three)
+        .unwrap());
+    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 3);
+    assert!(!store
+        .proactive_reserve_delivery_attempts(&[(events[3].id, events[3].attempt_count)])
+        .unwrap());
+    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 3);
+
+    // Event history is pruned to zero; the independent ledger still enforces
+    // the rate window and never permits a reset via history clearing.
+    store
+        .connection
+        .execute("DELETE FROM proactive_events", [])
+        .unwrap();
+    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 3);
+    let revision = add_document(&store, 5, "one", false);
+    let fresh = claimed_event(&store, &key(5, revision, ProactiveEventKind::New));
+    assert!(!store
+        .proactive_reserve_delivery_attempts(&[(fresh.id, fresh.attempt_count)])
+        .unwrap());
+}
+
+#[test]
+fn retry_is_counted_only_at_reservation_and_reservation_is_idempotent() {
+    let (_directory, store) = store();
+    add_source(&store, "one");
+    let revision = add_document(&store, 1, "one", false);
+    let first = claimed_event(&store, &key(1, revision, ProactiveEventKind::New));
+    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 0);
+    assert!(store
+        .proactive_reserve_delivery_attempts(&[(first.id, first.attempt_count)])
+        .unwrap());
+    store
+        .proactive_fail_delivery(first.id, first.attempt_count, "temporary")
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "UPDATE proactive_events SET deferred_until='2000-01-01T00:00:00Z' WHERE id=?1",
+            [first.id],
+        )
+        .unwrap();
+    let second = store.proactive_claim_due_event(first.id).unwrap();
+    assert_eq!(second.attempt_count, 2);
+    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 1);
+    assert!(store
+        .proactive_reserve_delivery_attempts(&[(second.id, second.attempt_count)])
+        .unwrap());
+    assert!(store
+        .proactive_reserve_delivery_attempts(&[(second.id, second.attempt_count)])
+        .unwrap());
+    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 2);
+}
+
+#[test]
+fn attempt_ledger_prunes_beyond_max_window_and_clock_rollback_cannot_resurrect_rows() {
+    let (_directory, store) = store();
+    add_source(&store, "one");
+    for id in 1..=3 {
+        let revision = add_document(&store, id, "one", false);
+        let event = claimed_event(&store, &key(id, revision, ProactiveEventKind::New));
+        assert!(store
+            .proactive_reserve_delivery_attempts(&[(event.id, event.attempt_count)])
+            .unwrap());
+    }
+    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 3);
+    store
+        .connection
+        .execute(
+            "UPDATE proactive_delivery_clock
+         SET max_observed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now','+8 days')
+         WHERE id=1",
+            [],
+        )
+        .unwrap();
+
+    // The forward watermark ages rows out of the maximum supported window.
+    assert_eq!(
+        store
+            .proactive_recent_delivery_attempts(7 * 24 * 60 * 60)
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM proactive_delivery_attempts"),
+        0
+    );
+    let future_clock: String = store
+        .connection
+        .query_row(
+            "SELECT max_observed_at FROM proactive_delivery_clock WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    // A rollback in system time cannot lower the persisted watermark and
+    // resurrect the pruned rows.
+    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 0);
+    let retained_clock: String = store
+        .connection
+        .query_row(
+            "SELECT max_observed_at FROM proactive_delivery_clock WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(retained_clock, future_clock);
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM proactive_delivery_attempts"),
+        0
+    );
 }
 
 #[test]
@@ -1175,6 +1464,68 @@ fn attempted_state_is_terminal_honest_and_promotable() {
         .unwrap();
     assert_eq!(store.proactive_clear_history().unwrap(), 2);
     assert!(store.proactive_history(10).unwrap().is_empty());
+}
+
+#[test]
+fn delivered_batch_is_atomic_when_any_attempt_is_stale() {
+    let (_directory, store) = store();
+    add_source(&store, "one");
+    let first_revision = add_document(&store, 1, "one", false);
+    let second_revision = add_document(&store, 2, "one", false);
+    let first = claimed_event(&store, &key(1, first_revision, ProactiveEventKind::New));
+    let second = claimed_event(&store, &key(2, second_revision, ProactiveEventKind::New));
+    assert!(store
+        .proactive_mark_attempted_batch(&[
+            (first.id, first.attempt_count),
+            (second.id, second.attempt_count + 1),
+        ])
+        .is_err());
+    assert_eq!(
+        store.proactive_event(first.id).unwrap().state,
+        ProactiveEventState::Claimed
+    );
+    assert_eq!(
+        store.proactive_event(second.id).unwrap().state,
+        ProactiveEventState::Claimed
+    );
+    store
+        .proactive_mark_attempted(first.id, first.attempt_count)
+        .unwrap();
+
+    assert!(store
+        .proactive_mark_delivered_batch(&[
+            (first.id, first.attempt_count),
+            (second.id, second.attempt_count + 1),
+        ])
+        .is_err());
+    assert_eq!(
+        store.proactive_event(first.id).unwrap().state,
+        ProactiveEventState::Attempted
+    );
+    assert_eq!(
+        store.proactive_event(second.id).unwrap().state,
+        ProactiveEventState::Claimed
+    );
+
+    let delivered = store
+        .proactive_mark_delivered_batch(&[
+            (first.id, first.attempt_count),
+            (second.id, second.attempt_count),
+        ])
+        .unwrap();
+    assert_eq!(delivered.len(), 2);
+    assert!(delivered
+        .iter()
+        .all(|event| event.state == ProactiveEventState::Delivered));
+    assert_eq!(
+        store
+            .proactive_history(10)
+            .unwrap()
+            .iter()
+            .filter(|item| item.event.state == ProactiveEventState::Delivered)
+            .count(),
+        2
+    );
 }
 
 #[test]

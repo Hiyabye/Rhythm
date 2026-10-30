@@ -60,7 +60,7 @@ fn schema_one_upgrade_preserves_every_preference() {
             .unwrap();
     }
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.info().unwrap().schema_version, 5);
+    assert_eq!(store.info().unwrap().schema_version, 6);
     assert_eq!(store.settings().unwrap().theme, "dark");
     assert_eq!(store.settings().unwrap().energy_profile, "eco");
     assert_eq!(store.settings().unwrap().interests, "컴퓨터 보안 · 장학금");
@@ -69,7 +69,7 @@ fn schema_one_upgrade_preserves_every_preference() {
     drop(store);
     assert_eq!(
         Store::open(&path).unwrap().info().unwrap().schema_version,
-        5
+        6
     );
 }
 #[test]
@@ -696,7 +696,7 @@ fn released_schema_two_reopen_preserves_archive_preferences_and_checkpoint() {
     assert_archive_integrity(&store);
     drop(store);
     let reopened = Store::open(&path).unwrap();
-    assert_eq!(reopened.info().unwrap().schema_version, 5);
+    assert_eq!(reopened.info().unwrap().schema_version, 6);
     assert_eq!(
         reopened
             .connection

@@ -124,7 +124,7 @@ pub(crate) async fn notification_authorization_status() -> String {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        "unknown".to_owned()
+        "unavailable".to_owned()
     }
 }
 
@@ -144,5 +144,20 @@ pub(crate) async fn notification_request_permission() -> String {
     #[cfg(not(target_os = "macos"))]
     {
         "unavailable".to_owned()
+    }
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod tests {
+    #[tokio::test]
+    async fn notification_permission_is_unavailable_off_macos() {
+        assert_eq!(
+            super::notification_authorization_status().await,
+            "unavailable"
+        );
+        assert_eq!(
+            super::notification_request_permission().await,
+            "unavailable"
+        );
     }
 }

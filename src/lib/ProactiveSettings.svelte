@@ -146,11 +146,13 @@
     <div class="privacy-note" aria-live="polite">
       <p>운영체제 알림 권한: {authorizationLabel(notificationAuthorization)}</p>
       {#if notificationAuthorization === 'denied'}
-        <p>권한이 거부되었습니다. macOS 시스템 설정 &gt; 알림 &gt; Rhythm에서 알림을 허용한 뒤 상태를 새로고침하세요.</p>
+        <p>권한이 거부되었습니다. 운영체제의 알림 설정에서 Rhythm 알림을 허용한 뒤 상태를 새로고침하세요.</p>
       {:else if notificationAuthorization === 'not_determined'}
         <p>아직 권한을 선택하지 않았습니다. 아래 버튼을 누를 때만 운영체제 권한 요청 창이 표시됩니다.</p>
-      {:else if notificationAuthorization === 'unavailable' || notificationAuthorization === 'unknown'}
-        <p>이 환경에서는 권한 상태를 확인할 수 없습니다. macOS 시스템 설정 &gt; 알림에서 Rhythm을 확인하세요.</p>
+      {:else if notificationAuthorization === 'unavailable'}
+        <p>이 환경에서는 운영체제 알림 권한 상태를 확인하거나 요청할 수 없습니다. 알림 전달 가능 여부는 운영체제 설정에서 확인하세요.</p>
+      {:else if notificationAuthorization === 'unknown'}
+        <p>운영체제가 알림 권한 상태를 알려주지 않았습니다. 알림 전달은 확인되지 않았습니다.</p>
       {/if}
       <p>권한 허용은 알림 전달을 보장하지 않습니다. 운영체제의 집중 모드와 앱의 알림 설정에 따라 전달되지 않을 수 있습니다.</p>
     </div>

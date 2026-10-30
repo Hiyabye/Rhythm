@@ -289,11 +289,17 @@ mod tests {
     }
 
     #[test]
-    fn login_visibility_uses_the_preference_and_requires_a_tray_to_hide() {
+    fn login_visibility_uses_only_the_preference_and_requires_a_tray_to_hide() {
         let login = LaunchMode::from_args([AUTOSTART_ARG]);
         assert!(!login.start_hidden(false, true));
         assert!(login.start_hidden(true, true));
         assert!(!login.start_hidden(true, false));
+
+        // The OS login path is governed by the saved preference, not the
+        // manual-only debugging flag.
+        let login_with_manual_flag = LaunchMode::from_args([AUTOSTART_ARG, HIDDEN_ARG]);
+        assert!(!login_with_manual_flag.start_hidden(false, true));
+        assert!(login_with_manual_flag.start_hidden(true, true));
 
         let manual = LaunchMode::from_args([HIDDEN_ARG]);
         assert!(manual.start_hidden(false, true));
