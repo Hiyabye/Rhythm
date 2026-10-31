@@ -143,7 +143,8 @@
             if (/^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(data)) {
               const image = window.document.createElement('img');
               image.src = data;
-              image.alt = node.getAttribute('alt') || resource.filename || '공지 이미지';
+              const alt = node.hasAttribute('alt') ? node.getAttribute('alt') ?? '' : resource.filename || '공지 이미지';
+              image.alt = alt;
               image.loading = 'lazy';
               parent.append(image);
               delete errors[resource.id];

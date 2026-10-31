@@ -1,6 +1,6 @@
 [package]
 name = "rhythm"
-version = "0.5.1"
+version = "0.9.0"
 edition = "2021"
 rust-version = "1.90"
 license = "MIT"
@@ -12,7 +12,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tokio = { version = "1", features = ["process", "io-util", "time", "sync", "rt-multi-thread", "macros", "fs", "net"] }
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.38", features = ["bundled", "backup"] }
+zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
@@ -21,9 +22,10 @@ sha2 = "0.10"
 url = "2"
 base64 = "0.22"
 tauri-plugin-autostart = "2.7"
-tauri-plugin-notification = "2.7"
 tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
 
@@ -38,4 +40,5 @@ mac-usernotifications = "=0.3.1"
 
 
 [dev-dependencies]
+minisign-verify = "=0.3.0"
 tempfile = "3"

@@ -5,9 +5,6 @@ use crate::storage::{
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-#[cfg(not(target_os = "macos"))]
-use tauri_plugin_notification::NotificationExt;
-
 pub(super) const CANDIDATE_LIMIT: usize = 100;
 
 pub const RATE_LIMIT: u32 = 3;
@@ -155,34 +152,6 @@ pub(super) fn activation_for_items(items: &[DeliveryItem]) -> Option<Notificatio
     })
 }
 
-#[cfg(not(target_os = "macos"))]
-pub(super) fn show_digest(app: &AppHandle, items: &[DeliveryItem]) -> Result<(), String> {
-    let Some(first) = items.first() else {
-        return Ok(());
-    };
-    let (title, body) = digest_text(items).expect("nonempty digest");
-    app.notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .extra("event_id", first.event_id)
-        .extra("document_id", first.document_id)
-        .extra("revision_id", first.revision_id)
-        .extra("attempt_count", first.attempt_count)
-        .extra("source_id", first.source_id.clone())
-        .extra("source_name", first.source_name.clone())
-        .extra(
-            "digest_event_ids",
-            items
-                .iter()
-                .map(|item| format!("{}:{}", item.event_id, item.attempt_count))
-                .collect::<Vec<_>>()
-                .join(","),
-        )
-        .show()
-        .map_err(|error| error.to_string())
-}
-
 #[cfg(target_os = "macos")]
 pub(super) async fn show_digest(
     app: &AppHandle,
@@ -205,35 +174,6 @@ pub(super) async fn show_digest(
         .map(Some)
         .map_err(|error| error.to_string())
 }
-
-#[cfg(not(target_os = "macos"))]
-pub(super) fn action_activation(
-    event: &tauri_plugin_notification::ActionPerformed,
-) -> Option<NotificationActivation> {
-    let extra = event.notification()?.extra();
-    Some(NotificationActivation {
-        event_id: extra.get("event_id")?.as_i64()?,
-        document_id: extra.get("document_id")?.as_i64()?,
-        revision_id: extra.get("revision_id")?.as_i64()?,
-        attempt_count: extra.get("attempt_count")?.as_u64()?.try_into().ok()?,
-        event_attempts: extra
-            .get("digest_event_ids")?
-            .as_str()?
-            .split(',')
-            .filter_map(|entry| {
-                let (id, attempts) = entry.split_once(':')?;
-                Some((id.parse::<i64>().ok()?, attempts.parse::<u32>().ok()?))
-            })
-            .collect(),
-        event_ids: extra
-            .get("digest_event_ids")?
-            .as_str()?
-            .split(',')
-            .filter_map(|entry| entry.split_once(':')?.0.parse::<i64>().ok())
-            .collect(),
-    })
-}
-
 pub(super) fn emit_activation(app: &AppHandle, activation: NotificationActivation) {
     let _ = app.emit("proactive://notification-clicked", activation);
 }

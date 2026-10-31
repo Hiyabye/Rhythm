@@ -75,48 +75,14 @@ fn ram_bytes() -> u64 {
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(0);
     }
-    #[cfg(target_os = "linux")]
-    {
-        return std::fs::read_to_string("/proc/meminfo")
-            .ok()
-            .and_then(|s| {
-                s.lines()
-                    .find(|l| l.starts_with("MemTotal:"))
-                    .map(str::to_owned)
-            })
-            .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
-            .map(|v| v.saturating_mul(1024))
-            .unwrap_or(0);
-    }
-    #[cfg(windows)]
-    {
-        return std::process::Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory",
-            ])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(0);
-    }
     #[allow(unreachable_code)]
     0
 }
-fn available_space(root: &Path) -> Result<u64, String> {
+pub(crate) fn available_space(root: &Path) -> Result<u64, String> {
     #[cfg(unix)]
     let result = std::process::Command::new("df")
         .arg("-Pk")
         .arg(root)
-        .output();
-    #[cfg(windows)]
-    let result = std::process::Command::new("powershell.exe")
-        .env("RHYTHM_DISK_PATH", root)
-        .args(["-NoProfile", "-NonInteractive", "-Command", "([System.IO.DriveInfo]::new([System.IO.Path]::GetPathRoot($env:RHYTHM_DISK_PATH))).AvailableFreeSpace"])
         .output();
     let output = result.map_err(|_| "사용 가능한 저장 공간을 확인하지 못했습니다.")?;
     if !output.status.success() {
@@ -124,15 +90,12 @@ fn available_space(root: &Path) -> Result<u64, String> {
     }
     let text =
         String::from_utf8(output.stdout).map_err(|_| "저장 공간 응답이 올바르지 않습니다.")?;
-    #[cfg(unix)]
     let bytes = text
         .lines()
         .last()
         .and_then(|s| s.split_whitespace().nth(3))
         .and_then(|s| s.parse::<u64>().ok())
         .and_then(|v| v.checked_mul(1024));
-    #[cfg(windows)]
-    let bytes = text.trim().parse::<u64>().ok();
     bytes.ok_or_else(|| "사용 가능한 저장 공간을 읽지 못했습니다.".into())
 }
 fn require_space(free: u64, remaining: u64) -> Result<(), String> {
@@ -189,6 +152,7 @@ impl Controller {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
+    #[cfg(test)]
     pub fn start(
         &self,
         store: Arc<Mutex<Store>>,
@@ -204,13 +168,41 @@ impl Controller {
                 "이 모델은 실제 추론 검증 전이므로 원클릭 설치를 제공하지 않습니다.".into(),
             );
         }
-        self.start_entry(store, root, entry)
+        self.start_entry_with_lease(store, root, entry, None)
     }
+    pub fn start_admitted(
+        &self,
+        store: Arc<Mutex<Store>>,
+        root: PathBuf,
+        catalog_id: String,
+        lease: crate::operation_gate::AdmissionLease,
+    ) -> Result<(), String> {
+        let entry = catalog()
+            .into_iter()
+            .find(|e| e.id == catalog_id)
+            .ok_or("모델 목록에서 항목을 선택해 주세요.")?;
+        if entry.compatibility != "verified" {
+            return Err(
+                "이 모델은 실제 추론 검증 전이므로 원클릭 설치를 제공하지 않습니다.".into(),
+            );
+        }
+        self.start_entry_with_lease(store, root, entry, Some(lease))
+    }
+    #[cfg(test)]
     fn start_entry(
         &self,
         store: Arc<Mutex<Store>>,
         root: PathBuf,
         entry: CatalogEntry,
+    ) -> Result<(), String> {
+        self.start_entry_with_lease(store, root, entry, None)
+    }
+    fn start_entry_with_lease(
+        &self,
+        store: Arc<Mutex<Store>>,
+        root: PathBuf,
+        entry: CatalogEntry,
+        lease: Option<crate::operation_gate::AdmissionLease>,
     ) -> Result<(), String> {
         let mut active = self
             .active
@@ -242,6 +234,7 @@ impl Controller {
         *active = Some(cancel.clone());
         let this = self.clone();
         tokio::spawn(async move {
+            let _lease = lease;
             let outcome =
                 install(&store, &root, &entry, &mut model, &cancel, &HttpsTransport).await;
             if let Err(error) = outcome {

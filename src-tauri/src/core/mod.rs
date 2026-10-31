@@ -1,8 +1,19 @@
 pub mod lifecycle;
 
-/// Own the application-data directory before recovering interrupted jobs. OS file
-/// locks are released on process termination, so a crash leaves no stale lease.
-pub fn lock_data_dir(root: &std::path::Path) -> Result<std::fs::File, String> {
+/// Own the application-data directory before recovering interrupted jobs. OS
+/// file locks are released on process termination; explicit unlock on drop also
+/// releases locks retained by descriptors inherited through `fork`.
+pub struct DataDirLock {
+    file: std::fs::File,
+}
+
+impl Drop for DataDirLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+pub fn lock_data_dir(root: &std::path::Path) -> Result<DataDirLock, String> {
     std::fs::create_dir_all(root).map_err(|_| "로컬 저장 폴더를 만들지 못했습니다.")?;
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -14,7 +25,7 @@ pub fn lock_data_dir(root: &std::path::Path) -> Result<std::fs::File, String> {
     file.try_lock().map_err(|_| {
         "Rhythm이 이미 실행 중이거나 데이터 폴더를 잠글 수 없습니다. 기존 창을 확인해 주세요."
     })?;
-    Ok(file)
+    Ok(DataDirLock { file })
 }
 
 #[cfg(target_os = "macos")]
@@ -86,6 +97,9 @@ mod ownership_tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("자료 보관");
         let first = super::lock_data_dir(&root).unwrap();
+        // A fork can keep the lock's open file description alive after the
+        // owning guard is dropped. Keep a duplicate open to exercise that case.
+        let inherited_descriptor = first.file.try_clone().unwrap();
         let child = |available: bool| {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "core::ownership_tests::data_dir_lock_excludes_other_processes_and_releases_on_drop", "--nocapture"])
@@ -100,6 +114,7 @@ mod ownership_tests {
         child(false);
         drop(first);
         child(true);
+        drop(inherited_descriptor);
     }
     #[test]
     fn second_owner_is_rejected_and_lock_is_released_on_drop() {

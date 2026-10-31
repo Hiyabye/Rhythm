@@ -239,6 +239,7 @@ impl Controller {
             }
         }
     }
+    #[cfg(test)]
     pub fn start(
         self: &Arc<Self>,
         store: SharedStore,
@@ -256,6 +257,7 @@ impl Controller {
         }
         Ok(status)
     }
+    #[cfg(test)]
     pub fn start_tracked(
         self: &Arc<Self>,
         store: SharedStore,
@@ -273,6 +275,28 @@ impl Controller {
         transport: T,
         ids: Option<Vec<String>>,
         mode: String,
+    ) -> Result<(SyncStatus, u64), String> {
+        self.start_tracked_with_lease(store, root, transport, ids, mode, None)
+    }
+    pub fn start_tracked_admitted(
+        self: &Arc<Self>,
+        store: SharedStore,
+        root: PathBuf,
+        client: network::Client,
+        ids: Option<Vec<String>>,
+        mode: String,
+        lease: crate::operation_gate::AdmissionLease,
+    ) -> Result<(SyncStatus, u64), String> {
+        self.start_tracked_with_lease(store, root, client, ids, mode, Some(lease))
+    }
+    fn start_tracked_with_lease<T: Transport + Clone + 'static>(
+        self: &Arc<Self>,
+        store: SharedStore,
+        root: PathBuf,
+        transport: T,
+        ids: Option<Vec<String>>,
+        mode: String,
+        lease: Option<crate::operation_gate::AdmissionLease>,
     ) -> Result<(SyncStatus, u64), String> {
         if !["historical", "incremental"].contains(&mode.as_str()) {
             return Err("동기화 방식을 확인해 주세요.".into());
@@ -319,6 +343,7 @@ impl Controller {
         self.update(None, &mode, 0, "동기화를 준비하고 있습니다.");
         let controller = self.clone();
         tauri::async_runtime::spawn(async move {
+            let _lease = lease;
             let mut outcome = controller
                 .execute(&store, &root, &transport, sources, &mode, Budget::default())
                 .await;
@@ -347,12 +372,13 @@ impl Controller {
         });
         Ok((self.status()?, task_id))
     }
-    pub fn retry(
+    pub fn retry_admitted(
         self: &Arc<Self>,
         store: SharedStore,
         root: PathBuf,
         client: network::Client,
         id: i64,
+        lease: crate::operation_gate::AdmissionLease,
     ) -> Result<SyncStatus, String> {
         let resource = with_store(&store, |s| {
             ensure_active(s, &AtomicBool::new(false))?;
@@ -363,6 +389,7 @@ impl Controller {
         self.update(None, "resource", 0, "첨부 자료를 다시 내려받고 있습니다.");
         let controller = self.clone();
         tauri::async_runtime::spawn(async move {
+            let _lease = lease;
             let result = async {
                 let url =
                     Url::parse(&resource.url).map_err(|_| "첨부 자료 주소가 올바르지 않습니다.")?;

@@ -40,6 +40,7 @@ fn snapshot(
 
 #[tauri::command]
 pub async fn proactive_snapshot(state: State<'_, AppState>) -> Result<ProactiveSnapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
     let store = state
         .store
         .lock()
@@ -52,6 +53,7 @@ pub async fn proactive_save(
     state: State<'_, AppState>,
     settings: ProactiveSettings,
 ) -> Result<ProactiveSnapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
     let store = state
         .store
         .lock()
@@ -77,6 +79,7 @@ pub async fn proactive_history(
     state: State<'_, AppState>,
     limit: Option<usize>,
 ) -> Result<Vec<ProactiveHistoryItem>, String> {
+    let _lease = state.operation_gate.shared().await?;
     let store = state
         .store
         .lock()
@@ -88,6 +91,7 @@ pub async fn proactive_history(
 pub async fn proactive_clear_history(
     state: State<'_, AppState>,
 ) -> Result<ProactiveSnapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
     let store = state
         .store
         .lock()

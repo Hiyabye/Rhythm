@@ -121,9 +121,10 @@ test('navigation, local searches, filters, safe highlighting and empty-result an
 });
 
 test('successful empty archive is distinct from loading and errors', async ({ page }) => {
-  await mockDesktop(page, { count: 0, queryDelay: 300 });
+  await mockDesktop(page, { count: 0, queryGate: true });
   await page.goto('/');
   await expect(page.locator('.archive-view .loading')).toBeVisible();
+  await page.evaluate(() => (window as Window & { __fixture: { releaseQueries: () => void } }).__fixture.releaseQueries());
   await expect(page.getByText('아직 보관된 공지가 없습니다', { exact: true })).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
@@ -172,11 +173,12 @@ test('subscriptions have no automatic collection, protect refreshing state, show
 test('reader hydrates legacy attachment-role inline images once and rejects remote executable markup', async ({ page }) => {
   const foreign: string[] = [];
   await page.route('https://untrusted.invalid/**', (route) => { foreign.push(route.request().url()); return route.abort(); });
-  await mockDesktop(page, { resources: [image], body: `<p onclick="window.bad=true">한국어 본문</p><p>CO<sub>2</sub>와 m<sup>2</sup></p><script>window.bad=true</script><iframe src="https://untrusted.invalid/frame"></iframe><svg onload="window.bad=true"></svg><img src="https://untrusted.invalid/tracker" data-resource-url="${image.url}" alt="첫 이미지"><img data-resource-url="${image.url}" alt="반복 이미지"><a href="javascript:window.bad=true">위험 링크</a><a href="https://example.com/page">외부 링크</a>` });
+  await mockDesktop(page, { resources: [image], body: `<p onclick="window.bad=true">한국어 본문</p><p>CO<sub>2</sub>와 m<sup>2</sup></p><script>window.bad=true</script><iframe src="https://untrusted.invalid/frame"></iframe><svg onload="window.bad=true"></svg><img src="https://untrusted.invalid/tracker" data-resource-url="${image.url}" alt="첫 이미지"><img data-resource-url="${image.url}" alt="반복 이미지"><img data-resource-url="${image.url}" alt=""><a href="javascript:window.bad=true">위험 링크</a><a href="https://example.com/page">외부 링크</a>` });
   await page.goto('/');
   await page.locator('#notice-1').click();
-  await expect(page.locator('.reader-body img')).toHaveCount(2);
+  await expect(page.locator('.reader-body img')).toHaveCount(3);
   await expect(page.locator('.reader-body img').first()).toHaveAttribute('src', /^data:image\/png;base64,/);
+  await expect(page.locator('.reader-body img').nth(2)).toHaveAttribute('alt', '');
   expect(await callCount(page, 'archive_resource_image')).toBe(1);
   await expect(page.locator('.reader-body sub')).toHaveText('2');
   await expect(page.locator('.reader-body sup')).toHaveText('2');

@@ -13,7 +13,7 @@ export interface FixtureOptions {
   unsupportedBody?: boolean;
   imageError?: boolean;
   imageDelay?: number;
-  queryDelay?: number;
+  queryGate?: boolean;
   aiInstalled?: boolean;
   aiResult?: boolean;
   aiPartial?: boolean;
@@ -42,6 +42,12 @@ export interface FixtureOptions {
   notificationAuthorization?: string;
   notificationRequestResult?: string;
   notificationRequestError?: boolean;
+  backupInspectError?: boolean;
+  backupRestoreError?: boolean;
+  updaterCheckError?: string;
+  updaterInstallError?: boolean;
+  updaterRestartError?: boolean;
+  updateAvailable?: boolean;
 }
 
 // Only the IPC boundary is faked: tests exercise the production Svelte build,
@@ -121,9 +127,15 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     const callbacks = new Map<number, (event: { event: string; id: number; payload: unknown }) => void>();
     let callbackId = 0;
     let eventId = 0;
+    let updaterHandler: number | null = null;
     let notificationHandler: number | null = null;
     const fixture = { ai, analyses, options, entries, calls: [] as { command: string; args: any }[], sourceDelay: 0,
       stateDelay: 0, subscribeError: false, snapshotFailures: 0, resultsFailures: 0, documentJobs: [] as any[], retryMessage: '자료를 내려받지 못했습니다. 연결을 확인해 주세요.',
+      queryResolvers: [] as Array<() => void>,
+      emitUpdater: (payload: unknown) => {
+        if (updaterHandler !== null) callbacks.get(updaterHandler)?.({ event: 'updater://progress', id: ++eventId, payload: copy(payload) });
+      },
+      releaseQueries() { this.queryResolvers.splice(0).forEach((release) => release()); },
       emitNotification: (payload: { event_id: number; document_id: number; revision_id: number }) => {
         if (notificationHandler !== null) callbacks.get(notificationHandler)?.({ event: 'proactive://notification-clicked', id: eventId, payload: { ...copy(payload), attempt_count: 1, event_ids: [payload.event_id] } });
       },
@@ -139,7 +151,10 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       } finally { if (ai.operation === current) ai.operation = null; }
     }
     Object.assign(window, { isTauri: true, __fixture: fixture, __TAURI_EVENT_PLUGIN_INTERNALS__: {
-      unregisterListener: (_event: string, _id: number) => { notificationHandler = null; },
+      unregisterListener: (event: string, _id: number) => {
+        if (event === 'updater://progress') updaterHandler = null;
+        if (event === 'proactive://notification-clicked') notificationHandler = null;
+      },
     }, __TAURI_INTERNALS__: {
       transformCallback: (callback: (event: { event: string; id: number; payload: unknown }) => void) => {
         const id = ++callbackId;
@@ -150,10 +165,33 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         fixture.calls.push({ command, args: copy(args) });
         switch (command) {
           case 'plugin:event|listen':
-            notificationHandler = args.handler;
+            if (args.event === 'updater://progress') updaterHandler = args.handler;
+            if (args.event === 'proactive://notification-clicked') notificationHandler = args.handler;
             eventId += 1;
             return eventId;
-          case 'plugin:event|unlisten': notificationHandler = null; return null;
+          case 'plugin:event|unlisten':
+            if (args.event === 'updater://progress') updaterHandler = null;
+            if (args.event === 'proactive://notification-clicked') notificationHandler = null;
+            return null;
+          case 'plugin:dialog|open': return '/fixtures/Rhythm-backup.rhythm-backup';
+          case 'plugin:dialog|save': return '/fixtures/Rhythm-backup.rhythm-backup';
+          case 'backup_inspect':
+            if (options.backupInspectError) throw '백업 파일의 형식이 올바르지 않습니다.';
+            return { format_version: 1, created_at: '1793404800', database_schema: 6, documents: 12, resources: 3,
+              resource_bytes: 1536, includes_model_weights: false };
+          case 'backup_restore':
+            if (options.backupRestoreError) throw '백업 데이터를 복원하지 못했습니다.';
+            return null;
+          case 'backup_cancel': return true;
+          case 'updater_check':
+            if (options.updaterCheckError) throw options.updaterCheckError;
+            return options.updateAvailable === false ? null : { version: '0.9.1', currentVersion: '0.9.0', date: null, body: '안정 버전 업데이트' };
+          case 'updater_install':
+            if (options.updaterInstallError) throw '서명된 업데이트를 설치하지 못했습니다.';
+            return { version: '0.9.1', currentVersion: '0.9.0', date: null, body: '안정 버전 업데이트' };
+          case 'updater_restart':
+            if (options.updaterRestartError) throw '업데이트를 적용하며 다시 시작하지 못했습니다.';
+            return null;
           case 'notification_authorization': return notificationAuthorization;
           case 'notification_request_permission':
             if (options.notificationRequestError) throw '알림 권한 요청을 사용할 수 없습니다.';
@@ -298,7 +336,11 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             const filtered = copy(entries.filter((entry) => (!query.saved_only || entry.saved) && (!query.unread_only || !entry.is_read)
               && (!query.source_id || entry.source_id === query.source_id) && (!query.category || entry.category === query.category)
               && query.query.trim().split(/\s+/).filter(Boolean).every((term: string) => `${entry.title} ${entry.snippet}`.toLowerCase().includes(term.toLowerCase()))));
-            await wait(options.queryDelay ?? 0);
+            if (options.queryGate) {
+              const { promise, resolve } = Promise.withResolvers<void>();
+              fixture.queryResolvers.push(resolve);
+              await promise;
+            } else await wait(options.queryDelay ?? 0);
             return { items: filtered.slice(query.offset, query.offset + query.limit), total: filtered.length, categories: ['장학', '학사'] };
           }
           case 'archive_document': {

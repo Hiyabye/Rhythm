@@ -7,8 +7,11 @@ stderr; stdout carries only versioned JSON Lines IPC.
 
 ## Runtime and compatibility
 
-Current application/worker version is **0.4.0**. The worker protocol remains v1;
-application prompt versioning and stored-result schemas are separate contracts.
+Current application/worker version is **0.9.0**. Rhythm currently supports and targets
+macOS only; the worker's cross-platform build options are implementation capabilities,
+not a claim of product support. Earlier Windows/Linux build evidence is historical.
+The worker protocol remains v1; application prompt versioning and stored-result schemas
+are separate contracts.
 
 The worker pins **mistral.rs v0.9.1**, upstream release commit
 [`11f255058573e085afe0a149f8a19cbd39aa1200`](https://github.com/EricLBuehler/mistral.rs/tree/11f255058573e085afe0a149f8a19cbd39aa1200).
@@ -58,19 +61,20 @@ cargo build --locked -p rhythm-ai-worker --release --features metal
 cargo build --locked -p rhythm-ai-worker --release --features cuda
 ```
 
-The root desktop helper also accepts an explicit backend selection:
+The root desktop helper is macOS-only and accepts an explicit `cpu` or `metal`
+selection:
 
 ```sh
-RHYTHM_AI_BACKEND=metal npm run desktop
+RHYTHM_AI_BACKEND=cpu npm run desktop
 RHYTHM_AI_BACKEND=metal npm run desktop:build
 ```
 
 Desktop scripts prefer Metal on Apple Silicon if the existing `xcrun metal --version`
-probe succeeds; otherwise they select CPU. `RHYTHM_AI_BACKEND` explicitly overrides
-this choice with `cpu`, `metal` or `cuda`. It selects the
-worker's build feature, not a guarantee that the accelerated device will load a model.
-Compatible tooling must already exist; the helper installs no toolchain or weights.
-The current useful Qwen3.5 output evidence is for Metal, not CPU.
+probe succeeds; otherwise they select CPU. Intel Macs use CPU. CUDA remains an optional
+direct Cargo worker build feature, not a supported desktop-script or product path.
+Backend selection chooses a build feature, not a guarantee that the accelerated device
+will load a model. Compatible tooling must already exist; the helper installs no
+toolchain or weights. The current useful Qwen3.5 output evidence is for Metal, not CPU.
 
 Do not enable upstream tool/search/execution capabilities or implicit remote resolution
 for notice analysis. GPU toolchains and model weights are not installed by these scripts.
@@ -238,6 +242,9 @@ measurements, final campaign outcomes and remaining gates. Transient diagnostics
 bounded timing/count reports without document or generated text; they are not persisted.
 
 Initial 4B CPU loading failed under then-current memory pressure before generation.
-Qwen3.5 CPU/CUDA, 9B (not downloaded), Windows/Linux runtime, complete native-flow coverage
-and release-optimized installer distribution remain unverified. Do not infer those claims
-from Metal compilation, baseline generation or the single-case application evidence.
+Qwen3.5 CPU/CUDA and 9B (not downloaded) remain unverified; the observed useful 2B/4B
+inference path is macOS Apple Silicon/Metal only. Historical Windows/Linux build evidence
+does not establish current support or runtime behavior. Complete native-flow coverage,
+release signing/notarization, Finder/DMG installation, and updater installation remain
+unverified. Do not infer those claims from Metal compilation, baseline generation or the
+single-case application evidence.

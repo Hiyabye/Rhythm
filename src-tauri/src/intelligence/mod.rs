@@ -166,9 +166,6 @@ impl Worker {
                 "AI 엔진을 시작하지 못했습니다. 앱을 다시 실행해 주세요.",
             ),
         };
-        // A GUI parent must not create a separate console for the bundled worker.
-        #[cfg(windows)]
-        command.creation_flags(0x08000000);
         match command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

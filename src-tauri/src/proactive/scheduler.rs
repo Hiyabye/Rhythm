@@ -4,6 +4,7 @@ use crate::{
         self,
         sync::{self, Controller},
     },
+    operation_gate::AdmissionGate,
     storage::{
         proactive::{
             ProactiveClaim, ProactiveEventKey, ProactiveOutcome, ProactiveSettings, ProactiveTask,
@@ -23,8 +24,6 @@ use std::{
 };
 use tauri::async_runtime::JoinHandle;
 use tauri::AppHandle;
-#[cfg(not(target_os = "macos"))]
-use tauri_plugin_notification::NotificationExt;
 use tokio::sync::{oneshot, watch};
 
 const WAKE_INTERVAL: Duration = Duration::from_secs(15);
@@ -35,6 +34,7 @@ pub struct Scheduler {
     network: archive::Client,
     root: PathBuf,
     app: AppHandle,
+    operation_gate: Arc<AdmissionGate>,
     control: Mutex<Control>,
     pending_activation: Arc<Mutex<Option<notification::NotificationActivation>>>,
     accepting_callbacks: Arc<AtomicBool>,
@@ -80,6 +80,7 @@ struct NotificationState {
     #[cfg(target_os = "macos")]
     callback_gate: Arc<Mutex<()>>,
     response_tasks: ResponseTasks,
+    operation_gate: Arc<AdmissionGate>,
 }
 
 impl Scheduler {
@@ -89,56 +90,19 @@ impl Scheduler {
         network: archive::Client,
         root: PathBuf,
         app: AppHandle,
+        operation_gate: Arc<AdmissionGate>,
     ) -> Result<Self, String> {
         let (sender, _) = watch::channel(false);
         let callback_gate = Arc::new(Mutex::new(()));
         let pending_activation = Arc::new(Mutex::new(None));
         let accepting_callbacks = Arc::new(AtomicBool::new(true));
-        #[cfg(not(target_os = "macos"))]
-        app.notification()
-            .on_action({
-                let app = app.clone();
-                let store = store.clone();
-                let accepting_callbacks = accepting_callbacks.clone();
-                let callback_gate = callback_gate.clone();
-                move |action| {
-                    let Ok(_callback_guard) = callback_gate.lock() else {
-                        return;
-                    };
-                    if !accepting_callbacks.load(Ordering::Acquire) {
-                        return;
-                    }
-                    if let Some(activation) = notification::action_activation(action) {
-                        let attempts = activation.event_attempts.to_vec();
-                        let Ok(store_guard) = store.lock() else {
-                            return;
-                        };
-                        if let Err(error) = store_guard.proactive_mark_delivered_batch(&attempts) {
-                            eprintln!("Proactive notification activation: {error}");
-                            return;
-                        }
-                        if let Ok(mut pending) = pending_activation.lock() {
-                            *pending = Some(activation.clone());
-                        }
-                        let handle = app.clone();
-                        if let Err(error) = app.run_on_main_thread(move || {
-                            if let Err(error) = crate::core::lifecycle::show_main_window(&handle) {
-                                eprintln!("Lifecycle: 알림에서 창을 표시하지 못했습니다: {error}");
-                            }
-                        }) {
-                            eprintln!("Lifecycle: 알림 창 복원을 예약하지 못했습니다: {error}");
-                        }
-                        notification::emit_activation(&app, activation);
-                    }
-                }
-            })
-            .map_err(|error| error.to_string())?;
         Ok(Self {
             store,
             archive,
             network,
             root,
             app,
+            operation_gate,
             control: Mutex::new(Control {
                 sender,
                 task: None,
@@ -162,12 +126,14 @@ impl Scheduler {
         {
             return Ok(());
         }
+        let _ = control.sender.send(false);
         let mut stop = control.sender.subscribe();
         let store = self.store.clone();
         let archive = self.archive.clone();
         let network = self.network.clone();
         let root = self.root.clone();
         let app = self.app.clone();
+        let operation_gate = self.operation_gate.clone();
         let mut notification_state = NotificationState {
             #[cfg(target_os = "macos")]
             pending_activation: self.pending_activation.clone(),
@@ -176,6 +142,7 @@ impl Scheduler {
             #[cfg(target_os = "macos")]
             callback_gate: self.callback_gate.clone(),
             response_tasks: ResponseTasks::default(),
+            operation_gate: operation_gate.clone(),
         };
         let (done_sender, done_receiver) = oneshot::channel();
         control.task = Some(tauri::async_runtime::spawn(async move {
@@ -183,16 +150,18 @@ impl Scheduler {
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        if let Err(error) = cycle(
-                            &store,
-                            &archive,
-                            &network,
-                            &root,
-                            &app,
-                            &mut notification_state,
-                            &mut stop,
-                        ).await {
-                            eprintln!("Proactive scheduler: {error}");
+                        if let Ok(_lease) = operation_gate.shared().await {
+                            if let Err(error) = cycle(
+                                &store,
+                                &archive,
+                                &network,
+                                &root,
+                                &app,
+                                &mut notification_state,
+                                &mut stop,
+                            ).await {
+                                eprintln!("Proactive scheduler: {error}");
+                            }
                         }
                     }
                     _ = notification_state.response_tasks.0.join_next(), if !notification_state.response_tasks.0.is_empty() => {},
@@ -209,6 +178,11 @@ impl Scheduler {
     pub async fn shutdown(&self) {
         let _callback_gate = self.callback_gate.lock();
         self.accepting_callbacks.store(false, Ordering::Release);
+        drop(_callback_gate);
+        self.quiesce().await;
+    }
+
+    pub async fn quiesce(&self) {
         let task = if let Ok(mut control) = self.control.lock() {
             let _ = control.sender.send(true);
             self.archive.cancel();
@@ -216,11 +190,37 @@ impl Scheduler {
         } else {
             None
         };
-        drop(_callback_gate);
         if let Some(task) = task {
             let _ = task.await;
         }
         self.archive.wait().await;
+    }
+
+    pub async fn resume_after_quiesce(&self) {
+        loop {
+            let stopped = match self.control.lock() {
+                Ok(mut control) => match control.task_done.as_mut() {
+                    Some(done) => {
+                        !matches!(done.try_recv(), Err(oneshot::error::TryRecvError::Empty))
+                    }
+                    None => true,
+                },
+                Err(_) => {
+                    eprintln!("Proactive: 유지보수 취소 후 스케줄러 상태를 복구하지 못했습니다.");
+                    return;
+                }
+            };
+            if stopped {
+                self.archive.wait().await;
+                if let Err(error) = self.start() {
+                    eprintln!(
+                        "Proactive: 유지보수 취소 후 스케줄러를 다시 시작하지 못했습니다: {error}"
+                    );
+                }
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
     }
 
     pub fn take_activation(&self) -> Result<Option<notification::NotificationActivation>, String> {
@@ -817,27 +817,6 @@ async fn discover_and_deliver(
     if deliver.is_empty() {
         return Ok(());
     }
-    #[cfg(not(target_os = "macos"))]
-    match notification::show_digest(app, &deliver) {
-        Ok(()) => {
-            let attempts = deliver
-                .iter()
-                .map(|item| (item.event_id, item.attempt_count))
-                .collect::<Vec<_>>();
-            with_store(store, |store| {
-                store.proactive_mark_attempted_batch(&attempts).map(|_| ())
-            })?;
-        }
-        Err(error) => {
-            for item in deliver {
-                with_store(store, |store| {
-                    store
-                        .proactive_fail_delivery(item.event_id, item.attempt_count, &error)
-                        .map(|_| ())
-                })?;
-            }
-        }
-    }
     #[cfg(target_os = "macos")]
     match notification::show_digest(app, &deliver).await {
         Ok(Some(handle)) => {
@@ -853,11 +832,15 @@ async fn discover_and_deliver(
             let pending_activation = notifications.pending_activation.clone();
             let accepting_callbacks = notifications.accepting_callbacks.clone();
             let callback_gate = notifications.callback_gate.clone();
+            let operation_gate = notifications.operation_gate.clone();
             let mut stop = stop.clone();
             notifications.response_tasks.spawn(async move {
                 let response = tokio::select! {
                     _ = stop.changed() => return,
                     response = handle.response() => response,
+                };
+                let Ok(_lease) = operation_gate.shared().await else {
+                    return;
                 };
                 let Ok(_callback_guard) = callback_gate.lock() else {
                     return;
@@ -889,6 +872,7 @@ async fn discover_and_deliver(
                                 if let Ok(mut pending) = pending_activation.lock() {
                                     *pending = Some(activation.clone());
                                 }
+                                drop(_lease);
                                 let handle = app.clone();
                                 let main_thread_gate = callback_gate.clone();
                                 let main_thread_accepting = accepting_callbacks.clone();

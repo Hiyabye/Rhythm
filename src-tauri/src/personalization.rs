@@ -19,6 +19,7 @@ async fn call<T: Send + 'static>(
 pub async fn personalization_get(
     state: State<'_, AppState>,
 ) -> Result<PersonalizationSnapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
     call(state.store.clone(), |s| s.personalization_snapshot()).await
 }
 #[tauri::command]
@@ -26,6 +27,7 @@ pub async fn personalization_save_profile(
     state: State<'_, AppState>,
     profile: PersonalizationProfile,
 ) -> Result<PersonalizationSnapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
     call(state.store.clone(), move |s| {
         s.personalization_save_profile(&profile)
     })
@@ -36,6 +38,7 @@ pub async fn personalization_save_interest(
     state: State<'_, AppState>,
     interest: PersonalInterestInput,
 ) -> Result<PersonalizationSnapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
     call(state.store.clone(), move |s| {
         s.personalization_save_interest(&interest)
     })
@@ -46,6 +49,7 @@ pub async fn personalization_remove_interest(
     state: State<'_, AppState>,
     id: i64,
 ) -> Result<PersonalizationSnapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
     call(state.store.clone(), move |s| {
         s.personalization_remove_interest(id)
     })
@@ -56,6 +60,7 @@ pub async fn personalization_set_learning(
     state: State<'_, AppState>,
     enabled: bool,
 ) -> Result<PersonalizationSnapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
     call(state.store.clone(), move |s| {
         s.personalization_set_learning(enabled)
     })
@@ -65,6 +70,7 @@ pub async fn personalization_set_learning(
 pub async fn personalization_reset(
     state: State<'_, AppState>,
 ) -> Result<PersonalizationSnapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
     call(state.store.clone(), |s| s.personalization_reset()).await
 }
 #[tauri::command]
@@ -72,6 +78,7 @@ pub async fn personalization_get_feedback(
     state: State<'_, AppState>,
     document_id: i64,
 ) -> Result<Option<String>, String> {
+    let _lease = state.operation_gate.shared().await?;
     call(state.store.clone(), move |s| {
         s.personalization_feedback(document_id)
     })
@@ -83,6 +90,7 @@ pub async fn personalization_set_feedback(
     document_id: i64,
     feedback: Option<String>,
 ) -> Result<Option<String>, String> {
+    let _lease = state.operation_gate.shared().await?;
     call(state.store.clone(), move |s| {
         s.personalization_set_feedback(document_id, feedback.as_deref())
     })
@@ -93,6 +101,7 @@ pub async fn personalization_recommendations(
     state: State<'_, AppState>,
     limit: u32,
 ) -> Result<PersonalizationRecommendations, String> {
+    let _lease = state.operation_gate.shared().await?;
     call(state.store.clone(), move |s| {
         s.personalization_recommendations(limit)
     })

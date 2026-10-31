@@ -22,6 +22,7 @@ pub fn client() -> Result<Client, String> {
 
 #[tauri::command]
 pub async fn archive_sources(state: State<'_, AppState>) -> Result<Vec<SourceInfo>, String> {
+    let _lease = state.operation_gate.shared().await?;
     with_store(&state.store, |s| s.sources())
 }
 #[tauri::command]
@@ -30,6 +31,7 @@ pub async fn archive_subscribe(
     id: String,
     subscribed: bool,
 ) -> Result<Vec<SourceInfo>, String> {
+    let _lease = state.operation_gate.shared().await?;
     with_store(&state.store, |s| {
         if !s.enabled("sogang_notices")? {
             return Err("서강대학교 공지 확장 기능을 먼저 켜 주세요.".into());
@@ -43,6 +45,7 @@ pub async fn archive_subscribe(
 }
 #[tauri::command]
 pub async fn archive_summary(state: State<'_, AppState>) -> Result<ArchiveSummary, String> {
+    let _lease = state.operation_gate.shared().await?;
     with_store(&state.store, |s| s.archive_summary())
 }
 #[tauri::command]
@@ -51,6 +54,7 @@ pub async fn archive_query(
     query: ArchiveQuery,
 ) -> Result<ArchivePage, String> {
     let store = state.store.clone();
+    let _lease = state.operation_gate.shared().await?;
     tauri::async_runtime::spawn_blocking(move || with_store(&store, |s| s.archive_query(&query)))
         .await
         .map_err(|_| "로컬 검색 작업을 완료하지 못했습니다.")?
@@ -61,6 +65,7 @@ pub async fn archive_document(
     id: i64,
     revision_id: Option<i64>,
 ) -> Result<DocumentDetail, String> {
+    let _lease = state.operation_gate.shared().await?;
     with_store(&state.store, |s| s.document(id, revision_id))
 }
 #[tauri::command]
@@ -70,6 +75,7 @@ pub async fn archive_state(
     is_read: Option<bool>,
     saved: Option<bool>,
 ) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
     with_store(&state.store, |s| s.set_document_state(id, is_read, saved))
 }
 #[tauri::command]
@@ -78,21 +84,28 @@ pub async fn archive_start(
     source_ids: Option<Vec<String>>,
     mode: String,
 ) -> Result<SyncStatus, String> {
-    state.archive.start(
-        state.store.clone(),
-        state.data_root.clone(),
-        state.network.clone(),
-        source_ids,
-        mode,
-    )
+    let lease = state.operation_gate.shared().await?;
+    state
+        .archive
+        .start_tracked_admitted(
+            state.store.clone(),
+            state.data_root.clone(),
+            state.network.clone(),
+            source_ids,
+            mode,
+            lease,
+        )
+        .map(|(status, _)| status)
 }
 #[tauri::command]
 pub async fn archive_cancel(state: State<'_, AppState>) -> Result<SyncStatus, String> {
+    let _lease = state.operation_gate.shared().await?;
     state.archive.cancel();
     state.archive.status()
 }
 #[tauri::command]
 pub async fn archive_status(state: State<'_, AppState>) -> Result<SyncStatus, String> {
+    let _lease = state.operation_gate.shared().await?;
     state.archive.status()
 }
 #[tauri::command]
@@ -100,15 +113,18 @@ pub async fn archive_retry_resource(
     state: State<'_, AppState>,
     id: i64,
 ) -> Result<SyncStatus, String> {
-    state.archive.retry(
+    let lease = state.operation_gate.shared().await?;
+    state.archive.retry_admitted(
         state.store.clone(),
         state.data_root.clone(),
         state.network.clone(),
         id,
+        lease,
     )
 }
 #[tauri::command]
 pub async fn archive_resource_image(state: State<'_, AppState>, id: i64) -> Result<String, String> {
+    let _lease = state.operation_gate.shared().await?;
     let (_, bytes) = sync::local_resource(&state.store, &state.data_root, id).await?;
     // Released archives may label an inline raster as an attachment when both
     // roles shared its URL. Local integrity, size and raster bytes are the boundary.
@@ -126,6 +142,7 @@ fn image_data_uri(bytes: &[u8]) -> Result<String, String> {
 }
 #[tauri::command]
 pub async fn archive_reveal_resource(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
     let (resource, _) = sync::local_resource(&state.store, &state.data_root, id).await?;
     // Reveal only an integrity-checked archive file; never execute/open its contents.
     tauri_plugin_opener::reveal_item_in_dir(

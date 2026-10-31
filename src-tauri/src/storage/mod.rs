@@ -14,7 +14,7 @@ mod personalization_tests;
 pub mod proactive;
 #[cfg(test)]
 mod proactive_tests;
-const SCHEMA_VERSION: i64 = 6;
+pub(crate) const SCHEMA_VERSION: i64 = 6;
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
     let migrations = [
@@ -155,6 +155,30 @@ impl Store {
                 .map_err(|e| e.to_string())?,
         })
     }
+    pub(crate) fn backup_to(&self, destination: &Path) -> Result<(), String> {
+        let mut target = Connection::open(destination).map_err(|e| e.to_string())?;
+        let backup = rusqlite::backup::Backup::new(&self.connection, &mut target)
+            .map_err(|e| e.to_string())?;
+        backup
+            .run_to_completion(128, std::time::Duration::from_millis(50), None)
+            .map_err(|e| e.to_string())?;
+        drop(backup);
+        target
+            .execute_batch("PRAGMA journal_mode=DELETE;")
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub(crate) fn backup_summary(&self) -> Result<(i64, u64), String> {
+        let schema = self
+            .connection
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        let documents = self
+            .connection
+            .query_row("SELECT COUNT(*) FROM documents", [], |r| r.get::<_, i64>(0))
+            .map_err(|e| e.to_string())? as u64;
+        Ok((schema, documents))
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -184,6 +208,36 @@ mod tests {
             .query_row("SELECT sqlite_compileoption_used('ENABLE_FTS5')", [], |r| r
                 .get::<_, bool>(0))
             .unwrap());
+    }
+    #[test]
+    fn online_backup_contains_committed_wal_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let live = directory.path().join("live.db");
+        let snapshot = directory.path().join("snapshot.db");
+        let store = Store::open(&live).unwrap();
+        store
+            .save(&Settings {
+                theme: "dark".into(),
+                energy_profile: "eco".into(),
+                interests: "보안".into(),
+            })
+            .unwrap();
+        store.backup_to(&snapshot).unwrap();
+        let copy = Connection::open(&snapshot).unwrap();
+        let settings = copy
+            .query_row(
+                "SELECT theme,energy_profile,interests FROM settings WHERE id=1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(settings, ("dark".into(), "eco".into(), "보안".into()));
     }
     #[test]
     fn invalid_settings_do_not_change_storage() {

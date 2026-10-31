@@ -1,12 +1,14 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod archive;
+mod backup;
 mod core;
 mod extensions;
 mod intelligence;
 mod notification_permission;
+pub(crate) mod operation_gate;
 mod personalization;
 mod proactive;
 mod storage;
+mod updater;
 use extensions::{ExtensionInfo, Registry};
 use intelligence::{Worker, WorkerStatus};
 use serde::Serialize;
@@ -18,23 +20,95 @@ use storage::{proactive::ProactiveSettings, Settings, StorageInfo, Store};
 use tauri::Manager;
 
 pub(crate) struct AppState {
-    _instance_lock: std::fs::File,
+    _instance_lock: core::DataDirLock,
     pub(crate) store: Arc<Mutex<Store>>,
-    data_root: PathBuf,
+    pub(crate) data_root: PathBuf,
     lifecycle: Arc<dyn core::lifecycle::LifecyclePreferences>,
     tray_available: bool,
     launch_at_login: Mutex<()>,
-    proactive: proactive::Scheduler,
-    archive: Arc<archive::sync::Controller>,
+    pub(crate) proactive: Arc<proactive::Scheduler>,
+    pub(crate) archive: Arc<archive::sync::Controller>,
     network: archive::Client,
     registry: Registry,
-    worker: Arc<tokio::sync::Mutex<Worker>>,
-    analysis: intelligence::analysis::Controller,
-    models: intelligence::models::Controller,
+    pub(crate) worker: Arc<tokio::sync::Mutex<Worker>>,
+    pub(crate) analysis: Arc<intelligence::analysis::Controller>,
+    pub(crate) models: intelligence::models::Controller,
     hardware: intelligence::models::Hardware,
     ai_gate: tokio::sync::Mutex<()>,
-    ai_operation: intelligence::operations::Controller,
+    pub(crate) ai_operation: intelligence::operations::Controller,
     maintenance_shutdown: Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) operation_gate: Arc<operation_gate::AdmissionGate>,
+}
+
+pub(crate) struct AppMaintenanceGuard {
+    _gate: operation_gate::MaintenanceGuard,
+    proactive: Arc<proactive::Scheduler>,
+    analysis: Arc<intelligence::analysis::Controller>,
+}
+
+impl Drop for AppMaintenanceGuard {
+    fn drop(&mut self) {
+        self.analysis.resume();
+        if let Err(error) = self.proactive.start() {
+            eprintln!("Proactive: 유지보수 후 스케줄러를 다시 시작하지 못했습니다: {error}");
+        }
+    }
+}
+
+struct MaintenancePreparation {
+    reservation: Option<operation_gate::MaintenanceReservation>,
+    proactive: Arc<proactive::Scheduler>,
+    analysis: Arc<intelligence::analysis::Controller>,
+    armed: bool,
+}
+
+impl Drop for MaintenancePreparation {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.analysis.resume();
+        let proactive = self.proactive.clone();
+        tauri::async_runtime::spawn(async move {
+            proactive.resume_after_quiesce().await;
+        });
+    }
+}
+
+impl AppState {
+    pub(crate) async fn exclusive_maintenance(&self) -> Result<AppMaintenanceGuard, String> {
+        let mut preparation = MaintenancePreparation {
+            reservation: Some(self.operation_gate.close()?),
+            proactive: self.proactive.clone(),
+            analysis: self.analysis.clone(),
+            armed: true,
+        };
+        self.archive.cancel();
+        self.analysis.stop();
+        self.models.stop();
+        self.ai_operation.cancel();
+        let ai_gate = self.ai_gate.lock().await;
+        self.analysis.stop();
+        self.models.stop();
+        self.ai_operation.cancel();
+        drop(ai_gate);
+        self.proactive.quiesce().await;
+        self.archive.wait().await;
+        self.analysis.wait().await;
+        self.models.wait().await;
+        let gate = preparation
+            .reservation
+            .take()
+            .expect("maintenance reservation remains until exclusive acquisition")
+            .acquire()
+            .await?;
+        preparation.armed = false;
+        Ok(AppMaintenanceGuard {
+            _gate: gate,
+            proactive: self.proactive.clone(),
+            analysis: self.analysis.clone(),
+        })
+    }
 }
 #[derive(Serialize)]
 struct Snapshot {
@@ -99,6 +173,7 @@ async fn snapshot(state: &AppState) -> Result<Snapshot, String> {
 }
 #[tauri::command]
 async fn get_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
     snapshot(&state).await
 }
 #[tauri::command]
@@ -106,6 +181,7 @@ async fn save_settings(
     state: tauri::State<'_, AppState>,
     settings: Settings,
 ) -> Result<Snapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
     {
         state
             .store
@@ -174,6 +250,7 @@ async fn lifecycle_status(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<LifecycleStatus, String> {
+    let _lease = state.operation_gate.shared().await?;
     read_lifecycle_status(&app, state.inner())
 }
 
@@ -183,6 +260,7 @@ async fn lifecycle_set_close_to_background(
     state: tauri::State<'_, AppState>,
     enabled: bool,
 ) -> Result<LifecycleStatus, String> {
+    let _lease = state.operation_gate.shared().await?;
     if enabled && !state.tray_available {
         return Err(
             "시스템 트레이를 사용할 수 없어 창을 닫을 때 백그라운드로 전환할 수 없습니다.".into(),
@@ -200,6 +278,7 @@ async fn lifecycle_set_start_hidden(
     state: tauri::State<'_, AppState>,
     enabled: bool,
 ) -> Result<LifecycleStatus, String> {
+    let _lease = state.operation_gate.shared().await?;
     save_proactive(state.inner(), |settings| settings.start_hidden = enabled)?;
     read_lifecycle_status(&app, state.inner())
 }
@@ -210,6 +289,7 @@ async fn lifecycle_set_launch_at_login(
     state: tauri::State<'_, AppState>,
     enabled: bool,
 ) -> Result<LifecycleStatus, String> {
+    let _lease = state.operation_gate.shared().await?;
     let _guard = state
         .launch_at_login
         .lock()
@@ -242,6 +322,7 @@ async fn set_extension(
     id: String,
     enabled: bool,
 ) -> Result<Snapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
     {
         let store = state
             .store
@@ -268,13 +349,14 @@ fn runtime_status(state: &AppState) -> WorkerStatus {
 }
 #[tauri::command]
 async fn worker_status(state: tauri::State<'_, AppState>) -> Result<WorkerStatus, String> {
+    let _lease = state.operation_gate.shared().await?;
     match state.worker.try_lock() {
         Ok(mut worker) => Ok(worker.refresh().await),
         Err(_) => Ok(runtime_status(&state)),
     }
 }
 fn main() {
-    let app = tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         // The single-instance check runs before windows, the data lock and every
         // store/worker initialization. A second process exits in plugin setup.
         .plugin(tauri_plugin_single_instance::init(
@@ -291,10 +373,11 @@ fn main() {
                 .arg(core::lifecycle::AUTOSTART_ARG)
                 .build(),
         )
-        // Desktop permission APIs in the notification plugin report `Granted`
-        // unconditionally. Delivery code must not treat plugin setup or that
-        // value as proof that the OS will show a notification.
-        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init());
+    if let Some(key) = option_env!("RHYTHM_UPDATER_PUBKEY").filter(|key| !key.trim().is_empty()) {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().pubkey(key).build());
+    }
+    let app = builder
         .setup(|app| {
             core::install_menu(app.handle())?;
             let data_root = app.path().app_data_dir()?;
@@ -308,6 +391,7 @@ fn main() {
                     return Ok(());
                 }
             };
+            backup::recover_pending_restore(&data_root).map_err(std::io::Error::other)?;
             let store =
                 Store::open(&data_root.join("rhythm.sqlite3")).map_err(std::io::Error::other)?;
             store
@@ -336,6 +420,7 @@ fn main() {
                     core::lifecycle::show_main_window(app.handle())?;
                 }
             }
+            let operation_gate = Arc::new(operation_gate::AdmissionGate::default());
             let archive = archive::sync::Controller::new();
             let network = archive::client().map_err(std::io::Error::other)?;
             let proactive = proactive::Scheduler::new(
@@ -344,16 +429,13 @@ fn main() {
                 network.clone(),
                 data_root.clone(),
                 app.handle().clone(),
+                operation_gate.clone(),
             )
             .map_err(std::io::Error::other)?;
             let executable = std::env::current_exe()?
                 .parent()
                 .ok_or("실행 파일 경로를 찾을 수 없습니다.")?
-                .join(if cfg!(windows) {
-                    "rhythm-ai-worker.exe"
-                } else {
-                    "rhythm-ai-worker"
-                });
+                .join("rhythm-ai-worker");
             let worker = tauri::async_runtime::block_on(async {
                 let mut worker = Worker::launch(&executable);
                 worker.refresh().await;
@@ -361,6 +443,7 @@ fn main() {
             });
             let hardware = intelligence::models::hardware(&data_root);
             let maintenance_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            app.manage(updater::State::default());
             app.manage(AppState {
                 launch_at_login: Mutex::new(()),
                 _instance_lock: instance_lock,
@@ -368,17 +451,18 @@ fn main() {
                 data_root,
                 lifecycle,
                 tray_available,
-                proactive,
+                proactive: Arc::new(proactive),
                 registry: Registry::new(archive.clone()),
                 archive,
                 network,
                 worker: Arc::new(tokio::sync::Mutex::new(worker)),
-                analysis: intelligence::analysis::Controller::default(),
+                analysis: Arc::new(intelligence::analysis::Controller::default()),
                 models: intelligence::models::Controller::default(),
                 hardware,
                 ai_gate: tokio::sync::Mutex::new(()),
                 ai_operation: intelligence::operations::Controller::default(),
                 maintenance_shutdown: maintenance_shutdown.clone(),
+                operation_gate,
             });
             tauri::async_runtime::spawn(intelligence::maintenance::run(
                 app.handle().clone(),
@@ -392,6 +476,13 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            backup::backup_create,
+            backup::backup_inspect,
+            backup::backup_restore,
+            backup::backup_cancel,
+            updater::updater_check,
+            updater::updater_install,
+            updater::updater_restart,
             personalization::personalization_get,
             personalization::personalization_save_profile,
             personalization::personalization_save_interest,

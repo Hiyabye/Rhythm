@@ -1,0 +1,242 @@
+name: Release draft (explicit tag, draft only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to package (must match all checked-in version metadata)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rhythm-release-draft-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate trusted release tag and reject existing release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      commit: ${{ steps.tag.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+      - name: Validate tag provenance on trusted main
+        id: tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          git fetch --no-tags origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          main_commit="$(git rev-parse refs/remotes/origin/main^{commit})"
+          if ! git merge-base --is-ancestor "$tag_commit" "$main_commit"; then
+            echo "Release tag does not point to a commit reachable from trusted main."
+            exit 1
+          fi
+          echo "commit=$tag_commit" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_COMMIT=$tag_commit" >> "$GITHUB_ENV"
+          git checkout --detach "$tag_commit"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Verify tag and version metadata
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const tag = process.env.RELEASE_TAG;
+          if (!/^v\d+\.\d+\.\d+$/.test(tag)) throw new Error(`Invalid release tag: ${tag}`);
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+          const packageLock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8')).version;
+          const tauri = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8')).version;
+          const cargo = fs.readFileSync('src-tauri/Cargo.toml', 'utf8').match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+          const worker = fs.readFileSync('crates/ai-worker/Cargo.toml', 'utf8').match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+          const expected = `v${pkg}`;
+          if (packageLock !== pkg || tauri !== pkg || cargo !== pkg || worker !== pkg || tag !== expected) {
+            throw new Error(`Tag/version mismatch: tag=${tag}, package=${pkg}, lock=${packageLock}, tauri=${tauri}, rhythm=${cargo}, worker=${worker}`);
+          }
+          fs.writeFileSync(process.env.GITHUB_ENV, `RELEASE_VERSION=${pkg}\n`, { flag: 'a' });
+          console.log(`Validated ${tag}`);
+          NODE
+      - name: Refuse to overwrite an existing GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "A release for $RELEASE_TAG already exists; refusing to overwrite it."
+            exit 1
+          fi
+
+  signed-bundles:
+    name: macOS Apple Silicon updater artifacts
+    needs: validate
+    runs-on: macos-14
+    defaults:
+      run:
+        shell: bash
+    environment:
+      name: release-signing
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: 2
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - name: Build signed bundles for this runner architecture
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RHYTHM_UPDATER_PUBKEY: ${{ secrets.RHYTHM_UPDATER_PUBKEY }}
+        run: |
+          test -n "$TAURI_SIGNING_PRIVATE_KEY"
+          test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          test -n "$RHYTHM_UPDATER_PUBKEY"
+          npm run desktop:build -- --bundles app dmg --config '{"bundle":{"createUpdaterArtifacts":true}}'
+      - name: Stage signed updater bundle, DMG and metadata
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const root = 'target/release/bundle';
+          const output = 'release-assets';
+          fs.mkdirSync(output, { recursive: true });
+          const files = [];
+          const dmgs = [];
+          function walk(dir) {
+            if (!fs.existsSync(dir)) return;
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const full = path.join(dir, entry.name);
+              if (entry.isDirectory()) walk(full);
+              else if (entry.isFile() && entry.name.endsWith('.sig')) files.push(full);
+              else if (entry.isFile() && entry.name.endsWith('.dmg')) dmgs.push(full);
+            }
+          }
+          walk(root);
+          if (process.platform !== 'darwin' || process.arch !== 'arm64') {
+            throw new Error(`Release artifacts require Apple Silicon macOS; received ${process.platform}/${process.arch}`);
+          }
+          const os = 'darwin';
+          const arch = 'aarch64';
+          const platforms = {};
+          for (const sigPath of files) {
+            const assetPath = sigPath.slice(0, -4);
+            const asset = path.basename(assetPath);
+            const signature = fs.readFileSync(sigPath, 'utf8').trim();
+            if (!fs.existsSync(assetPath)) throw new Error(`Missing artifact for signature: ${assetPath}`);
+            if (!signature) throw new Error(`Empty updater signature: ${sigPath}`);
+            if (!asset.endsWith('.app.tar.gz')) continue;
+            const target = `${os}-${arch}-app`;
+            if (platforms[target]) throw new Error(`Duplicate updater target: ${target}`);
+            fs.copyFileSync(assetPath, path.join(output, asset));
+            fs.copyFileSync(sigPath, path.join(output, `${asset}.sig`));
+            platforms[target] = { asset, signature };
+          }
+          if (!platforms[`darwin-${arch}-app`]) throw new Error(`No signed Apple Silicon macOS updater bundle found under ${root}`);
+          if (dmgs.length !== 1) throw new Error(`Expected exactly one DMG under ${root}; found ${dmgs.length}`);
+          fs.copyFileSync(dmgs[0], path.join(output, path.basename(dmgs[0])));
+          platforms[`darwin-${arch}`] = platforms[`darwin-${arch}-app`];
+          fs.writeFileSync(path.join(output, `platforms-${os}-${arch}.json`), JSON.stringify({ os, arch, platforms }, null, 2));
+          console.log(`Staged ${Object.keys(platforms).join(', ')}`);
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rhythm-signed-macos-arm64
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  draft-release:
+    name: Create GitHub draft release (never publish)
+    needs: [validate, signed-bundles]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rhythm-signed-*
+          path: release-assets
+          merge-multiple: true
+      - name: Revalidate tag and assemble stable metadata and checksums
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const crypto = require('node:crypto');
+          const tag = process.env.RELEASE_TAG;
+          const version = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+          const packageLock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8')).version;
+          const tauri = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8')).version;
+          const cargo = fs.readFileSync('src-tauri/Cargo.toml', 'utf8').match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+          const worker = fs.readFileSync('crates/ai-worker/Cargo.toml', 'utf8').match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+          if (tag !== `v${version}` || packageLock !== version || tauri !== version || cargo !== version || worker !== version) throw new Error('Release tag/version metadata changed or do not match.');
+          const root = 'release-assets';
+          const platforms = {};
+          for (const name of fs.readdirSync(root)) {
+            if (!name.startsWith('platforms-') || !name.endsWith('.json')) continue;
+            const record = JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'));
+            for (const [target, item] of Object.entries(record.platforms)) {
+              if (platforms[target]) throw new Error(`Duplicate updater target: ${target}`);
+              const url = `https://github.com/${process.env.GH_REPO}/releases/download/${tag}/${encodeURIComponent(item.asset)}`;
+              platforms[target] = { url, signature: item.signature };
+            }
+            fs.rmSync(path.join(root, name));
+          }
+          if (!platforms['darwin-aarch64-app']) throw new Error('Missing the signed Apple Silicon macOS updater target.');
+          const manifest = { version, notes: `Rhythm ${version}`, pub_date: new Date().toISOString(), platforms };
+          fs.writeFileSync(path.join(root, 'latest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+          const files = fs.readdirSync(root).filter((name) => name !== 'SHA256SUMS').sort();
+          const sums = files.map((name) => `${crypto.createHash('sha256').update(fs.readFileSync(path.join(root, name))).digest('hex')}  ${name}`).join('\n') + '\n';
+          fs.writeFileSync(path.join(root, 'SHA256SUMS'), sums);
+          console.log(`Prepared ${tag} metadata for ${Object.keys(platforms).join(', ')}`);
+          NODE
+      - name: Refuse overwrite and create draft only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          git fetch --no-tags origin "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          test "$tag_commit" = "$RELEASE_COMMIT"
+          if gh release view "$RELEASE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "A release for $RELEASE_TAG already exists; refusing to overwrite it."
+            exit 1
+          fi
+          mapfile -t assets < <(find release-assets -maxdepth 1 -type f -print | sort)
+          test "${#assets[@]}" -gt 0
+          gh release create "$RELEASE_TAG" "${assets[@]}" --repo "$GH_REPO" --draft --verify-tag --title "$RELEASE_TAG" --notes "Draft generated from signed updater artifacts. Review signatures, SHA256SUMS, platform coverage, and release notes before publishing."
+

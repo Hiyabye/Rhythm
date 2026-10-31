@@ -103,6 +103,9 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
         let Some(state) = handle.try_state::<AppState>() else {
             break;
         };
+        let Ok(lease) = state.operation_gate.shared().await else {
+            continue;
+        };
         let focused = handle
             .get_webview_window("main")
             .and_then(|window| window.is_focused().ok())
@@ -178,13 +181,14 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
         if shutdown.load(Ordering::Acquire) {
             break;
         }
-        match state.analysis.start(
+        match state.analysis.start_admitted(
             state.store.clone(),
             state.worker.clone(),
             state.data_root.clone(),
             document,
             revision,
             false,
+            lease,
         ) {
             Ok(response) if response.job.is_some() => {
                 admitted += 1;

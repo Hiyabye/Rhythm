@@ -12,8 +12,8 @@ jobs:
     name: Frontend interactions (Chromium + WebKit)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -23,12 +23,8 @@ jobs:
       - run: npm run test:ui
 
   desktop:
-    name: Desktop (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-24.04, windows-latest]
-    runs-on: ${{ matrix.os }}
+    name: macOS desktop (Apple Silicon)
+    runs-on: macos-14
     env:
       CARGO_TERM_COLOR: always
       CARGO_BUILD_JOBS: 2
@@ -36,8 +32,8 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -45,11 +41,6 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Install Linux native build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev librsvg2-dev libxdo-dev patchelf
       - run: npm ci
       - run: npm run check
       - run: npm run build
@@ -57,7 +48,7 @@ jobs:
       - name: Build and stage worker for Tauri checks
         run: |
           cargo build --locked -p rhythm-ai-worker
-          node -e 'const fs=require("node:fs"),p=require("node:path"),cp=require("node:child_process");const target=cp.execFileSync("rustc",["-vV"],{encoding:"utf8"}).match(/host: (.+)/)[1].trim();const ext=process.platform==="win32"?".exe":"";const bin=p.resolve("target/debug/rhythm-ai-worker"+ext);fs.mkdirSync("src-tauri/binaries",{recursive:true});fs.copyFileSync(bin,"src-tauri/binaries/rhythm-ai-worker-"+target+ext);fs.appendFileSync(process.env.GITHUB_ENV,"RHYTHM_WORKER_TEST_BIN="+bin+"\n");'
+          node -e 'const fs=require("node:fs"),p=require("node:path"),cp=require("node:child_process");const target=cp.execFileSync("rustc",["-vV"],{encoding:"utf8"}).match(/host: (.+)/)[1].trim();if(target!=="aarch64-apple-darwin")throw new Error(`Unexpected CI target: ${target}`);const bin=p.resolve("target/debug/rhythm-ai-worker");fs.mkdirSync("src-tauri/binaries",{recursive:true});fs.copyFileSync(bin,"src-tauri/binaries/rhythm-ai-worker-"+target);fs.appendFileSync(process.env.GITHUB_ENV,"RHYTHM_WORKER_TEST_BIN="+bin+"\n");'
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Test storage and worker lifecycle (no model weights)
         run: cargo test --locked --workspace

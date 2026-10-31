@@ -194,6 +194,7 @@ impl Controller {
     /// Explicit admission only. A valid cache hit never starts the worker or verifies weights.
     /// `regenerate` creates a new attempt without deleting earlier successful results.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub fn start(
         &self,
         store: SharedStore,
@@ -202,6 +203,48 @@ impl Controller {
         document_id: i64,
         revision_id: i64,
         regenerate: bool,
+    ) -> Result<StartResponse, String> {
+        self.start_with_lease(
+            store,
+            worker,
+            data_dir,
+            document_id,
+            revision_id,
+            regenerate,
+            None,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_admitted(
+        &self,
+        store: SharedStore,
+        worker: SharedWorker,
+        data_dir: PathBuf,
+        document_id: i64,
+        revision_id: i64,
+        regenerate: bool,
+        lease: crate::operation_gate::AdmissionLease,
+    ) -> Result<StartResponse, String> {
+        self.start_with_lease(
+            store,
+            worker,
+            data_dir,
+            document_id,
+            revision_id,
+            regenerate,
+            Some(lease),
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn start_with_lease(
+        &self,
+        store: SharedStore,
+        worker: SharedWorker,
+        data_dir: PathBuf,
+        document_id: i64,
+        revision_id: i64,
+        regenerate: bool,
+        lease: Option<crate::operation_gate::AdmissionLease>,
     ) -> Result<StartResponse, String> {
         let admission_started = Instant::now();
         // Admission and the queue's empty-to-idle transition use this same lock.
@@ -254,6 +297,7 @@ impl Controller {
             state.running = true;
             let controller = self.clone();
             tokio::spawn(async move {
+                let _lease = lease;
                 controller.run(store, worker, data_dir).await;
             });
         }
@@ -290,6 +334,11 @@ impl Controller {
             if let Some((_, cancellation)) = &state.active {
                 cancellation.cancel();
             }
+        }
+    }
+    pub fn resume(&self) {
+        if let Ok(mut state) = self.inner.state.lock() {
+            state.stopped = false;
         }
     }
     pub async fn wait(&self) {

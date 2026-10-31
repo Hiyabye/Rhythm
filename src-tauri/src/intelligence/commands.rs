@@ -19,7 +19,7 @@ fn check_open(state: &AppState) -> Result<(), String> {
     if state.maintenance_shutdown.load(Ordering::Acquire) {
         Err(EXIT_ERROR.into())
     } else {
-        Ok(())
+        state.operation_gate.ensure_open()
     }
 }
 
@@ -193,6 +193,7 @@ async fn operation_worker(
 }
 #[tauri::command]
 pub async fn ai_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
     let runtime = state
         .worker
         .try_lock()
@@ -245,18 +246,25 @@ pub async fn ai_install(
     state: tauri::State<'_, AppState>,
     catalog_id: String,
 ) -> Result<(), String> {
+    let lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
     check_open(&state)?;
-    state
-        .models
-        .start(state.store.clone(), state.data_root.clone(), catalog_id)
+    state.models.start_admitted(
+        state.store.clone(),
+        state.data_root.clone(),
+        catalog_id,
+        lease,
+    )
 }
 #[tauri::command]
-pub fn ai_cancel_download(state: tauri::State<'_, AppState>) {
+pub async fn ai_cancel_download(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
     state.models.cancel();
+    Ok(())
 }
 #[tauri::command]
 pub async fn ai_register(state: tauri::State<'_, AppState>, path: String) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
     check_open(&state)?;
     if state.analysis.running() {
@@ -298,6 +306,7 @@ pub async fn ai_select(
     state: tauri::State<'_, AppState>,
     id: Option<String>,
 ) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
     check_open(&state)?;
     if state.analysis.running() {
@@ -318,6 +327,7 @@ pub async fn ai_select(
 }
 #[tauri::command]
 pub async fn ai_load(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
     check_open(&state)?;
     if state.analysis.running() {
@@ -336,6 +346,7 @@ pub async fn ai_load(state: tauri::State<'_, AppState>) -> Result<(), String> {
 }
 #[tauri::command]
 pub async fn ai_unload(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
     check_open(&state)?;
     if state.analysis.running() {
@@ -345,6 +356,7 @@ pub async fn ai_unload(state: tauri::State<'_, AppState>) -> Result<(), String> 
 }
 #[tauri::command]
 pub async fn ai_restart(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
     check_open(&state)?;
     if state.analysis.running() {
@@ -358,6 +370,7 @@ pub async fn ai_remove(
     id: String,
     confirmed: bool,
 ) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
     if !confirmed {
         return Err("모델 삭제를 확인해 주세요.".into());
     }
@@ -398,6 +411,7 @@ pub async fn ai_preferences(
     state: tauri::State<'_, AppState>,
     preferences: AiPreferences,
 ) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
     check_open(&state)?;
     let old = with_store(&state, |s| s.ai_preferences())?;
@@ -431,52 +445,61 @@ pub async fn ai_analyze(
     revision_id: i64,
     regenerate: bool,
 ) -> Result<analysis::StartResponse, String> {
+    let lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
     check_open(&state)?;
-    state.analysis.start(
+    state.analysis.start_admitted(
         state.store.clone(),
         state.worker.clone(),
         state.data_root.clone(),
         document_id,
         revision_id,
         regenerate,
+        lease,
     )
 }
 #[tauri::command]
-pub fn ai_cancel(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
+pub async fn ai_cancel(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
     state.analysis.cancel(&state.store, id)
 }
 #[tauri::command]
-pub fn ai_results(
+pub async fn ai_results(
     state: tauri::State<'_, AppState>,
     document_id: i64,
     revision_id: i64,
 ) -> Result<Vec<AiResult>, String> {
+    let _lease = state.operation_gate.shared().await?;
     with_store(&state, |s| {
         s.ai_document_results(document_id, Some(revision_id), 20)
     })
 }
 #[tauri::command]
-pub fn ai_document_jobs(
+pub async fn ai_document_jobs(
     state: tauri::State<'_, AppState>,
     document_id: i64,
     revision_id: i64,
 ) -> Result<Vec<AiJob>, String> {
+    let _lease = state.operation_gate.shared().await?;
     with_store(&state, |s| s.ai_document_jobs(document_id, revision_id, 20))
 }
 #[tauri::command]
-pub fn ai_cancel_operation(state: tauri::State<'_, AppState>) {
+pub async fn ai_cancel_operation(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
     state.ai_operation.cancel();
+    Ok(())
 }
 #[tauri::command]
-pub fn ai_diagnostics(
+pub async fn ai_diagnostics(
     state: tauri::State<'_, AppState>,
     job_id: i64,
-) -> Option<analysis::Diagnostics> {
-    state.analysis.diagnostics(job_id)
+) -> Result<Option<analysis::Diagnostics>, String> {
+    let _lease = state.operation_gate.shared().await?;
+    Ok(state.analysis.diagnostics(job_id))
 }
 #[tauri::command]
-pub fn ai_recent(state: tauri::State<'_, AppState>) -> Result<Vec<AiResult>, String> {
+pub async fn ai_recent(state: tauri::State<'_, AppState>) -> Result<Vec<AiResult>, String> {
+    let _lease = state.operation_gate.shared().await?;
     with_store(&state, |s| s.ai_recent_results(30))
 }
 
