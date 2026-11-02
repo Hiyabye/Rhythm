@@ -1,6 +1,6 @@
 [package]
 name = "rhythm-ai-worker"
-version = "0.9.2"
+version = "0.9.3"
 edition = "2021"
 rust-version = "1.94"
 license = "MIT"
@@ -12,11 +12,14 @@ static_vcruntime = "3.0"
 [features]
 default = ["inference"]
 inference = ["dep:mistralrs"]
+gpu-inference = ["dep:llama-cpp-2", "dep:llama-cpp-sys-2"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 filedescriptor = "0.8.3"
+llama-cpp-2 = { version = "=0.1.160", optional = true, default-features = false, features = ["vulkan", "common"] }
+llama-cpp-sys-2 = { version = "=0.1.160", optional = true, default-features = false, features = ["vulkan", "common"] }
 # v0.9.1 is the first inspected release with native qwen35 GGUF text loading.
 mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git", rev = "11f255058573e085afe0a149f8a19cbd39aa1200", optional = true, default-features = false }

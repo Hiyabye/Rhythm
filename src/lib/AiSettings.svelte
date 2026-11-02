@@ -14,6 +14,7 @@
   let feedback = $state('');
   let path = $state('');
   let removal = $state<string | null>(null);
+  let executionMode = $state<AiPreferences['execution_mode']>('auto');
   let disposed = false;
   let refreshing = false;
   let setupReported = false;
@@ -34,6 +35,7 @@
       const next = await invoke<AiSnapshot>('ai_snapshot');
       if (!disposed) {
         data = next; fetchError = '';
+        executionMode = next.preferences.execution_mode ?? 'auto';
         if (next.preferences.setup_completed && !setupReported) { setupReported = true; onsetup?.(); }
       }
     }
@@ -73,7 +75,14 @@
   <p class="archive-feedback" role="status">{feedback}</p>
   {#if data}
     {#if !data.preferences.setup_completed}<div class="ai-setup"><h3>로컬 AI 시작하기</h3><p>모델 선택 → 다운로드와 무결성 확인 → 불러오기 → 실제 추론 확인 순서로 준비합니다. 인터넷이 없어도 보관된 공지는 계속 읽을 수 있습니다.</p><p>설치는 아래 버튼을 누른 경우에만 시작합니다. 준비는 나중에 이어서 할 수 있습니다.</p></div>{/if}
-    <div class="setting-row"><div><h3>내 기기</h3><p>{data.hardware.os} · {data.hardware.arch} · 물리 메모리 {data.hardware.ram_bytes ? archiveSize(data.hardware.ram_bytes) : '확인하지 못함'}<br />현재 남은 저장 공간 {data.hardware.disk_available_bytes ? archiveSize(data.hardware.disk_available_bytes) : '확인하지 못함'}</p><p class="footnote">물리 메모리는 지금 사용할 수 있는 메모리와 다릅니다. 다른 앱의 사용량에 따라 모델을 불러오지 못할 수 있습니다. 처음에는 2B로 시작하는 편이 가볍습니다.</p><details><summary>고급 · 추론 백엔드</summary><p>{data.hardware.backend}</p><p class="footnote">이 Windows 버전은 CPU를 사용합니다. 실제 동작 상태는 아래 엔진에서 확인하세요.</p></details></div></div>
+    <div class="setting-row"><div><h3>내 기기</h3><p>{data.hardware.os} · {data.hardware.arch} · 물리 메모리 {data.hardware.ram_bytes ? archiveSize(data.hardware.ram_bytes) : '확인하지 못함'}<br />현재 남은 저장 공간 {data.hardware.disk_available_bytes ? archiveSize(data.hardware.disk_available_bytes) : '확인하지 못함'}</p><p class="footnote">물리 메모리는 지금 사용할 수 있는 메모리와 다릅니다. 다른 앱의 사용량에 따라 모델을 불러오지 못할 수 있습니다. 처음에는 2B로 시작하는 편이 가볍습니다.</p><details><summary>고급 · 추론 백엔드</summary><p>{data.hardware.backend}</p><p class="footnote">NVIDIA GPU는 Vulkan으로 실행합니다. GTX 10·16 및 RTX 20·30·40·50 시리즈가 대상이며, 모든 기종에서 검증된 것은 아닙니다. 드라이버와 남은 그래픽 메모리에 따라 실행 가능 여부가 달라집니다.</p></details></div></div>
+    <label class="field-label" for="ai-execution-mode">AI 실행 장치</label>
+    <select id="ai-execution-mode" bind:value={executionMode} disabled={busy || data.busy} onchange={(event) => preference({ execution_mode: event.currentTarget.value as AiPreferences['execution_mode'] })}>
+      <option value="auto">자동 · NVIDIA GPU 우선, 사용할 수 없으면 CPU</option>
+      <option value="cpu">CPU만 사용</option>
+      <option value="gpu">NVIDIA GPU만 사용</option>
+    </select>
+    <p class="footnote">장치를 바꾸면 불러온 모델을 해제하고 다음 분석부터 적용합니다. GPU 전용에서는 GPU를 사용할 수 없을 때 오류를 알립니다. 실제 실행 장치와 CPU 전환 이유는 아래 AI 엔진 상태에서 확인하세요.</p>
     {#if data.operation}<div class="ai-operation" aria-label="진행 중인 AI 작업"><h3>{operationName[data.operation.kind] ?? '로컬 AI 작업'}</h3><p role="status">{operationPhase[data.operation.cancelling ? 'cancelling' : data.operation.phase] ?? '로컬 AI 작업을 처리하고 있습니다'} · 경과 {(data.operation.elapsed_ms / 1000).toFixed(0)}초</p><p class="footnote">준비하는 동안 다른 화면과 보관된 공지를 계속 사용할 수 있습니다.</p><button class="text-button" disabled={cancelling || data.operation.cancelling} onclick={() => interrupt('ai_cancel_operation', {}, '작업 중단을 요청했습니다. 정리가 끝날 때까지 기다려 주세요.')}>{data.operation.cancelling ? '중단하는 중…' : '현재 AI 작업 취소'}</button></div>{/if}
     <div class="setting-row"><div><h3>AI 엔진</h3><p>{data.runtime.state === 'busy' ? '로컬 AI 작업 중' : data.runtime.state === 'loading' ? '모델을 불러오는 중' : data.runtime.state === 'ready' ? (data.runtime.model ? '모델 준비됨' : '모델 없이 대기 중') : '엔진 확인 필요'}</p>{#if data.runtime.detail}<p>{data.runtime.detail}</p>{/if}</div><div class="inline-controls"><button class="text-button" disabled={busy || data.busy} onclick={() => action('ai_restart', {}, 'AI 엔진을 다시 시작했습니다.')}>엔진 다시 시작</button><button class="text-button" aria-label="AI 엔진 상태 새로고침" onclick={refresh}>상태 새로고침</button></div></div>
     <div class="ai-catalog" aria-label="모델 카탈로그">

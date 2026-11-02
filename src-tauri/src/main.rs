@@ -583,10 +583,12 @@ fn main() {
                 .ok_or("실행 파일 경로를 찾을 수 없습니다.")?
                 .join(format!("rhythm-ai-worker{}", std::env::consts::EXE_SUFFIX));
             let worker = tauri::async_runtime::block_on(async {
-                let mut worker = Worker::launch(&executable);
+                let mode = store.lock().map_err(|_| std::io::Error::other("설정 잠금 오류"))?
+                    .ai_preferences().map_err(std::io::Error::other)?.execution_mode;
+                let mut worker = Worker::launch_configured(&executable, &mode);
                 worker.refresh().await;
-                worker
-            });
+                Ok::<_, std::io::Error>(worker)
+            })?;
             let hardware = intelligence::models::hardware(&data_root);
             let maintenance_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
             app.manage(AppState {

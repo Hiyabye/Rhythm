@@ -1,4 +1,25 @@
-# Windows CPU AI results
+# Windows AI results
+
+## 0.9.3 NVIDIA Vulkan addendum — 2026-11-02
+
+The GPU path was exercised on the development Windows 11 x64 machine with an NVIDIA GeForce GTX 1650, 4 GiB dedicated memory and driver 552.44. The worker uses llama.cpp through pinned `llama-cpp-2`/`llama-cpp-sys-2` 0.1.160. GTX 10/16 and RTX 20/30/40/50 remain hardware targets; only this GTX 1650 was exercised. See [Windows GPU setup and limits](WINDOWS_GPU.md).
+
+**At the user's direction, summary correctness is excluded from the GPU feature/build completion criteria.** The reference observations below do not block packaging. Existing source-grounding and output validation remain enforced; a rejected result is still not a completed analysis or a successful cache check.
+
+| Evaluation | Observed result and boundary |
+| --- | --- |
+| Qwen3.5 2B real GPU worker | Runtime integration passed in 111.141 s: Vulkan status, load, normal Korean output, structured JSON, model reuse, 25 actually offloaded NVIDIA GPU layers, request interruption/reap, reload, recovered inference and shutdown. Initial load took 9.078 s; structured request took 56.867 s, including 56.794 s generation. |
+| Qwen3.5 4B real GPU worker | The same runtime integration passed in 159.602 s with 31 actually offloaded GPU layers. Initial load took 17.818 s; structured request took 92.243 s, including 92.035 s generation. |
+| Reference output checks | Both models passed the JSON structure check on one fixed synthetic Korean scholarship notice. 2B returned category `공모전·대회` and `event_date` fact kinds; 4B returned `학사` and `documents` kinds. Both failed the expected scholarship category and deadline-kind checks. Runtime report `status: passed` does not mean these reference checks passed. |
+| Real app analysis pipeline, 2B | The test host completed two Vulkan generation attempts (97.902 s and 54.982 s, model reuse reported), but source-grounding validation rejected a date value that did not match its referenced source text. No current-revision result was stored, quality status remained incomplete and the final cache check was incomplete. The test took 215.95 s; its analysis job took 209.196 s. Recovery was not requested in this app-pipeline run, and native UI was not verified. |
+
+The direct-worker interruption tests terminate the owned child 500 ms after submitting inference, reap it, then start a new worker, load and infer again. They establish interruption at the pending parent IPC request, not that a GPU kernel was active at that exact instant. These checks launch no HTTP service and read existing local model files; they do not establish OS-enforced offline operation. The app-pipeline run's worker working set was 1,832,340 KiB after load and 1,906,268 KiB at its final sample. These are process-memory samples, not GPU VRAM measurements or measured peaks.
+
+Other builds were running during these measurements. **Do not compare these times to the historical CPU results below or describe them as isolated performance benchmarks.** Neither model-file size nor observed offloaded-layer count establishes a maximum VRAM requirement.
+
+The runtime reports are local at `D:\Codex_Rhythm\.build-tools\validation\gpu-1650-2b-01.json` and `gpu-1650-4b-01.json`; the app-pipeline report is `gpu-app-analysis-2b.json`. The direct-worker reports identify worker SHA-256 `00e285cfd8290a62471a5719ad395fb03819445a8231a4349544d7d2d1f981fc`. Their model byte counts and SHA-256 values match the pinned 2B/4B files recorded below. A later rebuilt installer is a different artifact and requires its own packaging record.
+
+## Historical 0.9.2 CPU observations
 
 These observations were collected on 2026-11-02 on the Windows 11 x64 development machine described in [Windows validation](WINDOWS_VALIDATION.md), using the uncommitted working tree, a release-profile app test host and the CPU release worker unless the installed-app interaction is explicitly identified below. They are not other-PC or broad model-accuracy verification. Each result below covers one case.
 

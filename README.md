@@ -4,7 +4,9 @@
 
 Rhythm은 학교 공지와 개인 정보를 내 컴퓨터에 모으는 한국어 데스크톱 앱입니다. 클라우드 계정 없이 시작할 수 있으며, 한 번 보관한 공지 본문과 내려받은 자료는 인터넷 연결 없이 다시 볼 수 있습니다.
 
-현재 전환 대상은 **Windows 11 x64, CPU 추론, 사용자별 NSIS 설치**입니다. 업데이트는 새 설치 파일을 직접 받아 설치하는 방식으로 준비합니다. Windows 이식과 설치·실행 검증이 진행 중이며, 각 검증 결과는 [Windows 검증표](docs/WINDOWS_VALIDATION.md)에 기록합니다. 기존 macOS 시험 결과는 Windows에서의 동작을 보증하지 않습니다.
+현재 대상은 **Windows 11 x64, CPU·NVIDIA GPU 로컬 추론, 사용자별 NSIS 설치**입니다. 업데이트는 새 설치 파일을 직접 받아 설치하는 방식입니다. GPU는 기존 CPU 워커와 별도로 Vulkan 워커를 사용하며, 지원 목표는 GTX 10·16과 RTX 20·30·40·50 시리즈입니다. 모든 기종의 동작을 확인했다는 뜻은 아닙니다. 실행 방식과 개발 도구, 기종별 시험 범위는 [Windows GPU 안내](docs/WINDOWS_GPU.md), Windows 설치·운영체제 기능의 시험 결과는 [Windows 검증표](docs/WINDOWS_VALIDATION.md)를 확인하세요. 기존 macOS 시험 결과는 Windows에서의 동작을 보증하지 않습니다.
+
+아래 v0.9.2 설명에는 당시 macOS·CPU 시험 기록을 보존했습니다. 현재 Windows CPU와 GPU의 검증 상태는 위의 별도 기록을 기준으로 합니다.
 
 ## 원칙
 

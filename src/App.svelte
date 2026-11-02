@@ -231,7 +231,7 @@
         </button>
       {/each}
     </nav>
-    <div class="sidebar-bottom"><span class="local-dot"></span><span>내 기기에 머무는 정보</span><small>v0.9.2</small></div>
+    <div class="sidebar-bottom"><span class="local-dot"></span><span>내 기기에 머무는 정보</span><small>v0.9.3</small></div>
   </aside>
 
   <main id="main" tabindex="-1">

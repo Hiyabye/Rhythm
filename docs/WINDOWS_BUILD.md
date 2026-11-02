@@ -1,6 +1,6 @@
 # Windows 11 x64 빌드 환경
 
-현재 제품 목표는 Windows 11 x64, Rust MSVC, CPU 추론, 사용자별 NSIS 설치 및 수동 업데이트입니다. 이 문서는 빌드 환경을 만드는 방법이며, 설치 파일과 프로그램의 동작이 검증됐다는 뜻은 아닙니다. 결과는 [Windows 검증표](WINDOWS_VALIDATION.md)에 기록합니다.
+현재 제품 목표는 Windows 11 x64, Rust MSVC, CPU 및 NVIDIA GPU 추론, 사용자별 NSIS 설치 및 수동 업데이트입니다. GPU 경로의 대상 기종·추가 개발 도구·검증 한계는 [Windows GPU 안내](WINDOWS_GPU.md)에 설명합니다. 이 문서는 빌드 환경을 만드는 방법이며, 설치 파일과 프로그램의 동작이 검증됐다는 뜻은 아닙니다. 결과는 [Windows 검증표](WINDOWS_VALIDATION.md)에 기록합니다.
 
 함께 제공되는 소스 ZIP에는 소스, 잠금 파일, 라이선스와 빌드·시험에 필요한 이미지 및 공개 인증서 자료가 포함됩니다. 컴파일된 실행 파일·라이브러리, 모델 가중치, 빌드 캐시와 사용자 데이터베이스·백업 파일은 포함하지 않습니다. Pretendard 글꼴은 소스 ZIP에 별도 포함하지 않으며, 아래 `npm ci`가 잠금 파일에 지정된 패키지에서 준비합니다.
 
@@ -16,6 +16,7 @@
 - 인터넷 연결, C:에 최소 10 GiB 및 D:에 최소 30 GiB의 사용 가능한 공간. Rust 의존성·로컬 AI 모델·빌드 산출물은 추가 공간을 사용할 수 있습니다.
 - Visual Studio Build Tools의 x64 MSVC와 Windows 11 SDK 10.0.26100.0. Visual Studio 설치에는 관리자 권한이 필요합니다.
 - Rust 1.94 이상의 `x86_64-pc-windows-msvc` 안정 도구 체인. 잠긴 Windows 의존성 중 mistral.rs가 1.94를 요구하며, 이번 빌드는 1.99.1로 확인했습니다.
+- GPU 워커 빌드에는 Vulkan SDK와 libclang이 추가로 필요합니다. 프로젝트와 CI가 사용하는 버전은 Vulkan SDK 1.4.363.0 및 LLVM 20.1.8입니다. 기존 `setup-windows.ps1`은 이 GPU 도구를 설치하지 않으므로 [GPU 빌드 안내](WINDOWS_GPU.md)에 따라 별도로 준비합니다. 사용자 PC의 실행에는 SDK 전체가 필요하지 않습니다.
 
 [Tauri의 Windows 사전 준비](https://v2.tauri.app/start/prerequisites/)도 함께 확인하세요. Node.js나 WebView2가 없다면 먼저 공식 설치 경로에서 준비해야 합니다. 모델 가중치는 도구 설치에 포함되지 않습니다.
 
@@ -46,7 +47,7 @@ npm run desktop
 npm run desktop:build
 ```
 
-`windows-env.ps1`을 쓴 경우 Cargo 산출물은 `D:\Codex_Rhythm\.build-tools\target` 아래에 생성됩니다. NSIS 산출물은 그 아래 `release\bundle\nsis`에서 확인합니다. `CARGO_TARGET_DIR`을 따로 정했다면 그 경로가 우선합니다. 이전 버전이 이미 실행 중이면 완전히 종료한 뒤 새 설치 파일을 수동으로 실행합니다. 제거 프로그램은 사용자 데이터와 모델을 항상 보존하도록 구성되어 있으며, 실제 시험 결과는 검증 기록을 확인해야 합니다.
+`windows-env.ps1`을 쓴 경우 앱·CPU Cargo 산출물은 `D:\Codex_Rhythm\.build-tools\target` 아래에, GPU 워커 산출물은 짧은 별도 경로 `D:\Codex_Rhythm\.g` 아래에 생성됩니다. NSIS 산출물은 앱 target의 `release\bundle\nsis`에서 확인합니다. `CARGO_TARGET_DIR`과 `RHYTHM_GPU_TARGET_DIR`을 따로 지정할 수도 있으며, GPU 경로는 셰이더 생성 도구의 Windows 경로 길이 문제를 피하기 위해 32자 이하로 제한합니다. 배포용 설치 프로그램에는 CPU와 GPU 워커가 모두 필요합니다. 이전 버전이 이미 실행 중이면 완전히 종료한 뒤 새 설치 파일을 수동으로 실행합니다. 제거 프로그램은 사용자 데이터와 모델을 항상 보존하도록 구성되어 있으며, 실제 시험 결과는 검증 기록을 확인해야 합니다.
 
 설치 도구 캐시는 `bundle.useLocalToolsDir` 설정으로 Cargo 산출물 폴더 아래 `.tauri`에 둡니다. 여러 PC에서 사용할 빌드이므로 `target-cpu=native`나 CPU 기능을 강제로 켜는 개발용 환경 설정을 추가하지 마세요. 첫 CPU AI 엔진 빌드는 많은 메모리와 시간이 필요하므로 실제 모델 시험과 동시에 실행하지 않는 편이 좋습니다.
 

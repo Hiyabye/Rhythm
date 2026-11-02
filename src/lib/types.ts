@@ -217,6 +217,7 @@ export interface AiModel {
 export interface AiPreferences {
   active_model_id: string | null; setup_completed: boolean; processing_mode: 'explicit' | 'recent';
   automatic_limit: number; max_tokens: number;
+  execution_mode: 'auto' | 'cpu' | 'gpu';
 }
 export interface AnalysisKey {
   document_id: number; revision_id: number; task: string; model_sha256: string;
@@ -235,7 +236,7 @@ export interface Analysis {
   uncertainty: 'clear' | 'ambiguous' | 'unknown'; facts: AnalysisFact[];
 }
 export interface AiResult extends AnalysisKey {
-  id: number; job_id: number; model_identity: { name?: string; sha256?: string; max_tokens?: number }; result: Analysis;
+  id: number; job_id: number; model_identity: { name?: string; sha256?: string; max_tokens?: number; execution_mode?: string; runtime_policy?: string; loaded_backend?: string }; result: Analysis;
   partial: boolean; processed_chars: number; total_chars: number; duration_ms: number; created_at: string;
 }
 export interface AiOperation {

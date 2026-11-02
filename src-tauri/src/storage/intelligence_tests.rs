@@ -2,6 +2,126 @@ use super::intelligence::*;
 use super::*;
 use serde_json::json;
 
+#[test]
+fn execution_preference_migrates_schema_seven_and_persists_without_resetting_archive() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    populated_schema_two(&path);
+    let connection = Connection::open(&path).unwrap();
+    for migration in [
+        include_str!("../../migrations/003_intelligence.sql"),
+        include_str!("../../migrations/004_personalization.sql"),
+        include_str!("../../migrations/005_proactive.sql"),
+        include_str!("../../migrations/006_notification_attempts.sql"),
+        include_str!("../../migrations/007_notification_activation.sql"),
+    ] {
+        connection.execute_batch(migration).unwrap();
+    }
+    connection
+        .execute_batch("UPDATE ai_preferences SET max_tokens=2048 WHERE id=1;")
+        .unwrap();
+    drop(connection);
+    let store = Store::open(&path).unwrap();
+    let mut preferences = store.ai_preferences().unwrap();
+    assert_eq!(preferences.execution_mode, "auto");
+    assert_eq!(preferences.max_tokens, 2048);
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
+    assert_eq!(
+        store
+            .connection
+            .query_row("SELECT COUNT(*) FROM documents", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    for mode in ["cpu", "gpu", "auto"] {
+        preferences.execution_mode = mode.into();
+        store.ai_save_preferences(&preferences).unwrap();
+        assert_eq!(store.ai_preferences().unwrap().execution_mode, mode);
+    }
+    preferences.execution_mode = "gpu".into();
+    store.ai_save_preferences(&preferences).unwrap();
+    preferences.execution_mode = "invalid".into();
+    assert!(store.ai_save_preferences(&preferences).is_err());
+    drop(store);
+    assert_eq!(
+        Store::open(&path)
+            .unwrap()
+            .ai_preferences()
+            .unwrap()
+            .execution_mode,
+        "gpu"
+    );
+}
+
+#[test]
+fn execution_preference_old_payload_defaults_to_auto() {
+    let preferences: AiPreferences = serde_json::from_value(json!({
+        "active_model_id":null,"setup_completed":false,"processing_mode":"explicit",
+        "automatic_limit":3,"max_tokens":1024
+    }))
+    .unwrap();
+    assert_eq!(preferences.execution_mode, "auto");
+}
+
+#[test]
+fn actual_backend_provenance_commits_with_result_and_survives_reopen() {
+    let (directory, mut store) = database();
+    let job = store
+        .ai_enqueue(&key(), &json!({"id":"test","execution_mode":"auto"}), 1)
+        .unwrap();
+    store.ai_claim_next().unwrap();
+    store.connection.execute_batch("CREATE TRIGGER reject_gpu_result BEFORE INSERT ON ai_results BEGIN SELECT RAISE(ABORT,'test result failure'); END;").unwrap();
+    assert!(store
+        .ai_complete_job_with_backend(
+            job.id,
+            &json!({"summary":"tested"}),
+            false,
+            4,
+            4,
+            10,
+            Some("vulkan")
+        )
+        .is_err());
+    assert!(store
+        .ai_job(job.id)
+        .unwrap()
+        .unwrap()
+        .model_identity
+        .get("loaded_backend")
+        .is_none());
+    assert!(store.ai_cached_result(&key()).unwrap().is_none());
+    store
+        .connection
+        .execute_batch("DROP TRIGGER reject_gpu_result;")
+        .unwrap();
+    let result = store
+        .ai_complete_job_with_backend(
+            job.id,
+            &json!({"summary":"tested"}),
+            false,
+            4,
+            4,
+            10,
+            Some("vulkan"),
+        )
+        .unwrap();
+    assert_eq!(result.model_identity["loaded_backend"], "vulkan");
+    assert_eq!(
+        store.ai_job(job.id).unwrap().unwrap().model_identity["loaded_backend"],
+        "vulkan"
+    );
+    drop(store);
+    let reopened = Store::open(&directory.path().join("db")).unwrap();
+    assert_eq!(
+        reopened
+            .ai_cached_result(&key())
+            .unwrap()
+            .unwrap()
+            .model_identity["loaded_backend"],
+        "vulkan"
+    );
+}
+
 fn populated_schema_two(path: &Path) {
     let connection = Connection::open(path).unwrap();
     connection

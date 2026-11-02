@@ -1,0 +1,18 @@
+Microsoft Visual C++ Runtime
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+Rhythm's Windows package includes unmodified x64 redistributable files
+msvcp140.dll, vcruntime140.dll and vcruntime140_1.dll from the installed
+Microsoft Visual Studio 2022 VC/Redist/MSVC directory. These Microsoft files
+are not covered by Rhythm's MIT license.
+
+The files are deployed beside the application. Microsoft signature, x64 image
+type, matching runtime version and copied SHA-256 are checked when staging.
+Their update is the responsibility of the application distributor: future
+Rhythm installers must ship an appropriate serviced runtime version.
+
+Microsoft software terms and distributable-code list:
+https://visualstudio.microsoft.com/license-terms/vs2022-ga-diagnosticbuildtools/
+https://learn.microsoft.com/visualstudio/releases/2022/redistribution
+Deployment guidance:
+https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files?view=msvc-170

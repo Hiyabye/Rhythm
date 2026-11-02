@@ -4,6 +4,8 @@ Version numbers describe product milestones, not promises that future functional
 
 ## Windows 11 x64 port — current work
 
+- GPU follow-up: persisted automatic/CPU/NVIDIA-GPU execution choice, optional llama.cpp/Vulkan worker and CPU fallback. GTX 10/16 and RTX 20/30/40/50 are target generations, not a blanket tested-hardware claim. Schema 8 adds execution preference; semantic cache identity separates explicit modes and saved results retain actual backend provenance. Hardware, model, failure recovery and packaged-app evidence must be recorded separately before claiming support for each combination.
+
 - Preserve the local archive, deterministic personalization, optional AI, opt-in scheduling and the existing backup format. Windows uses a CPU worker, WinRT notification activation and a per-user installer. Schema 7 adds expiring hashed notification tokens; restored tokens must be cleared.
 - Windows restore is designed for a local fixed NTFS data volume, with prepared data verified, previous files preserved and ambiguous recovery states rejected. The journal and file moves are not evidence of a multi-file power-loss transaction; process-abort tests and actual power-loss behavior are separate gates.
 - Automated tests, real inference, native notifications/login/tray, installed-app update/uninstall and failure recovery are not complete merely because code or a workflow exists. Record observations and limitations in the validation table.

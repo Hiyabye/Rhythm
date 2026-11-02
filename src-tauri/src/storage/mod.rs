@@ -16,7 +16,7 @@ mod personalization_tests;
 pub mod proactive;
 #[cfg(test)]
 mod proactive_tests;
-pub(crate) const SCHEMA_VERSION: i64 = 7;
+pub(crate) const SCHEMA_VERSION: i64 = 8;
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
     let migrations = [
@@ -27,6 +27,7 @@ fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
         include_str!("../../migrations/005_proactive.sql"),
         include_str!("../../migrations/006_notification_attempts.sql"),
         include_str!("../../migrations/007_notification_activation.sql"),
+        include_str!("../../migrations/008_ai_execution_mode.sql"),
     ];
     for migration in migrations.iter().skip(version as usize) {
         let transaction = connection.transaction().map_err(|e| e.to_string())?;

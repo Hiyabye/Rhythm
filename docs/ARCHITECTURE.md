@@ -1,6 +1,6 @@
 # Architecture
 
-Current port target: **Windows 11 x64, CPU worker, per-user NSIS and manual updates**. The implementation and its verification are tracked separately in [Windows validation](WINDOWS_VALIDATION.md). Historical platform observations below apply only to their stated versions and machines.
+Current port target: **Windows 11 x64, CPU and optional NVIDIA GPU workers, per-user NSIS and manual updates**. The implementation and its verification are tracked separately in [Windows validation](WINDOWS_VALIDATION.md). Historical platform observations below apply only to their stated versions and machines.
 
 ## Boundaries
 
@@ -19,8 +19,9 @@ Rust application (src-tauri)
         ├─ app_data_dir()/models/ → verified managed GGUF files
         ├─ stored document revision → validated result → SQLite cache
         │ versioned JSON lines over stdin/stdout
-rhythm-ai-worker (crates/ai-worker)
-        └─ mistral.rs v0.9.1 (pinned release commit) → local GGUF
+selected isolated worker
+  ├─ rhythm-ai-worker (crates/ai-worker) → pinned mistral.rs CPU → local GGUF
+  └─ optional NVIDIA GPU worker → pinned llama.cpp / Vulkan → local GGUF
 ```
 
 There are only two Cargo workspace members: the Tauri app and worker. The archive, local intelligence, personalization, lifecycle, scheduler, notifications and versioned backup remain local-first. Collection never waits for inference or writes AI results. Released migrations are immutable; schema 7 adds hashed Windows notification activation tokens. Windows uses manual installer updates; prior platform CI and release artifacts do not establish current Windows behavior. Backups exclude model weights and are not encrypted.
@@ -51,7 +52,7 @@ Before `Store::open` can recover interrupted work, `core::lock_data_dir` obtains
 
 Rust owns persistence; browser previews do not substitute localStorage or simulate success. A startup or migration failure prevents launch rather than replacing user data. Theme changes are optimistic and revert on save failure; system mode follows OS preference. Energy profile controls app-open inference admission/residency and scheduled sync cadence only when the scheduler interval is set to automatic (`0`). Schema-4 profile, interests, feedback and learned evidence remain local; deterministic ranking does not depend on an AI model or inference result.
 
-## SQLite schemas 5–7 and upgrade compatibility
+## SQLite schemas 5–8 and upgrade compatibility
 
 `storage/mod.rs` opens `app_data_dir()/rhythm.sqlite3` for `io.github.hiyabye.rhythm`, enables foreign keys, WAL and a five-second busy timeout, and applies ordered transactional migrations using `PRAGMA user_version`. A newer schema is rejected before changing journal mode. Migrations `001`–`004` remain unchanged; `005_proactive.sql` adds lifecycle/scheduler settings, per-source scheduler tasks and outcomes, notification baseline/dedupe/events and `sources.seed_complete`.
 
@@ -64,6 +65,10 @@ The event state machine is `pending → claimed → attempted | deferred | faile
 Schema 6 adds a bounded handoff-attempt ledger independent of visible notification history and a persisted nondecreasing UTC watermark. A batch reserves its rate slots transactionally before handing off to the OS; a crash between reservation and handoff can consume a slot without a visible notification. Clearing or pruning event history does not reset the rate window. Schema-5 migration conservatively reconstructs known attempts at each event's last recorded attempt time; earlier timestamps cannot be recovered. A backward clock adjustment pauses watermark advancement until wall time catches up, which can delay future attempts after a large clock correction.
 
 Schema 7 adds expiring notification activation-token hashes bound to event attempts. The raw token is carried by the Windows activation URL and is consumed at most once. Restoring a backup clears token records in staging so an old notification cannot activate a different restored database.
+
+Schema 8 adds `ai_preferences.execution_mode` with `auto` (default), `cpu`, and `gpu` choices. Existing migrations are unchanged. Device changes share AI admission, refuse active analysis, stop/reap the worker before applying the new choice, and restore the prior in-memory choice if persistence fails. Startup reads the persisted mode. Automatic mode can fall back to the CPU worker; explicit GPU mode reports failure rather than silently using CPU.
+
+The optional GPU worker uses llama.cpp/Vulkan over the existing bounded JSON-lines pipe, without an inference HTTP server. NVIDIA GTX 10/16 and RTX 20/30/40/50 are implementation targets; the target list is not evidence of testing every GPU. GPU runtime availability, model memory admission and successful inference are separate claims. Semantic cache identity includes the requested execution mode and `llama-vulkan-v1` runtime policy; changing between explicit CPU/GPU modes does not silently reuse the other mode's result. Automatic mode may reuse a result created during fallback. Successful results retain their observed backend in `model_identity.loaded_backend`, committed atomically with the result, so a later GPU-capable session does not relabel an earlier CPU analysis. Missing historical provenance remains unknown.
 
 `002_archive.sql` adds only implemented archive structures:
 

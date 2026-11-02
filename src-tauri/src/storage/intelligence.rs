@@ -34,6 +34,12 @@ pub struct AiPreferences {
     pub processing_mode: String,
     pub automatic_limit: u32,
     pub max_tokens: u32,
+    #[serde(default = "default_execution_mode")]
+    pub execution_mode: String,
+}
+
+fn default_execution_mode() -> String {
+    "auto".into()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -244,7 +250,7 @@ impl Store {
         )
     }
     pub fn ai_preferences(&self) -> Result<AiPreferences, String> {
-        self.connection.query_row("SELECT active_model_id,setup_completed,processing_mode,automatic_limit,max_tokens FROM ai_preferences WHERE id=1",[],|r|Ok(AiPreferences { active_model_id:r.get(0)?,setup_completed:r.get(1)?,processing_mode:r.get(2)?,automatic_limit:r.get(3)?,max_tokens:r.get(4)? })).map_err(|e|e.to_string())
+        self.connection.query_row("SELECT active_model_id,setup_completed,processing_mode,automatic_limit,max_tokens,execution_mode FROM ai_preferences WHERE id=1",[],|r|Ok(AiPreferences { active_model_id:r.get(0)?,setup_completed:r.get(1)?,processing_mode:r.get(2)?,automatic_limit:r.get(3)?,max_tokens:r.get(4)?,execution_mode:r.get(5)? })).map_err(|e|e.to_string())
     }
     pub fn ai_save_preferences(&self, preferences: &AiPreferences) -> Result<(), String> {
         if let Some(id) = &preferences.active_model_id {
@@ -253,12 +259,13 @@ impl Store {
             }
         }
         if !["explicit", "recent"].contains(&preferences.processing_mode.as_str())
+            || !["auto", "cpu", "gpu"].contains(&preferences.execution_mode.as_str())
             || preferences.automatic_limit > 20
             || !(128..=4096).contains(&preferences.max_tokens)
         {
             return Err("AI 처리 설정을 확인해 주세요.".into());
         }
-        self.connection.execute("UPDATE ai_preferences SET active_model_id=?1,setup_completed=?2,processing_mode=?3,automatic_limit=?4,max_tokens=?5 WHERE id=1", params![preferences.active_model_id,preferences.setup_completed,preferences.processing_mode,preferences.automatic_limit,preferences.max_tokens]).map_err(|e|e.to_string())?;
+        self.connection.execute("UPDATE ai_preferences SET active_model_id=?1,setup_completed=?2,processing_mode=?3,automatic_limit=?4,max_tokens=?5,execution_mode=?6 WHERE id=1", params![preferences.active_model_id,preferences.setup_completed,preferences.processing_mode,preferences.automatic_limit,preferences.max_tokens,preferences.execution_mode]).map_err(|e|e.to_string())?;
         Ok(())
     }
     /// Deduplicates pending/running attempts. Cache lookup is explicit via `ai_cached_result`.
@@ -411,6 +418,7 @@ impl Store {
         changed(self.connection.execute("UPDATE ai_jobs SET status=?2,error=?3,duration_ms=?4,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?1 AND status IN ('pending','running')",params![id,status,error,duration_ms.map(|v|v as i64)]).map_err(|e|e.to_string())?)
     }
     /// The pipeline must schema-validate and ground `result` before invoking this method.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub fn ai_complete_job(
         &mut self,
@@ -421,6 +429,27 @@ impl Store {
         total_chars: u64,
         duration_ms: u64,
     ) -> Result<AiResult, String> {
+        self.ai_complete_job_with_backend(
+            id,
+            result,
+            partial,
+            processed_chars,
+            total_chars,
+            duration_ms,
+            None,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn ai_complete_job_with_backend(
+        &mut self,
+        id: i64,
+        result: &Value,
+        partial: bool,
+        processed_chars: u64,
+        total_chars: u64,
+        duration_ms: u64,
+        loaded_backend: Option<&str>,
+    ) -> Result<AiResult, String> {
         let encoded = serde_json::to_string(result).map_err(|e| e.to_string())?;
         if total_chars > i64::MAX as u64
             || duration_ms > i64::MAX as u64
@@ -428,10 +457,17 @@ impl Store {
             || encoded.len() > 128 * 1024
             || processed_chars > total_chars
             || (!partial && processed_chars != total_chars)
+            || loaded_backend
+                .is_some_and(|backend| !["cpu", "vulkan", "cuda", "metal"].contains(&backend))
         {
             return Err("AI 분석 결과의 범위나 형식을 확인해 주세요.".into());
         }
         let transaction = self.connection.transaction().map_err(|e| e.to_string())?;
+        if let Some(backend) = loaded_backend {
+            // Record only an observed successful inference backend, atomically
+            // with the result. An automatic fallback remains visible on reopen.
+            changed(transaction.execute("UPDATE ai_jobs SET model_identity_json=json_set(model_identity_json,'$.loaded_backend',?2) WHERE id=?1 AND status='running'", params![id, backend]).map_err(|e| e.to_string())?)?;
+        }
         changed(transaction.execute("INSERT INTO ai_results(job_id,document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,result_json,partial,processed_chars,total_chars,duration_ms) SELECT id,document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,?2,?3,?4,?5,?6 FROM ai_jobs WHERE id=?1 AND status='running'", params![id,encoded,partial,processed_chars as i64,total_chars as i64,duration_ms as i64]).map_err(|e|e.to_string())?)?;
         let result_id = transaction.last_insert_rowid();
         transaction.execute("UPDATE ai_jobs SET status='completed',error=NULL,duration_ms=?2,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?1",params![id,duration_ms as i64]).map_err(|e|e.to_string())?;

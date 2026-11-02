@@ -7,6 +7,36 @@ async function reader(page: import('@playwright/test').Page) {
   await expect(page.getByRole('region', { name: '공지 AI 분석' })).toBeVisible();
 }
 
+test('execution device selection persists across settings remount and unloads the old model', async ({ page }) => {
+  await mockDesktop(page, { aiInstalled: true }); await page.goto('/');
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  const mode = page.getByLabel('AI 실행 장치', { exact: true });
+  await expect(mode).toHaveValue('auto');
+  await page.getByRole('button', { name: '선택한 모델 불러오기', exact: true }).click();
+  await expect(page.getByText('모델 준비됨', { exact: true })).toBeVisible();
+  await mode.selectOption('cpu');
+  await expect(mode).toHaveValue('cpu');
+  await expect(page.getByText('모델 없이 대기 중', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await expect(mode).toHaveValue('cpu');
+  await mode.selectOption('gpu');
+  await expect(mode).toHaveValue('gpu');
+  expect(await callCount(page, 'ai_preferences')).toBe(2);
+});
+
+test('execution device save failure restores the persisted choice and shows fallback status', async ({ page }) => {
+  await mockDesktop(page, { aiExecutionMode: 'auto', aiExecutionError: true, aiRuntimeDetail: 'GPU 메모리가 부족해 CPU로 전환했습니다.' });
+  await page.goto('/');
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await expect(page.getByText('GPU 메모리가 부족해 CPU로 전환했습니다.', { exact: true })).toBeVisible();
+  const mode = page.getByLabel('AI 실행 장치', { exact: true });
+  await mode.selectOption('gpu');
+  await expect(page.getByText('실행 장치를 저장하지 못했습니다. 다시 시도해 주세요.', { exact: true })).toBeVisible();
+  await expect(mode).toHaveValue('auto');
+  expect(await callCount(page, 'ai_install')).toBe(0);
+});
+
 test('first-run AI setup never blocks archived notices or starts a download', async ({ page }) => {
   await mockDesktop(page, { aiSetupNeeded: true }); await page.goto('/');
   await expect(page.getByRole('button', { name: '로컬 AI 설정하기' })).toBeVisible();

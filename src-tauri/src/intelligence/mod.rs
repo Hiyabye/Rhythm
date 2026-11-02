@@ -4,6 +4,8 @@ mod archived_evaluation;
 pub mod commands;
 #[cfg(test)]
 mod evaluation;
+#[cfg(all(test, windows))]
+mod gpu_tests;
 pub mod maintenance;
 pub mod models;
 pub mod operations;
@@ -124,6 +126,7 @@ fn backend_name(backend: Option<&str>) -> &str {
         Some("cpu") => "CPU",
         Some("metal") => "Metal",
         Some("cuda") => "CUDA",
+        Some("vulkan") => "NVIDIA GPU (Vulkan)",
         _ => "미확인",
     }
 }
@@ -258,6 +261,9 @@ impl WorkerJob {
 
 pub struct Worker {
     executable: Option<PathBuf>,
+    execution_mode: String,
+    active_gpu: bool,
+    fallback_reason: Option<String>,
     child: Option<Child>,
     input: Option<ChildStdin>,
     output: Option<BufReader<ChildStdout>>,
@@ -269,6 +275,96 @@ pub struct Worker {
     analysis_json_v1: Option<bool>,
 }
 impl Worker {
+    pub fn launch_configured(path: &Path, mode: &str) -> Self {
+        let gpu = path.with_file_name("rhythm-ai-worker-gpu.exe");
+        let use_gpu = mode == "gpu" || (mode == "auto" && gpu.is_file());
+        let mut worker = Self::launch_command(Command::new(if use_gpu { &gpu } else { path }));
+        worker.executable = Some(path.to_owned());
+        worker.execution_mode = mode.to_owned();
+        worker.active_gpu = use_gpu;
+        if mode == "auto" && !use_gpu {
+            worker.fallback_reason = Some("GPU 작업 파일이 없어 CPU를 사용합니다.".into());
+        }
+        worker
+    }
+
+    pub fn set_execution_mode(&mut self, mode: &str) -> Result<(), String> {
+        if !matches!(mode, "auto" | "cpu" | "gpu") {
+            return Err("AI 실행 방식이 올바르지 않습니다.".into());
+        }
+        if self.child.is_some() {
+            return Err("실행 방식을 바꾸기 전에 AI 작업을 종료해야 합니다.".into());
+        }
+        self.execution_mode = mode.into();
+        self.fallback_reason = None;
+        self.active_gpu = false;
+        Ok(())
+    }
+
+    fn add_fallback_detail(&mut self) {
+        if let Some(reason) = &self.fallback_reason {
+            let detail = self.status.detail.take().unwrap_or_default();
+            self.status.detail = Some(format!("CPU 전환: {reason} · {detail}"));
+        }
+    }
+
+    async fn fallback_to_cpu(&mut self, reason: String) -> Result<(), String> {
+        self.terminate().await;
+        let path = self
+            .executable
+            .clone()
+            .ok_or("CPU 작업 파일 경로가 없습니다.")?;
+        let mode = self.execution_mode.clone();
+        *self = Self::launch(&path);
+        self.execution_mode = mode;
+        // Error strings come from the bounded local worker protocol, never a shell.
+        self.fallback_reason = Some(reason.chars().take(240).collect());
+        if self.child.is_none() {
+            self.add_fallback_detail();
+            return Err(self.status.detail.clone().unwrap_or_default());
+        }
+        Ok(())
+    }
+
+    async fn request_with_fallback(
+        &mut self,
+        method: &str,
+        params: Value,
+        deadline: Duration,
+    ) -> Result<Value, String> {
+        let result = self
+            .request_params(method, params.clone(), deadline)
+            .await
+            .and_then(|value| {
+                if self.active_gpu {
+                    let valid = match method {
+                        "status" | "load" => {
+                            value["engine"] == "llama.cpp"
+                                && value["build_backend"] == "vulkan"
+                                && value["runtime_available"] == true
+                                && (value["model"].is_null() || value["loaded_backend"] == "vulkan")
+                        }
+                        "infer" => value["loaded_backend"] == "vulkan",
+                        _ => true,
+                    };
+                    if !valid {
+                        return Err(
+                            "GPU 작업 프로세스의 실제 실행 장치를 확인하지 못했습니다.".into()
+                        );
+                    }
+                }
+                Ok(value)
+            });
+        if self.active_gpu && self.execution_mode == "auto" {
+            if let Err(error) = result {
+                self.fallback_to_cpu(error).await?;
+                // A new process has no outstanding request; never reuse a failed pipe.
+                return self.request_params(method, params, deadline).await;
+            }
+        }
+        result
+    }
+
     pub fn launch(path: &Path) -> Self {
         let mut worker = Self::launch_command(Command::new(path));
         worker.executable = Some(path.to_owned());
@@ -277,6 +373,9 @@ impl Worker {
     fn launch_command(mut command: Command) -> Self {
         let mut worker = Self {
             executable: None,
+            execution_mode: "cpu".into(),
+            active_gpu: false,
+            fallback_reason: None,
             child: None,
             input: None,
             output: None,
@@ -417,7 +516,17 @@ impl Worker {
             .executable
             .clone()
             .ok_or("AI 엔진 실행 파일 경로가 없습니다.")?;
-        *self = Self::launch(&path);
+        let mode = self.execution_mode.clone();
+        let reason = self.fallback_reason.clone();
+        *self = if reason.is_some() && mode == "auto" {
+            Self::launch(&path)
+        } else {
+            Self::launch_configured(&path, &mode)
+        };
+        self.execution_mode = mode;
+        if reason.is_some() {
+            self.fallback_reason = reason;
+        }
         let status = self.refresh().await;
         if status.state != "ready" {
             return Err(status
@@ -498,7 +607,7 @@ impl Worker {
         }
         self.status.state = "busy".into();
         let result = self
-            .request_params("infer", params, Duration::from_secs(600))
+            .request_with_fallback("infer", params, Duration::from_secs(600))
             .await
             .and_then(inference_response);
         match &result {
@@ -509,6 +618,7 @@ impl Worker {
                     "실제 불러온 백엔드: {} · GPU 사용률 측정값은 아닙니다.",
                     backend_name(response.metrics.loaded_backend.as_deref())
                 ));
+                self.add_fallback_detail();
             }
             Err(error) => {
                 self.stop().await;
@@ -525,7 +635,7 @@ impl Worker {
         self.ensure_running().await?;
         self.status.state = "loading".into();
         if let Err(error) = self
-            .request_params(
+            .request_with_fallback(
                 "load",
                 json!({"model_path":path_text}),
                 Duration::from_secs(180),
@@ -589,17 +699,34 @@ impl Worker {
         Ok(())
     }
     pub async fn refresh(&mut self) -> WorkerStatus {
+        if self.child.is_none()
+            && self.active_gpu
+            && self.execution_mode == "auto"
+            && self.status.state == "failed"
+        {
+            let reason = self
+                .status
+                .detail
+                .clone()
+                .unwrap_or_else(|| "GPU 작업을 시작하지 못했습니다.".into());
+            if self.fallback_to_cpu(reason).await.is_err() {
+                return self.status.clone();
+            }
+        }
         if self.child.is_none() {
             return self.status.clone();
         }
-        let result = self.request("status").await.and_then(|value| {
-            let payload: StatusPayload = serde_json::from_value(value)
-                .map_err(|_| "AI 엔진 상태 응답 형식이 올바르지 않습니다.".to_string())?;
-            if payload.engine != "mistral.rs" {
-                return Err("AI 엔진 상태 응답의 엔진 정보가 올바르지 않습니다.".into());
-            }
-            Ok(payload)
-        });
+        let result = self
+            .request_with_fallback("status", json!({}), Duration::from_secs(8))
+            .await
+            .and_then(|value| {
+                let payload: StatusPayload = serde_json::from_value(value)
+                    .map_err(|_| "AI 엔진 상태 응답 형식이 올바르지 않습니다.".to_string())?;
+                if !matches!(payload.engine.as_str(), "mistral.rs" | "llama.cpp") {
+                    return Err("AI 엔진 상태 응답의 엔진 정보가 올바르지 않습니다.".into());
+                }
+                Ok(payload)
+            });
         match result {
             Ok(result) => {
                 self.analysis_json_v1 = Some(result.analysis_json_v1);
@@ -617,6 +744,7 @@ impl Worker {
                     )),
                     model: result.model,
                 };
+                self.add_fallback_detail();
             }
             Err(error) => {
                 self.terminate().await;

@@ -231,7 +231,16 @@ pub async fn ai_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, 
         .active_model_id
         .as_ref()
         .and_then(|id| models.iter().find(|model| &model.id == id))
-        .and_then(|model| analysis::key_for(0, 0, model, preferences.max_tokens).ok())
+        .and_then(|model| {
+            analysis::key_for_mode(
+                0,
+                0,
+                model,
+                preferences.max_tokens,
+                &preferences.execution_mode,
+            )
+            .ok()
+        })
         .map(|key| key.configuration_hash);
     let initial_hardware = state.hardware.clone();
     let root = state.data_root.clone();
@@ -433,6 +442,32 @@ pub async fn ai_preferences(
     let old = with_store(&state, |s| s.ai_preferences())?;
     if old.active_model_id != preferences.active_model_id {
         return Err("모델 선택 기능으로 활성 모델을 변경해 주세요.".into());
+    }
+    if old.execution_mode != preferences.execution_mode {
+        if !["auto", "cpu", "gpu"].contains(&preferences.execution_mode.as_str()) {
+            return Err("AI 실행 장치를 확인해 주세요.".into());
+        }
+        if state.analysis.running() {
+            return Err("분석을 취소하거나 완료한 뒤 실행 장치를 변경해 주세요.".into());
+        }
+        if old.setup_completed != preferences.setup_completed {
+            return Err("실행 장치를 먼저 저장한 뒤 AI 설정을 완료해 주세요.".into());
+        }
+        let mut worker = tokio::select! {
+            biased;
+            _ = exiting(&state.maintenance_shutdown) => return Err(EXIT_ERROR.into()),
+            worker = state.worker.lock() => worker,
+        };
+        // Keep ownership through reap, configuration and persistence; a background
+        // refresh cannot restart the old backend between these steps.
+        worker.stop_for_inventory().await?;
+        check_open(&state)?;
+        worker.set_execution_mode(&preferences.execution_mode)?;
+        if let Err(error) = with_store(&state, |s| s.ai_save_preferences(&preferences)) {
+            worker.set_execution_mode(&old.execution_mode)?;
+            return Err(error);
+        }
+        return Ok(());
     }
     if preferences.setup_completed && !old.setup_completed {
         if state.analysis.running() {

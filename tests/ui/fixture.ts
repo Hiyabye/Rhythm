@@ -19,6 +19,9 @@ export interface FixtureOptions {
   aiResult?: boolean;
   aiPartial?: boolean;
   aiSetupNeeded?: boolean;
+  aiExecutionMode?: 'auto' | 'cpu' | 'gpu';
+  aiExecutionError?: boolean;
+  aiRuntimeDetail?: string;
   aiInstallError?: boolean;
   aiInferenceError?: boolean;
   aiDelay?: number;
@@ -129,7 +132,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       duration_ms: 1250,
       created_at: '2026-10-24 12:00:00',
     });
-    const ai = { catalog: ['qwen35-4b', 'qwen35-2b'].map((id) => ({ id, name: id === 'qwen35-4b' ? 'Qwen3.5 4B' : 'Qwen3.5 2B', parameters: id === 'qwen35-4b' ? '4B' : '2B', quantization: 'Q4_K_M', bytes: 2740937888, memory_bytes: id === 'qwen35-4b' ? 10737418240 : 5368709120, description: '한국어 공지 분석용 로컬 모델', use_case: '균형 잡힌 공지 분석', repository: 'unsloth/Qwen3.5-4B-GGUF', revision: 'pinned-revision', filename: `${id}.gguf`, sha256: 'a'.repeat(64), license: 'Apache-2.0', compatibility: 'available', reason: id === 'qwen35-4b' ? 'Windows CPU(i5-10300H, RAM 16GB)에서 제한된 공지로 추론과 복구를 시험했습니다. 한 장학 사례의 자동 검사는 통과했지만 일반적인 정확도를 보장하지 않으며, 결과를 원문과 대조해야 합니다. 실제 메모리 사용량은 환경에 따라 달라집니다.' : 'Windows CPU(i5-10300H, RAM 16GB)에서 제한된 공지로 시험했습니다. 장학 공지 분류 오류와 발표 시점 표현 누락이 발견되어 결과를 원문과 대조해야 합니다. 실제 메모리 사용량은 환경에 따라 달라집니다.' })), models: options.aiInstalled ? [model()] : [], preferences: { active_model_id: options.aiInstalled ? 'qwen35-4b' : null as string | null, setup_completed: !options.aiSetupNeeded, processing_mode: 'explicit', automatic_limit: 3, max_tokens: 1024 }, jobs: [] as any[], runtime: { state: 'ready', runtime_available: true, model: null as string | null, detail: null }, hardware: { os: 'windows', arch: 'x86_64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, operation: null as AiOperation | null, progress: null as any, analysis_contract: { prompt_version: contract.prompt_version, schema_version: contract.schema_version, configuration_hash: 'b'.repeat(64) } };
+    const ai = { catalog: ['qwen35-4b', 'qwen35-2b'].map((id) => ({ id, name: id === 'qwen35-4b' ? 'Qwen3.5 4B' : 'Qwen3.5 2B', parameters: id === 'qwen35-4b' ? '4B' : '2B', quantization: 'Q4_K_M', bytes: 2740937888, memory_bytes: id === 'qwen35-4b' ? 10737418240 : 5368709120, description: '한국어 공지 분석용 로컬 모델', use_case: '균형 잡힌 공지 분석', repository: 'unsloth/Qwen3.5-4B-GGUF', revision: 'pinned-revision', filename: `${id}.gguf`, sha256: 'a'.repeat(64), license: 'Apache-2.0', compatibility: 'available', reason: id === 'qwen35-4b' ? 'Windows CPU(i5-10300H, RAM 16GB)에서 제한된 공지로 추론과 복구를 시험했습니다. 한 장학 사례의 자동 검사는 통과했지만 일반적인 정확도를 보장하지 않으며, 결과를 원문과 대조해야 합니다. 실제 메모리 사용량은 환경에 따라 달라집니다.' : 'Windows CPU(i5-10300H, RAM 16GB)에서 제한된 공지로 시험했습니다. 장학 공지 분류 오류와 발표 시점 표현 누락이 발견되어 결과를 원문과 대조해야 합니다. 실제 메모리 사용량은 환경에 따라 달라집니다.' })), models: options.aiInstalled ? [model()] : [], preferences: { active_model_id: options.aiInstalled ? 'qwen35-4b' : null as string | null, setup_completed: !options.aiSetupNeeded, processing_mode: 'explicit', automatic_limit: 3, max_tokens: 1024, execution_mode: options.aiExecutionMode ?? 'auto' }, jobs: [] as any[], runtime: { state: 'ready', runtime_available: true, model: null as string | null, detail: options.aiRuntimeDetail ?? null }, hardware: { os: 'windows', arch: 'x86_64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, operation: null as AiOperation | null, progress: null as any, analysis_contract: { prompt_version: contract.prompt_version, schema_version: contract.schema_version, configuration_hash: 'b'.repeat(64) } };
     const analyses = options.aiResult ? [analysis(1, 1, 1)] : [];
     let personalization = { profile: { university: '', department: '', study_level: '' }, interests: copy(options.initialInterests ?? []), learning_enabled: true };
     const documentFeedback = new Map<number, string>();
@@ -335,7 +338,13 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'ai_cancel_operation': if (ai.operation) ai.operation.cancelling = true; return null;
           case 'ai_unload':
           case 'ai_restart': ai.runtime.model = null; return null;
-          case 'ai_preferences': if (args.preferences.setup_completed && !ai.preferences.setup_completed) await operation('setup', options.aiSetupDelay ?? 0); Object.assign(ai.preferences, args.preferences); return null;
+          case 'ai_preferences':
+            if (args.preferences.execution_mode !== ai.preferences.execution_mode) {
+              if (options.aiExecutionError) throw '실행 장치를 저장하지 못했습니다. 다시 시도해 주세요.';
+              ai.runtime.model = null;
+            }
+            if (args.preferences.setup_completed && !ai.preferences.setup_completed) await operation('setup', options.aiSetupDelay ?? 0);
+            Object.assign(ai.preferences, args.preferences); return null;
           case 'ai_remove': ai.models = ai.models.filter((model) => model.id !== args.id); if (ai.preferences.active_model_id === args.id) ai.preferences.active_model_id = null; return null;
           case 'ai_analyze': {
             const cached = analyses.find((result) => result.document_id === args.documentId && result.revision_id === args.revisionId);

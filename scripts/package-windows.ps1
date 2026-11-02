@@ -85,8 +85,8 @@ foreach ($name in $names) {
     }
     [void] $selected.Add($name)
 }
-$documents = @('WINDOWS_USAGE.md', 'WINDOWS_BUILD.md', 'WINDOWS_VALIDATION.md', 'WINDOWS_AI_RESULTS.md')
-$requiredFiles = @('LICENSE','Cargo.lock','package-lock.json','src-tauri/tauri.conf.json','src-tauri/icons/icon.ico','assets/licenses/Tauri-template-MIT.txt','assets/licenses/Pretendard-OFL.txt')
+$documents = @('WINDOWS_USAGE.md', 'WINDOWS_BUILD.md', 'WINDOWS_VALIDATION.md', 'WINDOWS_AI_RESULTS.md', 'WINDOWS_GPU.md')
+$requiredFiles = @('LICENSE','Cargo.lock','package-lock.json','src-tauri/tauri.conf.json','src-tauri/icons/icon.ico','assets/licenses/Tauri-template-MIT.txt','assets/licenses/Pretendard-OFL.txt','assets/licenses/llama.cpp-MIT.txt','assets/licenses/llama-cpp-rs-MIT.txt','assets/licenses/Microsoft-VC-Runtime-NOTICE.txt')
 $requiredFiles += $documents | ForEach-Object { 'docs/' + $_ }
 foreach ($required in $requiredFiles) {
     if (-not $selected.Contains($required)) { throw "Required source file is missing: $required" }
