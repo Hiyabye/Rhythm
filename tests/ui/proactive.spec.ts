@@ -76,8 +76,12 @@ test('proactive settings save OS lifecycle, sync cadence, notifications and quie
   const quietStart = page.getByLabel('시작 시간', { exact: true });
   const quietEnd = page.getByLabel('종료 시간', { exact: true });
   await quietStart.fill('23:30');
+  // WebKit commits native time inputs on blur; finish each edit as a user would
+  // before inspecting the persisted settings or editing the next field.
+  await quietStart.press('Tab');
   await expect(quietStart).toBeEnabled();
   await quietEnd.fill('07:30');
+  await quietEnd.press('Tab');
   await expect(quietEnd).toBeEnabled();
   await expect(page.getByText('권한 허용은 알림 전달을 보장하지 않습니다.', { exact: false })).toBeVisible();
   await expect.poll(() => page.evaluate(() => {

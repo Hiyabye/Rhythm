@@ -270,10 +270,17 @@ test('late initial feedback read cannot overwrite a newer user correction', asyn
 });
 
 test('closing while reader feedback is pending refreshes Today after the write commits', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-11-02T12:00:00Z') });
   await mockDesktop(page, { feedbackWriteDelay: 350 }); await page.goto('/');
   await page.getByRole('button', { name: /한국어 공지 01/ }).first().click();
-  await page.getByRole('button', { name: '관심 있어요' }).click();
+  const interested = page.getByRole('button', { name: '관심 있어요' });
+  await expect(interested).toBeEnabled();
+  await page.clock.pauseAt(new Date('2026-11-02T13:00:00Z'));
+  await interested.click();
+  await expect(interested).toBeDisabled();
   await page.getByRole('button', { name: /목록으로 돌아가기/ }).click();
+  await expect(page.locator('.archive-reader')).toHaveCount(0);
+  await page.clock.runFor(400);
   const recommendation = page.getByRole('region', { name: '오늘의 추천' })
     .getByRole('group', { name: /한국어 공지 01 추천 피드백/ })
     .getByRole('button', { name: '관심 있어요' });

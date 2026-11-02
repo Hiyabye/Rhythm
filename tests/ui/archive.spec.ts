@@ -302,28 +302,39 @@ test('obsolete searches cannot overwrite newer filters or clamp their page', asy
 });
 
 test('closing during image hydration stops subsequent obsolete image reads', async ({ page }) => {
+  // Keep the admitted read pending until the user has actually closed the reader.
+  await page.clock.install({ time: new Date('2026-11-02T12:00:00Z') });
   const resources = [image, { ...image, id: 8, url: `${image.url}?two` }, { ...image, id: 9, url: `${image.url}?three` }];
   await mockDesktop(page, { resources, imageDelay: 250, body: resources.map((item) => `<img data-resource-url="${item.url}">`).join('') });
   await page.goto('/');
   await navigate(page, '받은 소식');
+  await expect(page.locator('#notice-1')).toBeVisible();
+  await page.clock.pauseAt(new Date('2026-11-02T13:00:00Z'));
   await page.locator('#notice-1').click();
   await expect.poll(() => callCount(page, 'archive_resource_image')).toBe(1);
   await page.getByRole('button', { name: /목록으로 돌아가기/ }).click();
+  await expect(page.locator('.archive-reader')).toHaveCount(0);
+  await page.clock.runFor(350); // Complete the one already admitted local read after closing.
   await expect(page.locator('.notice-list')).toBeVisible();
-  await page.waitForTimeout(350); // Observe completion of the one already admitted local read.
   expect(await callCount(page, 'archive_resource_image')).toBe(1);
   await expect(page.locator('.archive-reader')).toHaveCount(0);
 });
 
 test('returning before automatic read write completes refreshes unread filters afterward', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-11-02T12:00:00Z') });
   await mockDesktop(page);
   await page.goto('/');
   await navigate(page, '받은 소식');
   await page.getByLabel('읽지 않은 공지만').check();
+  await expect(page.locator('.notice-list > li')).toHaveCount(2);
+  await page.clock.pauseAt(new Date('2026-11-02T13:00:00Z'));
   await page.evaluate(() => { (window as any).__fixture.stateDelay = 300; });
   await page.locator('#notice-1').click();
   await expect(page.locator('.reader-header h2')).toBeVisible();
+  await expect.poll(() => callCount(page, 'archive_state')).toBe(1);
   await page.getByRole('button', { name: /목록으로 돌아가기/ }).click();
+  await expect(page.locator('.archive-reader')).toHaveCount(0);
+  await page.clock.runFor(350);
   await expect(page.locator('.notice-list > li')).toHaveCount(1);
   await expect(page.locator('#notice-2')).toBeVisible();
   await expect(page.locator('.archive-list-heading h2')).toBeFocused();

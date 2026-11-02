@@ -8,7 +8,12 @@ export default defineConfig({
   expect: { timeout: 5_000 },
   reporter: 'list',
   outputDir: 'node_modules/.cache/playwright-results',
-  use: { baseURL: 'http://127.0.0.1:4178', viewport: { width: 1180, height: 800 }, trace: 'retain-on-failure' },
+  use: {
+    baseURL: 'http://127.0.0.1:4178', viewport: { width: 1180, height: 800 }, trace: 'retain-on-failure',
+    // Shared IPC fixtures exercise macOS regardless of the test runner's OS.
+    // windows.spec.ts explicitly overrides this for the Windows UI contract.
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+  },
   projects: [{ name: 'chromium', use: { browserName: 'chromium' } }, { name: 'webkit', use: { browserName: 'webkit' } }],
   webServer: {
     command: 'npm run build && npm exec vite preview -- --host 127.0.0.1 --port 4178 --strictPort',

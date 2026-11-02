@@ -211,6 +211,10 @@ test('initial analysis read failure has explicit retry and clears after successf
 });
 
 test('successful model refresh clears a transient read error', async ({ page }) => {
+  // Pause before mounting so there is no in-flight periodic refresh to race
+  // this test's explicit retry.
+  await page.clock.install({ time: new Date('2026-11-02T12:00:00Z') });
+  await page.clock.pauseAt(new Date('2026-11-02T13:00:00Z'));
   await mockDesktop(page, { aiInstalled: true }); await page.goto('/');
   await page.getByRole('button', { name: '설정', exact: true }).click();
   await expect(page.getByRole('button', { name: '선택한 모델 불러오기', exact: true })).toBeVisible();
