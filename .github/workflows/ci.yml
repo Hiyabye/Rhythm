@@ -71,6 +71,8 @@ jobs:
         shell: pwsh
     steps:
       - uses: actions/checkout@v5
+      - name: Prepare and verify Cloud Files for restore tests
+        run: ./scripts/prepare-windows-restore-ci.ps1
       - uses: actions/setup-node@v5
         with:
           node-version: 22

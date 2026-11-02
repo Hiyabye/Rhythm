@@ -59,7 +59,10 @@ fn cloud_root_status(status: i32) -> Result<(), String> {
     } else if status >= 0 {
         Err("동기화 폴더에서는 복원할 수 없습니다. 로컬 앱 데이터 폴더를 사용해 주세요.".into())
     } else {
-        Err("복원 폴더의 클라우드 동기화 상태를 확인하지 못했습니다.".into())
+        Err(format!(
+            "복원 폴더의 클라우드 동기화 상태를 확인하지 못했습니다. (HRESULT: 0x{:08X})",
+            status as u32
+        ))
     }
 }
 
@@ -160,9 +163,28 @@ mod tests {
     fn sync_root_status_accepts_only_known_outside_error() {
         assert!(cloud_root_status(NOT_UNDER_SYNC_ROOT).is_ok());
         assert!(cloud_root_status(0).is_err());
-        assert!(cloud_root_status(0x8007018bu32 as i32).is_err()); // access denied
-        assert!(cloud_root_status(0x8007007au32 as i32).is_err()); // short buffer
-        assert!(cloud_root_status(0x80070002u32 as i32).is_err()); // missing path
+        for status in [
+            0x8007018bu32, // cloud file access denied (including restricted tokens)
+            0x8007007a,    // short buffer
+            0x80070002,    // missing path
+            0x80070032,    // operation not supported (e.g. unavailable filter)
+            0x80070178,    // not a cloud file does not establish its parent's status
+        ] {
+            let error = cloud_root_status(status as i32).unwrap_err();
+            assert!(error.contains(&format!("0x{status:08X}")), "{error}");
+        }
+    }
+
+    #[test]
+    fn local_restore_root_passes_native_cloud_filter_query() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("한글 복원 폴더");
+        fs::create_dir(&root).unwrap();
+        // Exercise the real API, including the verbatim path spelling produced
+        // by Windows canonicalize. This is also an early CI environment check:
+        // an unavailable Cloud Files filter must not silently permit restores.
+        validate_root(&root).unwrap();
+        validate_root(&root.canonicalize().unwrap()).unwrap();
     }
 
     #[test]
