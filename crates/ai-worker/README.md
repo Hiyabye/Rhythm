@@ -7,7 +7,7 @@ stderr; stdout carries only versioned JSON Lines IPC.
 
 ## Runtime and compatibility
 
-Current application/worker version is **0.9.0**. Rhythm currently supports and targets
+Current application/worker version is **0.9.2**. Rhythm currently supports and targets
 macOS only; the worker's cross-platform build options are implementation capabilities,
 not a claim of product support. Earlier Windows/Linux build evidence is historical.
 The worker protocol remains v1; application prompt versioning and stored-result schemas
