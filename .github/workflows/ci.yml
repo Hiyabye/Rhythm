@@ -84,6 +84,7 @@ jobs:
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
           $vsPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if (-not $vsPath) { throw 'Visual Studio C++ tools are missing' }
+          $before = @($env:PATH -split ';' | Where-Object { $_ })
           Import-Module (Join-Path $vsPath 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')
           Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
           $ninjaPath = Join-Path $vsPath 'Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja'
@@ -92,7 +93,12 @@ jobs:
             $value = [Environment]::GetEnvironmentVariable($name)
             if ($value) { "$name=$value" >> $env:GITHUB_ENV }
           }
-          $env:PATH -split ';' | Where-Object { $_ } | ForEach-Object { $_ >> $env:GITHUB_PATH }
+          # Export only directories the dev shell added. Re-adding the runner's
+          # whole PATH put Git's usr/bin (a Unix `link`) ahead of MSVC link.exe.
+          # Each GITHUB_PATH line is prepended, so write them in reverse order.
+          $added = @($env:PATH -split ';' | Where-Object { $_ -and $before -notcontains $_ })
+          [array]::Reverse($added)
+          $added | ForEach-Object { $_ >> $env:GITHUB_PATH }
           $ninjaPath >> $env:GITHUB_PATH
       - name: Prepare pinned Vulkan and libclang build tools
         run: |
