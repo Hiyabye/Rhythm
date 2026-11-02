@@ -1,6 +1,6 @@
 # Roadmap
 
-Version numbers describe product milestones, not promises that future functionality exists. Rhythm stays local-first and Korean-first throughout. **Current support and distribution target macOS only.** Platform builds, CI and native behavior recorded under earlier milestones are historical evidence, not current Windows/Linux support. Implementation, automated checks, bounded live collection and native/platform verification are separate claims.
+Version numbers describe product milestones, not promises that future functionality exists. Rhythm stays local-first and Korean-first throughout. **Current support and distribution target macOS Apple Silicon and Windows 11 x64.** Platform builds, CI and native behavior recorded under earlier milestones are historical evidence, not current Linux support; Windows evidence is tracked in [Windows validation](WINDOWS_VALIDATION.md). Implementation, automated checks, bounded live collection and native/platform verification are separate claims.
 
 ## v0.1.0 — Foundation
 
@@ -381,11 +381,28 @@ Changes:
 - **Dependency advisories:** `zip` 8.6.0 stays in the worker until an upstream mistral.rs release moves candle to `zip` >= 9.0.5 (alerts dismissed as unreachable); `deepmerge` and Linux-only `glib` alerts stay open.
 - **Platforms:** Windows, Linux and Intel Macs are not supported.
 
+## Windows 11 x64 support — in progress
+
+Ported from contributor PR #1 and merged as an addition: every macOS path is kept behind `cfg`, and both platforms share the identifier, schema and backup format.
+
+- Per-user unsigned NSIS installer with both AI workers and app-local VC runtime; manual installer updates; uninstall keeps data and models.
+- Windows-native login startup (HKCU Run), Explorer reveal, WinRT notifications with one-use activation tokens (schema 7) and fixed-NTFS journaled restore.
+- Separate llama.cpp/Vulkan NVIDIA worker with an `auto`/`cpu`/`gpu` execution mode (schema 8); explicit modes keep separate cache identities.
+- Model download folder selection on both platforms (schema 9).
+- Merge fixes: macOS keeps its v1.0 cache identity, an oversized GPU request falls back only once, chosen folders never adopt unowned files, and macOS system symlinks are accepted.
+
+### Evidence and open gates
+
+- Contributor evidence (before the merge, on one Windows 11 PC with a GTX 1650) is in [Windows validation](WINDOWS_VALIDATION.md), [Windows AI results](WINDOWS_AI_RESULTS.md) and [Windows GPU](WINDOWS_GPU.md).
+- After the merge: macOS Rust (except the pre-existing `settings_show_the_built_application_version` failure from the shell redesign), desktop-script and Playwright suites (including a Windows user-agent spec) pass; Windows Rust code was type-checked and Clippy-checked from macOS with stub C tools, which is not a Windows build or test.
+- Open: a Windows CI run of the merged branch, an installed-app run of the merged build, native login/sleep/notification-click checks, and a second Windows machine.
+
 ## After v1.0.0
 
 Possible platform and distribution work, each a future product decision:
 
-- Windows and Linux support (the historical Linux `glib 0.18.5` finding must be re-reviewed first) and Intel macOS.
+- Linux support (the historical Linux `glib 0.18.5` finding must be re-reviewed first) and Intel macOS.
+- Windows code signing, if justified.
 - Developer ID signing and Apple notarization, if justified.
 - A production Tauri updater with a protected signing key.
 

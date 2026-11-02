@@ -33,6 +33,34 @@ metadata; unsupported or incomplete artifacts return an error rather than fetchi
 replacement metadata. Neither the builder nor requests enable tools, search, MCP,
 shell execution, code execution, or file attachments.
 
+## Windows NVIDIA GPU worker
+
+`--no-default-features --features gpu-inference` builds a separate worker on
+`llama-cpp-2`/`llama-cpp-sys-2` pinned to `0.1.160` with Vulkan (`src/gpu.rs`). It
+speaks the same protocol, reports `engine: "llama.cpp"` and `build_backend:
+"vulkan"`, and is shipped on Windows as the `rhythm-ai-worker-gpu` sidecar beside
+the CPU worker. CPU and GPU features are mutually exclusive (compile error). The
+worker accepts only an NVIDIA Vulkan device and reports a GPU load only after it
+observes offloaded layers and an allocated GPU buffer. Its context is 8192 tokens;
+an input that does not fit is rejected with an error containing `토큰 한도를
+넘습니다`, which the app treats as a per-request CPU retry rather than a device
+failure. Archived `<|`/`|>` delimiters are neutralized so source text cannot open
+a chat role.
+
+NVIDIA GTX 10/16 and RTX 20/30/40/50 are targets, not tested hardware. Build
+requirements (Vulkan SDK, libclang, CMake, Ninja, a target directory of at most 32
+characters distinct from the CPU one) are in the
+[Windows GPU guide](../../docs/WINDOWS_GPU.md):
+
+```powershell
+$env:LLAMA_BUILD_SHARED_LIBS = '0'
+$env:LLAMA_STATIC_CRT = '1'
+cargo test --locked -p rhythm-ai-worker --release --no-default-features --features gpu-inference --target-dir D:\rhythm-gpu
+```
+
+On Windows release builds, `build.rs` links the VC runtime statically
+(`static_vcruntime`) while keeping the Windows Universal CRT dynamic.
+
 ## Build and tests
 
 From the repository root, with Cargo/Rust on PATH:
