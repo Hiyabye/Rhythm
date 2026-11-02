@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "useLocalToolsDir": true,
+    "targets": ["nsis"],
+    "externalBin": [
+      "binaries/rhythm-ai-worker",
+      "binaries/rhythm-ai-worker-gpu"
+    ],
+    "resources": {
+      "../assets/licenses/Pretendard-OFL.txt": "licenses/Pretendard-OFL.txt",
+      "../assets/licenses/Tauri-template-MIT.txt": "licenses/Tauri-template-MIT.txt",
+      "../assets/licenses/llama.cpp-MIT.txt": "licenses/llama.cpp-MIT.txt",
+      "../assets/licenses/llama-cpp-rs-MIT.txt": "licenses/llama-cpp-rs-MIT.txt",
+      "../assets/licenses/Microsoft-VC-Runtime-NOTICE.txt": "licenses/Microsoft-VC-Runtime-NOTICE.txt",
+      "binaries/vc-runtime/msvcp140.dll": "msvcp140.dll",
+      "binaries/vc-runtime/vcruntime140.dll": "vcruntime140.dll",
+      "binaries/vc-runtime/vcruntime140_1.dll": "vcruntime140_1.dll"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "languages": ["Korean", "English"],
+        "installerHooks": "../scripts/installer-hooks.nsh",
+        "template": "../scripts/installer-template.nsi",
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      },
+      "webviewInstallMode": {
+        "silent": true,
+        "type": "downloadBootstrapper"
+      }
+    }
+  }
+}
