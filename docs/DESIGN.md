@@ -1,10 +1,150 @@
+---
+name: Rhythm
+description: Korean-first, local-first macOS command center for Sogang notices, drawn in native Mac system grammar.
+colors:
+  bg: "#ffffff"
+  sidebar: "#f0f0f2"
+  surface: "#ffffff"
+  pane: "#fafafb"
+  field: "#ffffff"
+  text: "#1d1d1f"
+  text-2: "#3a3a3e"
+  secondary: "#5c5c61"
+  muted: "#68686d"
+  line: "#e4e4e7"
+  line-strong: "#cfcfd4"
+  hover: "rgb(0 0 0 / .045)"
+  accent: "#0a62d0"
+  accent-fill: "#0a62d0"
+  accent-text: "#ffffff"
+  soft: "#e3edfb"
+  danger: "#c0281c"
+  family-main: "#d0344a"
+  family-computing: "#d9730d"
+  family-engineering: "#1c9a5f"
+  family-other: "#8e8e93"
+  bg-dark: "#1e1e20"
+  sidebar-dark: "#29292c"
+  surface-dark: "#232326"
+  pane-dark: "#212124"
+  field-dark: "#2a2a2d"
+  text-dark: "#f2f2f5"
+  text-2-dark: "#d6d6db"
+  secondary-dark: "#afafb5"
+  muted-dark: "#9c9ca3"
+  line-dark: "#36363a"
+  line-strong-dark: "#4a4a4f"
+  hover-dark: "rgb(255 255 255 / .06)"
+  accent-dark: "#6aa6ff"
+  accent-fill-dark: "#2368d4"
+  accent-text-dark: "#ffffff"
+  soft-dark: "#233753"
+  danger-dark: "#ff7c70"
+  family-main-dark: "#ff6b7d"
+  family-computing-dark: "#ffa24d"
+  family-engineering-dark: "#3fcf8a"
+  family-other-dark: "#98989f"
+typography:
+  display:
+    fontFamily: "Pretendard Variable, Pretendard, -apple-system, BlinkMacSystemFont, sans-serif"
+    fontSize: "26px"
+    fontWeight: 700
+    lineHeight: 1.25
+    letterSpacing: "-0.02em"
+  headline:
+    fontFamily: "Pretendard Variable, Pretendard, -apple-system, BlinkMacSystemFont, sans-serif"
+    fontSize: "15px"
+    fontWeight: 650
+  title:
+    fontFamily: "Pretendard Variable, Pretendard, -apple-system, BlinkMacSystemFont, sans-serif"
+    fontSize: "14px"
+    fontWeight: 500
+    lineHeight: 1.45
+  body:
+    fontFamily: "Pretendard Variable, Pretendard, -apple-system, BlinkMacSystemFont, sans-serif"
+    fontSize: "13px"
+    fontWeight: 400
+    lineHeight: 1.5
+  meta:
+    fontFamily: "Pretendard Variable, Pretendard, -apple-system, BlinkMacSystemFont, sans-serif"
+    fontSize: "12px"
+    fontWeight: 400
+    fontFeature: "tnum"
+  label:
+    fontFamily: "Pretendard Variable, Pretendard, -apple-system, BlinkMacSystemFont, sans-serif"
+    fontSize: "11px"
+    fontWeight: 600
+rounded:
+  bar: "2px"
+  row: "6px"
+  panel: "8px"
+  card: "10px"
+  circle: "50%"
+spacing:
+  sidebar: "232px"
+  sidebar-compact: "200px"
+  sidebar-icon: "60px"
+  week-pane: "340px"
+  content-x: "32px"
+  block-gap: "28px"
+components:
+  button-primary:
+    backgroundColor: "{colors.accent-fill}"
+    textColor: "{colors.accent-text}"
+    rounded: "{rounded.row}"
+    padding: "5px 14px"
+    height: "28px"
+  button-secondary:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.text}"
+    rounded: "{rounded.row}"
+    padding: "5px 14px"
+    height: "28px"
+  source-item:
+    textColor: "{colors.text}"
+    typography: "{typography.body}"
+    rounded: "{rounded.row}"
+    padding: "5px 10px"
+    height: "30px"
+  source-item-active:
+    backgroundColor: "{colors.soft}"
+    textColor: "{colors.text}"
+    rounded: "{rounded.row}"
+  chip:
+    textColor: "{colors.secondary}"
+    typography: "{typography.meta}"
+    rounded: "{rounded.row}"
+    padding: "0 9px"
+    height: "26px"
+  chip-pressed:
+    backgroundColor: "{colors.soft}"
+    textColor: "{colors.accent}"
+    rounded: "{rounded.row}"
+  day-number-today:
+    backgroundColor: "{colors.accent-fill}"
+    textColor: "{colors.accent-text}"
+    rounded: "{rounded.circle}"
+    size: "26px"
+  banner:
+    backgroundColor: "{colors.pane}"
+    textColor: "{colors.text}"
+    rounded: "{rounded.panel}"
+    padding: "11px 14px"
+  week-pane:
+    backgroundColor: "{colors.pane}"
+    width: "340px"
+    padding: "30px 20px 24px"
+---
+
 # Design — Quiet Intelligence
 
 Rhythm is an information-first personal command center, not a chatbot dashboard. v0.3 made local analysis an optional layer beside the archive; v0.3.1 refined processing reliability. v0.4 adds user-controlled local profile, reversible feedback and explainable deterministic recommendations without making a model or internet access a prerequisite. v0.5 adds opt-in app lifecycle controls, scheduled incremental collection and native notification requests. v0.9 adds user-directed single-file backup/restore. v1.0.0 is the first stable release: Settings shows manual update steps (no automatic update control), an empty archive shows a short first-run guide on Today, and destructive actions (restore, personalization reset, deleting an interest or learned memory, clearing notification history, deleting a managed model) require a confirmation that names what changes and what is kept. Backup is not encrypted and excludes model weights; restore requires confirmation and a manual relaunch, and managed models survive only when local weights match expected size/SHA-256. Rhythm supports and targets macOS Apple Silicon only; previous Windows/Linux implementations and observations are historical, not current support. Release builds are ad-hoc signed and not notarized by design; Gatekeeper rejects them and README documents the per-app approval. Empty states distinguish cold start from tailored results; fictional summaries and fabricated activity do not fill them. Native behavior still requires the specifically described verification; do not infer distribution readiness from implementation.
 
+The visual system is a native macOS app drawn without irony, with Things 3 and Fantastical as the craft bar (standing user decision recorded in `PRODUCT.md`). The YAML frontmatter above is the normative token list; `.impeccable/design.json` carries the matching component snippets, motion and breakpoints. The shell (sidebar, page header, banners) and Today were redesigned in this system. Settings, the reader and the AI surfaces already use the same tokens but keep their earlier geometry and have not been redesigned yet.
+
 ## Korean-first navigation
 
-Main navigation remains **오늘 · 받은 소식 · 탐색 · 보관함 · 설정**. Labels, feedback and application-facing errors use natural Korean; product identifiers and model names stay recognizable.
+Navigation is a macOS source list. The four primary views **오늘 · 받은 소식 · 탐색 · 보관함** sit at the top, extension groups follow, and **설정** sits at the bottom. Labels, feedback and application-facing errors use natural Korean; product identifiers and model names stay recognizable.
 
 | View | Current behavior |
 | --- | --- |
@@ -14,12 +154,30 @@ Main navigation remains **오늘 · 받은 소식 · 탐색 · 보관함 · 설�
 | 보관함 | User-saved notices, independent of extension enablement. Saving contributes only bounded local evidence and does not make attachments available automatically. |
 | 설정 | Profile, explicit interests and priority, learned memory/evidence, learning control/reset, source controls, model catalog and AI processing preferences; v0.5 adds lifecycle, scheduler, notification policy and history controls. |
 
+Sidebar structure, top to bottom:
+
+- **Brand row:** the Beat mark and the word "Rhythm".
+- **Primary items:** each with a 17 px line icon in the accent colour. 받은 소식 shows the unread count and 보관함 the saved count as a plain tabular-numeral badge in secondary text, with a screen-reader description ("읽지 않은 공지 N개", "저장한 공지 N개"). A zero count is not shown.
+- **Extension groups:** one group per extension, headed by its display name in a small label (11 px/600, secondary). For 서강대학교 공지, the supported subscribed boards are grouped under organization sub-labels (the "서강대학교 ·" prefix is removed), because board names repeat across institutions. Each board row has a small family-colour swatch next to its name. A disabled extension shows one quiet row, "꺼져 있음 · 설정에서 켜기"; an enabled extension with no subscribed boards shows "구독한 게시판 없음 · 설정". Both rows lead to Settings.
+- **Board scope:** selecting a board opens 받은 소식 filtered to that board. The page title becomes the board name with "<organization> · 받은 소식" below it, and the board row, not 받은 소식, is marked current.
+- **Bottom:** a sync status line, then 설정. While a sync runs, the line shows its message and page with a spinning refresh icon; otherwise it shows "마지막 확인 오늘 HH:MM" or "마지막 확인 M월 D일" from the latest successful board check, or "아직 가져온 적 없음" when subscribed boards were never fetched.
+
+The page header is the view title (26 px) alone. On Today a line below it gives the date, the unread count and, after a sync with new notices, "최근 동기화로 새 공지 N". There is no eyebrow, caption, header note or footer.
+
 `App.svelte` centralizes navigation, clears stale hash/scroll position and focuses main content. `ArchiveView.svelte` resets filters when changing sections, tracks asynchronous search generations and returns visible focus to the opened row on reader close, or to the list heading if that row disappeared. Saved/unread filters clamp to the last valid page after state changes, including late automatic read writes. Browser previews clearly identify desktop-only behavior and disable local operations rather than showing simulated persistence.
 
 
 ## Personalized Today and memory
 
-Today requests a bounded set of recommendations from Rust/SQLite. The quiet list shows title, source, publication date, source category, read/saved state, an optional valid current AI summary, and only the deterministic reasons that contributed to its score. Interest feedback can be reversed on the row; the same controls appear in the reader. Recommendations never require an analysis and opening a notice does not start inference.
+Today requests a bounded set of recommendations from Rust/SQLite. Recommendations never require an analysis and opening a notice does not start inference.
+
+Presentation. The centre column holds **나를 위한 소식** as inset list rows separated by hairlines. Each row shows the unread dot, the title (heavier when unread), a meta line with the board's family swatch, source, publication date, original category and "보관함에 저장됨" when saved, the deterministic reasons that contributed to its score, and an optional valid current AI summary labeled "저장된 AI 요약". The feedback chips **관심 있어요 / 관심 없어요** sit at the row's trailing edge. They appear when the row is hovered or contains focus, stay visible when pressed, and are always visible at 640 px and narrower, where they move below the row content. The same controls appear in the reader and can be reversed in either place.
+
+A trailing 340 px **이번 주** pane on the right edge of the window lists Monday to Sunday with today's date number circled in the accent fill. Past days are dimmed. Each day lists notices published that day as events: a 3 px family-colour bar plus the title and a source meta line, so the colour is never the only cue. At most five notices appear per day, followed by "외 N건 · 받은 소식에서 모두 보기". AI-extracted reference dates appear in the matching day with a dotted grey bar and an "AI 참고 일정" label; dates after Sunday appear under **이후 AI 참고 일정** (at most five, labeled "AI · M월 D일"). Only dates from analyses that match the current contract are shown. A footnote says the reference dates come from the local AI, are not used for ranking or notifications, and should be checked in the original. When the week may extend beyond the loaded page, a footnote says only the newest notices are shown.
+
+Below the picks, **최근 분석한 소식** lists at most five stored analyses: the short summary first, then "AI 분류 <category>", partial-analysis and contract-mismatch notes, up to two extracted dates, and the model name with a prompt to check the original.
+
+Below 1100 px the week pane stops being a separate pane, and the order becomes picks → week → recent analyses in one column.
 
 With no profile or interactions, Today labels the list as recent notices before personalization and links directly to interest settings. Explicit interest matches, explicit negative topics, profile matches, current feedback, saves, source subscription, freshness and meaningful revision recency affect ranking. Historical initial backfill receives no freshness reward; AI-generated dates and classifications do not rank notices. A modest two-pass source cap reduces same-source repetition without changing scores. The received-news list and search continue to expose the full archive.
 
@@ -89,20 +247,64 @@ Today’s recommendation list is independent of AI analysis. A separate section 
 
 Pretendard Variable is imported locally through the `pretendard` npm package in `src/main.ts`; startup does not use a font CDN. The font stack falls back to native system fonts and sans-serif. Its SIL Open Font License is retained at `assets/licenses/Pretendard-OFL.txt` and bundled as an application resource.
 
-Hierarchy comes from type size/weight, whitespace and alignment. A stable left sidebar anchors navigation. Settings uses an internal section list and restrained content column; archive lists and reader share the same surfaces. At narrower widths sidebar labels yield to icon navigation and controls reflow. Native window controls and a minimum window size are retained. The reader region is keyboard-focusable, has a Korean label/visible outline and scrolls wide content with horizontal arrows. Narrow native macOS reading and browser WebKit/Chromium 640 px/200% wide-table containment were checked. Browser results and historical Windows/Linux builds do not establish support for other native platforms.
+Type sits at macOS system sizes on a 13 px base (line height 1.5). Hierarchy comes from size and weight, not colour or decoration:
+
+- **Page title** (700, 26 px, line height 1.25, −0.02em): one per view, in the page header.
+- **Pane heading** (650, 15 px): 나를 위한 소식, 최근 분석한 소식, 이번 주, with a 12 px secondary note on the same baseline.
+- **Row title** (500, 14 px, line height 1.45; 650 when unread): pick titles and recent-analysis summaries.
+- **Body** (400, 13 px): sidebar items, banners, buttons.
+- **Meta** (400, 12 px, tabular numerals): source/date lines, reasons (in `--text-2`), chips, counts.
+- **Label** (600, 11 px): sidebar group headings, weekday names, event meta and footnotes (400).
+- **Day number** (600, 15 px, tabular numerals) in a 26 px circle.
+
+**The Tabular Count Rule.** Every count, date and time (sidebar badges, the Today subline, sync time, day numbers, meta lines) uses tabular numerals so columns and badges don't shift.
+
+**The No-Kicker Rule.** No eyebrows, letter-spaced kickers, header notes or taglines above or around titles. The page title stands alone; context goes in the line below it.
+
+Layout is three panes on Today and two elsewhere. The sidebar is fixed at 232 px (200 px below 1100 px; a 60 px icon column below 800 px). Main content is padded 26 px top, 32 px sides and 40 px bottom (26 px sides below 1100 px; 22/20/32 px below 800 px). On Today a fixed 340 px week pane occupies the right edge and main content reserves that width. Today's blocks are separated by 28 px. Below 1100 px the week pane joins the main column (picks → week → recent analyses); at 640 px and narrower the feedback chips move below each pick. Settings keeps its internal section list and restrained content column; archive lists and reader share the same surfaces. Native window controls and a minimum window size are retained. The reader region is keyboard-focusable, has a Korean label/visible outline and scrolls wide content with horizontal arrows. Narrow native macOS reading and browser WebKit/Chromium 640 px/200% wide-table containment were checked. Browser results and historical Windows/Linux builds do not establish support for other native platforms.
+
+Depth is flat. Panes are separated by 1 px hairlines (`--line`) and the tonal step between `--bg`, `--sidebar` and `--pane`, not by shadows. The only shadows are small control affordances: the selected segment (`0 1px 3px #0000000a`), the switch knob (`0 1px 2px #0002`) and the transient save notice (`0 4px 24px #0000000c`). Corners are 6 px for rows, buttons, chips and events, 8 px for pick rows and banners, 10 px for AI panels, and 2 px for swatches and event bars. Motion is native-quick: hover, selection and chip-reveal fades of 140–150 ms, a spinning icon only while a sync runs, and everything disabled under `prefers-reduced-motion`.
+
+The sidebar is opaque `--sidebar`, not macOS vibrancy; translucency would need a Tauri window setting and is an accepted gap.
 
 Shared styles live in `src/app.css`, with AI surfaces in `src/lib/ai.css`; reusable symbols are in `src/lib/Icon.svelte`. Tailwind CSS is integrated, while semantic component classes define the visual system.
 
 ## Color
 
-| Role | Color |
-| --- | --- |
-| Forest green | `#344C43` |
-| Warm ivory | `#F4F1EA` |
-| Dark foundation | `#202622` |
-| Muted green reference | `#A1AA9C` |
+One system-blue accent on neutral greys, with four calendar-style family colours for institutions. Token values are in the frontmatter (light keys, and `-dark` keys for `:root[data-theme=dark]`).
 
-Light mode uses a near-white main surface (`#FAF9F6`) and warmer sidebar (`#F0EEE7`). Dark mode changes the same semantic tokens for surfaces, text, dividers, interaction and errors. Color emphasizes selection, focus and primary actions; state is not communicated through color alone. Light-theme secondary/muted semantic text was darkened to meet a tested 4.5:1 normal-text contrast minimum against main, surface and sidebar backgrounds. Thin separators organize content without purple gradients, glowing AI ornaments or fabricated activity indicators.
+- **Neutrals.** `--bg` and `--surface` are white in light mode and graphite (`#1e1e20` / `#232326`) in dark mode. `--sidebar` is a slightly darker grey than the content. `--pane` is a barely tinted surface for the week pane and banners. `--field` backs inputs.
+- **Text.** `--text` for titles and body, `--text-2` for secondary content that still needs weight (recommendation reasons, chip text on narrow screens, the brand name), `--secondary` for meta lines and notes, `--muted` for placeholders, empty days and footnotes.
+- **Lines.** `--line` is the hairline for separators and pane edges. `--line-strong` is for control outlines that must read as edges (secondary buttons, the "AI 참고 일정" label).
+- **Accent.** `--accent` is the accent as text or icon: sidebar icons, text buttons, the unread dot, focus rings, today's weekday name, pressed chips. `--accent-fill` is the accent as a filled background behind `--accent-text`: primary buttons and today's date circle. They are the same in light mode; in dark mode the fill is deeper (`#2368d4`) so white text on it stays legible, while the text accent is lighter (`#6aa6ff`). `--soft` is the selection tint for the active sidebar row, pressed chips and text selection.
+- **Family colours.** `--family-main` (main academic board), `--family-computing`, `--family-engineering` and `--family-other` (fallback). They appear only as 8 px swatches in the sidebar and pick meta lines and as 3 px event bars in the week pane. AI reference dates use a dotted `--muted` bar instead.
+- **Danger.** `--danger` for error banners (text and border, transparent background) and destructive text.
+
+**The One Accent Rule.** Blue is the only chromatic UI colour. It marks selection, focus, the unread dot, today's date and primary actions, nothing else.
+
+**The Colour-Plus-Text Rule.** A family colour always sits next to a text label (board name or source name). Colour identifies an institution at a glance; the text carries the meaning.
+
+**The Fill-Versus-Text Rule.** White text goes on `--accent-fill`, never on `--accent`. Use `--accent` only for text and icons on neutral backgrounds.
+
+Contrast, computed from the token values (WCAG relative luminance), not measured on screen:
+
+- `--text`, `--text-2` and `--secondary` exceed 4.5:1 on `--bg`, `--sidebar`, `--pane` and `--soft` in both themes (lowest: `--secondary` on `--soft`, 5.63 light, 5.52 dark).
+- `--muted` exceeds 4.5:1 on `--bg`, `--sidebar` and `--pane` in both themes (lowest 4.87 light on `--sidebar`).
+- `--accent` is 5.72 on `--bg` light and 5.59 dark; white on `--accent-fill` is 5.72 light and 5.25 dark.
+- `--accent` on `--soft` is 4.84 light and 4.88 dark, so pressed chip text (12 px/600) stays above 4.5:1 in both themes.
+- Family colours as non-text marks: dark-theme bars and swatches are 5.0:1 or more on `--pane` and `--sidebar`. Light-theme bars on `--pane` are 3.13–4.71; light-theme swatches on `--sidebar` are 2.86 (`--family-other`) and 2.88 (`--family-computing`), below 3:1. The swatch is decorative and always paired with the board name.
+
+### Visual guardrails
+
+- **Do** use `--accent-fill` behind white text and `--accent` for accent text and icons.
+- **Do** pair every family colour with its board or source name.
+- **Do** use tabular numerals for counts, dates and times.
+- **Do** keep feedback chips hidden until row hover/focus, visible when pressed, and always visible at 640 px and narrower.
+- **Don't** add eyebrows, letter-spaced kickers, header notes, taglines or stat tiles.
+- **Don't** introduce a second chromatic accent beyond the family marks.
+- **Don't** separate panes with shadows; use hairlines and tonal steps.
+
+State is not communicated through color alone. Thin separators organize content without purple gradients, glowing AI ornaments or fabricated activity indicators.
 
 ## Interaction and accessibility boundaries
 
@@ -114,8 +316,10 @@ v0.9.2 native review (isolated validation bundle, macOS 27.2, Accessibility API 
 
 v1.0.0 review (macOS 27.2, the release app copied from its DMG, Accessibility API inspection and AX actions, not spoken VoiceOver output). Fixed: the settings side navigation had silently lost links to General, Extensions, AI, Personalization and Background in v0.9.0 and now links every section; the learning switch announced its state but never showed it visually; repeated per-item buttons (interest edit/delete, notification history open) now include the item name; stored scheduler errors and history errors are plain text instead of alerts re-announced on every visit; the General "시작과 종료" row had no control and now links to Background. The first-run guide is a named region on an empty Today. Native confirmation sheets were observed for interest deletion, and cancelling left the interest in place. Still not reviewed: spoken VoiceOver output and rotor, OS text size and zoom, increased contrast, and reduced motion at the OS level (reduced-motion CSS exists but was not observed natively). No `prefers-contrast` styling exists.
 
+The native-macOS redesign of the shell (sidebar, page header, banners) and Today, after v1.0.0, was checked only with mocked-IPC Playwright captures in Chromium and WebKit (light, dark, empty Today, 1000 px and 640 px widths, feedback hover/focus, a board-scoped inbox and Settings). It has not been natively reviewed: none of the v0.9.2 or v1.0.0 observations above apply to the new sidebar, week pane or feedback chips. The token contrast values in [Color](#color) are computed, not measured. The sidebar with all ten supported boards subscribed has not been captured. The sidebar is opaque rather than vibrant, and there is still no `prefers-contrast` styling.
+
 ## Beat branding
 
-`assets/branding/beat.svg` is the original vector source. Four rounded bars of different heights form a rhythm recognizable at small sizes; the desktop icon uses ivory bars on forest green. Generated desktop icon formats in `src-tauri/icons/` remain committed.
+`assets/branding/beat.svg` is the original vector source. Four rounded bars of different heights form a rhythm recognizable at small sizes. Generated desktop icon formats in `src-tauri/icons/` remain committed. The redesign did not touch the source SVG or the desktop icon, which still use the earlier pre-redesign colours (`#F4F1EA` bars on `#344C43`); they are not part of the current palette and do not match the in-app accent.
 
-The in-app mark uses `currentColor` for both themes. Branding can evolve without changing application boundaries. The original logo follows Rhythm's MIT license; font/dependency licenses and the rights to school content remain separate.
+In the app, the mark is a small 16 px-high set of four 3 px bars in `--accent`, next to the word "Rhythm" in the sidebar brand row. It follows the theme through the accent token. Branding can evolve without changing application boundaries. The original logo follows Rhythm's MIT license; font/dependency licenses and the rights to school content remain separate.

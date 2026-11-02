@@ -3,12 +3,18 @@
   import { invoke } from '@tauri-apps/api/core';
   import type { AiSnapshot, ArchivePage, ArchiveSummary, AiResult, DocumentItem, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
   import analysisContract from './analysis-contract.json' with { type: 'json' };
-  import { archiveDate, archiveError, archiveSize } from './archive-format';
+  import { archiveDate, archiveDay, archiveError, localDayKey } from './archive-format';
   import DocumentReader from './DocumentReader.svelte';
   import Highlighted from './Highlighted.svelte';
   import Icon from './Icon.svelte';
 
-  let { page, desktop, enabled, activation, onactivationhandled, onsettings, onaisettings }: { page: string; desktop: boolean; enabled: boolean; activation: { document_id: number; revision_id: number; event_id: number } | null; onactivationhandled: () => void; onsettings: () => void; onaisettings: () => void } = $props();
+  let { page, desktop, enabled, sourceRequest, activation, onactivationhandled, onsettings, onaisettings, onsourcechange, oncontext, onweekpane }: {
+    page: string; desktop: boolean; enabled: boolean; sourceRequest: { id: string; token: number };
+    activation: { document_id: number; revision_id: number; event_id: number } | null;
+    onactivationhandled: () => void; onsettings: () => void; onaisettings: () => void; onsourcechange: (id: string) => void;
+    oncontext: (context: { summary: ArchiveSummary | null; sources: SourceInfo[] | null; status: SyncStatus | null }) => void;
+    onweekpane: (visible: boolean) => void;
+  } = $props();
   let result = $state<ArchivePage>({ items: [], total: 0, categories: [] });
   let summary = $state<ArchiveSummary | null>(null);
   let sources = $state<SourceInfo[]>([]);
@@ -43,14 +49,16 @@
 
   $effect(() => {
     const currentPage = page;
+    const request = sourceRequest;
     void currentPage;
+    void request.token;
     readerId = null;
     readerRevisionId = null;
     lastOpened = 0;
     restoreListFocus = false;
     draft = '';
     query = '';
-    source = '';
+    source = request.id;
     category = '';
     unread = false;
     ascending = false;
@@ -72,6 +80,12 @@
       saved_only: page === 'bookmark', unread_only: unread, ascending, offset, limit: pageSize };
     void revision;
     if (desktop) void fetchPage(filters);
+  });
+
+  // The week agenda is a trailing window pane, so the shell reserves its width while it is shown.
+  $effect(() => {
+    onweekpane(page === 'today' && readerId === null);
+    return () => onweekpane(false);
   });
 
   $effect(() => {
@@ -96,6 +110,7 @@
       void invoke<SyncStatus>('archive_status').then((value) => {
         if (!active) return;
         status = value;
+        oncontext({ summary: null, sources: null, status: value });
         if (wasRunning && !value.running) { revision++; void refreshContext(); }
         wasRunning = value.running;
       }).catch((reason) => { if (active) error = archiveError(reason); });
@@ -108,7 +123,7 @@
       const [counts, catalog, sync] = await Promise.all([
         invoke<ArchiveSummary>('archive_summary'), invoke<SourceInfo[]>('archive_sources'), invoke<SyncStatus>('archive_status'),
       ]);
-      if (active) { summary = counts; sources = catalog; status = sync; }
+      if (active) { summary = counts; sources = catalog; status = sync; oncontext({ summary: counts, sources: catalog, status: sync }); }
     } catch (reason) { if (active) error = archiveError(reason); }
     try {
       const analyses = await invoke<AiResult[]>('ai_recent');
@@ -235,17 +250,56 @@
     await tick();
     if (!active || readerId !== null || loading) return;
     restoreListFocus = false;
-    const target = document.getElementById(`notice-${lastOpened}`) ?? listHeading;
+    const target = (lastOpenedTarget && document.getElementById(lastOpenedTarget)) || document.getElementById(`notice-${lastOpened}`) || listHeading;
     target?.focus({ preventScroll: true });
     target?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
   }
   let lastOpened = 0;
-  async function open(item: DocumentItem) {
-    lastOpened = item.id;
+  let lastOpenedTarget = '';
+  async function open(item: DocumentItem, target = `notice-${item.id}`) {
+    await openDocument(item.id, target);
+  }
+  async function openDocument(id: number, target: string) {
+    lastOpened = id;
+    lastOpenedTarget = target;
     readerRevisionId = null;
-    readerId = item.id;
+    readerId = id;
     await tick();
     window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+
+  const weekdayLabels = ['월', '화', '수', '목', '금', '토', '일'];
+  const weekDayLimit = 5;
+  const todayKey = localDayKey(new Date());
+  function familyOf(sourceId: string): string {
+    return sources.find((item) => item.id === sourceId)?.family ?? 'other';
+  }
+  function titleOf(documentId: number, fallback: string): string {
+    return result.items.find((item) => item.id === documentId)?.title
+      ?? recommendations.find((item) => item.item.id === documentId)?.item.title ?? fallback;
+  }
+  // Only dates from analyses that match the current contract appear, exactly as in the recent-analysis list.
+  let referenceDates = $derived(recentAnalyses.flatMap((analysis) => currentSummary(analysis.document_id)?.id !== analysis.id ? [] :
+    analysis.result.facts.filter((fact) => fact.date && /^\d{4}-\d{2}-\d{2}/.test(fact.date)).map((fact, index) => ({
+      key: `${analysis.id}-${index}`, day: fact.date!.slice(0, 10), label: fact.label, documentId: analysis.document_id,
+      title: titleOf(analysis.document_id, analysis.result.short_summary),
+    }))));
+  let week = $derived.by(() => {
+    const now = new Date();
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (now.getDay() + 6) % 7);
+    return weekdayLabels.map((label, index) => {
+      const day = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + index);
+      const key = localDayKey(day);
+      return { key, label, month: day.getMonth() + 1, date: day.getDate(),
+        notices: result.items.filter((item) => archiveDay(item.published_at) === key),
+        dates: referenceDates.filter((entry) => entry.day === key) };
+    });
+  });
+  let laterDates = $derived(referenceDates.filter((entry) => entry.day > week[6].key).sort((a, b) => a.day.localeCompare(b.day)).slice(0, 5));
+  // The Today query holds the newest page only; say so when this week may extend past it.
+  let weekTruncated = $derived(result.items.length === pageSize && (archiveDay(result.items[pageSize - 1].published_at) ?? '') >= week[0].key);
+  function shortDay(day: string): string {
+    return `${Number(day.slice(5, 7))}월 ${Number(day.slice(8, 10))}일`;
   }
 
   async function paginate(delta: number) {
@@ -260,110 +314,142 @@
 {:else}
   <section class="archive-view" aria-busy={loading}>
     {#if page === 'today'}
-      <div class="archive-intro"><span class="section-kicker">내 기기에 쌓이는 학교 소식</span><h2>오늘도, 필요한 소식부터.</h2><p>직접 보관한 공지와 이미 분석한 핵심을 차분히 살펴보세요. {hasPreferences ? '관심사와 보관 행동을 바탕으로 정렬한 추천입니다.' : '아직 개인화 선호가 없어 최근 공지부터 보여드립니다.'}</p></div>
-      {#if desktop && summary?.documents === 0}
-        <section class="first-run" aria-labelledby="first-run-heading">
-          <h2 id="first-run-heading">Rhythm 시작하기</h2>
-          <p>Rhythm은 서강대학교의 공개 공지를 이 Mac에 보관해 인터넷 없이도 읽고 검색할 수 있게 합니다. 계정이나 클라우드 없이 모든 자료와 설정은 이 기기에만 저장됩니다.</p>
-          <ol>
-            <li>설정 → 확장 기능에서 서강대학교 공지를 켜고 게시판을 구독합니다. 원문 수집을 확인한 게시판만 구독할 수 있습니다.</li>
-            <li>과거 자료 가져오기를 누르면 공지를 내려받습니다. 직접 시작하거나 자동 동기화를 켠 경우에만 네트워크를 사용합니다.</li>
-            <li>로컬 AI 모델은 선택 사항입니다. 모델 없이도 읽기, 검색과 추천을 사용할 수 있습니다.</li>
-            <li>백그라운드 실행, 자동 동기화와 알림은 처음에 모두 꺼져 있습니다. 켜더라도 Rhythm이 실행 중이고 Mac이 깨어 있을 때만 동작합니다.</li>
-          </ol>
-          <p>데이터 저장 위치는 설정 → 데이터 및 개인정보에서 확인할 수 있습니다.</p>
-          <button class="button secondary small" onclick={onsettings}>설정에서 시작하기</button>
-        </section>
-      {/if}
-      <dl class="archive-statistics">
-        <div><dt>보관된 공지</dt><dd>{summary?.documents ?? '—'}</dd></div>
-        <div><dt>읽지 않은 공지</dt><dd>{summary?.unread ?? '—'}</dd></div>
-        <div><dt>보관함</dt><dd>{summary?.saved ?? '—'}</dd></div>
-        <div><dt>최근 동기화의 새 공지</dt><dd>{summary?.new_since_sync ?? '—'}</dd></div>
-      </dl>
-      <p class="footnote">과거 자료 가져오기는 새 공지 수에서 제외됩니다. 저장된 자료 {archiveSize(summary?.resource_bytes ?? 0)}.</p>
-      {#if recommendationError}<p role="alert" class="archive-error">{recommendationError}</p>{/if}
-      {#if recommendations.length}
-        <section class="ai-recent" aria-label="오늘의 추천">
-          <div class="collection-heading">
-            <h2>나를 위한 소식</h2>
-            <span class="muted">{hasPreferences ? '관심 설정과 저장·피드백을 반영한 추천' : '최근 공지 · 개인화 시작 전'}</span>
-            {#if !hasPreferences}<button class="text-button" onclick={onsettings}>관심 분야 설정</button>{/if}
-          </div>
-          <ul>
-            {#each recommendations as recommendation (recommendation.item.id)}
-              {@const analysis = currentSummary(recommendation.item.id)}
-              <li>
-                <button class="notice-open" onclick={() => void open(recommendation.item)}>
-                  <strong>{recommendation.item.title}</strong>
-                  <span class="notice-meta">
-                    {recommendation.item.source_name} · {archiveDate(recommendation.item.published_at)}
-                    {#if recommendation.item.category} · {recommendation.item.category}{/if}
-                    · {recommendation.item.is_read ? '읽음' : '읽지 않음'} · {recommendation.item.saved ? '보관함에 저장' : '미저장'}
-                  </span>
-                  {#each recommendation.reasons as reason}<span class="notice-meta">{reason}</span>{/each}
-                  {#if analysis}
-                    <span class="notice-ai-preview">저장된 AI 요약{analysis.partial ? ' · 일부 분석' : ''} · {analysis.result.short_summary}</span>
-                  {/if}
-                  {#if recommendation.feedback}
-                    <span class="notice-meta">내 피드백: {recommendation.feedback === 'interested' ? '관심 있음' : '관심 없음'}</span>
-                  {/if}
-                </button>
-                <div class="recommendation-actions" role="group" aria-label={`${recommendation.item.title} 추천 피드백`}>
-                  <button class="button secondary small" aria-pressed={recommendation.feedback === 'interested'} disabled={pendingRecommendationFeedback[recommendation.item.id]} onclick={() => void setRecommendationFeedback(recommendation, recommendation.feedback === 'interested' ? null : 'interested')}>관심 있어요</button>
-                  <button class="button secondary small" aria-pressed={recommendation.feedback === 'not_interested'} disabled={pendingRecommendationFeedback[recommendation.item.id]} onclick={() => void setRecommendationFeedback(recommendation, recommendation.feedback === 'not_interested' ? null : 'not_interested')}>관심 없어요</button>
-                </div>
-              </li>
-            {/each}
-          </ul>
-        </section>
-      {:else if !recommendationError}
-        <div class="recommendation-empty">
-          <p>{enabled ? hasPreferences ? '관심 분야와 맞는 소식을 아직 찾지 못했습니다.' : '개인화 전에는 최근 공지를 표시합니다. 관심사를 설정하면 추천에 반영됩니다.' : '확장 기능을 끄면 새 추천은 표시하지 않습니다. 기존 공지는 받은 소식과 탐색에서 계속 볼 수 있습니다.'}</p>
-          {#if !hasPreferences}<button class="text-button" onclick={onsettings}>관심 분야 설정</button>{/if}
+      <div class="today-layout">
+        <div class="today-main">
+          {#if desktop && summary?.documents === 0}
+            <section class="first-run" aria-labelledby="first-run-heading">
+              <h2 id="first-run-heading">Rhythm 시작하기</h2>
+              <p>Rhythm은 서강대학교의 공개 공지를 이 Mac에 보관해 인터넷 없이도 읽고 검색할 수 있게 합니다. 계정이나 클라우드 없이 모든 자료와 설정은 이 기기에만 저장됩니다.</p>
+              <ol>
+                <li>설정 → 확장 기능에서 서강대학교 공지를 켜고 게시판을 구독합니다. 원문 수집을 확인한 게시판만 구독할 수 있습니다.</li>
+                <li>과거 자료 가져오기를 누르면 공지를 내려받습니다. 직접 시작하거나 자동 동기화를 켠 경우에만 네트워크를 사용합니다.</li>
+                <li>로컬 AI 모델은 선택 사항입니다. 모델 없이도 읽기, 검색과 추천을 사용할 수 있습니다.</li>
+                <li>백그라운드 실행, 자동 동기화와 알림은 처음에 모두 꺼져 있습니다. 켜더라도 Rhythm이 실행 중이고 Mac이 깨어 있을 때만 동작합니다.</li>
+              </ol>
+              <p>데이터 저장 위치는 설정 → 데이터 및 개인정보에서 확인할 수 있습니다.</p>
+              <button class="button" onclick={onsettings}>설정에서 시작하기</button>
+            </section>
+          {/if}
+          {#if error}<div class="archive-error" role="alert">{error}<button class="text-button" onclick={() => { revision++; void refreshContext(); }}>다시 시도</button></div>{/if}
+          {#if recommendationError}<p role="alert" class="archive-error">{recommendationError}</p>{/if}
+          {#if recommendations.length}
+            <section class="today-picks" aria-label="오늘의 추천">
+              <div class="pane-heading">
+                <h2 bind:this={listHeading} tabindex="-1">나를 위한 소식</h2>
+                <span class="pane-note">{hasPreferences ? '관심 설정과 저장·피드백을 반영한 추천' : '최근 공지 · 개인화 시작 전'}</span>
+                {#if !hasPreferences}<button class="text-button" onclick={onsettings}>관심 분야 설정</button>{/if}
+              </div>
+              <ul class="pick-list">
+                {#each recommendations as recommendation (recommendation.item.id)}
+                  {@const item = recommendation.item}
+                  {@const analysis = currentSummary(item.id)}
+                  <li class:notice-unread={!item.is_read}>
+                    <button class="pick-open" id={`notice-${item.id}`} onclick={() => void open(item)}>
+                      <span class="pick-title"><span class="notice-read-dot" aria-hidden="true"></span><strong>{item.title}</strong><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}</span></span>
+                      <span class="pick-meta"><span class={`board-swatch family-${familyOf(item.source_id)}`} aria-hidden="true"></span>{item.source_name} · {archiveDate(item.published_at)}{#if item.category}{' · '}{item.category}{/if}{#if item.saved}{' · '}보관함에 저장됨{/if}</span>
+                      {#if recommendation.reasons.length}<span class="pick-reasons">{#each recommendation.reasons as reason, index}{#if index}{' · '}{/if}<span>{reason}</span>{/each}</span>{/if}
+                      {#if analysis}<span class="notice-ai-preview"><span class="ai-tag">저장된 AI 요약{analysis.partial ? ' · 일부 분석' : ''}</span> {analysis.result.short_summary}</span>{/if}
+                    </button>
+                    <div class="recommendation-actions" role="group" aria-label={`${item.title} 추천 피드백`}>
+                      <button class="chip" aria-pressed={recommendation.feedback === 'interested'} disabled={pendingRecommendationFeedback[item.id]} onclick={() => void setRecommendationFeedback(recommendation, recommendation.feedback === 'interested' ? null : 'interested')}>관심 있어요</button>
+                      <button class="chip" aria-pressed={recommendation.feedback === 'not_interested'} disabled={pendingRecommendationFeedback[item.id]} onclick={() => void setRecommendationFeedback(recommendation, recommendation.feedback === 'not_interested' ? null : 'not_interested')}>관심 없어요</button>
+                    </div>
+                  </li>
+                {/each}
+              </ul>
+            </section>
+          {:else if !recommendationError}
+            <div class="recommendation-empty">
+              <h2 bind:this={listHeading} tabindex="-1">나를 위한 소식</h2>
+              <p>{enabled ? hasPreferences ? '관심 분야와 맞는 소식을 아직 찾지 못했습니다.' : '개인화 전에는 최근 공지를 표시합니다. 관심사를 설정하면 추천에 반영됩니다.' : '확장 기능을 끄면 새 추천은 표시하지 않습니다. 기존 공지는 받은 소식과 탐색에서 계속 볼 수 있습니다.'}</p>
+              {#if !hasPreferences}<button class="text-button" onclick={onsettings}>관심 분야 설정</button>{/if}
+            </div>
+          {/if}
+          {#if recentAnalyses.length}
+            <section class="today-analyses" aria-label="최근 분석한 소식">
+              <div class="pane-heading"><h2>최근 분석한 소식</h2><span class="pane-note">저장된 AI 결과 · 추천 순위에는 영향 없음</span></div>
+              <ul class="pick-list">
+                {#each recentAnalyses.slice(0, 5) as analysis}
+                  {@const currentContract = currentSummary(analysis.document_id)?.id === analysis.id}
+                  <li>
+                    <button class="pick-open" id={`analysis-${analysis.id}`} onclick={() => void openDocument(analysis.document_id, `analysis-${analysis.id}`)}>
+                      <strong class="pick-summary">{analysis.result.short_summary}</strong>
+                      <span class="pick-meta">AI 분류 {analysis.result.category}{#if !currentContract}{' · '}현재 분석 설정과 다를 수 있습니다{/if}</span>
+                      {#if analysis.partial}<span class="pick-meta">일부 내용 분석</span>{/if}
+                      {#if currentContract}
+                        {#each analysis.result.facts.filter((fact) => fact.date).slice(0, 2) as fact}
+                          <span class="pick-meta">{fact.label} · {fact.date} · 원문에서 추출한 참고 일정</span>
+                        {/each}
+                      {/if}
+                      <span class="pick-meta">{analysis.model_identity.name ?? '로컬 모델'} · 원문과 근거 확인</span>
+                    </button>
+                  </li>
+                {/each}
+              </ul>
+            </section>
+          {:else if aiError}
+            <p class="footnote">저장된 AI 결과를 불러오지 못했습니다. 공지 목록은 계속 사용할 수 있습니다.</p>
+          {/if}
         </div>
-      {/if}
-      {#if recentAnalyses.length}
-        <section class="ai-recent" aria-label="최근 분석한 소식">
-          <div class="collection-heading"><h2>최근 분석한 소식</h2><span class="muted">저장된 AI 결과 · 추천 순위에는 영향 없음</span></div>
-          <ul>
-            {#each recentAnalyses.slice(0, 5) as analysis}
-              {@const currentContract = currentSummary(analysis.document_id)?.id === analysis.id}
-              <li>
-                <button class="notice-open" onclick={() => { lastOpened = analysis.document_id; readerId = analysis.document_id; }}>
-                  <span class="ai-tag">AI 분류 · {analysis.result.category} · {currentContract ? '현재 계약' : '이전 계약'}</span>
-                  <strong>{analysis.result.short_summary}</strong>
-                  {#if !currentContract}<span class="notice-meta">현재 분석 설정과 다를 수 있습니다 · 원문과 근거 확인</span>{/if}
-                  {#if analysis.partial}<span class="muted">일부 내용 분석</span>{/if}
-                  {#if currentContract}
-                    {#each analysis.result.facts.filter((fact) => fact.date).slice(0, 2) as fact}
-                      <span class="notice-meta">{fact.label} · {fact.date} · 원문에서 추출한 참고 일정</span>
-                    {/each}
-                  {/if}
-                  <span class="notice-meta">{analysis.model_identity.name ?? '로컬 모델'} · 원문과 근거 확인 →</span>
-                </button>
+
+        <aside class="week-pane" aria-labelledby="week-heading">
+          <div class="pane-heading"><h2 id="week-heading">이번 주</h2><span class="pane-note">{shortDay(week[0].key)} – {week[6].month === week[0].month ? `${week[6].date}일` : shortDay(week[6].key)}</span></div>
+          {#if loading && !result.items.length}<p class="loading" role="status">이번 주 공지를 불러오는 중입니다…</p>{/if}
+          <ol class="week-days">
+            {#each week as day (day.key)}
+              <li class="week-day" class:is-today={day.key === todayKey} class:is-past={day.key < todayKey}>
+                <div class="day-label"><span class="day-name">{day.label}</span><span class="day-number">{day.date}</span>{#if day.key === todayKey}<span class="sr-only">오늘</span>{/if}</div>
+                <ul class="day-events">
+                  {#each day.notices.slice(0, weekDayLimit) as item (item.id)}
+                    <li><button class="event" class:notice-unread={!item.is_read} id={`week-${item.id}`} onclick={() => void open(item, `week-${item.id}`)}>
+                      <span class={`event-bar family-${familyOf(item.source_id)}`} aria-hidden="true"></span>
+                      <span class="event-title">{item.title}</span>
+                      <span class="event-meta">{item.source_name}{#if item.historical}{' · '}과거 자료{/if}</span>
+                    </button></li>
+                  {/each}
+                  {#if day.notices.length > weekDayLimit}<li class="day-more">외 {day.notices.length - weekDayLimit}건 · 받은 소식에서 모두 보기</li>{/if}
+                  {#each day.dates as entry (entry.key)}
+                    <li><button class="event event-ai" id={`week-ai-${entry.key}`} onclick={() => void openDocument(entry.documentId, `week-ai-${entry.key}`)}>
+                      <span class="event-bar" aria-hidden="true"></span>
+                      <span class="event-title"><span class="ai-mark">AI 참고 일정</span> {entry.label}</span>
+                      <span class="event-meta">{entry.title} · 원문 확인</span>
+                    </button></li>
+                  {/each}
+                  {#if !day.notices.length && !day.dates.length}<li class="day-empty">공지 없음</li>{/if}
+                </ul>
               </li>
             {/each}
-          </ul>
-        </section>
-      {:else if aiError}
-        <p class="footnote">저장된 AI 결과를 불러오지 못했습니다. 공지 목록은 계속 사용할 수 있습니다.</p>
-      {/if}
-    {/if}
-    {#if status?.running}<div class="archive-sync-strip" role="status"><Icon name="refresh" size={16} /><span>{status.message}{#if status.page > 0} · {status.page}쪽{/if}</span><button class="text-button" onclick={onsettings}>설정에서 진행 확인</button></div>{/if}
+          </ol>
+          {#if weekTruncated}<p class="pane-footnote">이번 주 공지가 많아 최근 {pageSize}건만 표시합니다. 전체 목록은 받은 소식에서 볼 수 있습니다.</p>{/if}
+          {#if laterDates.length}
+            <h3 class="later-heading">이후 AI 참고 일정</h3>
+            <ul class="day-events">
+              {#each laterDates as entry (entry.key)}
+                <li><button class="event event-ai" id={`later-ai-${entry.key}`} onclick={() => void openDocument(entry.documentId, `later-ai-${entry.key}`)}>
+                  <span class="event-bar" aria-hidden="true"></span>
+                  <span class="event-title"><span class="ai-mark">AI · {shortDay(entry.day)}</span> {entry.label}</span>
+                  <span class="event-meta">{entry.title} · 원문 확인</span>
+                </button></li>
+              {/each}
+            </ul>
+          {/if}
+          <p class="pane-footnote">게시일 기준 공지와 로컬 AI가 원문에서 추출한 참고 일정입니다. 참고 일정은 추천 순위와 알림에 쓰지 않으니 원문에서 확인하세요.</p>
+        </aside>
+      </div>
+    {:else}
     {#if page === 'search'}
       <form class="search-form archive-search" onsubmit={search} role="search"><Icon name="search" size={21} /><label class="sr-only" for="local-query">보관된 공지 검색</label><input id="local-query" type="search" bind:value={draft} maxlength="512" placeholder="제목과 본문에서 검색" autocomplete="off" disabled={!desktop} /><button class="text-button" type="submit" disabled={!desktop || loading}>검색</button></form>
       <p class="footnote">한국어 일부 단어, 영문, 숫자를 검색할 수 있습니다. 띄어 쓴 검색어는 모두 포함된 공지를 찾습니다. 검색어는 외부로 보내지 않습니다.</p>
     {/if}
     <div class="archive-toolbar">
       <div class="archive-filters">
-        <label>정보원<select bind:value={source} onchange={() => { category = ''; offset = 0; }} disabled={!desktop}><option value="">모든 정보원</option>{#each sources as item}<option value={item.id}>{item.organization} · {item.name}</option>{/each}</select></label>
+        <label>정보원<select bind:value={source} onchange={() => { category = ''; offset = 0; onsourcechange(source); }} disabled={!desktop}><option value="">모든 정보원</option>{#each sources as item}<option value={item.id}>{item.organization} · {item.name}</option>{/each}</select></label>
         <label>분류<select bind:value={category} onchange={() => offset = 0} disabled={!desktop}><option value="">모든 분류</option>{#each result.categories as value}<option value={value}>{value}</option>{/each}</select></label>
         <label>정렬<select bind:value={ascending} onchange={() => offset = 0} disabled={!desktop}><option value={false}>게시일 최신순</option><option value={true}>게시일 오래된순</option></select></label>
       </div>
       {#if page === 'inbox'}<label class="archive-checkbox"><input type="checkbox" bind:checked={unread} onchange={() => offset = 0} disabled={!desktop} /> 읽지 않은 공지만</label>{/if}
     </div>
-    <div class="collection-heading archive-list-heading"><h2 bind:this={listHeading} tabindex="-1">{page === 'today' ? '최근 공지' : page === 'bookmark' ? '저장한 공지' : query ? '검색 결과' : '보관된 공지'} <span class="muted">{result.total.toLocaleString('ko-KR')}</span></h2><button class="text-button" disabled={!desktop || loading} onclick={() => { revision++; void refreshContext(); }}>목록 새로고침</button></div>
+    <div class="collection-heading archive-list-heading"><h2 bind:this={listHeading} tabindex="-1">{page === 'bookmark' ? '저장한 공지' : query ? '검색 결과' : '보관된 공지'} <span class="muted">{result.total.toLocaleString('ko-KR')}</span></h2><button class="text-button" disabled={!desktop || loading} onclick={() => { revision++; void refreshContext(); }}>목록 새로고침</button></div>
     {#if error}<div class="archive-error" role="alert">{error}<button class="text-button" onclick={() => { revision++; void refreshContext(); }}>다시 시도</button></div>{/if}
     <p class="sr-only archive-result-status" role="status">{loading ? '로컬 공지를 불러오는 중입니다.' : error ? '목록을 새로 불러오지 못했습니다.' : `공지 ${result.total.toLocaleString('ko-KR')}개${result.total ? ` · ${offset + 1}–${Math.min(offset + pageSize, result.total)}` : ''}`}</p>
     <p class="archive-feedback" role="status">{feedback}</p>
@@ -387,6 +473,7 @@
       <nav class="archive-pagination" aria-label="공지 목록 페이지"><button class="button secondary small" disabled={offset === 0 || loading} onclick={() => paginate(-1)}>이전</button><span aria-live="polite">{offset + 1}–{Math.min(offset + pageSize, result.total)} / {result.total}</span><button class="button secondary small" disabled={offset + pageSize >= result.total || loading} onclick={() => paginate(1)}>다음</button></nav>
     {:else if !loading && !error}
       <div class="empty-state archive-empty"><span class="empty-icon"><Icon name={page === 'bookmark' ? 'bookmark' : page === 'search' ? 'search' : 'inbox'} size={30} /></span><h2>{query || source || category || unread ? '조건에 맞는 공지가 없습니다' : page === 'bookmark' ? '아직 저장한 공지가 없습니다' : '아직 보관된 공지가 없습니다'}</h2><p>{query || source || category || unread ? '검색어 또는 필터를 바꿔 보세요. 이미 보관한 내용만 검색하며 인터넷 연결은 필요하지 않습니다.' : page === 'bookmark' ? '공지 옆의 저장 버튼으로 중요한 정보를 모아 보세요. 확장 기능을 꺼도 보관함은 유지됩니다.' : '설정에서 정보원을 구독하고 공개된 공지를 가져오세요. 한 번 보관한 본문은 오프라인에서도 읽을 수 있습니다.'}</p>{#if page !== 'bookmark' && !query}<button class="button secondary" onclick={onsettings}>정보원 설정하기 <Icon name="arrow" size={16} /></button>{/if}</div>
+    {/if}
     {/if}
   </section>
 {/if}

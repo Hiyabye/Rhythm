@@ -88,12 +88,14 @@ test('initial query error is not presented as a successful empty archive and can
   await expect(page.getByText('아직 보관된 공지가 없습니다', { exact: true })).toHaveCount(0);
   await page.evaluate(() => (window as any).__fixture.options.queryError = false);
   await page.getByRole('button', { name: '다시 시도', exact: true }).click();
+  await navigate(page, '받은 소식');
   await expect(page.locator('.notice-list > li')).toHaveCount(2);
 });
 
 test('saving an item admits only one pending write and announces feedback', async ({ page }) => {
   await mockDesktop(page);
   await page.goto('/');
+  await navigate(page, '받은 소식');
   await page.evaluate(() => (window as any).__fixture.stateDelay = 400);
   const save = page.getByRole('button', { name: '한국어 공지 01 보관함에 저장', exact: true });
   await save.click();
@@ -124,6 +126,7 @@ test('navigation, local searches, filters, safe highlighting and empty-result an
 test('successful empty archive is distinct from loading and errors', async ({ page }) => {
   await mockDesktop(page, { count: 0, queryGate: true });
   await page.goto('/');
+  await navigate(page, '받은 소식');
   await expect(page.locator('.archive-view .loading')).toBeVisible();
   await page.evaluate(() => (window as Window & { __fixture: { releaseQueries: () => void } }).__fixture.releaseQueries());
   await expect(page.getByText('아직 보관된 공지가 없습니다', { exact: true })).toBeVisible();
@@ -235,6 +238,7 @@ test('corrupt resources stay visible, offer repair and report final retry failur
 test('reader return restores visible focus after scrolling lower in a long list', async ({ page }) => {
   await mockDesktop(page, { count: 30 });
   await page.goto('/');
+  await navigate(page, '받은 소식');
   await page.locator('#notice-28').scrollIntoViewIfNeeded();
   await page.locator('#notice-28').click();
   await expect(page.locator('.reader-header h2')).toBeFocused();
@@ -266,7 +270,9 @@ test('narrow reader contains wide tables, exposes keyboard scroll and preserves 
   const ratios = await page.evaluate(() => {
     const style = getComputedStyle(document.documentElement);
     const luminance = (hex: string) => {
-      const values = hex.trim().slice(1).match(/../g)!.map((x) => parseInt(x, 16) / 255).map((x) => x <= .04045 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4);
+      // The production build minifies colors, so accept #rgb as well as #rrggbb.
+      const digits = hex.trim().slice(1);
+      const values = (digits.length === 3 ? digits.replace(/./g, '$&$&') : digits).match(/../g)!.map((x) => parseInt(x, 16) / 255).map((x) => x <= .04045 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4);
       return values[0] * .2126 + values[1] * .7152 + values[2] * .0722;
     };
     const ratio = (a: string, b: string) => (Math.max(luminance(a), luminance(b)) + .05) / (Math.min(luminance(a), luminance(b)) + .05);
@@ -299,6 +305,7 @@ test('closing during image hydration stops subsequent obsolete image reads', asy
   const resources = [image, { ...image, id: 8, url: `${image.url}?two` }, { ...image, id: 9, url: `${image.url}?three` }];
   await mockDesktop(page, { resources, imageDelay: 250, body: resources.map((item) => `<img data-resource-url="${item.url}">`).join('') });
   await page.goto('/');
+  await navigate(page, '받은 소식');
   await page.locator('#notice-1').click();
   await expect.poll(() => callCount(page, 'archive_resource_image')).toBe(1);
   await page.getByRole('button', { name: /목록으로 돌아가기/ }).click();
@@ -333,4 +340,44 @@ test('disabling extension preserves local saved items and disables resource retr
   await page.locator('#notice-1').click();
   await expect(page.locator('.reader-body')).toContainText('보관된 한국어 본문');
   await expect(page.getByRole('button', { name: '본문.png 다시 내려받기', exact: true })).toBeDisabled();
+});
+
+test('today lays out this week by publication day and labels AI reference dates', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-10-25T10:00:00'));
+  await mockDesktop(page, { count: 7, aiResult: true });
+  await page.goto('/');
+  const week = page.getByRole('complementary', { name: '이번 주', exact: true });
+  await expect(week).toContainText('10월 19일 – 25일');
+  const saturday = week.locator('.week-day').nth(5);
+  await expect(saturday.locator('.event:not(.event-ai)')).toHaveCount(5);
+  await expect(saturday).toContainText('외 2건');
+  await expect(week.locator('.is-today')).toContainText('오늘');
+  // The fixture's AI date (10월 30일) falls after this week and stays labeled as a reference.
+  await expect(week.getByRole('heading', { name: '이후 AI 참고 일정', exact: true })).toBeVisible();
+  await expect(week.locator('.event-ai')).toContainText('AI · 10월 30일');
+  await expect(week).toContainText('추천 순위와 알림에 쓰지 않으니');
+  await week.locator('#week-3').click();
+  await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 03');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#week-3')).toBeFocused();
+});
+
+test('sidebar boards scope the inbox and badges describe their counts', async ({ page }) => {
+  await mockDesktop(page, { count: 3, saved: true });
+  await page.goto('/');
+  const sidebar = page.getByRole('navigation', { name: '기본 탐색', exact: true });
+  await expect(sidebar).toContainText('구독한 게시판 없음');
+  await expect(sidebar.getByRole('button', { name: '받은 소식', exact: true })).toHaveAccessibleDescription('읽지 않은 공지 3개');
+  await page.evaluate(() => (window as any).__TAURI_INTERNALS__.invoke('archive_subscribe', { id: 'computing-updates', subscribed: true }));
+  await navigate(page, '설정');
+  await navigate(page, '오늘');
+  await sidebar.getByRole('button', { name: '소프트웨어융합대학 소식', exact: true }).click();
+  // A scoped inbox is titled by its board, like a mailbox, with the organization beside it.
+  await expect(page.getByRole('heading', { level: 1, name: '소식', exact: true })).toBeVisible();
+  await expect(page.locator('.page-header p')).toHaveText('소프트웨어융합대학 · 받은 소식');
+  await expect(page.getByRole('combobox', { name: '정보원', exact: true })).toHaveValue('computing-updates');
+  await expect(sidebar.getByRole('button', { name: '소프트웨어융합대학 소식', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(sidebar.getByRole('button', { name: '받은 소식', exact: true })).not.toHaveAttribute('aria-current');
+  await page.getByRole('combobox', { name: '정보원', exact: true }).selectOption('');
+  await expect(sidebar.getByRole('button', { name: '소프트웨어융합대학 소식', exact: true })).not.toHaveAttribute('aria-current');
 });

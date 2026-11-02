@@ -24,6 +24,19 @@ export function archiveDate(value: string | null, includeTime = false): string {
   }).format(date);
 }
 
+/** Local calendar day (`YYYY-MM-DD`) of an archive timestamp, or null when unparseable. */
+export function archiveDay(value: string | null): string | null {
+  if (!value) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value) ? `${value.replace(' ', 'T')}Z` : value;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : localDayKey(date);
+}
+
+export function localDayKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
 export function archiveSize(bytes: number | null): string {
   if (bytes === null) return '크기 미상';
   if (bytes < 1024) return `${bytes} B`;

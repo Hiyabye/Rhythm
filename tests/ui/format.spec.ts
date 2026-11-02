@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { archiveError, archiveDate } from '../../src/lib/archive-format';
+import { archiveError, archiveDate, archiveDay, localDayKey } from '../../src/lib/archive-format';
 
 test('storage failures have actionable Korean feedback rather than raw database diagnostics', () => {
   expect(archiveError('database or disk is full')).toContain('저장 공간이 부족');
@@ -21,4 +21,12 @@ test('calendar publication dates are stable across timezones and UTC collection 
     if (original === undefined) delete process.env.TZ;
     else process.env.TZ = original;
   }
+});
+
+test('archive day keys keep calendar dates and convert UTC collection times to the local day', () => {
+  expect(archiveDay('2026-10-24')).toBe('2026-10-24');
+  expect(archiveDay('2026-10-24 12:00:00')).toBe(localDayKey(new Date(Date.UTC(2026, 9, 24, 12))));
+  expect(archiveDay('잘못된 날짜')).toBeNull();
+  expect(archiveDay(null)).toBeNull();
+  expect(localDayKey(new Date(2026, 0, 5))).toBe('2026-01-05');
 });

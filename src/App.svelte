@@ -11,15 +11,15 @@
   import UpdaterSettings from './lib/UpdaterSettings.svelte';
   import ProactiveSettings from './lib/ProactiveSettings.svelte';
   import './lib/ai.css';
-  import { archiveError as message } from './lib/archive-format';
-  import type { EnergyProfile, Settings, Snapshot, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot, RestoreOutcome } from './lib/types';
+  import { archiveError as message, archiveDay, localDayKey } from './lib/archive-format';
+  import type { ArchiveSummary, EnergyProfile, Settings, Snapshot, SourceInfo, SyncStatus, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot, RestoreOutcome } from './lib/types';
 
   const navigation = [
-    { id: 'today', label: '오늘', caption: '나에게 필요한 하루의 흐름' },
-    { id: 'inbox', label: '받은 소식', caption: '여러 곳의 소식을 한곳에서' },
-    { id: 'search', label: '탐색', caption: '쌓인 정보에서 필요한 것을 발견하세요' },
-    { id: 'bookmark', label: '보관함', caption: '다시 보고 싶은 정보의 자리' },
-    { id: 'settings', label: '설정', caption: '나의 방식으로 Rhythm을 조율하세요' },
+    { id: 'today', label: '오늘' },
+    { id: 'inbox', label: '받은 소식' },
+    { id: 'search', label: '탐색' },
+    { id: 'bookmark', label: '보관함' },
+    { id: 'settings', label: '설정' },
   ];
   const categories = [
     ['general', '일반'], ['extensions', '확장 기능'], ['ai', 'AI 모델'], ['ai-processing', 'AI 처리'], ['personalization', '개인화'],
@@ -54,6 +54,26 @@
   let heading = $derived(navigation.find((item) => item.id === page)!);
   let dark = $derived(theme === 'dark' || (theme === 'system' && systemDark));
   let date = new Intl.DateTimeFormat('ko-KR', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
+  // Archive context reported by ArchiveView; the sidebar reads it but never fetches it separately.
+  let summary = $state<ArchiveSummary | null>(null);
+  let sources = $state<SourceInfo[]>([]);
+  let syncStatus = $state<SyncStatus | null>(null);
+  // A new token asks ArchiveView to reset its filters, optionally scoped to one board.
+  let sourceRequest = $state({ id: '', token: 0 });
+  let activeSource = $state('');
+  let weekPane = $state(false);
+  let boards = $derived(sources.filter((item) => item.supported && item.subscribed));
+  // Board names repeat across institutions ("학사 공지" / "학사공지"), so the sidebar groups them by organization.
+  let boardGroups = $derived.by(() => {
+    const groups = new Map<string, SourceInfo[]>();
+    for (const board of boards) {
+      const label = organizationLabel(board.organization);
+      groups.set(label, [...(groups.get(label) ?? []), board]);
+    }
+    return [...groups];
+  });
+  let scopedBoard = $derived(page === 'inbox' && activeSource ? sources.find((item) => item.id === activeSource) ?? null : null);
+  let lastChecked = $derived(boards.reduce<string | null>((latest, item) => !item.last_success || (latest && latest >= item.last_success) ? latest : item.last_success, null));
 
   $effect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';
@@ -99,8 +119,10 @@
     };
   });
 
-  async function navigate(destination: string) {
+  async function navigate(destination: string, sourceId = '') {
     page = destination;
+    sourceRequest = { id: sourceId, token: sourceRequest.token + 1 };
+    activeSource = sourceId;
     notice = '';
     history.replaceState(null, '', location.pathname + location.search);
     await tick();
@@ -200,6 +222,18 @@
     document.getElementById('main')?.focus({ preventScroll: true });
   }
 
+  function organizationLabel(organization: string): string {
+    return organization.replace(/^서강대학교\s*·\s*/, '') || organization;
+  }
+
+  function checkedLabel(value: string): string {
+    const day = archiveDay(value);
+    if (!day) return value;
+    if (day !== localDayKey(new Date())) return `${Number(day.slice(5, 7))}월 ${Number(day.slice(8, 10))}일`;
+    const time = new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value) ? `${value.replace(' ', 'T')}Z` : value);
+    return Number.isNaN(time.getTime()) ? '오늘' : `오늘 ${new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false }).format(time)}`;
+  }
+
   function storageSize(bytes: number) {
     return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   }
@@ -211,19 +245,48 @@
 <div class="app-shell">
   <aside class="sidebar" aria-label="주 메뉴">
     <div class="brand"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>Rhythm</span></div>
-    <div class="sidebar-kicker">나의 공간</div>
     <nav aria-label="기본 탐색">
-      {#each navigation as item}
-        <button class:active={page === item.id} aria-label={item.label} aria-current={page === item.id ? 'page' : undefined} onclick={() => navigate(item.id)}>
-          <Icon name={item.id} /><span>{item.label}</span>{#if page === item.id}<span class="nav-mark" aria-hidden="true"></span>{/if}
-        </button>
+      <ul class="source-list">
+        {#each navigation.slice(0, 4) as item}
+          {@const count = item.id === 'inbox' ? summary?.unread : item.id === 'bookmark' ? summary?.saved : undefined}
+          <li><button class="source-item" class:active={page === item.id && !activeSource} aria-label={item.label} aria-current={page === item.id && !activeSource ? 'page' : undefined} aria-describedby={count ? `nav-count-${item.id}` : undefined} onclick={() => navigate(item.id)}>
+            <Icon name={item.id} size={17} /><span class="source-label">{item.label}</span>
+            {#if count}<span class="count" aria-hidden="true">{count.toLocaleString('ko-KR')}</span><span class="sr-only" id={`nav-count-${item.id}`}>{item.id === 'inbox' ? `읽지 않은 공지 ${count}개` : `저장한 공지 ${count}개`}</span>{/if}
+          </button></li>
+        {/each}
+      </ul>
+      {#each snapshot?.extensions ?? [] as extension}
+        <p class="source-group-heading" id={`group-${extension.id}`}>{extension.display_name}</p>
+        <ul class="source-list" aria-labelledby={`group-${extension.id}`}>
+          {#if !extension.enabled}
+            <li><button class="source-item quiet" onclick={() => navigate('settings')}><span class="source-label">꺼져 있음 · 설정에서 켜기</span></button></li>
+          {:else if extension.id === 'sogang_notices' && boards.length}
+            {#each boardGroups as [organization, members] (organization)}
+              <li class="board-organization" aria-hidden="true">{organization}</li>
+              {#each members as board (board.id)}
+                <li><button class="source-item board" class:active={page === 'inbox' && activeSource === board.id} aria-current={page === 'inbox' && activeSource === board.id ? 'page' : undefined} aria-label={`${organizationLabel(board.organization)} ${board.name}`} onclick={() => navigate('inbox', board.id)}>
+                  <span class={`board-swatch family-${board.family}`} aria-hidden="true"></span><span class="source-label">{board.name}</span>
+                </button></li>
+              {/each}
+            {/each}
+          {:else}
+            <li><button class="source-item quiet" onclick={() => navigate('settings')}><span class="source-label">구독한 게시판 없음 · 설정</span></button></li>
+          {/if}
+        </ul>
       {/each}
+      <div class="sidebar-bottom">
+        <p class="sync-line" role="status">
+          {#if syncStatus?.running}<Icon name="refresh" size={14} /><span>{syncStatus.message}{#if syncStatus.page > 0} · {syncStatus.page}쪽{/if}</span>
+          {:else if lastChecked}<span>마지막 확인 {checkedLabel(lastChecked)}</span>
+          {:else if boards.length}<span>아직 가져온 적 없음</span>{/if}
+        </p>
+        <button class="source-item" class:active={page === 'settings'} aria-label="설정" aria-current={page === 'settings' ? 'page' : undefined} onclick={() => navigate('settings')}><Icon name="settings" size={17} /><span class="source-label">설정</span></button>
+      </div>
     </nav>
-    <div class="sidebar-bottom"><span class="local-dot"></span><span>내 기기에 머무는 정보</span><small>v1.0.0</small></div>
   </aside>
 
-  <main id="main" tabindex="-1">
-    <header class="page-header"><div><div class="eyebrow">{page === 'today' ? date : '나의 커맨드 센터'}</div><h1>{heading.label}</h1><p>{heading.caption}</p></div><span class="header-note"><Icon name="lock" size={14} /> 로컬 퍼스트</span></header>
+  <main id="main" tabindex="-1" class:with-week-pane={weekPane}>
+    <header class="page-header"><h1>{scopedBoard?.name ?? heading.label}</h1>{#if scopedBoard}<p>{organizationLabel(scopedBoard.organization)} · 받은 소식</p>{/if}{#if page === 'today'}<p>{date}{#if summary}{' · '}읽지 않은 공지 {summary.unread.toLocaleString('ko-KR')}{#if summary.new_since_sync}{' · '}최근 동기화로 새 공지 {summary.new_since_sync.toLocaleString('ko-KR')}{/if}{/if}</p>{/if}</header>
     {#if !desktop && !loading}<div class="banner browser-notice" role="status"><Icon name="info" /><div><strong>데스크톱 앱에서 시작해 주세요</strong><p>브라우저에서는 화면만 둘러볼 수 있습니다. 설정 저장과 로컬 데이터 접근은 Rhythm 앱에서 사용할 수 있습니다.</p></div></div>{/if}
     {#if error}<div class="banner error" role="alert"><Icon name="info" /><div><strong>작업을 완료하지 못했습니다</strong><p>{error}</p></div>{#if !snapshot && desktop}<button class="text-button" onclick={load}>다시 시도</button>{/if}</div>{/if}
     {#if restoreOutcome}<div class="banner" role="status"><Icon name="info" /><div><strong>백업 복원을 마쳤습니다</strong><p>공지 {restoreOutcome.documents.toLocaleString('ko-KR')}건과 첨부 자료 {restoreOutcome.resources.toLocaleString('ko-KR')}개를 복원하고 무결성을 확인했습니다.{#if restoreOutcome.unavailable_resources} 백업 당시 내려받지 못한 첨부 자료 {restoreOutcome.unavailable_resources.toLocaleString('ko-KR')}개는 포함되지 않았습니다.{/if}{#if restoreOutcome.models_needing_reinstall} 이 기기에 맞는 파일이 없는 AI 모델 {restoreOutcome.models_needing_reinstall.toLocaleString('ko-KR')}개는 다시 설치해야 합니다.{/if} 이전 데이터는 데이터 폴더에 복구용으로 보관되어 있습니다.</p></div><button class="text-button" onclick={() => restoreOutcome = null}>닫기</button></div>{/if}
@@ -258,8 +321,10 @@
         </div>
       </div>
     {:else}
-      <ArchiveView {page} {desktop} enabled={noticesEnabled} activation={proactiveActivation} onactivationhandled={() => proactiveActivation = null} onsettings={() => navigate('settings')} onaisettings={aiSettings} />
+      <ArchiveView {page} {desktop} enabled={noticesEnabled} {sourceRequest} activation={proactiveActivation} onactivationhandled={() => proactiveActivation = null} onsettings={() => navigate('settings')} onaisettings={aiSettings}
+        onsourcechange={(id) => activeSource = id}
+        onweekpane={(visible) => weekPane = visible}
+        oncontext={(context) => { if (context.summary) summary = context.summary; if (context.sources) sources = context.sources; syncStatus = context.status; }} />
     {/if}
-    <footer class="page-footer"><span>Rhythm</span><span>조용하게, 나의 리듬으로.</span></footer>
   </main>
 </div>
