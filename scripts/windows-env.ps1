@@ -1,5 +1,11 @@
 # Dot-source before local npm/cargo commands. CI uses its own installed toolchain.
 $ErrorActionPreference = 'Stop'
+# Child build scripts should use this host and its existing execution policy.
+# Keep an explicit caller selection; never retry under another host after a denial.
+if (-not $env:RHYTHM_POWERSHELL) {
+  $rhythmPowerShellExe = if ($PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }
+  $env:RHYTHM_POWERSHELL = Join-Path $PSHOME $rhythmPowerShellExe
+}
 $rhythmTools = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\.build-tools'))
 $env:CARGO_HOME = Join-Path $rhythmTools 'cargo'
 $env:RUSTUP_HOME = Join-Path $rhythmTools 'rustup'

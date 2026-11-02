@@ -41,6 +41,8 @@ npm run check
 npm run desktop
 ```
 
+`windows-env.ps1`은 현재 PowerShell 실행 파일을 `RHYTHM_POWERSHELL`로 전달하므로, PowerShell 7에서 시작한 빌드도 VC 런타임 준비 단계에서 같은 호스트를 사용합니다. 이 변수를 미리 지정했다면 그 선택을 유지합니다. 프로젝트 환경 스크립트 없이 PowerShell 7에서 전역 도구를 사용하는 경우에는 `$env:RHYTHM_POWERSHELL = (Join-Path $PSHOME 'pwsh.exe')`처럼 실행 파일 경로를 지정하세요. 지정하지 않으면 기존 `powershell.exe`를 사용합니다. 선택한 호스트의 실행 정책을 그대로 적용하며, 실패했을 때 정책을 바꾸거나 다른 호스트로 재시도하지 않습니다. VC 런타임 준비가 실패하면 긴 워커 빌드 전에 중단합니다.
+
 릴리스 설치 프로그램을 만들 때:
 
 ```powershell

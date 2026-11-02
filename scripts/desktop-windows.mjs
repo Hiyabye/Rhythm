@@ -48,6 +48,15 @@ export function desktop({ platform = process.platform, arch = process.arch, env 
       throw new Error('GPU and CPU target directories must be different.');
     }
   }
+  // Use the explicitly selected host (windows-env.ps1 exports its own host),
+  // retaining Windows PowerShell compatibility for other build environments.
+  // Stage before expensive compilations so missing tools or denied scripts fail fast.
+  const powershell = env.RHYTHM_POWERSHELL || 'powershell.exe';
+  try {
+    run(powershell, ['-NoProfile', '-File', join(cwd, 'scripts', 'stage-vc-runtime.ps1')]);
+  } catch (cause) {
+    throw new Error(`Microsoft VC runtime staging failed using ${powershell}. Set RHYTHM_POWERSHELL to the intended PowerShell executable if needed. The selected host's execution policy is unchanged.`, { cause });
+  }
   console.log('Building Windows x64 CPU worker. Model weights are installed separately in the app.');
   run('cargo', ['build', '--locked', '-p', 'rhythm-ai-worker', ...(release ? ['--release'] : [])], false, buildEnv);
   const binary = join(targetDir, release ? 'release' : 'debug', 'rhythm-ai-worker.exe');
@@ -65,7 +74,6 @@ export function desktop({ platform = process.platform, arch = process.arch, env 
     copy(join(gpuTargetDir, release ? 'release' : 'debug', 'rhythm-ai-worker.exe'),
       join(cwd, 'src-tauri', 'binaries', 'rhythm-ai-worker-gpu-' + target + '.exe'));
   }
-  run('powershell.exe', ['-NoProfile', '-File', join(cwd, 'scripts', 'stage-vc-runtime.ps1')]);
   // A CPU-only build must not package an old GPU executable left by another build.
   const config = backend === 'cpu'
     ? ['--config', JSON.stringify({ bundle: { externalBin: ['binaries/rhythm-ai-worker'] } })]
