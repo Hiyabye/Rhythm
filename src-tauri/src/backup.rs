@@ -1786,6 +1786,60 @@ pub(crate) fn backup_restore_outcome(
     state.restore_outcome.clone()
 }
 
+/// Verifies the archive into staging and writes the durable restore journal.
+/// The next launch finalizes it through `recover_pending_restore`.
+fn stage_restore(
+    root: &Path,
+    source: &Path,
+    cancellation: &BackupCancellation,
+) -> Result<(), String> {
+    if root.join(STAGING).exists() || root.join(JOURNAL).exists() {
+        return Err(
+            "이전 복원 작업의 복구 파일이 남아 있습니다. 앱을 다시 시작한 뒤 확인해 주세요.".into(),
+        );
+    }
+    let previous_name = format!("{PREVIOUS_PREFIX}{}-{}", timestamp(), std::process::id());
+    if root.join(&previous_name).exists() {
+        return Err("기존 데이터 복구 폴더가 이미 있습니다.".into());
+    }
+    let database_metadata = fs::symlink_metadata(root.join("rhythm.sqlite3"))
+        .map_err(|_| "현재 데이터베이스를 찾지 못했습니다.")?;
+    if !database_metadata.is_file() || database_metadata.file_type().is_symlink() {
+        return Err("현재 데이터베이스 경로가 안전하지 않습니다.".into());
+    }
+    let resources_metadata = fs::symlink_metadata(root.join("resources"));
+    let had_resources = match resources_metadata {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => true,
+        Ok(_) => return Err("현재 첨부 자료 폴더 경로가 안전하지 않습니다.".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => return Err("현재 첨부 자료 폴더를 확인하지 못했습니다.".into()),
+    };
+    let stage = root.join(STAGING);
+    let result = (|| {
+        let preview = extract_verified_cancellable(source, &stage, cancellation)?;
+        fs::create_dir_all(stage.join("resources"))
+            .map_err(|_| "첨부 자료 폴더를 준비하지 못했습니다.")?;
+        reconcile_model_inventory(&stage, &root.join("models"), cancellation)?;
+        validate_staged_database_cancellable(
+            &stage,
+            preview.database_schema,
+            preview.documents,
+            preview.resources,
+            Some(cancellation),
+        )?;
+        sync_directory(&stage.join("resources"))?;
+        sync_directory(&stage)?;
+        check_cancellation(Some(cancellation))?;
+        cancellation.begin_commit()?;
+        write_journal(root, &previous_name, had_resources, &preview)?;
+        Ok(())
+    })();
+    if result.is_err() && !root.join(JOURNAL).exists() {
+        let _ = fs::remove_dir_all(&stage);
+    }
+    result
+}
+
 #[tauri::command]
 pub(crate) async fn backup_restore(
     app: tauri::AppHandle,
@@ -1807,47 +1861,7 @@ pub(crate) async fn backup_restore(
         let _registration = registration;
         check_cancellation(Some(&cancellation))?;
         let maintenance = maintenance;
-        let output = (|| -> Result<(), String> {
-            if root.join(STAGING).exists() || root.join(JOURNAL).exists() {
-                return Err("이전 복원 작업의 복구 파일이 남아 있습니다. 앱을 다시 시작한 뒤 확인해 주세요.".into());
-            }
-            let previous_name = format!("{PREVIOUS_PREFIX}{}-{}", timestamp(), std::process::id());
-            if root.join(&previous_name).exists() { return Err("기존 데이터 복구 폴더가 이미 있습니다.".into()); }
-            let database_metadata = fs::symlink_metadata(root.join("rhythm.sqlite3")).map_err(|_| "현재 데이터베이스를 찾지 못했습니다.")?;
-            if !database_metadata.is_file() || database_metadata.file_type().is_symlink() {
-                return Err("현재 데이터베이스 경로가 안전하지 않습니다.".into());
-            }
-            let resources_metadata = fs::symlink_metadata(root.join("resources"));
-            let had_resources = match resources_metadata {
-                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => true,
-                Ok(_) => return Err("현재 첨부 자료 폴더 경로가 안전하지 않습니다.".into()),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-                Err(_) => return Err("현재 첨부 자료 폴더를 확인하지 못했습니다.".into()),
-            };
-            let stage = root.join(STAGING);
-            let result = (|| {
-                let preview = extract_verified_cancellable(Path::new(&source), &stage, &cancellation)?;
-                fs::create_dir_all(stage.join("resources")).map_err(|_| "첨부 자료 폴더를 준비하지 못했습니다.")?;
-                reconcile_model_inventory(&stage, &root.join("models"), &cancellation)?;
-                validate_staged_database_cancellable(
-                    &stage,
-                    preview.database_schema,
-                    preview.documents,
-                    preview.resources,
-                    Some(&cancellation),
-                )?;
-                sync_directory(&stage.join("resources"))?;
-                sync_directory(&stage)?;
-                check_cancellation(Some(&cancellation))?;
-                cancellation.begin_commit()?;
-                write_journal(&root, &previous_name, had_resources, &preview)?;
-                Ok(())
-            })();
-            if result.is_err() && !root.join(JOURNAL).exists() {
-                let _ = fs::remove_dir_all(&stage);
-            }
-            result
-        })();
+        let output = stage_restore(&root, Path::new(&source), &cancellation);
         if output.is_ok() || root.join(JOURNAL).exists() {
             // Keep maintenance closed until exit. The restore is finalized by the
             // next launch; Rhythm does not relaunch itself because a relaunched
@@ -1857,6 +1871,8 @@ pub(crate) async fn backup_restore(
             app_for_exit.exit(0);
         }
         output
-    }).await.map_err(|_| "복원 준비를 마치지 못했습니다.".to_owned())??;
+    })
+    .await
+    .map_err(|_| "복원 준비를 마치지 못했습니다.".to_owned())??;
     Ok(())
 }
