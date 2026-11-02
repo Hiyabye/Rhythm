@@ -25,3 +25,6 @@ Thumbs.db
 *.sqlite3
 *.sqlite3-shm
 *.sqlite3-wal
+
+# Local Claude Code skills, agents and hooks (Impeccable install)
+/.claude/
