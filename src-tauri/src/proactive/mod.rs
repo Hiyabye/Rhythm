@@ -1,5 +1,7 @@
 mod notification;
 pub mod scheduler;
+#[cfg(windows)]
+pub(crate) mod windows_notification;
 
 use crate::{
     storage::{
@@ -100,5 +102,7 @@ pub async fn proactive_clear_history(
     snapshot(&store, state.proactive.take_activation()?)
 }
 
+#[cfg(all(test, windows))]
+mod native_validation;
 #[cfg(test)]
 mod tests;

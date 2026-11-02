@@ -1215,6 +1215,7 @@ impl Store {
     /// Records confirmed display for a batch atomically. Every event must still
     /// be claimed/attempted at the matching attempt; one stale item rolls back
     /// the whole batch so history cannot describe a partially activated digest.
+    #[cfg(any(target_os = "macos", test))]
     pub fn proactive_mark_delivered_batch(
         &self,
         events: &[(i64, u32)],

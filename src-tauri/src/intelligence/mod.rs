@@ -4,7 +4,10 @@ mod archived_evaluation;
 pub mod commands;
 #[cfg(test)]
 mod evaluation;
+#[cfg(all(test, windows))]
+mod gpu_tests;
 pub mod maintenance;
+pub(crate) mod model_storage;
 pub mod models;
 pub mod operations;
 #[cfg(test)]
@@ -124,6 +127,7 @@ fn backend_name(backend: Option<&str>) -> &str {
         Some("cpu") => "CPU",
         Some("metal") => "Metal",
         Some("cuda") => "CUDA",
+        Some("vulkan") => "NVIDIA GPU (Vulkan)",
         _ => "미확인",
     }
 }
@@ -140,17 +144,239 @@ async fn drain_diagnostics(mut reader: impl AsyncRead + Unpin, mut log: impl FnM
     }
 }
 
+#[cfg(windows)]
+struct WorkerJob(std::os::windows::io::OwnedHandle);
+
+#[cfg(windows)]
+impl WorkerJob {
+    fn new() -> Result<Self, String> {
+        use std::os::windows::io::{AsRawHandle, FromRawHandle};
+        use windows::{
+            core::PCWSTR,
+            Win32::{
+                Foundation::HANDLE,
+                System::JobObjects::{
+                    CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+                    JOBOBJECT_BASIC_LIMIT_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                },
+            },
+        };
+        // SAFETY: null security attributes make the unnamed job handle non-inheritable.
+        let raw = unsafe { CreateJobObjectW(None, PCWSTR::null()) }
+            .map_err(|error| format!("AI 작업 보호를 설정하지 못했습니다: {error}"))?;
+        // SAFETY: CreateJobObjectW returned a new handle; ownership moves to OwnedHandle.
+        let job = Self(unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(raw.0) });
+        let limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+            BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
+                LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // SAFETY: the valid structure and handle live throughout this synchronous call.
+        unsafe {
+            SetInformationJobObject(
+                HANDLE(job.0.as_raw_handle()),
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        }
+        .map_err(|error| format!("AI 작업 보호를 설정하지 못했습니다: {error}"))?;
+        Ok(job)
+    }
+
+    fn assign(&self, child: &Child) -> Result<(), String> {
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::{Foundation::HANDLE, System::JobObjects::AssignProcessToJobObject};
+        let process = child
+            .raw_handle()
+            .ok_or("AI 작업 프로세스가 이미 종료되었습니다.")?;
+        // SAFETY: both handles remain owned by their respective objects for this call.
+        unsafe { AssignProcessToJobObject(HANDLE(self.0.as_raw_handle()), HANDLE(process)) }
+            .map_err(|error| format!("AI 작업 보호를 적용하지 못했습니다: {error}"))
+    }
+
+    #[cfg(test)]
+    fn set_test_process_memory_limit(&self, bytes: usize) -> Result<(), String> {
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::{
+            Foundation::HANDLE,
+            System::JobObjects::{
+                JobObjectExtendedLimitInformation, SetInformationJobObject,
+                JOBOBJECT_BASIC_LIMIT_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+            },
+        };
+        let limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+            BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
+                LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+                ..Default::default()
+            },
+            ProcessMemoryLimit: bytes,
+            ..Default::default()
+        };
+        // SAFETY: the job and correctly sized information structure outlive the call.
+        unsafe {
+            SetInformationJobObject(
+                HANDLE(self.0.as_raw_handle()),
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        }
+        .map_err(|error| format!("시험 워커 메모리 제한 설정 실패: {error}"))
+    }
+
+    #[cfg(test)]
+    fn test_process_memory_limit(&self) -> Result<usize, String> {
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::{
+            Foundation::HANDLE,
+            System::JobObjects::{
+                JobObjectExtendedLimitInformation, QueryInformationJobObject,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+            },
+        };
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        // SAFETY: the owned handle and correctly sized output buffer remain valid for the call.
+        unsafe {
+            QueryInformationJobObject(
+                Some(HANDLE(self.0.as_raw_handle())),
+                JobObjectExtendedLimitInformation,
+                (&mut limits as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                None,
+            )
+        }
+        .map_err(|error| format!("시험 워커 메모리 제한 확인 실패: {error}"))?;
+        let expected = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+        if limits.BasicLimitInformation.LimitFlags.0 & expected.0 != expected.0 {
+            return Err("시험 워커 메모리 제한 또는 종료 보호가 설정되지 않았습니다.".into());
+        }
+        Ok(limits.ProcessMemoryLimit)
+    }
+}
+
 pub struct Worker {
     executable: Option<PathBuf>,
+    execution_mode: String,
+    active_gpu: bool,
+    fallback_reason: Option<String>,
     child: Option<Child>,
     input: Option<ChildStdin>,
     output: Option<BufReader<ChildStdout>>,
     next_id: u64,
     status: WorkerStatus,
+    #[cfg(windows)]
+    job: Option<WorkerJob>,
     // None until this process has supplied a validated status response.
     analysis_json_v1: Option<bool>,
 }
 impl Worker {
+    /// Windows ships a separate llama.cpp Vulkan worker beside the CPU worker.
+    /// Other platforms ship one worker whose build selects its own backend
+    /// (Metal with a CPU retry on Apple Silicon), so the mode does not apply.
+    #[cfg(not(windows))]
+    pub fn launch_configured(path: &Path, mode: &str) -> Self {
+        let mut worker = Self::launch(path);
+        worker.execution_mode = mode.to_owned();
+        worker
+    }
+
+    #[cfg(windows)]
+    pub fn launch_configured(path: &Path, mode: &str) -> Self {
+        let gpu = path.with_file_name("rhythm-ai-worker-gpu.exe");
+        let use_gpu = mode == "gpu" || (mode == "auto" && gpu.is_file());
+        let mut worker = Self::launch_command(Command::new(if use_gpu { &gpu } else { path }));
+        worker.executable = Some(path.to_owned());
+        worker.execution_mode = mode.to_owned();
+        worker.active_gpu = use_gpu;
+        if mode == "auto" && !use_gpu {
+            worker.fallback_reason = Some("GPU 작업 파일이 없어 CPU를 사용합니다.".into());
+        }
+        worker
+    }
+
+    pub fn set_execution_mode(&mut self, mode: &str) -> Result<(), String> {
+        if !matches!(mode, "auto" | "cpu" | "gpu") {
+            return Err("AI 실행 방식이 올바르지 않습니다.".into());
+        }
+        if self.child.is_some() {
+            return Err("실행 방식을 바꾸기 전에 AI 작업을 종료해야 합니다.".into());
+        }
+        self.execution_mode = mode.into();
+        self.fallback_reason = None;
+        self.active_gpu = false;
+        Ok(())
+    }
+
+    fn add_fallback_detail(&mut self) {
+        if let Some(reason) = &self.fallback_reason {
+            let detail = self.status.detail.take().unwrap_or_default();
+            self.status.detail = Some(format!("CPU 전환: {reason} · {detail}"));
+        }
+    }
+
+    async fn fallback_to_cpu(&mut self, reason: String) -> Result<(), String> {
+        self.terminate().await;
+        let path = self
+            .executable
+            .clone()
+            .ok_or("CPU 작업 파일 경로가 없습니다.")?;
+        let mode = self.execution_mode.clone();
+        *self = Self::launch(&path);
+        self.execution_mode = mode;
+        // Error strings come from the bounded local worker protocol, never a shell.
+        self.fallback_reason = Some(reason.chars().take(240).collect());
+        if self.child.is_none() {
+            self.add_fallback_detail();
+            return Err(self.status.detail.clone().unwrap_or_default());
+        }
+        Ok(())
+    }
+
+    async fn request_with_fallback(
+        &mut self,
+        method: &str,
+        params: Value,
+        deadline: Duration,
+    ) -> Result<Value, String> {
+        let result = self
+            .request_params(method, params.clone(), deadline)
+            .await
+            .and_then(|value| {
+                if self.active_gpu {
+                    let valid = match method {
+                        "status" | "load" => {
+                            value["engine"] == "llama.cpp"
+                                && value["build_backend"] == "vulkan"
+                                && value["runtime_available"] == true
+                                && (value["model"].is_null() || value["loaded_backend"] == "vulkan")
+                        }
+                        "infer" => value["loaded_backend"] == "vulkan",
+                        _ => true,
+                    };
+                    if !valid {
+                        return Err(
+                            "GPU 작업 프로세스의 실제 실행 장치를 확인하지 못했습니다.".into()
+                        );
+                    }
+                }
+                Ok(value)
+            });
+        if self.active_gpu && self.execution_mode == "auto" {
+            if let Err(error) = result {
+                self.fallback_to_cpu(error).await?;
+                // A new process has no outstanding request; never reuse a failed pipe.
+                return self.request_params(method, params, deadline).await;
+            }
+        }
+        result
+    }
+
     pub fn launch(path: &Path) -> Self {
         let mut worker = Self::launch_command(Command::new(path));
         worker.executable = Some(path.to_owned());
@@ -159,6 +385,9 @@ impl Worker {
     fn launch_command(mut command: Command) -> Self {
         let mut worker = Self {
             executable: None,
+            execution_mode: "cpu".into(),
+            active_gpu: false,
+            fallback_reason: None,
             child: None,
             input: None,
             output: None,
@@ -167,7 +396,22 @@ impl Worker {
             status: WorkerStatus::unavailable(
                 "AI 엔진을 시작하지 못했습니다. 앱을 다시 실행해 주세요.",
             ),
+            #[cfg(windows)]
+            job: None,
         };
+        #[cfg(windows)]
+        let job = match WorkerJob::new() {
+            Ok(job) => job,
+            Err(error) => {
+                worker.status.state = "failed".into();
+                worker.status.detail = Some(error);
+                return worker;
+            }
+        };
+        // A GUI application must not flash a console each time the worker starts.
+        // Pipe handles remain explicitly inherited by the child.
+        #[cfg(windows)]
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         match command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -176,6 +420,22 @@ impl Worker {
             .spawn()
         {
             Ok(mut child) => {
+                #[cfg(windows)]
+                if let Err(error) = job.assign(&child) {
+                    // Never leave an unprotected worker running when assignment fails.
+                    let _ = child.start_kill();
+                    tokio::spawn(async move {
+                        let _ = child.kill().await;
+                        let _ = child.wait().await;
+                    });
+                    worker.status.state = "failed".into();
+                    worker.status.detail = Some(error);
+                    return worker;
+                }
+                #[cfg(windows)]
+                {
+                    worker.job = Some(job);
+                }
                 if let Some(stderr) = child.stderr.take() {
                     // Give GUI-only parents a valid diagnostics handle and drain it so
                     // upstream logging can never block the worker's protocol pipe.
@@ -190,7 +450,12 @@ impl Worker {
                 worker.output = child.stdout.take().map(BufReader::new);
                 worker.child = Some(child);
             }
-            Err(e) => eprintln!("Worker launch: {e}"),
+            Err(e) => {
+                eprintln!("Worker launch: {e}");
+                worker.status.state = "failed".into();
+                worker.status.detail =
+                    Some("AI 엔진을 시작하지 못했습니다. 앱 설치 상태를 확인해 주세요.".into());
+            }
         };
         worker
     }
@@ -263,7 +528,17 @@ impl Worker {
             .executable
             .clone()
             .ok_or("AI 엔진 실행 파일 경로가 없습니다.")?;
-        *self = Self::launch(&path);
+        let mode = self.execution_mode.clone();
+        let reason = self.fallback_reason.clone();
+        *self = if reason.is_some() && mode == "auto" {
+            Self::launch(&path)
+        } else {
+            Self::launch_configured(&path, &mode)
+        };
+        self.execution_mode = mode;
+        if reason.is_some() {
+            self.fallback_reason = reason;
+        }
         let status = self.refresh().await;
         if status.state != "ready" {
             return Err(status
@@ -344,7 +619,7 @@ impl Worker {
         }
         self.status.state = "busy".into();
         let result = self
-            .request_params("infer", params, Duration::from_secs(600))
+            .request_with_fallback("infer", params, Duration::from_secs(600))
             .await
             .and_then(inference_response);
         match &result {
@@ -355,6 +630,7 @@ impl Worker {
                     "실제 불러온 백엔드: {} · GPU 사용률 측정값은 아닙니다.",
                     backend_name(response.metrics.loaded_backend.as_deref())
                 ));
+                self.add_fallback_detail();
             }
             Err(error) => {
                 self.stop().await;
@@ -371,7 +647,7 @@ impl Worker {
         self.ensure_running().await?;
         self.status.state = "loading".into();
         if let Err(error) = self
-            .request_params(
+            .request_with_fallback(
                 "load",
                 json!({"model_path":path_text}),
                 Duration::from_secs(180),
@@ -401,15 +677,68 @@ impl Worker {
         self.status =
             WorkerStatus::unavailable("AI 엔진이 중지되었습니다. 다음 요청 때 다시 시작합니다.");
     }
-    pub async fn refresh(&mut self) -> WorkerStatus {
-        let result = self.request("status").await.and_then(|value| {
-            let payload: StatusPayload = serde_json::from_value(value)
-                .map_err(|_| "AI 엔진 상태 응답 형식이 올바르지 않습니다.".to_string())?;
-            if payload.engine != "mistral.rs" {
-                return Err("AI 엔진 상태 응답의 엔진 정보가 올바르지 않습니다.".into());
+    /// Inventory changes may remove or replace a model file. Do not proceed
+    /// until the current child is known to have exited and been reaped; unlike
+    /// an explicit restart, this does not require the executable to exist.
+    pub async fn stop_for_inventory(&mut self) -> Result<(), String> {
+        if let Some(child) = self.child.as_mut() {
+            let exited = child
+                .try_wait()
+                .map_err(|_| "AI 엔진 종료 상태를 확인하지 못했습니다.")?;
+            if exited.is_none() {
+                if child.start_kill().is_err()
+                    && child
+                        .try_wait()
+                        .map_err(|_| "AI 엔진 종료 상태를 확인하지 못했습니다.")?
+                        .is_none()
+                {
+                    return Err("AI 엔진을 안전하게 종료하지 못했습니다.".into());
+                }
+                child
+                    .wait()
+                    .await
+                    .map_err(|_| "AI 엔진 종료를 확인하지 못했습니다.")?;
             }
-            Ok(payload)
-        });
+        }
+        self.child.take();
+        self.input.take();
+        self.output.take();
+        self.analysis_json_v1 = None;
+        #[cfg(windows)]
+        self.job.take();
+        self.status =
+            WorkerStatus::unavailable("AI 엔진이 중지되었습니다. 다음 요청 때 다시 시작합니다.");
+        Ok(())
+    }
+    pub async fn refresh(&mut self) -> WorkerStatus {
+        if self.child.is_none()
+            && self.active_gpu
+            && self.execution_mode == "auto"
+            && self.status.state == "failed"
+        {
+            let reason = self
+                .status
+                .detail
+                .clone()
+                .unwrap_or_else(|| "GPU 작업을 시작하지 못했습니다.".into());
+            if self.fallback_to_cpu(reason).await.is_err() {
+                return self.status.clone();
+            }
+        }
+        if self.child.is_none() {
+            return self.status.clone();
+        }
+        let result = self
+            .request_with_fallback("status", json!({}), Duration::from_secs(8))
+            .await
+            .and_then(|value| {
+                let payload: StatusPayload = serde_json::from_value(value)
+                    .map_err(|_| "AI 엔진 상태 응답 형식이 올바르지 않습니다.".to_string())?;
+                if !matches!(payload.engine.as_str(), "mistral.rs" | "llama.cpp") {
+                    return Err("AI 엔진 상태 응답의 엔진 정보가 올바르지 않습니다.".into());
+                }
+                Ok(payload)
+            });
         match result {
             Ok(result) => {
                 self.analysis_json_v1 = Some(result.analysis_json_v1);
@@ -427,6 +756,7 @@ impl Worker {
                     )),
                     model: result.model,
                 };
+                self.add_fallback_detail();
             }
             Err(error) => {
                 self.terminate().await;
@@ -448,6 +778,8 @@ impl Worker {
                     self.input.take();
                     self.output.take();
                     self.child.take();
+                    #[cfg(windows)]
+                    self.job.take();
                     self.analysis_json_v1 = None;
                     self.status = WorkerStatus {
                         state: "failed".into(),
@@ -465,6 +797,10 @@ impl Worker {
         self.observe_exit();
         self.status.clone()
     }
+    #[cfg(test)]
+    pub(super) fn process_id(&self) -> Option<u32> {
+        self.child.as_ref().and_then(Child::id)
+    }
     async fn terminate(&mut self) {
         self.analysis_json_v1 = None;
         self.input.take();
@@ -473,6 +809,8 @@ impl Worker {
             let _ = child.kill().await;
             let _ = child.wait().await;
         }
+        #[cfg(windows)]
+        self.job.take();
     }
     pub async fn shutdown(&mut self) {
         self.analysis_json_v1 = None;
@@ -486,11 +824,197 @@ impl Worker {
             }
             self.child.take();
         }
+        #[cfg(windows)]
+        self.job.take();
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn job_parent_fixture() {
+        let Some(marker) = std::env::var_os("RHYTHM_JOB_TEST_MARKER") else {
+            return;
+        };
+        let executable = std::env::var_os("RHYTHM_JOB_TEST_WORKER").expect("test worker path");
+        let mut command = Command::new(executable);
+        command.arg("run");
+        let worker = Worker::launch_command(command);
+        let pid = worker.process_id().expect("protected test worker started");
+        assert!(worker.job.is_some());
+        let marker = std::path::PathBuf::from(marker);
+        let temporary = marker.with_extension("tmp");
+        std::fs::write(&temporary, pid.to_string()).unwrap();
+        std::fs::rename(temporary, marker).unwrap();
+        // Keep the job handle and worker alive until the outer test kills this parent.
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            std::hint::black_box(&worker);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn killing_parent_terminates_protected_worker() {
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use std::process::{Child as StdChild, Command as StdCommand, Stdio as StdStdio};
+        use std::time::Instant;
+        use windows::Win32::{
+            Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT},
+            System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE},
+        };
+        struct ParentGuard(StdChild);
+        impl Drop for ParentGuard {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let executable = test_worker::compile(
+            directory.path(),
+            "job-stubborn-worker",
+            r#"fn main() {
+                if std::env::args().nth(1).as_deref() != Some("run") { return; }
+                loop { std::thread::sleep(std::time::Duration::from_secs(60)); }
+            }"#,
+        );
+        let marker = directory.path().join("worker-pid");
+        let parent = StdCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "intelligence::tests::job_parent_fixture",
+                "--nocapture",
+            ])
+            .env("RHYTHM_JOB_TEST_MARKER", &marker)
+            .env("RHYTHM_JOB_TEST_WORKER", &executable)
+            .stdin(StdStdio::null())
+            .stdout(StdStdio::null())
+            .stderr(StdStdio::null())
+            .spawn()
+            .unwrap();
+        let mut parent = ParentGuard(parent);
+        let started = Instant::now();
+        while !marker.exists() {
+            assert!(
+                parent.0.try_wait().unwrap().is_none(),
+                "parent fixture exited before protecting worker"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "parent fixture did not start"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let pid: u32 = std::fs::read_to_string(&marker).unwrap().parse().unwrap();
+        // SAFETY: OpenProcess returns an owned, non-inherited handle to this test's child.
+        let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }.unwrap();
+        // SAFETY: ownership of the returned handle transfers to OwnedHandle.
+        let process = unsafe { OwnedHandle::from_raw_handle(process.0) };
+        // SAFETY: process is a live owned process handle and timeouts are bounded.
+        assert_eq!(
+            unsafe { WaitForSingleObject(HANDLE(process.as_raw_handle()), 0) },
+            WAIT_TIMEOUT
+        );
+        parent.0.kill().unwrap();
+        parent.0.wait().unwrap();
+        // The worker ignores stdin, so pipe closure alone cannot satisfy this check.
+        assert_eq!(
+            unsafe { WaitForSingleObject(HANDLE(process.as_raw_handle()), 10_000) },
+            WAIT_OBJECT_0
+        );
+    }
+
+    /// Explicitly opt in with the pinned 2B model and a CPU release worker.
+    /// The limits apply to the worker process, never the whole machine or app.
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "requires pinned 2B GGUF, a CPU worker, and at least 6 GiB available physical memory"]
+    async fn real_model_low_memory_failure_isolated() {
+        use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        let worker_path = std::env::var_os("RHYTHM_WORKER_TEST_BIN")
+            .expect("set RHYTHM_WORKER_TEST_BIN to the CPU release worker");
+        let model_path = std::env::var_os("RHYTHM_TEST_MODEL")
+            .expect("set RHYTHM_TEST_MODEL to the pinned 2B GGUF");
+        let model_path = std::path::PathBuf::from(model_path);
+        let entry = models::catalog()
+            .into_iter()
+            .find(|entry| entry.id == "qwen35-2b")
+            .expect("pinned 2B catalog entry");
+        models::verify_file(
+            &model_path,
+            Some((&entry.sha256, entry.bytes)),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .expect("the test requires the exact pinned 2B model");
+        let mut memory = MEMORYSTATUSEX {
+            dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: memory has the documented size and remains valid during the call.
+        unsafe { GlobalMemoryStatusEx(&mut memory) }.expect("query available memory");
+        assert!(
+            memory.ullAvailPhys >= 6 * 1024 * 1024 * 1024,
+            "at least 6 GiB available physical memory is required before the capped baseline; available: {}",
+            memory.ullAvailPhys
+        );
+        let executable = std::path::Path::new(&worker_path);
+        let mut baseline = Worker::launch(executable);
+        assert_eq!(baseline.refresh().await.state, "ready");
+        baseline
+            .job
+            .as_ref()
+            .unwrap()
+            .set_test_process_memory_limit(4 * 1024 * 1024 * 1024)
+            .expect("set baseline worker memory ceiling");
+        assert_eq!(
+            baseline
+                .job
+                .as_ref()
+                .unwrap()
+                .test_process_memory_limit()
+                .unwrap(),
+            4 * 1024 * 1024 * 1024
+        );
+        let loaded = baseline.load(&model_path).await
+            .expect("baseline did not load under the 4 GiB worker ceiling; low-memory comparison is inconclusive");
+        assert!(loaded.model.is_some());
+        assert!(loaded
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("실제 불러온 백엔드: CPU")));
+        baseline.shutdown().await;
+        assert!(baseline.child.is_none());
+
+        let mut constrained = Worker::launch(executable);
+        assert_eq!(constrained.refresh().await.state, "ready");
+        constrained
+            .job
+            .as_ref()
+            .unwrap()
+            .set_test_process_memory_limit(256 * 1024 * 1024)
+            .expect("set low worker memory ceiling");
+        assert_eq!(
+            constrained
+                .job
+                .as_ref()
+                .unwrap()
+                .test_process_memory_limit()
+                .unwrap(),
+            256 * 1024 * 1024
+        );
+        assert!(constrained.load(&model_path).await.is_err(),
+            "the model loaded under the low ceiling; this run did not demonstrate a low-memory failure");
+        assert!(
+            constrained.child.is_none(),
+            "failed worker must be stopped and reaped"
+        );
+        // The test parent is still responsive and can start a new empty worker.
+        assert_eq!(constrained.restart().await.unwrap().state, "ready");
+        constrained.shutdown().await;
+        assert!(constrained.child.is_none());
+    }
     #[tokio::test]
     async fn diagnostic_chunks_are_bounded_and_invalid_utf8_does_not_stop_drainage() {
         let mut bytes = vec![0xff; 2 * 1024 * 1024];

@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashSet, VecDeque},
     io::Read,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -267,7 +267,13 @@ impl Controller {
                 .ai_model(&id)?
                 .filter(|model| model.status == "installed")
                 .ok_or("설치가 완료된 AI 모델이 없습니다.")?;
-            let key = key_for(document_id, revision_id, &model, preferences.max_tokens)?;
+            let key = key_for_mode(
+                document_id,
+                revision_id,
+                &model,
+                preferences.max_tokens,
+                &preferences.execution_mode,
+            )?;
             let mut cache_lookup_ms = None;
             if !regenerate {
                 let cache_started = Instant::now();
@@ -284,7 +290,8 @@ impl Controller {
             }
             let identity = json!({"id":model.id,"name":model.name,"sha256":model.sha256,
                 "catalog_id":model.catalog_id,"source_revision":model.source_revision,
-                "source_filename":model.source_filename,"max_tokens":preferences.max_tokens});
+                "source_filename":model.source_filename,"max_tokens":preferences.max_tokens,
+                "execution_mode":preferences.execution_mode,"runtime_policy":"llama-vulkan-v1"});
             let job = store.ai_enqueue(&key, &identity, 100)?;
             Ok(StartResponse {
                 cached: None,
@@ -517,13 +524,14 @@ impl Controller {
                             Ok(output) => {
                                 let value = serde_json::to_value(output.analysis)
                                     .map_err(|e| e.to_string())?;
-                                store.ai_complete_job(
+                                store.ai_complete_job_with_backend(
                                     job.id,
                                     &value,
                                     output.partial,
                                     output.processed_chars,
                                     output.total_chars,
                                     duration,
+                                    output.loaded_backend.as_deref(),
                                 )?;
                                 terminal_phase = "completed".into();
                                 Ok(())
@@ -556,12 +564,26 @@ impl Controller {
     }
 }
 
+#[cfg(test)]
 pub fn key_for(
     document_id: i64,
     revision_id: i64,
     model: &AiModel,
     max_tokens: u32,
 ) -> Result<AnalysisKey, String> {
+    key_for_mode(document_id, revision_id, model, max_tokens, "auto")
+}
+
+pub fn key_for_mode(
+    document_id: i64,
+    revision_id: i64,
+    model: &AiModel,
+    max_tokens: u32,
+    execution_mode: &str,
+) -> Result<AnalysisKey, String> {
+    if !["auto", "cpu", "gpu"].contains(&execution_mode) {
+        return Err("AI 실행 장치를 확인해 주세요.".into());
+    }
     let hash = model
         .sha256
         .clone()
@@ -573,11 +595,11 @@ pub fn key_for(
         model_sha256: hash,
         prompt_version: PROMPT_VERSION,
         schema_version: SCHEMA_VERSION,
-        configuration_hash: configuration_hash(max_tokens, decoding_mode()),
+        configuration_hash: configuration_hash(max_tokens, decoding_mode(), execution_mode),
     })
 }
-fn configuration_hash(max_tokens: u32, decoding: &str) -> String {
-    let configuration = format!("analysis-v3;selector=head-tail-keywords-v4;prompt_rules=primary-purpose-positive-v1;evidence_encoding=explicit-id-v1;clock_rules=meridiem-v2;decoding={decoding};max_tokens={max_tokens};source_bytes={SOURCE_BYTES};thinking=false;sampler=deterministic;repair_attempts=1");
+fn configuration_hash(max_tokens: u32, decoding: &str, execution_mode: &str) -> String {
+    let configuration = format!("analysis-v3;selector=head-tail-keywords-v4;prompt_rules=primary-purpose-positive-v1;evidence_encoding=explicit-id-v1;clock_rules=meridiem-v2;decoding={decoding};max_tokens={max_tokens};source_bytes={SOURCE_BYTES};thinking=false;sampler=deterministic;repair_attempts=1;runtime_policy=llama-vulkan-v1;execution_mode={execution_mode}");
     format!("{:x}", Sha256::digest(configuration.as_bytes()))
 }
 
@@ -586,6 +608,7 @@ struct Output {
     partial: bool,
     processed_chars: u64,
     total_chars: u64,
+    loaded_backend: Option<String>,
 }
 async fn execute(
     store: &SharedStore,
@@ -597,7 +620,7 @@ async fn execute(
 ) -> Result<Output, String> {
     cancellation.check()?;
     let document_stage = stage(controller, job.id, "preparing", "document_model_read");
-    let (model, document) = with_store(store, |store| {
+    let (model, document, current_execution_mode) = with_store(store, |store| {
         let id = job.model_identity["id"]
             .as_str()
             .ok_or("작업의 모델 정보가 없습니다.")?;
@@ -611,6 +634,7 @@ async fn execute(
         Ok((
             model,
             store.document(job.key.document_id, Some(job.key.revision_id))?,
+            store.ai_preferences()?.execution_mode,
         ))
     })?;
     drop(document_stage);
@@ -620,7 +644,19 @@ async fn execute(
         .ok_or("작업의 출력 설정이 올바르지 않습니다.")? as u32;
     // Pending attempts can outlive an application upgrade. Never run the current
     // prompt/configuration while recording an older semantic cache identity.
-    if job.key != key_for(job.key.document_id, job.key.revision_id, &model, max_tokens)? {
+    let execution_mode = job.model_identity["execution_mode"]
+        .as_str()
+        .unwrap_or("auto");
+    if execution_mode != current_execution_mode
+        || job.key
+            != key_for_mode(
+                job.key.document_id,
+                job.key.revision_id,
+                &model,
+                max_tokens,
+                execution_mode,
+            )?
+    {
         return Err("이전 버전의 분석 설정입니다. 현재 설정으로 다시 요청해 주세요.".into());
     }
     let root = data_dir.to_owned();
@@ -655,6 +691,7 @@ async fn execute(
     cancellation.check()?;
     let mut request = prompt;
     let mut validated = None;
+    let mut loaded_backend = None;
     for attempt in 1..=2 {
         if let Some(controller) = controller {
             controller.begin_attempt(job.id);
@@ -680,6 +717,11 @@ async fn execute(
         };
         cancellation.check()?;
         let generated = generated?;
+        loaded_backend = generated
+            .metrics
+            .loaded_backend
+            .clone()
+            .filter(|backend| ["cpu", "vulkan", "cuda", "metal"].contains(&backend.as_str()));
         if let Some(controller) = controller {
             controller.record_attempt(job.id, generated.metrics);
         }
@@ -711,6 +753,7 @@ async fn execute(
         partial: processed_chars != total_chars,
         processed_chars,
         total_chars,
+        loaded_backend,
     })
 }
 
@@ -734,33 +777,9 @@ fn verified_path(
     model: &AiModel,
     cancellation: &Cancellation,
 ) -> Result<PathBuf, String> {
-    let supplied = Path::new(&model.path);
-    let path = if model.ownership == "managed" {
-        if supplied.is_absolute()
-            || supplied
-                .components()
-                .any(|part| !matches!(part, Component::Normal(_)))
-        {
-            return Err("관리 모델 경로가 올바르지 않습니다.".into());
-        }
-        let root = root
-            .canonicalize()
-            .map_err(|_| "모델 저장 위치를 찾을 수 없습니다.")?;
-        let path = root
-            .join(supplied)
-            .canonicalize()
-            .map_err(|_| "모델 파일을 찾을 수 없습니다.")?;
-        if !path.starts_with(&root) {
-            return Err("모델 파일이 관리 저장 위치 밖에 있습니다.".into());
-        }
-        path
-    } else if model.ownership == "external" && supplied.is_absolute() {
-        supplied
-            .canonicalize()
-            .map_err(|_| "등록한 외부 모델 파일을 찾을 수 없습니다.")?
-    } else {
-        return Err("모델 등록 경로가 올바르지 않습니다.".into());
-    };
+    let path = super::model_storage::resolve_model_path(root, model)?
+        .canonicalize()
+        .map_err(|_| "모델 파일을 찾을 수 없습니다.")?;
     let mut file = std::fs::File::open(&path).map_err(|_| "모델 파일을 읽을 수 없습니다.")?;
     let metadata = file
         .metadata()
@@ -2143,6 +2162,7 @@ mod tests {
                 name: "deterministic test engine".into(),
                 ownership: "external".into(),
                 path: path.to_string_lossy().into_owned(),
+                storage_directory: None,
                 sha256: Some(format!("{:x}", Sha256::digest(bytes))),
                 expected_sha256: None,
                 expected_bytes: None,
@@ -2376,7 +2396,7 @@ fn main() {{
             } else {
                 "analysis_json_v1"
             };
-            other.configuration_hash = configuration_hash(limit, other_mode);
+            other.configuration_hash = configuration_hash(limit, other_mode, "auto");
             assert_ne!(current.configuration_hash, other.configuration_hash);
             assert!(store.ai_cached_result(&other)?.is_none());
             Ok(())
@@ -2647,6 +2667,7 @@ fn main() {{
             name: "fixture".into(),
             ownership: "external".into(),
             path: file.to_string_lossy().into_owned(),
+            storage_directory: None,
             sha256: Some(format!("{:x}", Sha256::digest(bytes))),
             expected_sha256: None,
             expected_bytes: None,
@@ -2663,6 +2684,23 @@ fn main() {{
         assert!(verified_path(directory.path(), &model, &Cancellation::default()).is_ok());
         let first = key_for(1, 1, &model, 1024).unwrap();
         assert_ne!(first, key_for(1, 1, &model, 2048).unwrap());
+        let cpu = key_for_mode(1, 1, &model, 1024, "cpu").unwrap();
+        let gpu = key_for_mode(1, 1, &model, 1024, "gpu").unwrap();
+        assert_ne!(first, cpu);
+        assert_ne!(first, gpu);
+        assert_ne!(cpu, gpu);
+        assert!(key_for_mode(1, 1, &model, 1024, "invalid").is_err());
+        let custom = directory.path().join("별도 모델 폴더");
+        std::fs::create_dir(&custom).unwrap();
+        let filename = format!("{}.gguf", model.sha256.as_ref().unwrap());
+        std::fs::copy(&file, custom.join(&filename)).unwrap();
+        model.ownership = "managed".into();
+        model.path = format!("models/{filename}");
+        model.storage_directory = Some(custom.to_string_lossy().into_owned());
+        assert_eq!(
+            verified_path(directory.path(), &model, &Cancellation::default()).unwrap(),
+            custom.join(filename).canonicalize().unwrap()
+        );
         model.sha256 = Some("0".repeat(64));
         assert!(verified_path(directory.path(), &model, &Cancellation::default()).is_err());
         model.ownership = "managed".into();

@@ -1,4 +1,6 @@
 pub mod lifecycle;
+#[cfg(windows)]
+mod windows_autostart;
 
 /// Own the application-data directory before recovering interrupted jobs. OS
 /// file locks are released on process termination; explicit unlock on drop also

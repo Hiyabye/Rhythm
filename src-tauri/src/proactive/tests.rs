@@ -178,6 +178,33 @@ fn notifications_are_discovered_without_scheduler_enablement() {
 }
 
 #[test]
+fn authorization_policy_matches_each_platform_sender() {
+    if cfg!(windows) {
+        for status in ["unavailable", "denied", "not_determined", "unknown"] {
+            assert!(!scheduler::notification_authorization_permits(
+                status, false
+            ));
+            assert!(!scheduler::notification_authorization_permits(status, true));
+        }
+        assert!(scheduler::notification_authorization_permits(
+            "authorized",
+            false
+        ));
+    } else {
+        for status in ["denied", "not_determined"] {
+            assert!(!scheduler::notification_authorization_permits(
+                status, false
+            ));
+            // Quiet hours still claim and defer so the events are not lost.
+            assert!(scheduler::notification_authorization_permits(status, true));
+        }
+        for status in ["authorized", "provisional", "ephemeral", "unavailable"] {
+            assert!(scheduler::notification_authorization_permits(status, false));
+        }
+    }
+}
+
+#[test]
 fn sensitivity_policies_suppress_cold_start_and_negative_signals() {
     let item = |has_preferences, score, explicit_interest_match, negative_feedback| {
         PersonalizationNotificationScore {
@@ -463,10 +490,13 @@ async fn pending_notification_responses_are_bounded_nonblocking_and_cancelled_on
     assert!(!response_tasks.is_full());
     assert!(!callback_ran.load(Ordering::Acquire));
 }
-#[test]
-fn final_notification_gate_defers_when_notifications_were_disabled_after_claim() {
+fn claimed_delivery_fixture() -> (
+    tempfile::TempDir,
+    std::sync::Arc<std::sync::Mutex<crate::storage::Store>>,
+    DeliveryItem,
+) {
     use crate::storage::{
-        proactive::{ProactiveClaim, ProactiveEventKey, ProactiveEventState},
+        proactive::{ProactiveClaim, ProactiveEventKey},
         Store,
     };
     use rusqlite::Connection;
@@ -536,12 +566,31 @@ fn final_notification_gate_defers_when_notifications_were_disabled_after_claim()
         attempt_count: claimed.attempt_count,
     };
 
-    settings.notifications_enabled = false;
-    store.proactive_save_settings(&settings).unwrap();
     let shared = Arc::new(Mutex::new(store));
-    assert!(scheduler::revalidate_delivery_batch(&shared, vec![item])
-        .unwrap()
-        .is_empty());
+    (directory, shared, item)
+}
+
+#[test]
+fn final_notification_gate_defers_when_notifications_were_disabled_after_claim() {
+    use crate::storage::proactive::ProactiveEventState;
+    let (_directory, shared, item) = claimed_delivery_fixture();
+    let event_id = item.event_id;
+    {
+        let store = shared.lock().unwrap();
+        let mut settings = store.proactive_settings().unwrap();
+        settings.notifications_enabled = false;
+        store.proactive_save_settings(&settings).unwrap();
+    }
+    scheduler::handoff_validated(
+        &shared,
+        vec![item],
+        &"aa".repeat(32),
+        |_, _| -> Result<(), String> {
+            panic!("disabled notifications must never reach OS preparation")
+        },
+        |_| panic!("disabled notifications must never reach OS handoff"),
+    )
+    .unwrap();
     let event = shared.lock().unwrap().proactive_event(event_id).unwrap();
     assert_eq!(event.state, ProactiveEventState::Deferred);
     assert_eq!(event.attempt_count, 0);
@@ -553,6 +602,135 @@ fn final_notification_gate_defers_when_notifications_were_disabled_after_claim()
             .unwrap(),
         0
     );
+}
+
+#[test]
+fn reserved_macos_batch_defers_disabled_notifications_and_reserves_enabled_ones() {
+    use crate::storage::proactive::ProactiveEventState;
+    let (_directory, shared, item) = claimed_delivery_fixture();
+    let event_id = item.event_id;
+    let set_enabled = |enabled| {
+        let store = shared.lock().unwrap();
+        let mut settings = store.proactive_settings().unwrap();
+        settings.notifications_enabled = enabled;
+        store.proactive_save_settings(&settings).unwrap();
+    };
+    set_enabled(false);
+    assert!(
+        scheduler::reserve_delivery_batch(&shared, vec![item.clone()])
+            .unwrap()
+            .is_empty()
+    );
+    let event = shared.lock().unwrap().proactive_event(event_id).unwrap();
+    assert_eq!(event.state, ProactiveEventState::Deferred);
+    assert_eq!(
+        shared
+            .lock()
+            .unwrap()
+            .proactive_recent_delivery_attempts(600)
+            .unwrap(),
+        0
+    );
+
+    let (_directory, shared, item) = claimed_delivery_fixture();
+    let reserved = scheduler::reserve_delivery_batch(&shared, vec![item]).unwrap();
+    assert_eq!(reserved.len(), 1);
+    assert_eq!(
+        shared
+            .lock()
+            .unwrap()
+            .proactive_recent_delivery_attempts(600)
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn settings_change_waits_until_validated_handoff_finishes() {
+    let (_directory, shared, item) = claimed_delivery_fixture();
+    let changing = shared.clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (changed_tx, changed_rx) = std::sync::mpsc::channel();
+    let mut worker = None;
+    scheduler::handoff_validated(
+        &shared,
+        vec![item],
+        &"bb".repeat(32),
+        |store, _| {
+            worker = Some(std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                let store = changing.lock().unwrap();
+                let mut settings = store.proactive_settings().unwrap();
+                settings.notifications_enabled = false;
+                store.proactive_save_settings(&settings).unwrap();
+                changed_tx.send(()).unwrap();
+            }));
+            started_rx.recv().unwrap();
+            assert!(matches!(
+                changed_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ));
+            assert!(store.proactive_settings().unwrap().notifications_enabled);
+            Ok(())
+        },
+        |_| Ok(()),
+    )
+    .unwrap();
+    worker.unwrap().join().unwrap();
+    changed_rx.recv().unwrap();
+    assert!(
+        !shared
+            .lock()
+            .unwrap()
+            .proactive_settings()
+            .unwrap()
+            .notifications_enabled
+    );
+}
+
+#[test]
+fn unavailable_before_show_defers_without_consuming_an_attempt() {
+    use crate::storage::proactive::ProactiveEventState;
+    let (_directory, shared, item) = claimed_delivery_fixture();
+    let event_id = item.event_id;
+    let result = scheduler::handoff_validated(
+        &shared,
+        vec![item],
+        &"cc".repeat(32),
+        |_, _| Err::<(), String>("Windows notifications unavailable".into()),
+        |_| panic!("Show must not run after preparation fails"),
+    );
+    assert!(result.is_err());
+    let store = shared.lock().unwrap();
+    let event = store.proactive_event(event_id).unwrap();
+    assert_eq!(event.state, ProactiveEventState::Deferred);
+    assert_eq!(event.attempt_count, 0);
+    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 0);
+    assert!(store
+        .notification_token_consume(&"cc".repeat(32))
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn failed_show_is_counted_as_an_attempt() {
+    let (_directory, shared, item) = claimed_delivery_fixture();
+    let event_id = item.event_id;
+    let result = scheduler::handoff_validated(
+        &shared,
+        vec![item],
+        &"dd".repeat(32),
+        |_, _| Ok(()),
+        |_| Err("Show failed".into()),
+    );
+    assert!(result.is_err());
+    let store = shared.lock().unwrap();
+    assert_eq!(store.proactive_event(event_id).unwrap().attempt_count, 1);
+    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 1);
+    assert!(store
+        .notification_token_consume(&"dd".repeat(32))
+        .unwrap()
+        .is_none());
 }
 
 #[derive(Clone, Default)]

@@ -3,7 +3,7 @@ use super::proactive::{
     ProactiveEventState, ProactiveOutcome, ProactiveSettings, ProactiveTaskInput, QuietHours,
     SchedulerOutcome,
 };
-use super::Store;
+use super::{Store, SCHEMA_VERSION};
 use rusqlite::{params, Connection};
 use std::path::Path;
 use tempfile::TempDir;
@@ -204,7 +204,7 @@ fn schema_six_upgrade_conservatively_migrates_populated_schema_five_attempts() {
     version_five_database(&path);
 
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.info().unwrap().schema_version, 6);
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
     assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 2);
     assert_eq!(
         count(&store, "SELECT COUNT(*) FROM proactive_events WHERE id=7"),
@@ -219,8 +219,43 @@ fn schema_six_upgrade_conservatively_migrates_populated_schema_five_attempts() {
     drop(store);
 
     let reopened = Store::open(&path).unwrap();
-    assert_eq!(reopened.info().unwrap().schema_version, 6);
+    assert_eq!(reopened.info().unwrap().schema_version, SCHEMA_VERSION);
     assert_eq!(reopened.proactive_recent_delivery_attempts(600).unwrap(), 2);
+}
+
+#[test]
+fn schema_seven_upgrade_preserves_schema_six_events_and_creates_tokens_table() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("rhythm.db");
+    version_five_database(&path);
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(include_str!(
+            "../../migrations/006_notification_attempts.sql"
+        ))
+        .unwrap();
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        6
+    );
+    drop(connection);
+
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM proactive_events WHERE id=7"),
+        1
+    );
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM notification_activation_tokens"
+        ),
+        0
+    );
+    assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 2);
 }
 
 #[test]
@@ -271,7 +306,7 @@ fn migration_five_is_additive_and_keeps_version_four_data() {
     version_four_database(&path);
 
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.info().unwrap().schema_version, 6);
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
     assert_eq!(store.settings().unwrap().theme, "dark");
     assert_eq!(store.settings().unwrap().energy_profile, "eco");
     assert_eq!(store.archive_summary().unwrap().documents, 2);
@@ -313,7 +348,7 @@ fn migration_five_is_additive_and_keeps_version_four_data() {
 
     drop(store);
     let reopened = Store::open(&path).unwrap();
-    assert_eq!(reopened.info().unwrap().schema_version, 6);
+    assert_eq!(reopened.info().unwrap().schema_version, SCHEMA_VERSION);
     assert_eq!(reopened.proactive_baseline().unwrap(), 2);
     assert_eq!(reopened.archive_summary().unwrap().documents, 2);
 }

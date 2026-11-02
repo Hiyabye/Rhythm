@@ -58,6 +58,7 @@ fn model(id: &str, ownership: &str, path: &str, bytes: &[u8]) -> AiModel {
         name: id.into(),
         ownership: ownership.into(),
         path: path.into(),
+        storage_directory: None,
         sha256: Some(digest(bytes)),
         expected_sha256: None,
         expected_bytes: None,
@@ -391,13 +392,17 @@ fn assert_database_consistent(path: &Path) {
         .unwrap();
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn populated_profile_round_trips_every_table_resource_and_model_decision() {
     let workspace = tempfile::tempdir().unwrap();
     let source = workspace.path().join("source");
     let mut store = populated_profile(&source);
     complete_job(&mut store);
+    rusqlite::Connection::open(source.join("rhythm.sqlite3")).unwrap().execute(
+        "INSERT INTO notification_activation_tokens(token_hash,attempts_json,expires_at) VALUES(?1,'[]','2999-01-01T00:00:00Z')",
+        ["a".repeat(64)],
+    ).unwrap();
 
     // Online snapshot while another connection keeps committing in WAL mode.
     let writer_path = source.join("rhythm.sqlite3");
@@ -512,20 +517,11 @@ fn populated_profile_round_trips_every_table_resource_and_model_decision() {
     let prior_rows = table_rows(&target.join("rhythm.sqlite3"));
     fs::create_dir_all(target.join("models")).unwrap();
     fs::write(target.join("models/managed.gguf"), MANAGED_WEIGHTS).unwrap();
-    let stage = target.join(STAGING);
-    let staged = extract_verified(&archive, &stage).unwrap();
-    fs::create_dir_all(stage.join("resources")).unwrap();
     let cancellation = BackupCancellation(AtomicU8::new(CANCELLABLE));
-    reconcile_model_inventory(&stage, &target.join("models"), &cancellation).unwrap();
-    validate_staged_database(
-        &stage,
-        staged.database_schema,
-        staged.documents,
-        staged.resources,
-    )
-    .unwrap();
-    let previous = format!("{PREVIOUS_PREFIX}populated");
-    write_journal(&target, &previous, true, &staged).unwrap();
+    stage_restore(&target, &archive, &cancellation).unwrap();
+    let journal: RestoreJournal =
+        serde_json::from_slice(&fs::read(target.join(JOURNAL)).unwrap()).unwrap();
+    let previous = journal.previous;
     let outcome = recover_pending_restore(&target).unwrap().unwrap();
     assert_eq!(
         outcome,
@@ -542,6 +538,17 @@ fn populated_profile_round_trips_every_table_resource_and_model_decision() {
     assert_database_consistent(&restored);
     let mut restored_rows = table_rows(&restored);
     let mut expected = source_rows.clone();
+    assert_eq!(
+        expected
+            .remove("notification_activation_tokens")
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(restored_rows
+        .remove("notification_activation_tokens")
+        .unwrap()
+        .is_empty());
     // The only intended difference: a managed model without matching local
     // weights is marked missing and stops being the active model.
     let models = |rows: &mut std::collections::BTreeMap<String, Vec<String>>| {
@@ -603,9 +610,201 @@ fn populated_profile_round_trips_every_table_resource_and_model_decision() {
     assert_eq!(reopened.backup_summary().unwrap(), (schema, 4));
 }
 
+#[cfg(any(unix, windows))]
+#[test]
+fn restored_custom_model_path_is_only_a_validated_hint_without_filesystem_access() {
+    let workspace = tempfile::tempdir().unwrap();
+    let unavailable = workspace.path().join("unavailable model drive");
+    let directory = unavailable.to_string_lossy();
+    let filename = format!("{}.gguf", "a".repeat(64));
+    let relative = format!("models/{filename}");
+    assert!(!unavailable.exists());
+    assert_eq!(
+        restored_custom_model_path(&directory, &relative),
+        Some(unavailable.join(&filename).to_string_lossy().into_owned())
+    );
+    assert!(!unavailable.exists());
+    for invalid in [
+        "models/../outside.gguf".to_owned(),
+        "models/user-file.gguf".to_owned(),
+        format!("models/{}.gguf", "A".repeat(64)),
+        format!("other/{filename}"),
+        unavailable.join(&filename).to_string_lossy().into_owned(),
+    ] {
+        assert_eq!(restored_custom_model_path(&directory, &invalid), None);
+    }
+    for invalid in [
+        "relative".to_owned(),
+        format!("{directory}\0hidden"),
+        unavailable.join("..").to_string_lossy().into_owned(),
+        format!("{directory}{}", "a".repeat(4097)),
+    ] {
+        assert_eq!(restored_custom_model_path(&invalid, &relative), None);
+    }
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn restore_revokes_custom_model_directory_ownership_without_touching_weights_or_results() {
+    let workspace = tempfile::tempdir().unwrap();
+    let source = workspace.path().join("source");
+    let mut store = populated_profile(&source);
+    complete_job(&mut store);
+    let custom = workspace.path().join("외부 모델 저장 폴더");
+    fs::create_dir_all(&custom).unwrap();
+    let custom_text = custom.to_string_lossy().into_owned();
+    let bytes = b"existing model outside the application data directory";
+    for (id, status) in [
+        ("custom-installed", "installed"),
+        ("custom-interrupted", "cancelled"),
+        ("custom-downloading", "downloading"),
+    ] {
+        let filename = format!("{}.gguf", digest(id.as_bytes()));
+        let path = custom.join(&filename);
+        fs::write(&path, bytes).unwrap();
+        fs::write(path.with_extension("part"), b"partial weights").unwrap();
+        let mut inventory = model(id, "managed", &format!("models/{filename}"), bytes);
+        inventory.storage_directory = Some(custom_text.clone());
+        inventory.status = status.into();
+        inventory.downloaded_bytes = 7;
+        inventory.resume_etag = Some("previous-etag".into());
+        store.ai_upsert_model(&inventory).unwrap();
+    }
+    let mut preferences = store.ai_preferences().unwrap();
+    preferences.active_model_id = Some("custom-installed".into());
+    preferences.model_directory = Some(custom_text);
+    store.ai_save_preferences(&preferences).unwrap();
+    let snapshot = workspace.path().join("snapshot.sqlite3");
+    store.backup_to(&snapshot).unwrap();
+    let source_rows = table_rows(&snapshot);
+    let (schema, documents) = store.backup_summary().unwrap();
+    let archive = workspace
+        .path()
+        .join("custom-model-directory.rhythm-backup");
+    create(
+        &archive,
+        &snapshot,
+        &source.join("resources"),
+        "1793500000".into(),
+        schema,
+        documents,
+    )
+    .unwrap();
+    drop(store);
+
+    let target = workspace.path().join("target");
+    drop(Store::open(&target.join("rhythm.sqlite3")).unwrap());
+    fs::create_dir_all(target.join("models")).unwrap();
+    fs::write(target.join("models/managed.gguf"), MANAGED_WEIGHTS).unwrap();
+    let cancellation = BackupCancellation(AtomicU8::new(CANCELLABLE));
+    stage_restore(&target, &archive, &cancellation).unwrap();
+    let outcome = recover_pending_restore(&target).unwrap().unwrap();
+    assert_eq!(outcome.models_needing_reinstall, 4);
+    let restored_path = target.join("rhythm.sqlite3");
+    assert_database_consistent(&restored_path);
+    let restored_rows = table_rows(&restored_path);
+    assert_eq!(restored_rows["ai_results"], source_rows["ai_results"]);
+    assert_eq!(restored_rows["ai_jobs"], source_rows["ai_jobs"]);
+    let restored = Store::open(&restored_path).unwrap();
+    assert_eq!(restored.ai_preferences().unwrap().model_directory, None);
+    assert_eq!(restored.ai_preferences().unwrap().active_model_id, None);
+    for id in [
+        "custom-installed",
+        "custom-interrupted",
+        "custom-downloading",
+    ] {
+        let inventory = restored.ai_model(id).unwrap().unwrap();
+        assert_eq!(inventory.ownership, "external");
+        assert_eq!(inventory.status, "missing");
+        assert_eq!(inventory.storage_directory, None);
+        let original = custom.join(format!("{}.gguf", digest(id.as_bytes())));
+        assert_eq!(Path::new(&inventory.path), original);
+        assert_eq!(inventory.resume_etag, None);
+        assert_eq!(inventory.downloaded_bytes, 0);
+        assert_eq!(inventory.sha256, Some(digest(bytes)));
+        // Removing restored registration metadata cannot remove these weights.
+        restored.ai_remove_model(id).unwrap();
+        assert_eq!(fs::read(&original).unwrap(), bytes);
+        assert_eq!(
+            fs::read(original.with_extension("part")).unwrap(),
+            b"partial weights"
+        );
+    }
+    assert_eq!(
+        restored.ai_model("managed").unwrap().unwrap().status,
+        "installed"
+    );
+    assert_eq!(
+        restored.ai_model("external").unwrap().unwrap().status,
+        "installed"
+    );
+    assert_eq!(
+        fs::read(target.join("models/managed.gguf")).unwrap(),
+        MANAGED_WEIGHTS
+    );
+}
+
+#[test]
+fn restore_reconciles_duplicate_custom_and_external_models_without_losing_files_or_history() {
+    let workspace = tempfile::tempdir().unwrap();
+    let staging = workspace.path().join("staging");
+    let mut store = populated_profile(&staging);
+    complete_job(&mut store);
+    let custom = workspace.path().join("중복 등록 모델");
+    fs::create_dir(&custom).unwrap();
+    let bytes = b"custom model also registered as an external reference";
+    let filename = format!("{}.gguf", digest(bytes));
+    let file = custom.join(&filename);
+    fs::write(&file, bytes).unwrap();
+    let canonical_directory = custom
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let canonical_file = file.canonicalize().unwrap().to_string_lossy().into_owned();
+    let mut managed = model(
+        "custom-duplicate",
+        "managed",
+        &format!("models/{filename}"),
+        bytes,
+    );
+    managed.storage_directory = Some(canonical_directory.clone());
+    store.ai_upsert_model(&managed).unwrap();
+    let external = model("same-file-external", "external", &canonical_file, bytes);
+    store.ai_upsert_model(&external).unwrap();
+    let mut preferences = store.ai_preferences().unwrap();
+    preferences.active_model_id = Some(managed.id.clone());
+    preferences.model_directory = Some(canonical_directory);
+    store.ai_save_preferences(&preferences).unwrap();
+    drop(store);
+    let database = staging.join("rhythm.sqlite3");
+    let before = table_rows(&database);
+    let cancellation = BackupCancellation(AtomicU8::new(CANCELLABLE));
+
+    reconcile_model_inventory(&staging, &workspace.path().join("models"), &cancellation).unwrap();
+
+    assert_database_consistent(&database);
+    let after = table_rows(&database);
+    assert_eq!(before["ai_results"], after["ai_results"]);
+    assert_eq!(before["ai_jobs"], after["ai_jobs"]);
+    let restored = Store::open(&database).unwrap();
+    assert!(restored.ai_model(&managed.id).unwrap().is_none());
+    let retained = restored.ai_model(&external.id).unwrap().unwrap();
+    assert_eq!(retained.path, canonical_file);
+    assert_eq!(retained.ownership, "external");
+    assert_eq!(retained.status, "installed");
+    assert_eq!(retained.sha256, external.sha256);
+    assert_eq!(retained.storage_directory, None);
+    assert_eq!(restored.ai_preferences().unwrap().active_model_id, None);
+    assert_eq!(restored.ai_preferences().unwrap().model_directory, None);
+    assert_eq!(fs::read(&file).unwrap(), bytes);
+    restored.ai_remove_model(&retained.id).unwrap();
+    assert_eq!(fs::read(&file).unwrap(), bytes);
+}
+
 /// Mirrors the rename order of `recover_pending_restore` to leave the data
 /// directory in each state a crash between two durable steps can produce.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn recovery_resumes_from_every_interruption_point_and_is_idempotent() {
     const STEPS: usize = 7;
@@ -750,10 +949,11 @@ fn manifest_for(entries: &[(&str, &[u8])]) -> Manifest {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn hostile_archives_are_rejected_without_writing_outside_staging() {
     let workspace = tempfile::tempdir().unwrap();
+    let absolute_escape = workspace.path().join("absolute-escape");
+    let absolute_name = absolute_escape.to_string_lossy().replace('\\', "/");
     let db_path = workspace.path().join("db.sqlite3");
     tests::database(&db_path, 0, None);
     let db = fs::read(&db_path).unwrap();
@@ -767,9 +967,9 @@ fn hostile_archives_are_rejected_without_writing_outside_staging() {
             "absolute path",
             vec![
                 Item::File("rhythm.sqlite3", &db),
-                Item::File("/tmp/rhythm-escape", payload),
+                Item::File(&absolute_name, payload),
             ],
-            manifest_for(&[("rhythm.sqlite3", &db), ("/tmp/rhythm-escape", payload)]),
+            manifest_for(&[("rhythm.sqlite3", &db), (&absolute_name, payload)]),
         ),
         (
             "parent traversal",
@@ -874,7 +1074,7 @@ fn hostile_archives_are_rejected_without_writing_outside_staging() {
             "{case} wrote {listed:?}"
         );
     }
-    assert!(!Path::new("/tmp/rhythm-escape").exists());
+    assert!(!absolute_escape.exists());
     assert!(!workspace.path().join("escape").exists());
 }
 
@@ -998,6 +1198,7 @@ fn write_populated_native_profile() {
 
 /// Streams every user table into one digest per table, so a large restored
 /// profile can be compared without holding its rows in memory.
+#[cfg(unix)]
 fn table_digests(path: &Path) -> std::collections::BTreeMap<String, (u64, String)> {
     let connection =
         rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -1031,6 +1232,7 @@ fn table_digests(path: &Path) -> std::collections::BTreeMap<String, (u64, String
         .collect()
 }
 
+#[cfg(unix)]
 fn directory_bytes(path: &Path) -> u64 {
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return 0;
@@ -1044,6 +1246,7 @@ fn directory_bytes(path: &Path) -> u64 {
         .sum()
 }
 
+#[cfg(unix)]
 fn bench_env(name: &str, default: u64) -> u64 {
     std::env::var(name)
         .ok()
@@ -1052,6 +1255,7 @@ fn bench_env(name: &str, default: u64) -> u64 {
 }
 
 /// Deterministic Korean notice text of roughly `chars` characters.
+#[cfg(unix)]
 fn korean_text(chars: usize, seed: u64) -> String {
     const WORDS: &[&str] = &[
         "장학금",
@@ -1098,6 +1302,7 @@ fn korean_text(chars: usize, seed: u64) -> String {
     text
 }
 
+#[cfg(unix)]
 const BENCH_SOURCES: &[&str] = &[
     "sogang-academic",
     "computing-academic",
@@ -1108,6 +1313,7 @@ const BENCH_SOURCES: &[&str] = &[
 ];
 
 /// Builds a large synthetic profile through the real Store APIs.
+#[cfg(unix)]
 fn generate_large_profile(root: &Path, documents: u64, resource_mib: u64) {
     let mut store = Store::open(&root.join("rhythm.sqlite3")).unwrap();
     store.catalog(&crate::archive::definitions()).unwrap();

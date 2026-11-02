@@ -188,7 +188,8 @@ async fn actual_archived_notice_evaluation() {
                 }
                 observation["wall_ms"] = json!(started.elapsed().as_millis());
                 observation["diagnostics"] = json!(controller.diagnostics(job_id));
-                observation["worker_rss_kib"] = json!(evaluation::worker_rss_kib(&local_worker));
+                observation["worker_rss_kib"] =
+                    json!(evaluation::worker_rss_kib(worker.lock().await.process_id()));
                 let (job, results) = {
                     let store = store.lock().unwrap();
                     (
