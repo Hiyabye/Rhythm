@@ -18,6 +18,8 @@ fn main() {
   if line.contains("\"shutdown\"") { break; }
   if gpu && mode=="fail" && !line.contains("\"status\"") {
    println!("{{\"version\":1,\"id\":{id},\"ok\":false,\"error\":\"GPU memory exhausted\"}}");
+  } else if gpu && mode=="oversize" && line.contains("\"infer\"") && line.contains("긴 공지") {
+   println!("{{\"version\":1,\"id\":{id},\"ok\":false,\"error\":\"GPU 분석 입력과 출력이 8192 토큰 한도를 넘습니다. 본문 길이를 줄이거나 CPU를 사용해 주세요.\"}}");
   } else if line.contains("\"infer\"") {
    let backend=if gpu {"vulkan"} else {"cpu"};
    println!("{{\"version\":1,\"id\":{id},\"ok\":true,\"result\":{{\"text\":\"한국어 결과\",\"loaded_backend\":\"{backend}\"}}}}");
@@ -148,4 +150,22 @@ async fn gpu_unlaunchable_binary_falls_back_without_starting_after_stop() {
     worker.stop().await;
     worker.refresh().await;
     assert!(worker.process_id().is_none());
+}
+
+#[tokio::test]
+async fn gpu_input_overflow_runs_that_request_on_cpu_then_returns_to_gpu() {
+    let dir = fixture("oversize");
+    let mut worker = Worker::launch_configured(&dir.path().join("rhythm-ai-worker.exe"), "auto");
+    assert_eq!(worker.refresh().await.state, "ready");
+    let long = worker
+        .infer_analysis(Path::new("test.gguf"), "긴 공지", 32)
+        .await
+        .unwrap();
+    assert_eq!(long.metrics.loaded_backend.as_deref(), Some("cpu"));
+    let next = worker
+        .infer_analysis(Path::new("test.gguf"), "짧은 공지", 32)
+        .await
+        .unwrap();
+    assert_eq!(next.metrics.loaded_backend.as_deref(), Some("vulkan"));
+    worker.shutdown().await;
 }

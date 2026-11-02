@@ -260,11 +260,19 @@ impl WorkerJob {
     }
 }
 
+/// Stable part of the GPU worker's context-overflow error (`gpu.rs`). It
+/// rejects the input, not the device, so auto mode retries only that request
+/// on CPU instead of moving the whole session off the GPU.
+const GPU_INPUT_LIMIT: &str = "토큰 한도를 넘습니다";
+
 pub struct Worker {
     executable: Option<PathBuf>,
     execution_mode: String,
     active_gpu: bool,
     fallback_reason: Option<String>,
+    // Set after one oversized request ran on CPU; the next request relaunches
+    // the GPU worker because the device itself did not fail.
+    return_to_gpu: bool,
     child: Option<Child>,
     input: Option<ChildStdin>,
     output: Option<BufReader<ChildStdout>>,
@@ -344,6 +352,14 @@ impl Worker {
         params: Value,
         deadline: Duration,
     ) -> Result<Value, String> {
+        if self.return_to_gpu && self.execution_mode == "auto" {
+            self.terminate().await;
+            let path = self
+                .executable
+                .clone()
+                .ok_or("AI 엔진 실행 파일 경로가 없습니다.")?;
+            *self = Self::launch_configured(&path, "auto");
+        }
         let result = self
             .request_params(method, params.clone(), deadline)
             .await
@@ -369,7 +385,9 @@ impl Worker {
             });
         if self.active_gpu && self.execution_mode == "auto" {
             if let Err(error) = result {
+                let input_only = error.contains(GPU_INPUT_LIMIT);
                 self.fallback_to_cpu(error).await?;
+                self.return_to_gpu = input_only;
                 // A new process has no outstanding request; never reuse a failed pipe.
                 return self.request_params(method, params, deadline).await;
             }
@@ -388,6 +406,7 @@ impl Worker {
             execution_mode: "cpu".into(),
             active_gpu: false,
             fallback_reason: None,
+            return_to_gpu: false,
             child: None,
             input: None,
             output: None,
@@ -529,7 +548,8 @@ impl Worker {
             .clone()
             .ok_or("AI 엔진 실행 파일 경로가 없습니다.")?;
         let mode = self.execution_mode.clone();
-        let reason = self.fallback_reason.clone();
+        // An input-only CPU retry is not a device failure; restart on GPU.
+        let reason = self.fallback_reason.clone().filter(|_| !self.return_to_gpu);
         *self = if reason.is_some() && mode == "auto" {
             Self::launch(&path)
         } else {

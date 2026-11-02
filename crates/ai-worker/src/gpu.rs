@@ -215,6 +215,7 @@ impl GpuModel {
         let vocab = self.model.vocab();
         let tokens = vocab.tokenize(prompt.as_bytes(), true, true);
         if !token_budget_fits(tokens.len(), params.max_tokens) {
+            // The app matches "토큰 한도를 넘습니다" to retry only this request on CPU.
             return Err("GPU 분석 입력과 출력이 8192 토큰 한도를 넘습니다. 본문 길이를 줄이거나 CPU를 사용해 주세요.".into());
         }
         let mut samplers = Vec::new();
