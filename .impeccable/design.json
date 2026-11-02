@@ -1,0 +1,685 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-02T10:33:41+00:00",
+  "title": "Design System: Rhythm",
+  "extensions": {
+    "colorMeta": {
+      "bg": {
+        "role": "neutral",
+        "displayName": "Window White",
+        "canonical": "#ffffff",
+        "purpose": "Content background (light).",
+        "darkToken": "bg-dark",
+        "darkValue": "#1e1e20",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ]
+      },
+      "bg-dark": {
+        "role": "neutral",
+        "displayName": "Window White (dark)",
+        "canonical": "#1e1e20",
+        "lightToken": "bg"
+      },
+      "sidebar": {
+        "role": "neutral",
+        "displayName": "Source-List Grey",
+        "canonical": "#f0f0f2",
+        "purpose": "Opaque sidebar background.",
+        "darkToken": "sidebar-dark",
+        "darkValue": "#29292c",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252526",
+          "#424243",
+          "#616162",
+          "#828284",
+          "#a5a5a6",
+          "#c9c9ca",
+          "#eeeeef"
+        ]
+      },
+      "sidebar-dark": {
+        "role": "neutral",
+        "displayName": "Source-List Grey (dark)",
+        "canonical": "#29292c",
+        "lightToken": "sidebar"
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Surface White",
+        "canonical": "#ffffff",
+        "purpose": "Controls and secondary buttons.",
+        "darkToken": "surface-dark",
+        "darkValue": "#232326",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ]
+      },
+      "surface-dark": {
+        "role": "neutral",
+        "displayName": "Surface White (dark)",
+        "canonical": "#232326",
+        "lightToken": "surface"
+      },
+      "pane": {
+        "role": "neutral",
+        "displayName": "Pane Tint",
+        "canonical": "#fafafb",
+        "purpose": "Week pane and banners.",
+        "darkToken": "pane-dark",
+        "darkValue": "#212124",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616162",
+          "#828283",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeef"
+        ]
+      },
+      "pane-dark": {
+        "role": "neutral",
+        "displayName": "Pane Tint (dark)",
+        "canonical": "#212124",
+        "lightToken": "pane"
+      },
+      "field": {
+        "role": "neutral",
+        "displayName": "Field White",
+        "canonical": "#ffffff",
+        "purpose": "Inputs and text areas.",
+        "darkToken": "field-dark",
+        "darkValue": "#2a2a2d",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ]
+      },
+      "field-dark": {
+        "role": "neutral",
+        "displayName": "Field White (dark)",
+        "canonical": "#2a2a2d",
+        "lightToken": "field"
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#1d1d1f",
+        "purpose": "Titles and body text.",
+        "darkToken": "text-dark",
+        "darkValue": "#f2f2f5",
+        "tonalRamp": [
+          "#0b0b0c",
+          "#252526",
+          "#424243",
+          "#616163",
+          "#828284",
+          "#a5a5a7",
+          "#c9c9ca",
+          "#eeeeef"
+        ]
+      },
+      "text-dark": {
+        "role": "neutral",
+        "displayName": "Ink (dark)",
+        "canonical": "#f2f2f5",
+        "lightToken": "text"
+      },
+      "text-2": {
+        "role": "neutral",
+        "displayName": "Soft Ink",
+        "canonical": "#3a3a3e",
+        "purpose": "Recommendation reasons, brand name, narrow-screen chip text.",
+        "darkToken": "text-2-dark",
+        "darkValue": "#d6d6db",
+        "tonalRamp": [
+          "#0b0b0c",
+          "#252527",
+          "#424245",
+          "#616165",
+          "#828286",
+          "#a5a5a8",
+          "#c9c9cb",
+          "#eeeef0"
+        ]
+      },
+      "text-2-dark": {
+        "role": "neutral",
+        "displayName": "Soft Ink (dark)",
+        "canonical": "#d6d6db",
+        "lightToken": "text-2"
+      },
+      "secondary": {
+        "role": "neutral",
+        "displayName": "Meta Grey",
+        "canonical": "#5c5c61",
+        "purpose": "Meta lines, notes, counts.",
+        "darkToken": "secondary-dark",
+        "darkValue": "#afafb5",
+        "tonalRamp": [
+          "#0b0b0c",
+          "#252527",
+          "#424245",
+          "#616165",
+          "#828287",
+          "#a4a4a8",
+          "#c9c9cc",
+          "#eeeef0"
+        ]
+      },
+      "secondary-dark": {
+        "role": "neutral",
+        "displayName": "Meta Grey (dark)",
+        "canonical": "#afafb5",
+        "lightToken": "secondary"
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Quiet Grey",
+        "canonical": "#68686d",
+        "purpose": "Placeholders, empty days, footnotes, AI date bars.",
+        "darkToken": "muted-dark",
+        "darkValue": "#9c9ca3",
+        "tonalRamp": [
+          "#0b0b0c",
+          "#252527",
+          "#424245",
+          "#616165",
+          "#828286",
+          "#a4a4a8",
+          "#c9c9cc",
+          "#eeeef0"
+        ]
+      },
+      "muted-dark": {
+        "role": "neutral",
+        "displayName": "Quiet Grey (dark)",
+        "canonical": "#9c9ca3",
+        "lightToken": "muted"
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#e4e4e7",
+        "purpose": "Separators and pane edges.",
+        "darkToken": "line-dark",
+        "darkValue": "#36363a",
+        "tonalRamp": [
+          "#0b0b0c",
+          "#252526",
+          "#424243",
+          "#616163",
+          "#828284",
+          "#a5a5a7",
+          "#c9c9ca",
+          "#eeeeef"
+        ]
+      },
+      "line-dark": {
+        "role": "neutral",
+        "displayName": "Hairline (dark)",
+        "canonical": "#36363a",
+        "lightToken": "line"
+      },
+      "line-strong": {
+        "role": "neutral",
+        "displayName": "Edge Line",
+        "canonical": "#cfcfd4",
+        "purpose": "Secondary button and label outlines.",
+        "darkToken": "line-strong-dark",
+        "darkValue": "#4a4a4f",
+        "tonalRamp": [
+          "#0b0b0c",
+          "#252527",
+          "#424244",
+          "#616165",
+          "#828286",
+          "#a5a5a8",
+          "#c9c9cb",
+          "#eeeef0"
+        ]
+      },
+      "line-strong-dark": {
+        "role": "neutral",
+        "displayName": "Edge Line (dark)",
+        "canonical": "#4a4a4f",
+        "lightToken": "line-strong"
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "System Blue",
+        "canonical": "#0a62d0",
+        "purpose": "Accent as text/icon: selection icons, unread dot, focus ring, pressed chips.",
+        "darkToken": "accent-dark",
+        "darkValue": "#6aa6ff",
+        "tonalRamp": [
+          "#000924",
+          "#002253",
+          "#073e87",
+          "#135cbe",
+          "#3a80e5",
+          "#6fa6f7",
+          "#a2cbff",
+          "#d5f1ff"
+        ]
+      },
+      "accent-dark": {
+        "role": "primary",
+        "displayName": "System Blue (dark)",
+        "canonical": "#6aa6ff",
+        "lightToken": "accent"
+      },
+      "accent-fill": {
+        "role": "primary",
+        "displayName": "System Blue Fill",
+        "canonical": "#0a62d0",
+        "purpose": "Accent as filled background: primary buttons, today circle.",
+        "darkToken": "accent-fill-dark",
+        "darkValue": "#2368d4",
+        "tonalRamp": [
+          "#000924",
+          "#002253",
+          "#073e87",
+          "#135cbe",
+          "#3a80e5",
+          "#6fa6f7",
+          "#a2cbff",
+          "#d5f1ff"
+        ]
+      },
+      "accent-fill-dark": {
+        "role": "primary",
+        "displayName": "System Blue Fill (dark)",
+        "canonical": "#2368d4",
+        "lightToken": "accent-fill"
+      },
+      "soft": {
+        "role": "primary",
+        "displayName": "Selection Tint",
+        "canonical": "#e3edfb",
+        "purpose": "Active sidebar row, pressed chips, text selection.",
+        "darkToken": "soft-dark",
+        "darkValue": "#233753",
+        "tonalRamp": [
+          "#090b0e",
+          "#22252b",
+          "#3d424a",
+          "#5a626d",
+          "#7b838e",
+          "#9fa6af",
+          "#c4cad1",
+          "#ebeff3"
+        ]
+      },
+      "soft-dark": {
+        "role": "primary",
+        "displayName": "Selection Tint (dark)",
+        "canonical": "#233753",
+        "lightToken": "soft"
+      },
+      "danger": {
+        "role": "tertiary",
+        "displayName": "Error Red",
+        "canonical": "#c0281c",
+        "purpose": "Error banners and destructive text.",
+        "darkToken": "danger-dark",
+        "darkValue": "#ff7c70",
+        "tonalRamp": [
+          "#1f0000",
+          "#4a0603",
+          "#7a160e",
+          "#ad281d",
+          "#d55040",
+          "#ee8272",
+          "#ffb1a3",
+          "#ffe0d6"
+        ]
+      },
+      "danger-dark": {
+        "role": "tertiary",
+        "displayName": "Error Red (dark)",
+        "canonical": "#ff7c70",
+        "lightToken": "danger"
+      },
+      "family-main": {
+        "role": "secondary",
+        "displayName": "Main Board Red",
+        "canonical": "#d0344a",
+        "purpose": "Main academic board swatch and event bar.",
+        "darkToken": "family-main-dark",
+        "darkValue": "#ff6b7d",
+        "tonalRamp": [
+          "#1f0003",
+          "#4a0411",
+          "#7a1224",
+          "#ae2339",
+          "#d64c59",
+          "#ee7f84",
+          "#ffafb0",
+          "#ffdede"
+        ]
+      },
+      "family-main-dark": {
+        "role": "secondary",
+        "displayName": "Main Board Red (dark)",
+        "canonical": "#ff6b7d",
+        "lightToken": "family-main"
+      },
+      "family-computing": {
+        "role": "secondary",
+        "displayName": "Computing Orange",
+        "canonical": "#d9730d",
+        "purpose": "Computing boards swatch and event bar.",
+        "darkToken": "family-computing-dark",
+        "darkValue": "#ffa24d",
+        "tonalRamp": [
+          "#1b0400",
+          "#421600",
+          "#6d2c00",
+          "#9c4400",
+          "#c16711",
+          "#db915c",
+          "#f4bc95",
+          "#ffe6cd"
+        ]
+      },
+      "family-computing-dark": {
+        "role": "secondary",
+        "displayName": "Computing Orange (dark)",
+        "canonical": "#ffa24d",
+        "lightToken": "family-computing"
+      },
+      "family-engineering": {
+        "role": "secondary",
+        "displayName": "Engineering Green",
+        "canonical": "#1c9a5f",
+        "purpose": "Engineering boards swatch and event bar.",
+        "darkToken": "family-engineering-dark",
+        "darkValue": "#3fcf8a",
+        "tonalRamp": [
+          "#001004",
+          "#002f16",
+          "#00512b",
+          "#007542",
+          "#319863",
+          "#6eb88c",
+          "#a3d8b6",
+          "#d7f8e2"
+        ]
+      },
+      "family-engineering-dark": {
+        "role": "secondary",
+        "displayName": "Engineering Green (dark)",
+        "canonical": "#3fcf8a",
+        "lightToken": "family-engineering"
+      },
+      "family-other": {
+        "role": "secondary",
+        "displayName": "Other Grey",
+        "canonical": "#8e8e93",
+        "purpose": "Fallback family swatch and bar.",
+        "darkToken": "family-other-dark",
+        "darkValue": "#98989f",
+        "tonalRamp": [
+          "#0b0b0c",
+          "#252527",
+          "#424245",
+          "#616165",
+          "#828286",
+          "#a4a4a8",
+          "#c9c9cb",
+          "#eeeef0"
+        ]
+      },
+      "family-other-dark": {
+        "role": "secondary",
+        "displayName": "Other Grey (dark)",
+        "canonical": "#98989f",
+        "lightToken": "family-other"
+      },
+      "hover": {
+        "role": "neutral",
+        "displayName": "Hover Wash",
+        "canonical": "rgb(0 0 0 / .045)",
+        "purpose": "Row and button hover background."
+      },
+      "hover-dark": {
+        "role": "neutral",
+        "displayName": "Hover Wash (dark)",
+        "canonical": "rgb(255 255 255 / .06)"
+      },
+      "accent-text": {
+        "role": "primary",
+        "displayName": "On-Accent White",
+        "canonical": "#ffffff",
+        "purpose": "Text on accent-fill only."
+      },
+      "accent-text-dark": {
+        "role": "primary",
+        "displayName": "On-Accent White (dark)",
+        "canonical": "#ffffff"
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Page title",
+        "purpose": "One per view, in the page header."
+      },
+      "headline": {
+        "displayName": "Pane heading",
+        "purpose": "나를 위한 소식, 최근 분석한 소식, 이번 주."
+      },
+      "title": {
+        "displayName": "Row title",
+        "purpose": "Pick titles (650 when unread) and recent-analysis summaries."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Sidebar items, banners, buttons; 13px base."
+      },
+      "meta": {
+        "displayName": "Meta",
+        "purpose": "Source/date lines, reasons, chips, counts; tabular numerals."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Sidebar group headings, weekday names; 400 for event meta and footnotes."
+      }
+    },
+    "shadows": [
+      {
+        "name": "segment-selected",
+        "value": "0 1px 3px #0000000a",
+        "purpose": "Selected segment in a segmented control."
+      },
+      {
+        "name": "switch-knob",
+        "value": "0 1px 2px #0002",
+        "purpose": "Switch knob."
+      },
+      {
+        "name": "save-notice",
+        "value": "0 4px 24px #0000000c",
+        "purpose": "Transient save notice only."
+      }
+    ],
+    "motion": [
+      {
+        "name": "control-fade",
+        "value": "background .15s, color .15s, border-color .15s",
+        "purpose": "Button and row hover/selection."
+      },
+      {
+        "name": "chip-reveal",
+        "value": "opacity .14s, background .14s, color .14s",
+        "purpose": "Feedback chips appearing on row hover/focus."
+      },
+      {
+        "name": "sync-spin",
+        "value": "rotate 1.4s linear infinite",
+        "purpose": "Refresh icon only while a sync runs."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "prefers-reduced-motion: reduce disables all animation and transition",
+        "purpose": "Accessibility."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "settings-wide",
+        "value": "1500px",
+        "note": "min-width; wider settings nav"
+      },
+      {
+        "name": "compact",
+        "value": "1100px",
+        "note": "max-width; 200px sidebar, week pane joins main column"
+      },
+      {
+        "name": "icon-sidebar",
+        "value": "800px",
+        "note": "max-width; 60px icon sidebar"
+      },
+      {
+        "name": "narrow",
+        "value": "640px",
+        "note": "max-width; chips always visible, below pick content"
+      },
+      {
+        "name": "small",
+        "value": "540px",
+        "note": "max-width; settings and empty-state reflow"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Filled accent action, 28px high.",
+      "html": "<button class=\"ds-button\">설정에서 시작하기</button>",
+      "css": ".ds-button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:28px;padding:5px 14px;border:1px solid var(--accent-fill,#0a62d0);background:var(--accent-fill,#0a62d0);color:var(--accent-text,#fff);border-radius:6px;font:500 13px/1.5 \"Pretendard Variable\",-apple-system,sans-serif;cursor:pointer;transition:background .15s,color .15s,border-color .15s}.ds-button:hover{filter:brightness(1.1)}.ds-button:focus-visible{outline:2px solid var(--accent,#0a62d0);outline-offset:2px}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Neutral outlined action.",
+      "html": "<button class=\"ds-button-secondary\">나중에</button>",
+      "css": ".ds-button-secondary{display:inline-flex;align-items:center;min-height:28px;padding:5px 14px;border:1px solid var(--line-strong,#cfcfd4);background:var(--surface,#fff);color:var(--text,#1d1d1f);border-radius:6px;font:500 13px/1.5 \"Pretendard Variable\",-apple-system,sans-serif;cursor:pointer;transition:background .15s}.ds-button-secondary:hover{background:var(--hover,rgb(0 0 0/.045))}.ds-button-secondary:focus-visible{outline:2px solid var(--accent,#0a62d0);outline-offset:2px}"
+    },
+    {
+      "name": "Source List",
+      "kind": "nav",
+      "refersTo": "source-item",
+      "description": "Sidebar primary items with count badge, group heading, organization sub-label and board rows with family swatch.",
+      "html": "<nav class=\"ds-sidebar\"><button class=\"ds-item ds-active\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"><circle cx=\"12\" cy=\"12\" r=\"4\"/><path d=\"M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4\"/></svg><span class=\"ds-label\">오늘</span></button><button class=\"ds-item\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"><path d=\"M4 4h16v16H4z\"/><path d=\"M4 14h4l2 3h4l2-3h4\"/></svg><span class=\"ds-label\">받은 소식</span><span class=\"ds-count\">12</span></button><p class=\"ds-group\">서강대학교 공지</p><p class=\"ds-org\">소프트웨어융합대학</p><button class=\"ds-item ds-board\"><span class=\"ds-swatch\"></span><span class=\"ds-label\">소식</span></button></nav>",
+      "css": ".ds-sidebar{width:232px;padding:18px 10px 12px;background:var(--sidebar,#f0f0f2);border-right:1px solid var(--line,#e4e4e7);display:grid;gap:1px;font-family:\"Pretendard Variable\",-apple-system,sans-serif}.ds-item{display:flex;align-items:center;gap:9px;width:100%;min-height:30px;padding:5px 10px;border:0;border-radius:6px;background:transparent;color:var(--text,#1d1d1f);font-size:13px;text-align:left;cursor:pointer;transition:background .15s}.ds-item svg{color:var(--accent,#0a62d0);flex-shrink:0}.ds-item:hover{background:var(--hover,rgb(0 0 0/.045))}.ds-item:focus-visible{outline:2px solid var(--accent,#0a62d0);outline-offset:2px}.ds-active{background:var(--soft,#e3edfb);font-weight:600}.ds-label{flex:1}.ds-count{font-size:12px;color:var(--secondary,#5c5c61);font-variant-numeric:tabular-nums}.ds-group{margin:18px 10px 4px;font-size:11px;font-weight:600;color:var(--secondary,#5c5c61)}.ds-org{margin:0;padding:6px 10px 1px 20px;font-size:11px;color:var(--muted,#68686d)}.ds-board{padding-left:20px}.ds-swatch{width:8px;height:8px;margin:0 4px;border-radius:2px;background:var(--family-computing,#d9730d)}"
+    },
+    {
+      "name": "Feedback Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Recommendation feedback toggle; pressed state uses the selection tint.",
+      "html": "<div class=\"ds-chips\"><button class=\"ds-chip\" aria-pressed=\"true\">관심 있어요</button><button class=\"ds-chip\" aria-pressed=\"false\">관심 없어요</button></div>",
+      "css": ".ds-chips{display:flex;gap:6px}.ds-chip{height:26px;padding:0 9px;border:0;border-radius:6px;background:transparent;font:12px \"Pretendard Variable\",-apple-system,sans-serif;color:var(--secondary,#5c5c61);cursor:pointer;transition:opacity .14s,background .14s,color .14s}.ds-chip:hover{background:var(--hover,rgb(0 0 0/.045))}.ds-chip:focus-visible{outline:2px solid var(--accent,#0a62d0);outline-offset:2px}.ds-chip[aria-pressed=true]{background:var(--soft,#e3edfb);color:var(--accent,#0a62d0);font-weight:600}"
+    },
+    {
+      "name": "Pick Row",
+      "kind": "custom",
+      "description": "Inset Today recommendation row: unread dot, title, family swatch meta line, reasons.",
+      "html": "<ul class=\"ds-picks\"><li><button class=\"ds-pick\"><span class=\"ds-title\"><span class=\"ds-dot\"></span><strong>장학금 신청 안내</strong></span><span class=\"ds-meta\"><span class=\"ds-sw\"></span>소프트웨어융합대학 소식 · 2026년 10월 24일 · 장학</span><span class=\"ds-reasons\">관심 분야: 장학 · 구독 중인 정보원</span></button></li></ul>",
+      "css": ".ds-picks{list-style:none;margin:0;padding:0;font-family:\"Pretendard Variable\",-apple-system,sans-serif}.ds-picks li{border-bottom:1px solid var(--line,#e4e4e7)}.ds-pick{display:grid;gap:3px;width:100%;margin:4px 0;padding:8px 10px 8px 20px;border:0;border-radius:8px;background:transparent;text-align:left;color:var(--text,#1d1d1f);cursor:pointer;transition:background .15s}.ds-pick:hover{background:var(--hover,rgb(0 0 0/.045))}.ds-pick:focus-visible{outline:2px solid var(--accent,#0a62d0);outline-offset:2px}.ds-title{position:relative;font-size:14px;line-height:1.45}.ds-title strong{font-weight:650}.ds-dot{position:absolute;left:-12px;top:.55em;width:7px;height:7px;border-radius:50%;background:var(--accent,#0a62d0)}.ds-meta{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--secondary,#5c5c61);font-variant-numeric:tabular-nums}.ds-sw{width:8px;height:8px;border-radius:2px;background:var(--family-computing,#d9730d)}.ds-reasons{font-size:12px;color:var(--text-2,#3a3a3e)}"
+    },
+    {
+      "name": "Week Day",
+      "kind": "custom",
+      "refersTo": "day-number-today",
+      "description": "Week pane day row: weekday, circled today number, events with family bar or dotted AI bar.",
+      "html": "<ol class=\"ds-week\"><li class=\"ds-day ds-today\"><span class=\"ds-dl\"><span class=\"ds-dn\">일</span><span class=\"ds-num\">25</span></span><ul class=\"ds-events\"><li><button class=\"ds-event\"><span class=\"ds-bar\"></span><span class=\"ds-et\">한국어 공지 01</span><span class=\"ds-em\">소프트웨어융합대학 소식</span></button></li><li><button class=\"ds-event ds-ai\"><span class=\"ds-bar\"></span><span class=\"ds-et\"><span class=\"ds-mark\">AI 참고 일정</span> 신청 마감</span><span class=\"ds-em\">원문 확인</span></button></li></ul></li></ol>",
+      "css": ".ds-week{list-style:none;margin:0;padding:0;width:300px;font-family:\"Pretendard Variable\",-apple-system,sans-serif}.ds-day{display:grid;grid-template-columns:58px minmax(0,1fr);gap:6px;padding:6px 0}.ds-dl{display:flex;align-items:center;gap:4px;height:30px}.ds-dn{font-size:11px;font-weight:600;color:var(--secondary,#5c5c61)}.ds-today .ds-dn{color:var(--accent,#0a62d0)}.ds-num{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}.ds-today .ds-num{background:var(--accent-fill,#0a62d0);color:var(--accent-text,#fff)}.ds-events{list-style:none;margin:0;padding:0;display:grid;gap:2px}.ds-event{display:grid;grid-template-columns:3px minmax(0,1fr);gap:1px 8px;width:100%;padding:5px 6px;border:0;border-radius:6px;background:transparent;text-align:left;color:var(--text,#1d1d1f);cursor:pointer}.ds-event:hover{background:var(--hover,rgb(0 0 0/.045))}.ds-event:focus-visible{outline:2px solid var(--accent,#0a62d0);outline-offset:2px}.ds-bar{grid-row:span 2;border-radius:2px;background:var(--family-computing,#d9730d)}.ds-ai .ds-bar{background:repeating-linear-gradient(var(--muted,#68686d) 0 3px,transparent 3px 6px)}.ds-et{font-size:12.5px;font-weight:500;line-height:1.4}.ds-em{font-size:11px;color:var(--secondary,#5c5c61)}.ds-mark{padding:0 4px;border:1px solid var(--line-strong,#cfcfd4);border-radius:4px;font-size:11px;font-weight:600;color:var(--secondary,#5c5c61)}"
+    },
+    {
+      "name": "Banner",
+      "kind": "card",
+      "refersTo": "banner",
+      "description": "Nonblocking shell banner on the pane tint; error variant uses danger text and border.",
+      "html": "<div class=\"ds-banner\"><div><strong>로컬 AI를 설정할 수 있습니다</strong><p>모델 없이도 읽기, 검색과 추천을 사용할 수 있습니다.</p></div><button class=\"ds-tb\">로컬 AI 설정하기</button></div>",
+      "css": ".ds-banner{display:flex;align-items:flex-start;gap:10px;padding:11px 14px;background:var(--pane,#fafafb);border:1px solid var(--line,#e4e4e7);border-radius:8px;font:13px/1.6 \"Pretendard Variable\",-apple-system,sans-serif;color:var(--text,#1d1d1f)}.ds-banner strong{font-weight:600}.ds-banner p{margin:1px 0 0;color:var(--secondary,#5c5c61)}.ds-tb{margin-left:auto;white-space:nowrap;border:0;background:transparent;padding:2px 4px;color:var(--accent,#0a62d0);font:inherit;cursor:pointer}.ds-tb:hover{text-decoration:underline;text-underline-offset:3px}.ds-tb:focus-visible{outline:2px solid var(--accent,#0a62d0);outline-offset:2px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "A native Mac app beside Things 3 and Fantastical",
+    "overview": "The visual system is a native macOS app drawn without irony, with Things 3 and Fantastical as the craft bar (standing user decision recorded in `PRODUCT.md`). The YAML frontmatter above is the normative token list; `.impeccable/design.json` carries the matching component snippets, motion and breakpoints. The shell (sidebar, page header, banners) and Today were redesigned in this system. Settings, the reader and the AI surfaces already use the same tokens but keep their earlier geometry and have not been redesigned yet.",
+    "keyCharacteristics": [
+      "macOS source-list sidebar with count badges, extension groups and board scope",
+      "One system-blue accent; calendar-style family colours always paired with text",
+      "Pretendard at system sizes on a 13px base, tabular numerals for every count and date",
+      "Flat depth: hairlines and tonal steps between bg, sidebar and pane",
+      "Native-quick 140–150ms fades; no decorative motion"
+    ],
+    "rules": [
+      {
+        "name": "The Tabular Count Rule",
+        "body": "Every count, date and time (sidebar badges, the Today subline, sync time, day numbers, meta lines) uses tabular numerals so columns and badges don't shift.",
+        "section": "typography"
+      },
+      {
+        "name": "The No-Kicker Rule",
+        "body": "No eyebrows, letter-spaced kickers, header notes or taglines above or around titles. The page title stands alone; context goes in the line below it.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Accent Rule",
+        "body": "Blue is the only chromatic UI colour. It marks selection, focus, the unread dot, today's date and primary actions, nothing else.",
+        "section": "colors"
+      },
+      {
+        "name": "The Colour-Plus-Text Rule",
+        "body": "A family colour always sits next to a text label (board name or source name). Colour identifies an institution at a glance; the text carries the meaning.",
+        "section": "colors"
+      },
+      {
+        "name": "The Fill-Versus-Text Rule",
+        "body": "White text goes on `--accent-fill`, never on `--accent`. Use `--accent` only for text and icons on neutral backgrounds.",
+        "section": "colors"
+      }
+    ],
+    "dos": [
+      "Do use `--accent-fill` behind white text and `--accent` for accent text and icons.",
+      "Do pair every family colour with its board or source name.",
+      "Do use tabular numerals for counts, dates and times.",
+      "Do keep feedback chips hidden until row hover/focus, visible when pressed, and always visible at 640 px and narrower."
+    ],
+    "donts": [
+      "Don't add eyebrows, letter-spaced kickers, header notes, taglines or stat tiles.",
+      "Don't introduce a second chromatic accent beyond the family marks.",
+      "Don't separate panes with shadows; use hairlines and tonal steps."
+    ]
+  }
+}

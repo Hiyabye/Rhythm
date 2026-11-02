@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>노선도</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1440px;height:900px;overflow:hidden;font:13px/1.4 -apple-system,"Apple SD Gothic Neo",sans-serif;color:#0E1A3A;background:#F7F8FA;display:grid;grid-template-columns:224px 1fr}
+.rail{background:#0E1A3A;color:#fff;padding:24px 16px;display:flex;flex-direction:column;gap:6px}
+.rail .b{font-weight:800;font-size:19px;margin-bottom:18px}
+.rail a{padding:7px 10px;border-radius:999px;font-weight:600;color:#C9D2EA}
+.rail a.on{background:#fff;color:#0E1A3A}
+.rail small{margin-top:18px;color:#7F8DB5;font-size:11px;font-weight:700}
+.l{display:flex;gap:8px;align-items:center;padding:4px 10px;font-size:12.5px}
+.l s{width:18px;height:6px;border-radius:3px}
+main{padding:26px 34px}
+h1{font-size:28px;font-weight:800}
+.map{position:relative;height:420px;margin:18px 0 10px;background:#fff;border-radius:10px;border:1px solid #DCE0EA}
+.line{position:absolute;left:60px;right:60px;height:8px;border-radius:4px}
+.st{position:absolute;top:0;bottom:0;width:1px}
+.dot{position:absolute;width:18px;height:18px;border-radius:50%;background:#fff;border:4px solid #0E1A3A;transform:translate(-50%,-50%)}
+.x{width:34px;height:34px;border-width:5px}
+.lab{position:absolute;font-size:12px;width:150px;transform:translateX(-50%);text-align:center}
+.lab b{display:block;font-size:15px}
+.tag{position:absolute;font-size:11.5px;background:#fff;border:1px solid #DCE0EA;border-radius:6px;padding:3px 7px;white-space:nowrap}
+h2{font-size:15px;font-weight:800;margin:14px 0 6px}
+.r{display:flex;gap:14px;padding:10px 0;border-bottom:1px solid #DCE0EA}
+.r b{font-size:14px}
+.r span{color:#55607E;font-size:12px}
+</style></head><body>
+<aside class="rail"><div class="b">Rhythm</div><a class="on">오늘</a><a>받은 소식</a><a>탐색</a><a>보관함</a><small>노선</small>
+<span class="l"><s style="background:#D7263D"></s>학부 학사공지</span><span class="l"><s style="background:#2457C5"></s>소프트웨어융합대학</span><span class="l"><s style="background:#1E9E5A"></s>공과대학</span><span class="l"><s style="background:#F2A900"></s>AI 참고 일정</span><a style="margin-top:auto">설정</a></aside>
+<main><h1>이번 주 노선 · 11월 2일 – 8일</h1>
+<div class="map">
+<div class="line" style="top:140px;background:#D7263D"></div>
+<div class="line" style="top:200px;background:#2457C5"></div>
+<div class="line" style="top:260px;background:#1E9E5A"></div>
+<div class="dot x" style="left:120px;top:200px"></div><div class="lab" style="left:120px;top:290px"><b>2 월</b>오늘 · 환승 3</div>
+<div class="dot" style="left:300px;top:200px"></div><div class="lab" style="left:300px;top:290px"><b>3 화</b></div>
+<div class="dot" style="left:480px;top:140px"></div><div class="lab" style="left:480px;top:290px"><b>4 수</b></div>
+<div class="dot" style="left:660px;top:200px"></div><div class="lab" style="left:660px;top:290px"><b>5 목</b></div>
+<div class="dot" style="left:840px;top:260px"></div><div class="lab" style="left:840px;top:290px"><b>6 금</b></div>
+<div class="dot" style="left:1020px;top:200px"></div><div class="lab" style="left:1020px;top:290px"><b>7 토</b></div>
+<div class="tag" style="left:80px;top:60px">새 · 수강철회 기간 안내</div>
+<div class="tag" style="left:80px;top:92px">새 · 동계 인턴십 모집</div>
+<div class="tag" style="left:420px;top:92px">AI · 수강철회 마감</div>
+<div class="tag" style="left:600px;top:226px">AI · 인턴십 서류 마감</div>
+<div class="tag" style="left:780px;top:330px">AI · 안전교육 기한</div>
+</div>
+<h2>오늘 먼저 볼 소식</h2>
+<div class="r"><b>1</b><div><b>2027 동계 인턴십 모집</b><br><span>관심 분야 인턴십 일치 · 소프트웨어융합대학 취업·인턴십</span></div></div>
+<div class="r"><b>2</b><div><b>2026-2 수강철회 기간 안내</b><br><span>프로필 학부생 · 학부 학사공지</span></div></div>
+</main></body></html>

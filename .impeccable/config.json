@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "design-system-font",
+        "value": "sfmono-regular",
+        "createdAt": "2026-11-02T10:36:49.112Z",
+        "reason": "agent triage: monospace stack on .storage-path code shows a filesystem path (code context), pre-existing, not a brand font"
+      }
+    ]
+  }
+}

@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>편성표</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1440px;height:900px;overflow:hidden;font:13px/1.4 -apple-system,"Apple SD Gothic Neo",sans-serif;color:#14161B;background:#FBFBFA;display:grid;grid-template-columns:232px 1fr;font-variant-numeric:tabular-nums}
+.rail{background:#1F3BB3;color:#fff;padding:22px 16px;display:flex;flex-direction:column;gap:22px}
+.brand{font-weight:800;font-size:19px;letter-spacing:-.01em;display:flex;gap:8px;align-items:center}
+.brand i{display:inline-block;width:4px;background:#fff;border-radius:2px;margin-right:2px}
+.nav a{display:flex;justify-content:space-between;padding:7px 10px;border-radius:6px;color:#DDE3FF;text-decoration:none;font-weight:600}
+.nav a.on{background:#fff;color:#1F3BB3}
+.nav a b{font-weight:700;font-size:12px}
+.grp{font-size:11px;font-weight:700;color:#A9B6F2;letter-spacing:.04em;margin:0 10px 6px}
+.ch{display:flex;align-items:center;gap:8px;padding:5px 10px;color:#EEF1FF;font-size:12.5px}
+.ch s{width:10px;height:10px;border-radius:2px;flex:none}
+.ch em{margin-left:auto;font-style:normal;color:#A9B6F2;font-size:11px}
+.add{margin:4px 10px;padding:6px 8px;border:1px dashed #6F84DA;border-radius:6px;color:#A9B6F2;font-size:11.5px}
+.foot{margin-top:auto;font-size:11.5px;color:#C8D1FA;border-top:1px solid #3C55C4;padding-top:12px;line-height:1.6}
+main{padding:22px 32px;display:flex;flex-direction:column;gap:18px;overflow:hidden}
+header{display:flex;align-items:flex-end;gap:20px;border-bottom:2px solid #14161B;padding-bottom:12px}
+header h1{font-size:30px;font-weight:800;letter-spacing:-.02em}
+header .sub{color:#4A4F5C;font-weight:600;padding-bottom:5px}
+.tabs{margin-left:auto;display:flex;border:1px solid #14161B;border-radius:6px;overflow:hidden}
+.tabs span{padding:6px 14px;font-weight:700;font-size:12.5px}
+.tabs .on{background:#14161B;color:#fff}
+.grid{display:grid;grid-template-columns:150px repeat(7,1fr);border:1px solid #14161B;border-radius:4px;overflow:hidden}
+.grid>div{border-right:1px solid #D5D7DC;border-bottom:1px solid #D5D7DC;padding:7px 8px;min-height:62px;font-size:12px}
+.grid .dh{min-height:0;padding:6px 8px;font-weight:700;background:#ECEDEF;border-bottom:1px solid #14161B;display:flex;gap:6px;align-items:baseline}
+.grid .dh big{font-size:20px;font-weight:800}
+.grid .t{background:#14161B;color:#fff;border-color:#2B2F38}
+.grid .dh.t{background:#14161B}
+.grid .lab{font-weight:700;display:flex;gap:7px;align-items:flex-start;background:#F3F3F1}
+.grid .lab s{width:4px;align-self:stretch;border-radius:2px}
+.grid .lab small{display:block;font-weight:500;color:#5A5F6B;font-size:11px}
+.p{display:block;margin-bottom:4px;line-height:1.3}
+.m{display:inline-block;font-size:10px;font-weight:800;border:1.5px solid currentColor;border-radius:3px;padding:0 3px;margin-right:4px;line-height:14px}
+.t .m{color:#fff}
+.ai{color:#5A5F6B}.t .ai{color:#C9CCD3}
+.new{color:#A6192E}.t .new{color:#FF8A9A}
+.chg{color:#B26B00}
+.below{display:grid;grid-template-columns:1fr 340px;gap:28px;min-height:0}
+h2{font-size:15px;font-weight:800;display:flex;gap:10px;align-items:baseline;border-bottom:2px solid #14161B;padding-bottom:6px;margin-bottom:2px}
+h2 span{font-size:12px;font-weight:600;color:#5A5F6B}
+.row{display:grid;grid-template-columns:34px 1fr 150px 128px;gap:12px;align-items:start;padding:10px 0;border-bottom:1px solid #D5D7DC}
+.row .n{font-size:22px;font-weight:800;line-height:1}
+.row strong{font-size:14px;display:block;margin-bottom:3px}
+.why{font-size:11.5px;color:#4A4F5C}
+.why b{font-weight:700;color:#14161B}
+.src{font-size:12px;display:flex;gap:6px;align-items:center}
+.src s{width:10px;height:10px;border-radius:2px}
+.fb{display:flex;gap:6px}.fb span{border:1px solid #9EA3AD;border-radius:5px;padding:3px 8px;font-size:11.5px;font-weight:600}
+.side{border:1px solid #D5D7DC;border-radius:4px;padding:14px;font-size:12.5px;display:flex;flex-direction:column;gap:10px;background:#fff}
+.side h3{font-size:13px;font-weight:800}
+.kv{display:flex;justify-content:space-between;border-bottom:1px dotted #C3C6CC;padding-bottom:6px}
+.kv b{font-size:16px}
+.note{font-size:11.5px;color:#5A5F6B}
+</style></head><body>
+<aside class="rail">
+  <div class="brand"><span><i style="height:10px"></i><i style="height:18px"></i><i style="height:14px"></i><i style="height:8px"></i></span>Rhythm</div>
+  <div class="nav"><a class="on">오늘 <b>11.2</b></a><a>받은 소식 <b>24</b></a><a>탐색</a><a>보관함 <b>7</b></a></div>
+  <div><div class="grp">채널 · 서강대학교 공지</div>
+    <div class="ch"><s style="background:#E8475F"></s>학부 학사공지<em>3</em></div>
+    <div class="ch"><s style="background:#6FA1FF"></s>소프트웨어융합대학<em>5</em></div>
+    <div class="ch"><s style="background:#3FC48A"></s>공과대학<em>4</em></div>
+    <div class="add">확장 기능을 켜면 채널이 여기에 추가됩니다</div>
+  </div>
+  <div class="foot">마지막 확인 14:20 · 새 공지 3<br>자동 동기화 30분 · 다음 14:50<br>설정</div>
+</aside>
+<main>
+  <header><h1>11월 2일 월요일</h1><span class="sub">이번 주 · 새 공지 9 · AI 참고 일정 4</span><div class="tabs"><span>지난 주</span><span class="on">이번 주</span><span>다음 주</span></div></header>
+  <div class="grid">
+    <div class="dh">채널</div>
+    <div class="dh t"><big>2</big>월 · 오늘</div><div class="dh"><big>3</big>화</div><div class="dh"><big>4</big>수</div><div class="dh"><big>5</big>목</div><div class="dh"><big>6</big>금</div><div class="dh"><big>7</big>토</div><div class="dh"><big>8</big>일</div>
+    <div class="lab"><s style="background:#A6192E"></s><span>학부 학사공지<small>서강대학교</small></span></div>
+    <div class="t"><span class="p"><span class="m new">새</span>2026-2 수강철회 기간 안내</span><span class="p"><span class="m">변경</span>겨울 계절학기 개설 과목</span></div>
+    <div></div><div><span class="p ai"><span class="m">AI</span>수강철회 마감 (원문 확인)</span></div><div></div><div></div><div></div><div></div>
+    <div class="lab"><s style="background:#1F5FD6"></s><span>소프트웨어융합대학<small>학사 · 대외 · 취업 외 2</small></span></div>
+    <div class="t"><span class="p"><span class="m new">새</span>2027 동계 인턴십 모집</span></div>
+    <div><span class="p">SW 캡스톤 중간 발표 일정</span></div><div></div>
+    <div><span class="p ai"><span class="m">AI</span>인턴십 서류 마감</span></div><div></div><div><span class="p">해커톤 참가 신청</span></div><div></div>
+    <div class="lab"><s style="background:#138A5B"></s><span>공과대학<small>일반 · 취업 · 학사 · 연구</small></span></div>
+    <div class="t"><span class="p"><span class="m new">새</span>학부연구생 모집 (전자공학)</span></div>
+    <div></div><div><span class="p">연구실 안전교육 이수 안내</span></div><div></div>
+    <div><span class="p ai"><span class="m">AI</span>안전교육 이수 기한</span></div><div></div><div></div>
+  </div>
+  <div class="below">
+    <section><h2>오늘 먼저 볼 소식 <span>관심 분야 · 저장 · 피드백 기준 정렬</span></h2>
+      <div class="row"><span class="n">1</span><div><strong>2027 동계 인턴십 모집</strong><span class="why"><b>관심 분야</b> 인턴십 일치 · <b>구독</b> 채널 · 오늘 게시</span></div><span class="src"><s style="background:#1F5FD6"></s>SW융합 취업·인턴십</span><span class="fb"><span>관심 있어요</span><span>관심 없어요</span></span></div>
+      <div class="row"><span class="n">2</span><div><strong>2026-2 수강철회 기간 안내</strong><span class="why"><b>프로필</b> 학부생 · <b>최근 수정</b> 1회</span></div><span class="src"><s style="background:#A6192E"></s>학부 학사공지</span><span class="fb"><span>관심 있어요</span><span>관심 없어요</span></span></div>
+    </section>
+    <aside class="side"><h3>채널 상태</h3>
+      <div class="kv"><span>보관된 공지</span><b>1,284</b></div>
+      <div class="kv"><span>읽지 않음</span><b>24</b></div>
+      <div class="kv"><span>공과대학 연구공지</span><span>과거 자료 이어받기 필요</span></div>
+      <p class="note">AI 표시는 로컬 모델이 원문에서 추출한 참고 일정입니다. 순위와 알림에는 쓰지 않습니다.</p>
+    </aside>
+  </div>
+</main>
+</body></html>

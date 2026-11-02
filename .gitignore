@@ -28,3 +28,6 @@ Thumbs.db
 
 # Local Claude Code skills, agents and hooks (Impeccable install)
 /.claude/
+
+# Impeccable review screenshots (regenerated per design review)
+/.impeccable/review/
