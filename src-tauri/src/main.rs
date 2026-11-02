@@ -38,6 +38,7 @@ pub(crate) struct AppState {
     pub(crate) ai_operation: intelligence::operations::Controller,
     maintenance_shutdown: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) operation_gate: Arc<operation_gate::AdmissionGate>,
+    pub(crate) restore_outcome: Option<backup::RestoreOutcome>,
 }
 
 pub(crate) struct AppMaintenanceGuard {
@@ -391,7 +392,22 @@ fn main() {
                     return Ok(());
                 }
             };
-            backup::recover_pending_restore(&data_root).map_err(std::io::Error::other)?;
+            let restore_outcome = match backup::recover_pending_restore(&data_root) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    // The journal and every previous file stay in place, so a later
+                    // launch retries. Explain instead of panicking out of setup.
+                    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+                    let handle = app.handle().clone();
+                    app.dialog()
+                        .message(format!("{error}\n\n기존 데이터는 삭제하지 않았습니다. Rhythm을 다시 열면 복원 마무리를 다시 시도합니다."))
+                        .title("백업 복원을 마무리하지 못했습니다")
+                        .kind(MessageDialogKind::Error)
+                        .show(move |_| handle.exit(1));
+                    return Ok(());
+                }
+            };
+            backup::remove_stale_backup_snapshots(&data_root);
             let store =
                 Store::open(&data_root.join("rhythm.sqlite3")).map_err(std::io::Error::other)?;
             store
@@ -463,6 +479,7 @@ fn main() {
                 ai_operation: intelligence::operations::Controller::default(),
                 maintenance_shutdown: maintenance_shutdown.clone(),
                 operation_gate,
+                restore_outcome,
             });
             tauri::async_runtime::spawn(intelligence::maintenance::run(
                 app.handle().clone(),
@@ -480,6 +497,8 @@ fn main() {
             backup::backup_inspect,
             backup::backup_restore,
             backup::backup_cancel,
+            backup::backup_restore_outcome,
+            updater::updater_configured,
             updater::updater_check,
             updater::updater_install,
             updater::updater_restart,

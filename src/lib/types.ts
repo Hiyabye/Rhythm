@@ -281,3 +281,11 @@ export interface SyncStatus {
   page: number;
   message: string;
 }
+
+/** A restore this launch finalized; mirrors `backup::RestoreOutcome`. */
+export interface RestoreOutcome {
+  documents: number;
+  resources: number;
+  unavailable_resources: number;
+  models_needing_reinstall: number;
+}

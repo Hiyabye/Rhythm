@@ -12,7 +12,7 @@
   import ProactiveSettings from './lib/ProactiveSettings.svelte';
   import './lib/ai.css';
   import { archiveError as message } from './lib/archive-format';
-  import type { EnergyProfile, Settings, Snapshot, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot } from './lib/types';
+  import type { EnergyProfile, Settings, Snapshot, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot, RestoreOutcome } from './lib/types';
 
   const navigation = [
     { id: 'today', label: '오늘', caption: '나에게 필요한 하루의 흐름' },
@@ -45,6 +45,7 @@
   let handledActivationEventId = 0;
   let handledActivationAt = 0;
   let setupNeeded = $state(false);
+  let restoreOutcome = $state<RestoreOutcome | null>(null);
   let noticesEnabled = $derived(snapshot?.extensions.some((extension) => extension.id === 'sogang_notices' && extension.enabled) ?? false);
   let theme = $state<Theme>('system');
   let systemDark = $state(false);
@@ -129,6 +130,8 @@
         const proactive = await invoke<ProactiveSnapshot>('proactive_snapshot');
         if (proactive.pending_activation) handleProactiveActivation(proactive.pending_activation);
       } catch { /* The archive remains usable if proactive state is unavailable. */ }
+      try { restoreOutcome = await invoke<RestoreOutcome | null>('backup_restore_outcome'); }
+      catch { /* A missing report must not block the restored archive. */ }
       try { setupNeeded = !(await invoke<AiSnapshot>('ai_snapshot')).preferences.setup_completed; }
       catch { /* AI availability must not prevent archive access. Settings exposes recovery. */ }
     } catch (reason) {
@@ -221,6 +224,7 @@
     <header class="page-header"><div><div class="eyebrow">{page === 'today' ? date : '나의 커맨드 센터'}</div><h1>{heading.label}</h1><p>{heading.caption}</p></div><span class="header-note"><Icon name="lock" size={14} /> 로컬 퍼스트</span></header>
     {#if !desktop && !loading}<div class="banner browser-notice" role="status"><Icon name="info" /><div><strong>데스크톱 앱에서 시작해 주세요</strong><p>브라우저에서는 화면만 둘러볼 수 있습니다. 설정 저장과 로컬 데이터 접근은 Rhythm 앱에서 사용할 수 있습니다.</p></div></div>{/if}
     {#if error}<div class="banner error" role="alert"><Icon name="info" /><div><strong>작업을 완료하지 못했습니다</strong><p>{error}</p></div>{#if !snapshot && desktop}<button class="text-button" onclick={load}>다시 시도</button>{/if}</div>{/if}
+    {#if restoreOutcome}<div class="banner" role="status"><Icon name="info" /><div><strong>백업 복원을 마쳤습니다</strong><p>공지 {restoreOutcome.documents.toLocaleString('ko-KR')}건과 첨부 자료 {restoreOutcome.resources.toLocaleString('ko-KR')}개를 복원하고 무결성을 확인했습니다.{#if restoreOutcome.unavailable_resources} 백업 당시 내려받지 못한 첨부 자료 {restoreOutcome.unavailable_resources.toLocaleString('ko-KR')}개는 포함되지 않았습니다.{/if}{#if restoreOutcome.models_needing_reinstall} 이 기기에 맞는 파일이 없는 AI 모델 {restoreOutcome.models_needing_reinstall.toLocaleString('ko-KR')}개는 다시 설치해야 합니다.{/if} 이전 데이터는 데이터 폴더에 복구용으로 보관되어 있습니다.</p></div><button class="text-button" onclick={() => restoreOutcome = null}>닫기</button></div>{/if}
     {#if desktop && setupNeeded && page !== 'settings'}<div class="banner ai-setup-banner" role="status"><Icon name="cpu" /><div><strong>나의 기기에서 공지의 핵심을 정리하세요</strong><p>로컬 AI 모델을 선택하면 한국어 요약과 일정의 근거를 확인할 수 있습니다. 준비 전이나 오프라인에서도 공지는 계속 읽을 수 있습니다.</p></div><button class="text-button" onclick={aiSettings}>로컬 AI 설정하기</button><button class="text-button" onclick={() => setupNeeded = false}>나중에</button></div>{/if}
     <div class="save-notice" class:visible={Boolean(notice)} role="status" aria-live="polite">{#if notice}<Icon name="check" size={15} />{notice}{/if}</div>
 

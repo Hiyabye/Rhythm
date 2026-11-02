@@ -31,6 +31,7 @@ test('backup restore inspects selected file before confirmation and only invokes
   await expect(backup.getByRole('heading', { name: '복원할 백업 확인', exact: true })).toBeVisible();
   await expect(backup).toContainText('형식 v1 · 데이터베이스 스키마 6 · 공지 12건 · 첨부 자료 3개');
   await expect(backup).toContainText('모델 가중치는 포함되지 않습니다.');
+  await expect(backup).toContainText('자동으로 다시 열리지 않으니 Rhythm을 직접 다시 열어 주세요.');
   expect(await callCount(page, 'backup_inspect')).toBe(1);
 
   const confirmations: string[] = [];
@@ -41,6 +42,10 @@ test('backup restore inspects selected file before confirmation and only invokes
   await backup.getByRole('button', { name: '이 백업으로 복원', exact: true }).click();
   await expect.poll(() => confirmations.length).toBe(1);
   expect(confirmations[0]).toContain('현재 Rhythm 데이터 전체');
+  expect(confirmations[0]).toContain('복구용으로 보관');
+  expect(confirmations[0]).toContain('Rhythm이 종료됩니다');
+  expect(confirmations[0]).toContain('직접 다시 열면 복원이 마무리됩니다');
+  expect(confirmations[0]).not.toContain('다시 시작');
   expect(await callCount(page, 'backup_restore')).toBe(0);
   await expect(backup.getByRole('heading', { name: '복원할 백업 확인', exact: true })).toBeVisible();
 
@@ -87,19 +92,36 @@ test('backup preview can be cancelled without invoking restore', async ({ page }
   expect(await callCount(page, 'backup_restore')).toBe(0);
 });
 
-test('updater reports a missing signing key instead of showing a successful no-update result', async ({ page }) => {
-  await mockDesktop(page, { updaterCheckError: '업데이트 공개 키가 설정되지 않았습니다.' });
+test('unconfigured updater shows manual update guidance instead of a failing check', async ({ page }) => {
+  await mockDesktop(page);
+  await page.goto('/');
+  const updater = await openUpdater(page);
+
+  await expect(updater.getByRole('status')).toContainText('공식 채널이 설정되어 있지 않습니다');
+  await expect(updater.getByRole('listitem')).toHaveCount(4);
+  await expect(updater).toContainText('Rhythm을 완전히 종료합니다.');
+  await expect(updater).toContainText('보관한 공지, 설정, AI 모델은 앱과 별도로 저장되어 그대로 유지됩니다.');
+  await expect(updater.getByRole('button', { name: '업데이트 확인', exact: true })).toHaveCount(0);
+  await expect(updater.getByRole('alert')).toHaveCount(0);
+  await expect(updater).toContainText('0.9.1');
+  expect(await callCount(page, 'updater_configured')).toBe(1);
+  expect(await callCount(page, 'updater_check')).toBe(0);
+});
+
+test('configured updater reports genuine check failures', async ({ page }) => {
+  await mockDesktop(page, { updaterConfigured: true, updaterCheckError: '업데이트 정보를 확인하지 못했습니다: 네트워크 오류' });
   await page.goto('/');
   const updater = await openUpdater(page);
   await updater.getByRole('button', { name: '업데이트 확인', exact: true }).click();
 
-  await expect(updater.getByRole('alert')).toContainText('업데이트 공개 키가 설정되지 않았습니다.');
+  await expect(updater.getByRole('alert')).toContainText('업데이트 정보를 확인하지 못했습니다');
   await expect(updater.getByText('현재 최신 버전을 사용하고 있습니다.', { exact: true })).toHaveCount(0);
+  await expect(updater.getByRole('listitem')).toHaveCount(0);
   expect(await callCount(page, 'updater_check')).toBe(1);
 });
 
 test('updater installation errors remain recoverable', async ({ page }) => {
-  await mockDesktop(page, { updaterInstallError: true });
+  await mockDesktop(page, { updaterConfigured: true, updaterInstallError: true });
   await page.goto('/');
   const updater = await openUpdater(page);
   await updater.getByRole('button', { name: '업데이트 확인', exact: true }).click();
@@ -112,7 +134,7 @@ test('updater installation errors remain recoverable', async ({ page }) => {
 });
 
 test('updater asks before restart both after staging and when restarting is chosen', async ({ page }) => {
-  await mockDesktop(page);
+  await mockDesktop(page, { updaterConfigured: true });
   await page.goto('/');
   const updater = await openUpdater(page);
   await updater.getByRole('button', { name: '업데이트 확인', exact: true }).click();
@@ -141,7 +163,7 @@ test('updater asks before restart both after staging and when restarting is chos
 });
 
 test('restart failure is surfaced after explicit confirmation', async ({ page }) => {
-  await mockDesktop(page, { updaterRestartError: true });
+  await mockDesktop(page, { updaterConfigured: true, updaterRestartError: true });
   await page.goto('/');
   const updater = await openUpdater(page);
   await updater.getByRole('button', { name: '업데이트 확인', exact: true }).click();
@@ -150,4 +172,32 @@ test('restart failure is surfaced after explicit confirmation', async ({ page })
 
   await expect(updater.getByRole('alert')).toContainText('업데이트를 적용하며 다시 시작하지 못했습니다.');
   expect(await callCount(page, 'updater_restart')).toBe(1);
+});
+
+test('a finalized restore is reported once the reopened window loads', async ({ page }) => {
+  await mockDesktop(page, { restoreOutcome: { documents: 1240, resources: 37, unavailable_resources: 2, models_needing_reinstall: 1 } });
+  await page.goto('/');
+  const banner = page.getByRole('status').filter({ hasText: '백업 복원을 마쳤습니다' });
+  await expect(banner).toContainText('공지 1,240건과 첨부 자료 37개를 복원하고 무결성을 확인했습니다.');
+  await expect(banner).toContainText('내려받지 못한 첨부 자료 2개는 포함되지 않았습니다.');
+  await expect(banner).toContainText('AI 모델 1개는 다시 설치해야 합니다.');
+  await banner.getByRole('button', { name: '닫기', exact: true }).click();
+  await expect(banner).toHaveCount(0);
+});
+
+test('a complete restore without gaps reports no missing items', async ({ page }) => {
+  await mockDesktop(page, { restoreOutcome: { documents: 3, resources: 0, unavailable_resources: 0, models_needing_reinstall: 0 } });
+  await page.goto('/');
+  const banner = page.getByRole('status').filter({ hasText: '백업 복원을 마쳤습니다' });
+  await expect(banner).toContainText('공지 3건과 첨부 자료 0개를 복원하고 무결성을 확인했습니다.');
+  await expect(banner).not.toContainText('다시 설치');
+  await expect(banner).not.toContainText('포함되지 않았습니다');
+});
+
+test('ordinary launches show no restore report', async ({ page }) => {
+  await mockDesktop(page);
+  await page.goto('/');
+  await expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible();
+  expect(await callCount(page, 'backup_restore_outcome')).toBe(1);
+  await expect(page.getByText('백업 복원을 마쳤습니다', { exact: true })).toHaveCount(0);
 });

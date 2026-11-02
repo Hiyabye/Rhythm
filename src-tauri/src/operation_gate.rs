@@ -142,6 +142,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn second_maintenance_is_rejected_until_the_first_finishes_or_fails() {
+        let gate = Arc::new(AdmissionGate::default());
+        let first = gate.close().unwrap().acquire().await.unwrap();
+        assert!(gate.close().is_err());
+        assert!(gate.shared().await.is_err());
+        drop(first);
+        // A failed operation releases its guard the same way.
+        let failed: Result<(), String> = async {
+            let _second = gate.close()?.acquire().await?;
+            Err("simulated restore validation failure".into())
+        }
+        .await;
+        assert!(failed.is_err());
+        assert!(gate.ensure_open().is_ok());
+        assert!(gate.close().is_ok());
+    }
+
+    #[tokio::test]
     async fn cancelled_exclusive_wait_reopens_admission() {
         let gate = Arc::new(AdmissionGate::default());
         let lease = gate.shared().await.unwrap();

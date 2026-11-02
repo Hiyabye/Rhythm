@@ -44,6 +44,9 @@ export interface FixtureOptions {
   notificationRequestError?: boolean;
   backupInspectError?: boolean;
   backupRestoreError?: boolean;
+  restoreOutcome?: { documents: number; resources: number; unavailable_resources: number; models_needing_reinstall: number };
+  // Real builds embed no update key; only explicit tests exercise a configured channel.
+  updaterConfigured?: boolean;
   updaterCheckError?: string;
   updaterInstallError?: boolean;
   updaterRestartError?: boolean;
@@ -183,12 +186,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (options.backupRestoreError) throw '백업 데이터를 복원하지 못했습니다.';
             return null;
           case 'backup_cancel': return true;
+          case 'backup_restore_outcome': return options.restoreOutcome ?? null;
+          case 'updater_configured': return options.updaterConfigured ?? false;
           case 'updater_check':
             if (options.updaterCheckError) throw options.updaterCheckError;
-            return options.updateAvailable === false ? null : { version: '0.9.1', currentVersion: '0.9.0', date: null, body: '안정 버전 업데이트' };
+            return options.updateAvailable === false ? null : { version: '0.9.2', currentVersion: '0.9.1', date: null, body: '안정 버전 업데이트' };
           case 'updater_install':
             if (options.updaterInstallError) throw '서명된 업데이트를 설치하지 못했습니다.';
-            return { version: '0.9.1', currentVersion: '0.9.0', date: null, body: '안정 버전 업데이트' };
+            return { version: '0.9.2', currentVersion: '0.9.1', date: null, body: '안정 버전 업데이트' };
           case 'updater_restart':
             if (options.updaterRestartError) throw '업데이트를 적용하며 다시 시작하지 못했습니다.';
             return null;

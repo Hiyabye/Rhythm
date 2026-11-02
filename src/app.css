@@ -767,6 +767,15 @@ h3 {
   background: var(--accent-text);
 }
 
+.manual-update {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.7;
+  word-break: keep-all;
+}
+
 .footnote {
   font-size: 10px;
   color: var(--muted);

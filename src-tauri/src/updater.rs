@@ -54,8 +54,14 @@ fn info(update: &Update) -> UpdateInfo {
 pub(crate) fn signing_key_configured(key: Option<&str>) -> bool {
     key.is_some_and(|key| !key.trim().is_empty())
 }
+/// Whether this build embeds a trusted update key. Without one the updater
+/// plugin is not registered and Settings shows the manual update procedure.
+#[tauri::command]
+pub fn updater_configured() -> bool {
+    signing_key_configured(option_env!("RHYTHM_UPDATER_PUBKEY"))
+}
 fn ensure_signing_key() -> Result<(), String> {
-    if signing_key_configured(option_env!("RHYTHM_UPDATER_PUBKEY")) {
+    if updater_configured() {
         Ok(())
     } else {
         Err("공식 업데이트 서명 키가 앱에 구성되지 않았습니다. 이 빌드에서는 업데이트를 사용할 수 없습니다.".into())
@@ -232,6 +238,12 @@ mod tests {
             .find_map(|field| field.strip_prefix("version:"));
         assert_eq!(version, Some("2.0.0"));
         assert_ne!(version, Some("3.0.0"));
+    }
+
+    #[test]
+    fn settings_show_the_built_application_version() {
+        let settings = include_str!("../../src/lib/UpdaterSettings.svelte");
+        assert!(settings.contains(&format!("<span>{}</span>", env!("CARGO_PKG_VERSION"))));
     }
 
     #[test]

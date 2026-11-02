@@ -235,11 +235,20 @@ fn hash_file(
     }
     Ok((size, format!("{:x}", hash.finalize())))
 }
+/// A downloaded resource row with its database-recorded size and SHA-256.
+struct ReferencedResource {
+    name: String,
+    path: PathBuf,
+    bytes: u64,
+    sha256: String,
+}
+/// Lists distinct downloaded resources and rejects unsafe or linked paths.
+/// Content is verified against the recorded digest while it is archived.
 fn referenced_resources(
     database: &Path,
     resources_root: &Path,
     cancellation: Option<&BackupCancellation>,
-) -> Result<Vec<(String, PathBuf)>, String> {
+) -> Result<Vec<ReferencedResource>, String> {
     let connection =
         rusqlite::Connection::open_with_flags(database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|_| "백업 데이터베이스를 확인하지 못했습니다.")?;
@@ -248,8 +257,8 @@ fn referenced_resources(
     let mut rows = query
         .query([])
         .map_err(|_| "백업 첨부 자료 목록을 확인하지 못했습니다.")?;
-    let mut files = Vec::new();
-    let mut seen: HashMap<String, (i64, String)> = HashMap::new();
+    let mut files: Vec<ReferencedResource> = Vec::new();
+    let data_root = resources_root.parent().unwrap_or(resources_root);
     while let Some(row) = rows
         .next()
         .map_err(|_| "백업 첨부 자료 목록을 확인하지 못했습니다.")?
@@ -267,21 +276,14 @@ fn referenced_resources(
         if !valid_path(&name) || name == "rhythm.sqlite3" || expected_bytes < 0 {
             return Err("첨부 자료 경로가 안전하지 않습니다.".into());
         }
-        if let Some((size, hash)) = seen.get(&name) {
-            if *size != expected_bytes || hash != &expected_hash {
+        // Rows are ordered by path, so repeated references are adjacent.
+        if let Some(previous) = files.last().filter(|item| item.name == name) {
+            if previous.bytes != expected_bytes as u64 || previous.sha256 != expected_hash {
                 return Err("같은 첨부 경로를 가리키는 데이터베이스 정보가 서로 다릅니다.".into());
             }
             continue;
         }
-        seen.insert(name.clone(), (expected_bytes, expected_hash.clone()));
-        let path = resources_root
-            .parent()
-            .unwrap_or(resources_root)
-            .join(&name);
-        let mut current = resources_root
-            .parent()
-            .unwrap_or(resources_root)
-            .to_path_buf();
+        let mut current = data_root.to_path_buf();
         for part in Path::new(&name).components() {
             if let Component::Normal(component) = part {
                 current.push(component);
@@ -292,11 +294,12 @@ fn referenced_resources(
                 }
             }
         }
-        let (actual_bytes, actual_hash) = hash_file(&path, cancellation)?;
-        if actual_bytes != expected_bytes as u64 || actual_hash != expected_hash {
-            return Err("보관된 첨부 자료가 데이터베이스와 일치하지 않습니다.".into());
-        }
-        files.push((name, path));
+        files.push(ReferencedResource {
+            path: data_root.join(&name),
+            name,
+            bytes: expected_bytes as u64,
+            sha256: expected_hash,
+        });
     }
     Ok(files)
 }
@@ -353,56 +356,21 @@ fn create_cancellable(
 ) -> Result<BackupPreview, String> {
     check_cancellation(Some(cancellation))?;
     validate_snapshot_summary(snapshot, database_schema, documents)?;
-    let mut sources = vec![("rhythm.sqlite3".to_owned(), snapshot.to_owned())];
-    sources.extend(referenced_resources(
-        snapshot,
-        resources_root,
-        Some(cancellation),
-    )?);
+    let mut sources = vec![("rhythm.sqlite3".to_owned(), snapshot.to_owned(), None)];
+    sources.extend(
+        referenced_resources(snapshot, resources_root, Some(cancellation))?
+            .into_iter()
+            .map(|item| (item.name, item.path, Some((item.bytes, item.sha256)))),
+    );
     if sources.len() > MAX_ENTRIES {
         return Err("백업에 포함된 파일이 너무 많습니다.".into());
     }
     let mut seen = HashSet::new();
-    let mut entries = Vec::with_capacity(sources.len());
-    let mut total = 0u64;
-    let mut resource_bytes = 0u64;
-    for (name, path) in &sources {
+    for (name, _, _) in &sources {
         if !valid_path(name) || !seen.insert(name.as_str()) {
             return Err("백업 파일 경로가 중복되었거나 올바르지 않습니다.".into());
         }
-        check_cancellation(Some(cancellation))?;
-        let (bytes, sha256) = hash_file(path, Some(cancellation))?;
-        total = total
-            .checked_add(bytes)
-            .ok_or("백업 전체 크기가 올바르지 않습니다.")?;
-        if total > MAX_TOTAL {
-            return Err("백업 전체 크기가 허용 범위를 초과했습니다.".into());
-        }
-        if name.starts_with("resources/") {
-            resource_bytes += bytes;
-        }
-        entries.push(Entry {
-            path: name.clone(),
-            bytes,
-            sha256,
-        });
     }
-    if !seen.contains("rhythm.sqlite3") {
-        return Err("데이터베이스 스냅샷이 없습니다.".into());
-    }
-    let resources = entries
-        .iter()
-        .filter(|e| e.path.starts_with("resources/"))
-        .count() as u64;
-    let manifest = Manifest {
-        format_version: FORMAT_VERSION,
-        created_at,
-        database_schema,
-        documents,
-        resources,
-        resource_bytes,
-        entries,
-    };
     if destination.exists() {
         return Err("같은 이름의 파일이 이미 있습니다. 다른 저장 위치를 선택해 주세요.".into());
     }
@@ -426,17 +394,19 @@ fn create_cancellable(
     let options = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Deflated)
         .large_file(true);
-    zip.start_file(MANIFEST, options)
-        .map_err(|_| "백업 압축 파일을 만들지 못했습니다.")?;
-    serde_json::to_writer(&mut zip, &manifest).map_err(|_| "백업 정보를 기록하지 못했습니다.")?;
-    let mut buffer = [0u8; COPY_BUFFER];
-    for ((name, source), entry) in sources.iter().zip(&manifest.entries) {
-        if name != &entry.path {
-            return Err("백업 파일 목록이 변경되었습니다.".into());
-        }
+    // Each file is read once: archived bytes are hashed as they are written and
+    // resources must match the digest the database recorded for them. Readers
+    // locate the manifest by name, so it is written last with the final digests.
+    let mut buffer = vec![0u8; COPY_BUFFER];
+    let mut entries = Vec::with_capacity(sources.len());
+    let mut total = 0u64;
+    let mut resource_bytes = 0u64;
+    for (name, source, expected) in &sources {
+        check_cancellation(Some(cancellation))?;
+        let mut input = File::open(source)
+            .map_err(|_| "백업할 파일을 열지 못했습니다. 파일 권한을 확인해 주세요.")?;
         zip.start_file(name.as_str(), options)
             .map_err(|_| "백업 압축 파일을 만들지 못했습니다.")?;
-        let mut input = File::open(source).map_err(|_| "백업할 파일을 다시 열지 못했습니다.")?;
         let mut hash = Sha256::new();
         let mut bytes = 0u64;
         loop {
@@ -447,15 +417,43 @@ fn create_cancellable(
             if n == 0 {
                 break;
             }
-            bytes += n as u64;
+            bytes = bytes
+                .checked_add(n as u64)
+                .filter(|bytes| *bytes <= MAX_ENTRY)
+                .ok_or("백업 파일 하나가 허용 크기를 초과했습니다.")?;
             hash.update(&buffer[..n]);
             zip.write_all(&buffer[..n])
                 .map_err(|_| "백업 파일을 기록하지 못했습니다. 저장 공간을 확인해 주세요.")?;
         }
-        if bytes != entry.bytes || format!("{:x}", hash.finalize()) != entry.sha256 {
-            return Err("백업 자료가 생성 중 변경되어 무결성 확인에 실패했습니다.".into());
+        let sha256 = format!("{:x}", hash.finalize());
+        if let Some((expected_bytes, expected_hash)) = expected {
+            if bytes != *expected_bytes || &sha256 != expected_hash {
+                return Err("보관된 첨부 자료가 데이터베이스와 일치하지 않습니다.".into());
+            }
+            resource_bytes += bytes;
         }
+        total = total
+            .checked_add(bytes)
+            .filter(|total| *total <= MAX_TOTAL)
+            .ok_or("백업 전체 크기가 허용 범위를 초과했습니다.")?;
+        entries.push(Entry {
+            path: name.clone(),
+            bytes,
+            sha256,
+        });
     }
+    let manifest = Manifest {
+        format_version: FORMAT_VERSION,
+        created_at,
+        database_schema,
+        documents,
+        resources: sources.len() as u64 - 1,
+        resource_bytes,
+        entries,
+    };
+    zip.start_file(MANIFEST, options)
+        .map_err(|_| "백업 압축 파일을 만들지 못했습니다.")?;
+    serde_json::to_writer(&mut zip, &manifest).map_err(|_| "백업 정보를 기록하지 못했습니다.")?;
     let file = zip
         .finish()
         .map_err(|_| "백업 파일을 마무리하지 못했습니다. 저장 공간을 확인해 주세요.")?;
@@ -665,10 +663,13 @@ fn extract_verified_cancellable(
 }
 
 #[cfg(test)]
+#[path = "backup_tests.rs"]
+mod populated_tests;
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    fn database(path: &Path, document_count: u64, resource: Option<(&str, &[u8])>) {
+    pub(super) fn database(path: &Path, document_count: u64, resource: Option<(&str, &[u8])>) {
         let connection = rusqlite::Connection::open(path).unwrap();
         connection.execute_batch("CREATE TABLE documents(id INTEGER PRIMARY KEY); CREATE TABLE resources(local_path TEXT,bytes INTEGER,sha256 TEXT,status TEXT); PRAGMA user_version=6;").unwrap();
         for id in 1..=document_count {
@@ -689,7 +690,7 @@ mod tests {
                 .unwrap();
         }
     }
-    fn journal_preview(resources: u64) -> BackupPreview {
+    pub(super) fn journal_preview(resources: u64) -> BackupPreview {
         BackupPreview {
             format_version: 1,
             created_at: "test".into(),
@@ -1604,9 +1605,66 @@ fn sync_tree(_root: &Path, directory: &Path) -> Result<(), String> {
     sync_directory(directory)
 }
 
+/// What a completed next-launch restore installed, for the reopened window.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(crate) struct RestoreOutcome {
+    documents: u64,
+    /// Distinct verified resource files restored.
+    resources: u64,
+    /// Resource rows the backup itself recorded as not downloaded.
+    unavailable_resources: u64,
+    /// Managed models whose local weights did not match the restored inventory.
+    models_needing_reinstall: u64,
+}
+
+fn restore_outcome(root: &Path, journal: &RestoreJournal) -> Result<RestoreOutcome, String> {
+    let connection = rusqlite::Connection::open_with_flags(
+        root.join("rhythm.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|_| "복원된 데이터베이스를 열지 못했습니다.")?;
+    let count = |sql: &str| -> Result<u64, String> {
+        connection
+            .query_row(sql, [], |row| row.get::<_, i64>(0))
+            .map(|value| value.max(0) as u64)
+            .map_err(|_| "복원 결과를 확인하지 못했습니다.".to_owned())
+    };
+    let has_models = count(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='ai_models')",
+    )? == 1;
+    Ok(RestoreOutcome {
+        documents: journal.documents,
+        resources: journal.resources,
+        unavailable_resources: count("SELECT COUNT(*) FROM resources WHERE status<>'downloaded'")?,
+        models_needing_reinstall: if has_models {
+            count("SELECT COUNT(*) FROM ai_models WHERE ownership='managed' AND status='missing'")?
+        } else {
+            0
+        },
+    })
+}
+
+/// Stale online-backup snapshots are private to an interrupted `backup_create`.
+pub(crate) fn remove_stale_backup_snapshots(root: &Path) {
+    let Ok(items) = fs::read_dir(root) else {
+        return;
+    };
+    for item in items.flatten() {
+        let name = item.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(".rhythm-backup-")
+            && name.ends_with(".sqlite3")
+            && item.file_type().is_ok_and(|kind| kind.is_file())
+        {
+            let _ = fs::remove_file(item.path());
+        }
+    }
+}
+
 /// Called after the process lock is acquired and before Store::open. Each rename
 /// is recoverable from the journal and previous files remain available.
-pub(crate) fn recover_pending_restore(root: &Path) -> Result<(), String> {
+/// Returns what was installed when this launch finished a pending restore.
+pub(crate) fn recover_pending_restore(root: &Path) -> Result<Option<RestoreOutcome>, String> {
     let journal = root.join(JOURNAL);
     if !restore_durability_supported() && journal.exists() {
         return Err("이 플랫폼은 복원 상태의 파일 시스템 내구성을 보장하지 않아 자동 복원을 중단했습니다. 원본 파일은 변경하지 않았습니다.".into());
@@ -1614,7 +1672,7 @@ pub(crate) fn recover_pending_restore(root: &Path) -> Result<(), String> {
     if !journal.exists() {
         let _ = fs::remove_file(root.join(".rhythm-restore-journal.tmp"));
         let _ = fs::remove_dir_all(root.join(STAGING));
-        return Ok(());
+        return Ok(None);
     }
     let data: RestoreJournal =
         serde_json::from_slice(&fs::read(&journal).map_err(|_| "복원 상태를 읽지 못했습니다.")?)
@@ -1630,7 +1688,7 @@ pub(crate) fn recover_pending_restore(root: &Path) -> Result<(), String> {
         return Err("복원 상태 버전 또는 복구 경로가 올바르지 않습니다.".into());
     }
     let stage = root.join(STAGING);
-    let previous = root.join(data.previous);
+    let previous = root.join(&data.previous);
     if fs::symlink_metadata(&previous).is_ok_and(|meta| meta.file_type().is_symlink()) {
         return Err("기존 데이터 복구 폴더가 안전하지 않습니다.".into());
     }
@@ -1712,10 +1770,20 @@ pub(crate) fn recover_pending_restore(root: &Path) -> Result<(), String> {
     File::open(&live_db)
         .and_then(|f| f.sync_all())
         .map_err(|_| "복원 데이터베이스를 저장하지 못했습니다.")?;
+    let outcome = restore_outcome(root, &data)?;
     let _ = fs::remove_dir_all(&stage);
     fs::remove_file(journal).map_err(|_| "복원 상태를 정리하지 못했습니다.")?;
     sync_directory(root)?;
-    Ok(())
+    Ok(Some(outcome))
+}
+
+/// The restore this launch finalized, if any; it stays available for the
+/// whole session so a remounted window still reports it.
+#[tauri::command]
+pub(crate) fn backup_restore_outcome(
+    state: tauri::State<'_, crate::AppState>,
+) -> Option<RestoreOutcome> {
+    state.restore_outcome.clone()
 }
 
 #[tauri::command]
@@ -1734,7 +1802,7 @@ pub(crate) async fn backup_restore(
     require_restore_durability_support(restore_durability_supported())?;
     let maintenance = state.exclusive_maintenance().await?;
     let root = state.data_root.clone();
-    let app_for_restart = app.clone();
+    let app_for_exit = app.clone();
     tokio::task::spawn_blocking(move || {
         let _registration = registration;
         check_cancellation(Some(&cancellation))?;
@@ -1781,8 +1849,12 @@ pub(crate) async fn backup_restore(
             result
         })();
         if output.is_ok() || root.join(JOURNAL).exists() {
+            // Keep maintenance closed until exit. The restore is finalized by the
+            // next launch; Rhythm does not relaunch itself because a relaunched
+            // instance can race this process for the single-instance socket and
+            // data-directory lock and then exit silently.
             std::mem::forget(maintenance);
-            app_for_restart.restart();
+            app_for_exit.exit(0);
         }
         output
     }).await.map_err(|_| "복원 준비를 마치지 못했습니다.".to_owned())??;

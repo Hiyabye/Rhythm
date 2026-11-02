@@ -159,8 +159,10 @@ impl Store {
         let mut target = Connection::open(destination).map_err(|e| e.to_string())?;
         let backup = rusqlite::backup::Backup::new(&self.connection, &mut target)
             .map_err(|e| e.to_string())?;
+        // The caller holds the only connection's mutex, so no writer can run
+        // between steps; pausing would only extend the time the store is locked.
         backup
-            .run_to_completion(128, std::time::Duration::from_millis(50), None)
+            .run_to_completion(i32::MAX, std::time::Duration::ZERO, None)
             .map_err(|e| e.to_string())?;
         drop(backup);
         target
