@@ -83,7 +83,7 @@ jobs:
           fi
 
   signed-bundles:
-    name: macOS Apple Silicon updater artifacts
+    name: Developer ID notarized macOS Apple Silicon artifacts
     needs: validate
     runs-on: macos-14
     defaults:
@@ -106,8 +106,32 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: npm ci
-      - name: Build signed bundles for this runner architecture
+      - name: Import Developer ID certificate and notarization key
         env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          set -euo pipefail
+          test -n "$APPLE_CERTIFICATE" && test -n "$APPLE_CERTIFICATE_PASSWORD" && test -n "$APPLE_API_KEY_CONTENT"
+          keychain="$RUNNER_TEMP/rhythm-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/developer-id.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          umask 077
+          printf '%s' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/notary-key.p8"
+          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/notary-key.p8" >> "$GITHUB_ENV"
+      - name: Build, Developer ID sign, notarize and staple
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RHYTHM_UPDATER_PUBKEY: ${{ secrets.RHYTHM_UPDATER_PUBKEY }}
@@ -115,53 +139,24 @@ jobs:
           test -n "$TAURI_SIGNING_PRIVATE_KEY"
           test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
           test -n "$RHYTHM_UPDATER_PUBKEY"
-          npm run desktop:build -- --bundles app dmg --config '{"bundle":{"createUpdaterArtifacts":true}}'
-      - name: Stage signed updater bundle, DMG and metadata
+          node scripts/macos-release.mjs --updater
+      - name: Verify updater signature, bundle contents and stage assets
+        env:
+          RHYTHM_UPDATER_PUBKEY: ${{ secrets.RHYTHM_UPDATER_PUBKEY }}
         run: |
-          node <<'NODE'
-          const fs = require('node:fs');
-          const path = require('node:path');
-          const root = 'target/release/bundle';
-          const output = 'release-assets';
-          fs.mkdirSync(output, { recursive: true });
-          const files = [];
-          const dmgs = [];
-          function walk(dir) {
-            if (!fs.existsSync(dir)) return;
-            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-              const full = path.join(dir, entry.name);
-              if (entry.isDirectory()) walk(full);
-              else if (entry.isFile() && entry.name.endsWith('.sig')) files.push(full);
-              else if (entry.isFile() && entry.name.endsWith('.dmg')) dmgs.push(full);
-            }
-          }
-          walk(root);
-          if (process.platform !== 'darwin' || process.arch !== 'arm64') {
-            throw new Error(`Release artifacts require Apple Silicon macOS; received ${process.platform}/${process.arch}`);
-          }
-          const os = 'darwin';
-          const arch = 'aarch64';
-          const platforms = {};
-          for (const sigPath of files) {
-            const assetPath = sigPath.slice(0, -4);
-            const asset = path.basename(assetPath);
-            const signature = fs.readFileSync(sigPath, 'utf8').trim();
-            if (!fs.existsSync(assetPath)) throw new Error(`Missing artifact for signature: ${assetPath}`);
-            if (!signature) throw new Error(`Empty updater signature: ${sigPath}`);
-            if (!asset.endsWith('.app.tar.gz')) continue;
-            const target = `${os}-${arch}-app`;
-            if (platforms[target]) throw new Error(`Duplicate updater target: ${target}`);
-            fs.copyFileSync(assetPath, path.join(output, asset));
-            fs.copyFileSync(sigPath, path.join(output, `${asset}.sig`));
-            platforms[target] = { asset, signature };
-          }
-          if (!platforms[`darwin-${arch}-app`]) throw new Error(`No signed Apple Silicon macOS updater bundle found under ${root}`);
-          if (dmgs.length !== 1) throw new Error(`Expected exactly one DMG under ${root}; found ${dmgs.length}`);
-          fs.copyFileSync(dmgs[0], path.join(output, path.basename(dmgs[0])));
-          platforms[`darwin-${arch}`] = platforms[`darwin-${arch}-app`];
-          fs.writeFileSync(path.join(output, `platforms-${os}-${arch}.json`), JSON.stringify({ os, arch, platforms }, null, 2));
-          console.log(`Staged ${Object.keys(platforms).join(', ')}`);
-          NODE
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          source=target/release/bundle/notarized
+          mkdir release-assets
+          shopt -s nullglob
+          dmgs=("$source"/*.dmg)
+          test "${#dmgs[@]}" -eq 1
+          test "$(basename "${dmgs[0]}")" = "Rhythm_${version}_aarch64.dmg"
+          cp "${dmgs[0]}" "$source/Rhythm.app.tar.gz" "$source/Rhythm.app.tar.gz.sig" release-assets/
+          # Cryptographic check of the exact staged bytes; a non-empty .sig alone is not accepted.
+          node scripts/verify-update.mjs artifact --artifact release-assets/Rhythm.app.tar.gz --version "$version"
+          node scripts/verify-update.mjs bundle --archive release-assets/Rhythm.app.tar.gz --version "$version"
+          node -e 'const fs=require("node:fs");const signature=fs.readFileSync("release-assets/Rhythm.app.tar.gz.sig","utf8").trim();fs.writeFileSync("release-assets/platforms-darwin-aarch64.json",JSON.stringify({asset:"Rhythm.app.tar.gz",signature}))'
       - uses: actions/upload-artifact@v4
         with:
           name: rhythm-signed-macos-arm64
@@ -175,6 +170,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    environment:
+      name: release-signing
     env:
       RELEASE_TAG: ${{ inputs.tag }}
       RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
@@ -205,18 +202,10 @@ jobs:
           const worker = fs.readFileSync('crates/ai-worker/Cargo.toml', 'utf8').match(/^version\s*=\s*"([^"]+)"/m)?.[1];
           if (tag !== `v${version}` || packageLock !== version || tauri !== version || cargo !== version || worker !== version) throw new Error('Release tag/version metadata changed or do not match.');
           const root = 'release-assets';
-          const platforms = {};
-          for (const name of fs.readdirSync(root)) {
-            if (!name.startsWith('platforms-') || !name.endsWith('.json')) continue;
-            const record = JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'));
-            for (const [target, item] of Object.entries(record.platforms)) {
-              if (platforms[target]) throw new Error(`Duplicate updater target: ${target}`);
-              const url = `https://github.com/${process.env.GH_REPO}/releases/download/${tag}/${encodeURIComponent(item.asset)}`;
-              platforms[target] = { url, signature: item.signature };
-            }
-            fs.rmSync(path.join(root, name));
-          }
-          if (!platforms['darwin-aarch64-app']) throw new Error('Missing the signed Apple Silicon macOS updater target.');
+          const record = JSON.parse(fs.readFileSync(path.join(root, 'platforms-darwin-aarch64.json'), 'utf8'));
+          fs.rmSync(path.join(root, 'platforms-darwin-aarch64.json'));
+          const url = `https://github.com/${process.env.GH_REPO}/releases/download/${tag}/${encodeURIComponent(record.asset)}`;
+          const platforms = { 'darwin-aarch64': { url, signature: record.signature }, 'darwin-aarch64-app': { url, signature: record.signature } };
           const manifest = { version, notes: `Rhythm ${version}`, pub_date: new Date().toISOString(), platforms };
           fs.writeFileSync(path.join(root, 'latest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
           const files = fs.readdirSync(root).filter((name) => name !== 'SHA256SUMS').sort();
@@ -224,6 +213,10 @@ jobs:
           fs.writeFileSync(path.join(root, 'SHA256SUMS'), sums);
           console.log(`Prepared ${tag} metadata for ${Object.keys(platforms).join(', ')}`);
           NODE
+      - name: Verify the stable manifest against the staged artifact
+        env:
+          RHYTHM_UPDATER_PUBKEY: ${{ secrets.RHYTHM_UPDATER_PUBKEY }}
+        run: node scripts/verify-update.mjs manifest --manifest release-assets/latest.json --assets release-assets --version "${RELEASE_TAG#v}" --repo "$GH_REPO" --tag "$RELEASE_TAG"
       - name: Refuse overwrite and create draft only
         env:
           GH_TOKEN: ${{ github.token }}
@@ -238,5 +231,5 @@ jobs:
           fi
           mapfile -t assets < <(find release-assets -maxdepth 1 -type f -print | sort)
           test "${#assets[@]}" -gt 0
-          gh release create "$RELEASE_TAG" "${assets[@]}" --repo "$GH_REPO" --draft --verify-tag --title "$RELEASE_TAG" --notes "Draft generated from signed updater artifacts. Review signatures, SHA256SUMS, platform coverage, and release notes before publishing."
+          gh release create "$RELEASE_TAG" "${assets[@]}" --repo "$GH_REPO" --draft --verify-tag --title "$RELEASE_TAG" --notes "Draft generated from Developer ID signed, notarized and stapled artifacts whose updater signature was verified against the configured public key. Review SHA256SUMS and release notes before publishing."
 
