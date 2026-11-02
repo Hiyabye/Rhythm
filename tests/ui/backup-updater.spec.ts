@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { mockDesktop, callCount } from './fixture';
+import { mockDesktop, callCount, answerDialogs, dialogMessages } from './fixture';
 
 type FixtureWindow = Window & { __fixture: { calls: { command: string; args: Record<string, unknown> }[] } };
 
@@ -34,13 +34,10 @@ test('backup restore inspects selected file before confirmation and only invokes
   await expect(backup).toContainText('자동으로 다시 열리지 않으니 Rhythm을 직접 다시 열어 주세요.');
   expect(await callCount(page, 'backup_inspect')).toBe(1);
 
-  const confirmations: string[] = [];
-  page.once('dialog', async (dialog) => {
-    confirmations.push(dialog.message());
-    await dialog.dismiss();
-  });
+  await answerDialogs(page, 'cancel');
   await backup.getByRole('button', { name: '이 백업으로 복원', exact: true }).click();
-  await expect.poll(() => confirmations.length).toBe(1);
+  await expect.poll(() => dialogMessages(page).then((messages) => messages.length)).toBe(1);
+  const confirmations = await dialogMessages(page);
   expect(confirmations[0]).toContain('현재 Rhythm 데이터 전체');
   expect(confirmations[0]).toContain('복구용으로 보관');
   expect(confirmations[0]).toContain('Rhythm이 종료됩니다');
@@ -49,7 +46,7 @@ test('backup restore inspects selected file before confirmation and only invokes
   expect(await callCount(page, 'backup_restore')).toBe(0);
   await expect(backup.getByRole('heading', { name: '복원할 백업 확인', exact: true })).toBeVisible();
 
-  page.once('dialog', (dialog) => dialog.accept());
+  await answerDialogs(page, 'ok');
   await backup.getByRole('button', { name: '이 백업으로 복원', exact: true }).click();
   await expect(backup.getByRole('status').filter({ hasText: '복원을 준비했습니다.' })).toBeVisible();
   expect(await callCount(page, 'backup_restore')).toBe(1);
@@ -73,7 +70,7 @@ test('restore failure remains visible and releases the pending operation state',
   await page.goto('/');
   const backup = await openBackup(page);
   await backup.getByRole('button', { name: '백업 파일 선택', exact: true }).click();
-  page.once('dialog', (dialog) => dialog.accept());
+  await answerDialogs(page, 'ok');
   await backup.getByRole('button', { name: '이 백업으로 복원', exact: true }).click();
 
   await expect(backup.getByRole('alert')).toContainText('백업 데이터를 복원하지 못했습니다.');
@@ -139,23 +136,20 @@ test('updater asks before restart both after staging and when restarting is chos
   const updater = await openUpdater(page);
   await updater.getByRole('button', { name: '업데이트 확인', exact: true }).click();
 
-  page.once('dialog', (dialog) => dialog.dismiss());
+  await answerDialogs(page, 'cancel');
   await updater.getByRole('button', { name: '다운로드 및 설치', exact: true }).click();
   await expect(updater.getByText('서명된 업데이트를 준비했습니다.', { exact: true })).toBeVisible();
   await expect(updater.getByRole('button', { name: '설치 및 다시 시작', exact: true })).toBeVisible();
   expect(await callCount(page, 'updater_restart')).toBe(0);
 
-  const confirmations: string[] = [];
-  page.once('dialog', async (dialog) => {
-    confirmations.push(dialog.message());
-    await dialog.dismiss();
-  });
+  await answerDialogs(page, 'cancel');
   await updater.getByRole('button', { name: '설치 및 다시 시작', exact: true }).click();
-  await expect.poll(() => confirmations.length).toBe(1);
-  expect(confirmations[0]).toContain('서명 검증이 끝난 업데이트');
+  await expect.poll(() => dialogMessages(page).then((messages) => messages.length)).toBe(2);
+  expect((await dialogMessages(page))[1]).toContain('서명 검증이 끝난 업데이트');
+  await expect(updater.getByRole('button', { name: '설치 및 다시 시작', exact: true })).toBeEnabled();
   expect(await callCount(page, 'updater_restart')).toBe(0);
 
-  page.once('dialog', (dialog) => dialog.accept());
+  await answerDialogs(page, 'ok');
   await updater.getByRole('button', { name: '설치 및 다시 시작', exact: true }).click();
   await expect.poll(() => callCount(page, 'updater_restart')).toBe(1);
   const restart = await commandArgs(page, 'updater_restart');
@@ -167,7 +161,7 @@ test('restart failure is surfaced after explicit confirmation', async ({ page })
   await page.goto('/');
   const updater = await openUpdater(page);
   await updater.getByRole('button', { name: '업데이트 확인', exact: true }).click();
-  page.once('dialog', (dialog) => dialog.accept());
+  await answerDialogs(page, 'ok');
   await updater.getByRole('button', { name: '다운로드 및 설치', exact: true }).click();
 
   await expect(updater.getByRole('alert')).toContainText('업데이트를 적용하며 다시 시작하지 못했습니다.');
@@ -200,4 +194,27 @@ test('ordinary launches show no restore report', async ({ page }) => {
   await expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible();
   expect(await callCount(page, 'backup_restore_outcome')).toBe(1);
   await expect(page.getByText('백업 복원을 마쳤습니다', { exact: true })).toHaveCount(0);
+});
+
+test('a native confirmation that cannot open never starts a restore', async ({ page }) => {
+  await mockDesktop(page, { dialogError: true });
+  await page.goto('/');
+  const backup = await openBackup(page);
+  await backup.getByRole('button', { name: '백업 파일 선택', exact: true }).click();
+  await backup.getByRole('button', { name: '이 백업으로 복원', exact: true }).click();
+
+  await expect(backup.getByRole('alert')).toContainText('확인 창을 열지 못해 복원을 시작하지 않았습니다.');
+  expect(await callCount(page, 'backup_restore')).toBe(0);
+  await expect(backup.getByRole('button', { name: '이 백업으로 복원', exact: true })).toBeEnabled();
+});
+
+test('the frontend never relies on synchronous browser dialogs', async () => {
+  const { readdirSync, readFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true })
+    .flatMap((item) => item.isDirectory() ? files(join(dir, item.name)) : [join(dir, item.name)]);
+  const offenders = files('src')
+    .filter((file) => /\.(svelte|ts)$/.test(file) && !file.endsWith('confirm.ts'))
+    .filter((file) => /(^|[^.\w])(window\.)?(confirm|alert|prompt)\(/m.test(readFileSync(file, 'utf8')));
+  expect(offenders).toEqual([]);
 });

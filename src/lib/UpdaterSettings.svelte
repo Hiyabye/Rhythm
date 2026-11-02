@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
+  import { confirmAction } from './confirm';
 
   type UpdateInfo = { version: string; currentVersion: string; date: string | null; body: string | null };
   type Progress = { phase: 'downloading' | 'verifying' | 'installing' | 'staged' | 'restarting'; version?: string; downloaded?: number; total?: number | null };
@@ -46,10 +47,13 @@
   async function install() {
     if (!desktop || !configured || installing || !update) return;
     if (progress?.phase === 'staged') {
-      if (!window.confirm('서명 검증이 끝난 업데이트를 지금 설치하고 앱을 다시 시작할까요?')) return;
       installing = true;
       error = '';
-      try { await invoke('updater_restart', { confirmed: true }); }
+      try {
+        if (await confirmAction('서명 검증이 끝난 업데이트를 지금 설치하고 앱을 다시 시작할까요?', '설치 및 다시 시작')) {
+          await invoke('updater_restart', { confirmed: true });
+        }
+      }
       catch (reason) { error = String(reason); }
       finally { installing = false; }
       return;
@@ -59,7 +63,7 @@
     progress = null;
     try {
       update = await invoke<UpdateInfo>('updater_install');
-      const restart = window.confirm('서명 검증을 마쳤습니다. 지금 업데이트를 설치하고 앱을 다시 시작할까요? 취소하면 업데이트는 이번 실행 중에만 준비된 상태로 유지됩니다.');
+      const restart = await confirmAction('서명 검증을 마쳤습니다. 지금 업데이트를 설치하고 앱을 다시 시작할까요? 취소하면 업데이트는 이번 실행 중에만 준비된 상태로 유지됩니다.', '설치 및 다시 시작');
       if (restart) await invoke('updater_restart', { confirmed: true });
       else progress = { phase: 'staged', version: update.version };
     } catch (reason) { error = String(reason); }

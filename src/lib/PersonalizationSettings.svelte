@@ -3,6 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import type { PersonalInterest, PersonalInterestInput, PersonalizationSnapshot } from './types';
   import { archiveError } from './archive-format';
+  import { confirmAction } from './confirm';
 
   let { desktop }: { desktop: boolean } = $props();
   let data = $state<PersonalizationSnapshot | null>(null);
@@ -101,7 +102,14 @@
   }
 
   async function resetPersonalization() {
-    if (!confirm('개인화 프로필, 관심사, 기억과 피드백을 모두 초기화할까요? 보관한 공지는 유지됩니다.')) return;
+    let confirmed: boolean;
+    try {
+      confirmed = await confirmAction('개인화 프로필, 관심사, 기억과 피드백을 모두 초기화할까요? 보관한 공지는 유지됩니다.', '초기화');
+    } catch (reason) {
+      error = `${archiveError(reason)} 확인 창을 열지 못해 초기화하지 않았습니다.`;
+      return;
+    }
+    if (!confirmed || resetPending) return;
     resetPending = true;
     try {
       if (await action('personalization_reset')) {

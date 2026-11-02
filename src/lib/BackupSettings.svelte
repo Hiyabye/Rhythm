@@ -2,6 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { save, open } from '@tauri-apps/plugin-dialog';
   import { archiveError, archiveSize } from './archive-format';
+  import { confirmAction } from './confirm';
 
   let { desktop }: { desktop: boolean } = $props();
   type BackupPreview = {
@@ -96,8 +97,15 @@
   }
   async function restoreBackup() {
     if (!desktop || !selected || !preview || busy) return;
-    const confirmed = window.confirm('현재 Rhythm 데이터 전체를 이 백업의 데이터로 바꿉니다. 현재 데이터는 지우지 않고 복구용으로 보관합니다.\n\n확인하면 Rhythm이 종료됩니다. Rhythm을 직접 다시 열면 복원이 마무리됩니다.\n\n계속하시겠습니까?');
-    if (!confirmed) return;
+    error = ''; notice = '';
+    let confirmed: boolean;
+    try {
+      confirmed = await confirmAction('현재 Rhythm 데이터 전체를 이 백업의 데이터로 바꿉니다. 현재 데이터는 지우지 않고 복구용으로 보관합니다.\n\n복원하면 Rhythm이 종료됩니다. Rhythm을 직접 다시 열면 복원이 마무리됩니다.\n\n계속하시겠습니까?', '복원하고 종료');
+    } catch (reason) {
+      error = `${archiveError(reason)} 확인 창을 열지 못해 복원을 시작하지 않았습니다.`;
+      return;
+    }
+    if (!confirmed || busy) return;
     const id = startOperation();
     try {
       await invoke('backup_restore', { source: selected, confirmed: true, operationId: id });

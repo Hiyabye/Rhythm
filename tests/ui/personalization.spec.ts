@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { callCount, mockDesktop } from './fixture';
+import { callCount, mockDesktop, answerDialogs } from './fixture';
 
 interface FixtureCall { command: string; args: Record<string, unknown> }
 type FixtureWindow = Window & { __fixture: { calls: FixtureCall[] } };
@@ -136,10 +136,14 @@ test('learning toggle and reset call the reversible personalization commands', a
   await mockDesktop(page); await page.goto('/'); await navigate(page, '설정');
   const personal = page.locator('#personalization');
   await personal.getByRole('switch', { name: '관심사 학습' }).click();
-  page.once('dialog', (dialog) => dialog.accept());
+  await answerDialogs(page, 'cancel');
+  await personal.getByRole('button', { name: '개인화 데이터 초기화' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__fixture.dialogs.length)).toBe(1);
+  expect(await callCount(page, 'personalization_reset')).toBe(0);
+  await answerDialogs(page, 'ok');
   await personal.getByRole('button', { name: '개인화 데이터 초기화' }).click();
   expect(await callCount(page, 'personalization_set_learning')).toBe(1);
-  expect(await callCount(page, 'personalization_reset')).toBe(1);
+  await expect.poll(() => callCount(page, 'personalization_reset')).toBe(1);
 });
 
 test('reset disables profile and interest editing until all personalization data is cleared', async ({ page }) => {
@@ -149,7 +153,7 @@ test('reset disables profile and interest editing until all personalization data
   const university = personal.getByLabel('대학교');
   const interest = personal.getByLabel('관심사 이름');
   await university.fill('서강대학교');
-  page.once('dialog', (dialog) => dialog.accept());
+  await answerDialogs(page, 'ok');
   await personal.getByRole('button', { name: '개인화 데이터 초기화' }).click();
   await expect(university).toBeDisabled();
   await expect(interest).toBeDisabled();

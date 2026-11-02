@@ -47,6 +47,7 @@ export interface FixtureOptions {
   restoreOutcome?: { documents: number; resources: number; unavailable_resources: number; models_needing_reinstall: number };
   // Real builds embed no update key; only explicit tests exercise a configured channel.
   updaterConfigured?: boolean;
+  dialogError?: boolean;
   updaterCheckError?: string;
   updaterInstallError?: boolean;
   updaterRestartError?: boolean;
@@ -133,6 +134,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     let updaterHandler: number | null = null;
     let notificationHandler: number | null = null;
     const fixture = { ai, analyses, options, entries, calls: [] as { command: string; args: any }[], sourceDelay: 0,
+      dialogs: [] as string[], dialogAnswers: [] as ('ok' | 'cancel')[],
       stateDelay: 0, subscribeError: false, snapshotFailures: 0, resultsFailures: 0, documentJobs: [] as any[], retryMessage: '자료를 내려받지 못했습니다. 연결을 확인해 주세요.',
       queryResolvers: [] as Array<() => void>,
       emitUpdater: (payload: unknown) => {
@@ -176,6 +178,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (args.event === 'updater://progress') updaterHandler = null;
             if (args.event === 'proactive://notification-clicked') notificationHandler = null;
             return null;
+          case 'plugin:dialog|message': {
+            if (options.dialogError) throw '대화상자를 열 권한이 없습니다.';
+            fixture.dialogs.push(args.message);
+            // Unanswered confirmations are cancelled, like dismissing a native alert.
+            const ok = fixture.dialogAnswers.shift() === 'ok';
+            const custom = args.buttons?.OkCancelCustom as [string, string] | undefined;
+            return custom ? custom[ok ? 0 : 1] : ok ? 'Ok' : 'Cancel';
+          }
           case 'plugin:dialog|open': return '/fixtures/Rhythm-backup.rhythm-backup';
           case 'plugin:dialog|save': return '/fixtures/Rhythm-backup.rhythm-backup';
           case 'backup_inspect':
@@ -393,9 +403,24 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         }
       },
     } });
+    // The desktop dialog plugin replaces these with async IPC wrappers, so a
+    // synchronous-looking `window.confirm` returns an always-truthy Promise.
+    window.alert = (text?: unknown) => { void (window as any).__TAURI_INTERNALS__.invoke('plugin:dialog|message', { message: String(text) }); };
+    window.confirm = (async (text?: unknown) => 'Ok' === await (window as any).__TAURI_INTERNALS__.invoke('plugin:dialog|message', { message: String(text), buttons: 'OkCancel' })) as unknown as typeof window.confirm;
   }, { options, contract: analysisContract });
 }
 
 export async function callCount(page: Page, command: string) {
   return page.evaluate((command) => (window as any).__fixture.calls.filter((call: any) => call.command === command).length, command);
+}
+
+type DialogWindow = Window & { __fixture: { dialogs: string[]; dialogAnswers: ('ok' | 'cancel')[] } };
+
+/** Queues answers for upcoming native confirmations, in order. */
+export async function answerDialogs(page: Page, ...answers: ('ok' | 'cancel')[]) {
+  await page.evaluate((queued) => { (window as DialogWindow).__fixture.dialogAnswers.push(...queued); }, answers);
+}
+
+export async function dialogMessages(page: Page) {
+  return page.evaluate(() => [...(window as DialogWindow).__fixture.dialogs]);
 }
