@@ -18,7 +18,8 @@ test('read-state write failure does not hide a successfully archived article', a
   await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 01');
   await expect(page.locator('.reader-body')).toContainText('보관된 한국어 본문입니다.');
   await expect(page.getByRole('alert')).toContainText('읽음 상태를 저장하지 못했습니다');
-  await expect(page.getByRole('button', { name: '읽음으로 표시', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  // Action-named buttons must not also expose a pressed state that contradicts their label.
+  await expect(page.getByRole('button', { name: '읽음으로 표시', exact: true })).not.toHaveAttribute('aria-pressed');
 });
 test('iframe-only archive revision explains unsupported body without embedding it and keeps earlier text', async ({ page }) => {
   const remoteRequests: string[] = [];
@@ -98,7 +99,7 @@ test('saving an item admits only one pending write and announces feedback', asyn
   await save.click();
   await expect(save).toBeDisabled();
   await expect.poll(() => callCount(page, 'archive_state')).toBe(1);
-  await expect(page.getByRole('button', { name: '한국어 공지 01 저장 해제', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: '한국어 공지 01 저장 해제', exact: true })).not.toHaveAttribute('aria-pressed');
   await expect(page.locator('.archive-feedback')).toContainText('보관함에 저장했습니다');
 });
 

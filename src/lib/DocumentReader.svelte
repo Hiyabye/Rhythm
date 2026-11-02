@@ -285,8 +285,8 @@
       <h2 bind:this={heading} tabindex="-1">{detail.item.title}</h2>
       <div class="notice-meta"><time datetime={detail.item.published_at}>{archiveDate(detail.item.published_at)}</time>{#if detail.item.author}<span>{detail.item.author}</span>{/if}{#if detail.item.category}<span>{detail.item.category}</span>{/if}</div>
       <div class="reader-actions">
-        <button class="button secondary small" disabled={busy} aria-pressed={detail.item.is_read} onclick={() => updateState('is_read')}>{detail.item.is_read ? '읽지 않음으로 표시' : '읽음으로 표시'}</button>
-        <button class="button secondary small" disabled={busy} aria-pressed={detail.item.saved} onclick={() => updateState('saved')}><Icon name="bookmark" size={16} />{detail.item.saved ? '저장 해제' : '보관함에 저장'}</button>
+        <button class="button secondary small" disabled={busy} onclick={() => updateState('is_read')}>{detail.item.is_read ? '읽지 않음으로 표시' : '읽음으로 표시'}</button>
+        <button class="button secondary small" disabled={busy} onclick={() => updateState('saved')}><Icon name="bookmark" size={16} />{detail.item.saved ? '저장 해제' : '보관함에 저장'}</button>
         <button class="text-button" onclick={() => external(detail!.canonical_url)}>학교 원문 열기 ↗</button>
       </div>
       <div class="reader-actions" role="group" aria-label="관심 피드백">
