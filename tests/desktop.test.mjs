@@ -1,25 +1,37 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const script = new URL('../scripts/desktop.mjs', import.meta.url).href;
 // These tests substitute locally authored executables, never Cargo/Tauri/toolchain installs.
-function build({ platform = 'darwin', arch = 'arm64', available = true, override } = {}) {
+function build({ platform = 'darwin', arch = 'arm64', available = true, override, argv = ['build', '--debug'], setup, inspect } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'rhythm-desktop-test-'));
   try {
     mkdirSync(join(root, 'bin'));
-    mkdirSync(join(root, 'target/debug'), { recursive: true });
-    writeFileSync(join(root, 'target/debug/rhythm-ai-worker'), 'test-worker');
+    for (const profile of ['debug', 'release']) {
+      mkdirSync(join(root, 'target', profile), { recursive: true });
+      writeFileSync(join(root, 'target', profile, 'rhythm-ai-worker'), 'test-worker');
+    }
+    mkdirSync(join(root, 'src-tauri'));
+    writeFileSync(join(root, 'src-tauri/tauri.conf.json'), JSON.stringify({ version: '9.8.7' }));
+    setup?.(root);
     const mock = `#!${process.execPath}
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 const command = basename(process.argv[1]);
 appendFileSync(process.env.TEST_LOG, JSON.stringify([command, ...process.argv.slice(2)]) + '\\n');
+if (command === 'cargo' || command === 'npm') appendFileSync(process.env.TEST_LOG + '.env', JSON.stringify([command, process.env.CARGO_ENCODED_RUSTFLAGS ?? null]) + '\\n');
 if (command === 'rustc') console.log('host: ' + process.env.TEST_RUST_HOST);
 if (command === 'xcrun') process.exit(Number(process.env.TEST_METAL_STATUS));
+// Stand-in for a default Tauri release bundle.
+if (command === 'npm' && process.argv.includes('build') && !process.argv.includes('--debug')) {
+  mkdirSync('target/release/bundle/dmg', { recursive: true });
+  writeFileSync('target/release/bundle/dmg/Rhythm_9.8.7_aarch64.dmg', 'final-dmg');
+}
 `;
     // .mjs source keeps the stub independent of the temporary directory's package type.
     const source = join(root, 'mock.mjs');
@@ -35,12 +47,13 @@ if (command === 'xcrun') process.exit(Number(process.env.TEST_METAL_STATUS));
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
       Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} });
       Object.defineProperty(process, 'arch', { value: ${JSON.stringify(arch)} });
-      process.argv = [process.execPath, 'desktop.mjs', 'build', '--debug'];
+      process.argv = [process.execPath, 'desktop.mjs', ...${JSON.stringify(argv)}];
       await import(${JSON.stringify(script)});
     `], { cwd: root, env, encoding: 'utf8' });
     const calls = result.status === 0 ? readFileSync(join(root, 'calls'), 'utf8').trim().split('\n').map(JSON.parse) : [];
+    const envs = result.status === 0 ? readFileSync(join(root, 'calls.env'), 'utf8').trim().split('\n').map(JSON.parse) : [];
     if (result.status === 0) assert.equal(readFileSync(join(root, `src-tauri/binaries/rhythm-ai-worker-${env.TEST_RUST_HOST}`), 'utf8'), 'test-worker');
-    return { ...result, calls };
+    return { ...result, calls, envs, ...inspect?.(root) };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -81,4 +94,46 @@ test('explicit CPU override skips the Metal probe; unsupported backends fail', o
 });
 test('Metal override is rejected on Intel macOS', options, () => {
   assert.match(build({ arch: 'x64', override: 'metal' }).stderr, /requires Apple Silicon/);
+});
+test('release builds remap local source paths for both Cargo invocations', options, () => {
+  const result = build({ argv: ['build'] });
+  assert.equal(result.status, 0, result.stderr);
+  for (const [command, flags] of result.envs) {
+    const parts = flags.split('\x1f');
+    assert.ok(parts.includes(`--remap-path-prefix=${homedir()}=/home`), command);
+    assert.ok(parts.some((flag) => flag.startsWith('--remap-path-prefix=') && flag.endsWith('=/cargo')), command);
+    assert.ok(parts.some((flag) => flag.startsWith('--remap-path-prefix=') && flag.endsWith('=/rhythm')), command);
+  }
+  // Debug builds keep real paths for local debugging.
+  const debug = build();
+  assert.deepEqual(debug.envs.map(([, flags]) => flags), debug.envs.map(() => process.env.CARGO_ENCODED_RUSTFLAGS ?? null));
+});
+test('release builds publish only the fresh DMG and its checksum', options, () => {
+  const result = build({
+    argv: ['build'],
+    setup: (root) => {
+      // Stale output from earlier builds must not survive.
+      mkdirSync(join(root, 'target/release/bundle/dmg'), { recursive: true });
+      writeFileSync(join(root, 'target/release/bundle/dmg/Rhythm_0.9.2_aarch64.dmg'), 'old');
+      mkdirSync(join(root, 'target/release/bundle/macos'), { recursive: true });
+      writeFileSync(join(root, 'target/release/bundle/macos/Rhythm.app.tar.gz'), 'old');
+      mkdirSync(join(root, 'target/release/distribution'), { recursive: true });
+      writeFileSync(join(root, 'target/release/distribution/Rhythm_0.9.2_aarch64.dmg'), 'old');
+    },
+    inspect: (root) => ({
+      distribution: readdirSync(join(root, 'target/release/distribution')).sort(),
+      checksum: readFileSync(join(root, 'target/release/distribution/Rhythm_9.8.7_aarch64.dmg.sha256'), 'utf8'),
+      staleBundle: existsSync(join(root, 'target/release/bundle/macos/Rhythm.app.tar.gz')),
+    }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.distribution, ['Rhythm_9.8.7_aarch64.dmg', 'Rhythm_9.8.7_aarch64.dmg.sha256']);
+  const digest = createHash('sha256').update('final-dmg').digest('hex');
+  assert.equal(result.checksum, `${digest}  Rhythm_9.8.7_aarch64.dmg\n`);
+  assert.equal(result.staleBundle, false);
+});
+test('custom bundle selections do not produce distribution files', options, () => {
+  const result = build({ argv: ['build', '--no-bundle'], inspect: (root) => ({ distributed: existsSync(join(root, 'target/release/distribution')) }) });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.distributed, false);
 });
