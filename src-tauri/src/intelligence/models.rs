@@ -592,6 +592,13 @@ async fn install(
         true,
     )?;
     if full.exists() {
+        // A chosen folder may be shared with another profile or hold a file the
+        // user registered as external. Adopting it as managed would let model
+        // removal delete bytes Rhythm never wrote, so only adopt there when this
+        // inventory already received every byte (a crash after the final rename).
+        if model.storage_directory.is_some() && model.downloaded_bytes != entry.bytes {
+            return Err("선택한 폴더에 같은 모델 파일이 이미 있습니다. 삭제 권한을 넘겨받지 않도록 설치하지 않았습니다. 기존 파일은 '모델 파일 등록'으로 추가해 주세요.".into());
+        }
         let file = full.clone();
         let expected = entry.clone();
         let cancelled = cancel.clone();
@@ -1231,6 +1238,47 @@ mod tests {
                 .storage_directory,
             Some(selected)
         );
+    }
+    #[tokio::test]
+    async fn existing_file_in_chosen_folder_is_never_adopted_for_deletion() {
+        let (root, store, entry, bytes) = fixture();
+        let destination = tempfile::tempdir().unwrap();
+        let directory = destination.path().join("공유 모델 폴더");
+        std::fs::create_dir(&directory).unwrap();
+        let selected = choose_directory(&store, &directory);
+        // Another profile, or an external registration, already owns this file.
+        let foreign = directory.join(format!("{}.gguf", entry.sha256));
+        std::fs::write(&foreign, &bytes).unwrap();
+        let mut model = inventory(&entry);
+        model.storage_directory = Some(selected.clone());
+        let error = install(
+            &store,
+            root.path(),
+            &entry,
+            &mut model,
+            &Arc::new(AtomicBool::new(false)),
+            &Fake::new(bytes.clone()),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("모델 파일 등록"), "{error}");
+        assert_ne!(model.status, "installed");
+        assert_eq!(std::fs::read(&foreign).unwrap(), bytes);
+
+        // Rhythm's own download that crashed after the final rename recovers.
+        model.downloaded_bytes = entry.bytes;
+        install(
+            &store,
+            root.path(),
+            &entry,
+            &mut model,
+            &Arc::new(AtomicBool::new(false)),
+            &Fake::new(bytes.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(model.status, "installed");
+        assert_eq!(model.storage_directory.as_deref(), Some(selected.as_str()));
     }
     #[tokio::test]
     async fn changing_default_keeps_custom_and_legacy_partial_downloads_in_place() {
