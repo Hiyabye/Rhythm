@@ -488,7 +488,7 @@ fn populated_profile_round_trips_every_table_resource_and_model_decision() {
     let mut zip = ZipArchive::new(File::open(&archive).unwrap()).unwrap();
     let manifest = read_manifest(&mut zip).unwrap();
     let names: Vec<_> = (0..zip.len())
-        .map(|index| zip.by_index(index).unwrap().name().to_owned())
+        .map(|index| zip.by_index(index).unwrap().name().unwrap().into_owned())
         .collect();
     assert!(names.iter().all(|name| !name.starts_with("models/")));
     for entry in &manifest.entries {
