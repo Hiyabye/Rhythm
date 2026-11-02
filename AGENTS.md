@@ -6,6 +6,10 @@ Rhythm is a Korean-first, local-first Tauri 2 desktop command center. Current pr
 
 **Distribution policy (user decision):** release artifacts are an ad-hoc-signed (hardened runtime) `Rhythm.app` in `Rhythm_<version>_aarch64.dmg` plus a SHA-256 checksum file generated from the final DMG. Developer ID signing and Apple notarization are intentionally excluded; do not treat their absence as a task, request Apple membership, create Developer ID/notary credentials, bypass Gatekeeper, strip quarantine, or describe ad-hoc as trusted/notarized. Gatekeeper rejects these builds; that is expected and documented in README. `scripts/macos-release.mjs` (Developer ID path) is retained for a possible future decision and refuses to run without credentials. Updates are manual app replacement; the production updater stays disabled (no production key, no update server, draft workflow not activated). The signed-updater code, `scripts/verify-update.mjs` and their tests remain for possible future use; without `RHYTHM_UPDATER_PUBKEY` Settings shows manual update steps. Never test with or overwrite `/Applications/Rhythm.app` or the real profile.
 
+**Release outputs:** a default `npm run desktop:build` (release, no `--bundles`/`--no-bundle`) deletes `target/release/bundle/` first, then writes exactly two files to a fresh `target/release/distribution/`: `Rhythm_<version>_<arch>.dmg` and `<dmg>.sha256` (`shasum -a 256` format, computed from that DMG). Publish only those two files; never pick artifacts from `target/release/bundle/`. Release builds pass `--remap-path-prefix` for `$HOME`, `CARGO_HOME` and the checkout via `CARGO_ENCODED_RUSTFLAGS` (appending any existing `RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS`) so binaries carry no builder paths; check with `strings <binary> | grep "$HOME"`. Cargo `trim-paths` is unstable on the pinned toolchain. Debug builds keep real paths.
+
+**Dependency advisories (reviewed for v1.0.0):** the app's backup code uses `zip` 9.2.2. `zip` 8.6.0 remains only through candle-core in the worker (mistral.rs v0.9.1, and still in v0.9.5); candle uses it for `.npz`/pickle loading, which the GGUF-only worker never reaches, so those Dependabot alerts were dismissed as not used. Move off it when an upstream mistral.rs release uses `zip` >= 9.0.5. `deepmerge` (dev-only via `@sveltejs/vite-plugin-svelte`, no fixed release) and Linux-only `glib` 0.18.5 (needs Tauri 3) are open by user decision.
+
 - `src/`: Svelte 5 runes, TypeScript and Tailwind/custom CSS. `App.svelte` owns navigation/settings; `lib/ArchiveView.svelte`, `DocumentReader.svelte` and `SourceSettings.svelte` own archive surfaces; `PersonalizationSettings.svelte` manages profile/interests/memory; `AiSettings.svelte` and revision-keyed `AnalysisPanel.svelte` own AI management/results. `lib/types.ts` mirrors command payloads.
 - `src-tauri/src/main.rs`: Tauri command registration, application state/startup/exit; `core/mod.rs` owns the data-directory lock and platform menu.
 - `src-tauri/src/archive/`: shared record models, catalog, independent native parsers, constrained HTTPS/TLS, manual job controller and archive commands. `fixtures/README.md` and `certificates/README.md` document source/certificate provenance.
@@ -27,7 +31,7 @@ Use stable Rust **1.90+**, Node.js **22.12+**, npm and the macOS [Tauri prerequi
 ```sh
 npm ci
 npm run desktop                      # Metal if Apple Silicon tooling is available, otherwise CPU
-npm run desktop:build                # release worker + native application/bundles
+npm run desktop:build                # release worker + app/DMG; distribution files in target/release/distribution/
 npm run desktop:build -- --debug      # debug worker/application/bundle
 npm run desktop:build -- --no-bundle  # native build without installer generation
 npm run check                        # Svelte/TypeScript diagnostics

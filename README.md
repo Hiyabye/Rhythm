@@ -160,8 +160,10 @@ Node.js 22.12 이상, Rust 1.90 이상, Xcode Command Line Tools([Tauri 사전 �
 ```sh
 npm ci
 npm run desktop          # 개발 모드
-npm run desktop:build    # 릴리스 앱과 DMG (target/release/bundle/)
+npm run desktop:build    # 릴리스 DMG와 체크섬 (target/release/distribution/)
 ```
+
+`target/release/distribution/`에는 배포할 파일 두 개, `Rhythm_<버전>_aarch64.dmg`와 같은 이름의 `.sha256`만 들어갑니다. 빌드할 때마다 이전 결과물을 지우고 새로 만듭니다.
 
 Apple Silicon에서 Metal 컴파일러(Xcode의 Metal Toolchain)를 쓸 수 있으면 Metal 워커를, 아니면 CPU 워커를 빌드합니다. `RHYTHM_AI_BACKEND=cpu` 또는 `metal`로 직접 고를 수 있습니다. 직접 빌드한 앱도 Ad-hoc 서명이며 공증되지 않습니다.
 
