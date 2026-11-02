@@ -43,6 +43,8 @@
 .ai-facts details { font-size: 11px; color: var(--secondary); }
 .ai-facts blockquote { margin: 8px 0; padding-left: 12px; border-left: 2px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; }
 .ai-caution { border-left: 2px solid var(--secondary); padding-left: 12px; color: var(--secondary); }
+.ai-limits { font-size: 12px; line-height: 1.8; margin: 8px 0 12px; }
+.ai-limits strong { color: var(--text); font-weight: 600; }
 .ai-recent { margin: 28px 0; }
 .ai-recent h2 { font-size: 15px; }
 .ai-recent li { border-bottom: 1px solid var(--line); }

@@ -55,6 +55,13 @@ test('real reader UI submits once, shows grounded output, then reuses stored ana
   await panel.getByText('원문 근거', { exact: true }).click();
   await expect(panel.getByText('2026년 10월 30일까지 신청서를 제출하세요.', { exact: true })).toBeVisible();
   await expect(panel.getByText('AI 분류 · 장학', { exact: true })).toBeVisible();
+  // Limits are stated next to the result, not only in fine print.
+  const limits = panel.getByRole('note').filter({ hasText: 'AI가 만든 참고용 정리입니다.' });
+  await expect(limits).toContainText('틀리거나 빠질 수 있습니다');
+  await expect(limits).toContainText('첨부 파일과 이미지의 내용은 분석하지 않았습니다');
+  await expect(limits).toContainText('원문에서 직접 확인하세요');
+  await expect(panel).toContainText('근거가 있어도 AI의 해석은 틀릴 수 있습니다');
+  await expect(panel).not.toContainText('(원문에서 추출)');
   await page.getByRole('button', { name: /목록으로 돌아가기/ }).click();
   await page.locator('#notice-1').click();
   await expect(panel.getByText('장학금 신청 일정과 제출 서류를 확인하세요.', { exact: true })).toBeVisible();
