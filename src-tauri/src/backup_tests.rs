@@ -1,6 +1,6 @@
 //! Populated real-schema backup/restore, interruption recovery and hostile archives.
 use super::*;
-use crate::archive::model::{ArticleInput, ResourceInput, SourceDefinition};
+use crate::archive::model::{ArticleInput, ResourceInput};
 use crate::storage::{
     intelligence::{AiModel, AnalysisKey},
     personalization::{PersonalInterestInput, PersonalizationProfile},
@@ -73,36 +73,19 @@ fn model(id: &str, ownership: &str, path: &str, bytes: &[u8]) -> AiModel {
     }
 }
 
+const PRIMARY: &str = "sogang-academic";
+const SECONDARY: &str = "eng-academic";
+
 /// Weights a matching managed model has locally; never written into a backup.
 const MANAGED_WEIGHTS: &[u8] = b"GGUF\x03\x00\x00\x00managed weights retained locally";
 
 /// A profile with every kind of user state the backup must carry.
 fn populated_profile(root: &Path) -> Store {
     let store = Store::open(&root.join("rhythm.sqlite3")).unwrap();
-    store
-        .catalog(&[
-            SourceDefinition {
-                id: "one".into(),
-                name: "학사 공지".into(),
-                organization: "서강대학교".into(),
-                description: "공지".into(),
-                url: "https://www.sogang.ac.kr/".into(),
-                family: "main".into(),
-                supported: true,
-            },
-            SourceDefinition {
-                id: "two".into(),
-                name: "장학 공지".into(),
-                organization: "서강대학교".into(),
-                description: "공지".into(),
-                url: "https://www.sogang.ac.kr/".into(),
-                family: "main".into(),
-                supported: true,
-            },
-        ])
-        .unwrap();
-    store.subscribe("one", true).unwrap();
-    store.subscribe("two", true).unwrap();
+    // Real catalog identities, so a written native profile renders as usual.
+    store.catalog(&crate::archive::definitions()).unwrap();
+    store.subscribe(PRIMARY, true).unwrap();
+    store.subscribe(SECONDARY, true).unwrap();
     let write = |relative: &str, bytes: &[u8]| {
         let path = root.join(relative);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -151,7 +134,7 @@ fn populated_profile(root: &Path) -> Store {
     };
     let (first, _) = store
         .upsert_article(
-            "one",
+            PRIMARY,
             &article(
                 "1",
                 "2026학년도 장학금 신청 안내",
@@ -183,7 +166,7 @@ fn populated_profile(root: &Path) -> Store {
     // unchanged image reuses the downloaded file.
     store
         .upsert_article(
-            "one",
+            PRIMARY,
             &article(
                 "1",
                 "2026학년도 장학금 신청 안내(수정)",
@@ -195,7 +178,7 @@ fn populated_profile(root: &Path) -> Store {
         .unwrap();
     let (second, _) = store
         .upsert_article(
-            "one",
+            PRIMARY,
             &article(
                 "2",
                 "장학금 서류 제출 안내",
@@ -213,7 +196,7 @@ fn populated_profile(root: &Path) -> Store {
     download(second);
     let (third, _) = store
         .upsert_article(
-            "two",
+            SECONDARY,
             &article("9", "취업 박람회", "박람회 일정", vec![]),
             true,
         )
@@ -317,7 +300,7 @@ fn populated_profile(root: &Path) -> Store {
         .unwrap();
     store
         .proactive_save_task(&ProactiveTaskInput {
-            task_id: "source:one".into(),
+            task_id: format!("source:{PRIMARY}"),
             interval_minutes: 30,
             enabled: true,
         })
@@ -325,7 +308,7 @@ fn populated_profile(root: &Path) -> Store {
     // Enabling notifications set a baseline; only a later notice is eligible.
     let (fresh, _) = store
         .upsert_article(
-            "two",
+            SECONDARY,
             &article("10", "장학금 추가 모집", "추가 모집 안내", vec![]),
             false,
         )
@@ -987,4 +970,28 @@ fn backup_rejects_a_resource_changed_after_its_digest_was_recorded() {
         .file_name()
         .to_string_lossy()
         .ends_with(".tmp")));
+}
+
+/// Writes the populated fixture as a native test profile; never point it at
+/// real app data. Run with RHYTHM_NATIVE_PROFILE_DIR=<fresh>/io.github.hiyabye.rhythm.
+#[cfg(unix)]
+#[test]
+#[ignore = "writes an isolated native verification profile on request"]
+fn write_populated_native_profile() {
+    let root = PathBuf::from(
+        std::env::var_os("RHYTHM_NATIVE_PROFILE_DIR").expect("set RHYTHM_NATIVE_PROFILE_DIR"),
+    );
+    assert!(
+        !root.join("rhythm.sqlite3").exists(),
+        "RHYTHM_NATIVE_PROFILE_DIR must name a fresh directory"
+    );
+    let mut store = populated_profile(&root);
+    complete_job(&mut store);
+    // Keep the history, but start no collection or OS notification.
+    store
+        .proactive_save_settings(&ProactiveSettings::default())
+        .unwrap();
+    fs::create_dir_all(root.join("models")).unwrap();
+    fs::write(root.join("models/managed.gguf"), MANAGED_WEIGHTS).unwrap();
+    println!("{:?}", store.backup_summary().unwrap());
 }
