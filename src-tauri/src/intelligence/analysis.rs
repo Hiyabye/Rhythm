@@ -598,8 +598,20 @@ pub fn key_for_mode(
         configuration_hash: configuration_hash(max_tokens, decoding_mode(), execution_mode),
     })
 }
+/// Windows keys each execution mode separately: CPU (mistral.rs) and GPU
+/// (llama.cpp, smaller context, control-token neutralization) differ
+/// semantically. `auto` admits a result from either engine, and each result
+/// records and displays the device that produced it. Other platforms ship one
+/// worker, so the mode is not part of the identity and the hash input stays
+/// byte-identical to v1.0, keeping existing cached results valid.
 fn configuration_hash(max_tokens: u32, decoding: &str, execution_mode: &str) -> String {
-    let configuration = format!("analysis-v3;selector=head-tail-keywords-v4;prompt_rules=primary-purpose-positive-v1;evidence_encoding=explicit-id-v1;clock_rules=meridiem-v2;decoding={decoding};max_tokens={max_tokens};source_bytes={SOURCE_BYTES};thinking=false;sampler=deterministic;repair_attempts=1;runtime_policy=llama-vulkan-v1;execution_mode={execution_mode}");
+    let base = format!("analysis-v3;selector=head-tail-keywords-v4;prompt_rules=primary-purpose-positive-v1;evidence_encoding=explicit-id-v1;clock_rules=meridiem-v2;decoding={decoding};max_tokens={max_tokens};source_bytes={SOURCE_BYTES};thinking=false;sampler=deterministic;repair_attempts=1");
+    let configuration = if cfg!(windows) {
+        format!("{base};runtime_policy=llama-vulkan-v1;execution_mode={execution_mode}")
+    } else {
+        let _ = execution_mode;
+        base
+    };
     format!("{:x}", Sha256::digest(configuration.as_bytes()))
 }
 
@@ -755,6 +767,17 @@ async fn execute(
         total_chars,
         loaded_backend,
     })
+}
+
+#[cfg(all(test, not(windows)))]
+#[test]
+fn configuration_hash_keeps_released_v1_cache_identity() {
+    // Literal v1.0.0 input. A change here invalidates every cached result.
+    let released = format!("analysis-v3;selector=head-tail-keywords-v4;prompt_rules=primary-purpose-positive-v1;evidence_encoding=explicit-id-v1;clock_rules=meridiem-v2;decoding=analysis_json_v1;max_tokens=1024;source_bytes={SOURCE_BYTES};thinking=false;sampler=deterministic;repair_attempts=1");
+    let expected = format!("{:x}", Sha256::digest(released.as_bytes()));
+    for mode in ["auto", "cpu", "gpu"] {
+        assert_eq!(configuration_hash(1024, "analysis_json_v1", mode), expected);
+    }
 }
 
 #[cfg(test)]
@@ -2686,9 +2709,15 @@ fn main() {{
         assert_ne!(first, key_for(1, 1, &model, 2048).unwrap());
         let cpu = key_for_mode(1, 1, &model, 1024, "cpu").unwrap();
         let gpu = key_for_mode(1, 1, &model, 1024, "gpu").unwrap();
-        assert_ne!(first, cpu);
-        assert_ne!(first, gpu);
-        assert_ne!(cpu, gpu);
+        if cfg!(windows) {
+            assert_ne!(first, cpu);
+            assert_ne!(first, gpu);
+            assert_ne!(cpu, gpu);
+        } else {
+            // One worker per build: the mode cannot change what produced a result.
+            assert_eq!(first, cpu);
+            assert_eq!(first, gpu);
+        }
         assert!(key_for_mode(1, 1, &model, 1024, "invalid").is_err());
         let custom = directory.path().join("별도 모델 폴더");
         std::fs::create_dir(&custom).unwrap();
