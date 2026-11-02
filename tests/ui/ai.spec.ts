@@ -301,3 +301,67 @@ test('today uses existing summaries and dates without scheduling inference', asy
   await expect(page.getByText('신청 마감 · 2026-10-30 · 원문에서 추출한 참고 일정', { exact: true })).toBeVisible();
   expect(await callCount(page, 'ai_analyze')).toBe(0);
 });
+
+test('managed model removal can keep files after an inaccessible folder error and still requires confirmation', async ({ page }) => {
+  await mockDesktop(page, { aiInstalled: true, aiResult: true, aiRemoveError: true });
+  await page.goto('/');
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await page.getByRole('button', { name: '모델 삭제', exact: true }).click();
+  const confirmation = page.getByRole('group', { name: 'Qwen3.5 4B 삭제 확인', exact: true });
+  await expect(confirmation).toContainText('폴더에 접근할 수 없거나 다른 위치에 다시 설치하려면 파일을 남기고 목록에서 제거하세요.');
+  await confirmation.getByRole('button', { name: '취소', exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
+  expect(await callCount(page, 'ai_remove')).toBe(0);
+  await page.getByRole('button', { name: '모델 삭제', exact: true }).click();
+  await confirmation.getByRole('button', { name: '확인하고 삭제', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: '모델 폴더에 접근할 수 없습니다.' })).toBeVisible();
+  await expect(page.locator('.ai-installed')).toHaveCount(1);
+  await page.getByRole('button', { name: '모델 삭제', exact: true }).click();
+  await page.evaluate(() => { (window as any).__fixture.ai.operation = { kind: 'load', phase: 'verifying', elapsed_ms: 0, cancelling: false }; });
+  await page.getByRole('button', { name: 'AI 엔진 상태 새로고침', exact: true }).click();
+  await expect(confirmation.getByRole('button', { name: '파일을 남기고 목록에서 제거', exact: true })).toBeDisabled();
+  await page.evaluate(() => { (window as any).__fixture.ai.operation = null; });
+  await page.getByRole('button', { name: 'AI 엔진 상태 새로고침', exact: true }).click();
+  await confirmation.getByRole('button', { name: '파일을 남기고 목록에서 제거', exact: true }).click();
+  await expect(page.locator('.ai-installed')).toHaveCount(0);
+  await expect(page.getByText('파일을 남기고 모델을 목록에서 제거했습니다. 기존 분석은 유지됩니다.', { exact: true })).toBeVisible();
+  const calls = await page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'ai_remove'));
+  expect(calls).toHaveLength(2);
+  expect(calls[0].args).toEqual({ id: 'qwen35-4b', confirmed: true });
+  expect(calls[1].args).toEqual({ id: 'qwen35-4b', confirmed: true, keepFiles: true });
+  await reader(page);
+  await expect(page.getByRole('region', { name: '공지 AI 분석' }).getByText('장학금 신청 일정과 제출 서류를 확인하세요.', { exact: true })).toBeVisible();
+});
+
+test('AI setup stays visible after a delayed long source list and settings links reach their sections', async ({ page }) => {
+  await mockDesktop(page, { aiSetupNeeded: true, sourceCount: 32, sourceDelay: 1200 });
+  await page.goto('/');
+  await page.getByRole('button', { name: '로컬 AI 설정하기', exact: true }).click();
+  const heading = page.locator('#ai h2');
+  await expect(heading).toBeFocused();
+  await expect(page.getByLabel('서강대학교 공지 정보원 관리')).toHaveAttribute('aria-busy', 'false');
+  await expect(heading).toBeInViewport();
+  const nav = page.getByRole('navigation', { name: '설정 항목' });
+  for (const [label, id] of [['일반', 'general'], ['확장 기능', 'extensions'], ['AI 모델', 'ai'], ['AI 처리', 'ai-processing'], ['개인화', 'personalization'], ['백그라운드', 'background'], ['알림', 'notifications']]) {
+    await expect(nav.getByRole('link', { name: label, exact: true })).toHaveAttribute('href', `#${id}`);
+  }
+  await nav.getByRole('link', { name: '일반', exact: true }).click();
+  await nav.getByRole('link', { name: 'AI 모델', exact: true }).click();
+  await expect(heading).toBeInViewport();
+});
+
+test('macOS hides the Windows execution device and keeps a chosen model folder for new downloads', async ({ page }) => {
+  await mockDesktop(page, { aiInstalled: true });
+  await page.goto('/');
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await expect(page.getByLabel('AI 실행 장치', { exact: true })).toHaveCount(0);
+  await expect(page.getByPlaceholder('/전체/경로/model.gguf')).toHaveCount(1);
+  const storage = page.getByRole('group', { name: '모델 설치 폴더', exact: true });
+  await expect(storage.getByText('/isolated/models', { exact: true })).toBeVisible();
+  await storage.getByRole('button', { name: '설치 폴더 선택', exact: true }).click();
+  await expect(storage.getByText('/Volumes/로컬 모델/Rhythm', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Qwen3.5 2B 다운로드 및 설치', exact: true }).click();
+  const added = page.locator('.ai-installed').filter({ has: page.getByRole('heading', { name: 'Qwen3.5 2B', exact: true }) });
+  await expect(added.getByText('/Volumes/로컬 모델/Rhythm/qwen35-2b.gguf', { exact: true })).toBeVisible();
+  expect(await callCount(page, 'ai_preferences')).toBe(0);
+});

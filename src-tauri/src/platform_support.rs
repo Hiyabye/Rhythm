@@ -25,17 +25,25 @@ pub async fn platform_capabilities(
         },
     };
     let authorization = crate::notification_permission::notification_authorization_status().await;
-    let available = matches!(authorization.as_str(), "authorized" | "granted");
+    // macOS provisional/ephemeral authorization also permits delivery.
+    let available = matches!(
+        authorization.as_str(),
+        "authorized" | "granted" | "provisional" | "ephemeral"
+    );
+    #[cfg(windows)]
+    let notification_hint = "Windows 알림 설정과 앱 설치 상태를 확인해 주세요.";
+    #[cfg(not(windows))]
+    let notification_hint = "운영체제의 알림 설정에서 Rhythm 알림을 허용해 주세요.";
+    let updater = crate::updater::updater_configured();
     Ok(PlatformCapabilities {
         restore,
         notifications: FeatureSupport {
             available,
-            reason: (!available)
-                .then(|| "Windows 알림 설정과 앱 설치 상태를 확인해 주세요.".into()),
+            reason: (!available).then(|| notification_hint.into()),
         },
         updater: FeatureSupport {
-            available: false,
-            reason: Some("새 설치 파일로 수동 업데이트합니다.".into()),
+            available: updater,
+            reason: (!updater).then(|| "새 버전을 내려받아 직접 설치합니다.".into()),
         },
     })
 }

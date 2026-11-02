@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import type { ArchiveSummary, SourceInfo, SyncStatus } from './types';
   import { archiveDate, archiveError, archiveSize, sourceStatus } from './archive-format';
 
-  let { enabled }: { enabled: boolean } = $props();
+  let { enabled, oninitialload }: { enabled: boolean; oninitialload?: () => void } = $props();
   let sources = $state<SourceInfo[]>([]);
   let summary = $state<ArchiveSummary | null>(null);
   let status = $state<SyncStatus | null>(null);
@@ -22,7 +22,11 @@
   let subscribed = $derived(sources.filter((source) => source.subscribed && source.supported));
 
   onMount(() => {
-    void refresh();
+    void (async () => {
+      await refresh();
+      await tick();
+      if (active) oninitialload?.();
+    })();
     const timer = window.setInterval(() => {
       if (!active || polling || busy || loading || !enabled) return;
       polling = true;

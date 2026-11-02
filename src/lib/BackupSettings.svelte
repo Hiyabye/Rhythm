@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { save, open } from '@tauri-apps/plugin-dialog';
   import { archiveError, archiveSize } from './archive-format';
@@ -21,6 +22,14 @@
   let operationId = $state<string | null>(null);
   let error = $state('');
   let notice = $state('');
+  let restoreAvailable = $state<boolean | null>(null);
+  let restoreReason = $state('');
+  onMount(() => { if (desktop) void checkRestoreSupport(); });
+  async function checkRestoreSupport() {
+    restoreAvailable = null;
+    try { await invoke('backup_restore_support'); restoreAvailable = true; restoreReason = ''; }
+    catch (reason) { restoreAvailable = false; restoreReason = archiveError(reason); }
+  }
   function createdAt(value: string) {
     const seconds = Number(value);
     return Number.isFinite(seconds) ? new Date(seconds * 1000).toLocaleString('ko-KR') : value;
@@ -76,7 +85,7 @@
     finally { finishOperation(id); }
   }
   async function chooseBackup() {
-    if (!desktop || busy) return;
+    if (!desktop || busy || restoreAvailable !== true) return;
     error = ''; notice = '';
     let source: string | string[] | null;
     try {
@@ -96,7 +105,7 @@
     finally { finishOperation(id); }
   }
   async function restoreBackup() {
-    if (!desktop || !selected || !preview || busy) return;
+    if (!desktop || !selected || !preview || busy || restoreAvailable !== true) return;
     error = ''; notice = '';
     let confirmed: boolean;
     try {
@@ -119,13 +128,13 @@
   {#if !desktop}<p class="muted">백업과 복원은 데스크톱 앱에서 사용할 수 있습니다.</p>
   {:else}
     <div class="setting-row"><div><h3>로컬 백업 만들기</h3><p>현재 데이터베이스의 일관된 스냅샷과 보관된 첨부 자료를 하나의 백업 파일에 담습니다. AI 모델 파일은 포함하지 않습니다.</p></div><button class="text-button" disabled={busy} onclick={createBackup}>{busy ? '처리 중…' : '백업 파일 저장'}</button></div>
-    <div class="setting-row"><div><h3>백업에서 복원</h3><p>백업을 먼저 검사해 포함된 데이터와 버전을 확인합니다. 복원을 확정하면 Rhythm이 종료되고, 다음에 Rhythm을 열 때 복원을 마무리합니다.</p></div><button class="text-button" disabled={busy} onclick={chooseBackup}>{busy ? '검사 중…' : '백업 파일 선택'}</button></div>
+    <div class="setting-row"><div><h3>백업에서 복원</h3><p>백업을 먼저 검사해 포함된 데이터와 버전을 확인합니다. 복원을 확정하면 Rhythm이 종료되고, 다음에 Rhythm을 열 때 복원을 마무리합니다.</p>{#if restoreAvailable === null}<p>복원 가능 여부를 확인하고 있습니다.</p>{:else if !restoreAvailable}<p role="status">복원할 수 없습니다. {restoreReason}</p><button class="text-button" onclick={checkRestoreSupport}>복원 가능 여부 다시 확인</button>{/if}</div><button class="text-button" disabled={busy || restoreAvailable !== true} onclick={chooseBackup}>{busy ? '검사 중…' : '백업 파일 선택'}</button></div>
     {#if busy}
       <div class="inline-controls"><p class="muted" role="status">{cancelling ? '취소 요청을 처리하고 임시 파일을 정리하고 있습니다…' : '작업 중…'}</p><button class="text-button" disabled={cancelling} onclick={cancelOperation}>{cancelling ? '취소 요청됨' : '작업 취소'}</button></div>
     {/if}
     {#if preview}
       <div class="privacy-note" aria-live="polite"><div><h3>복원할 백업 확인</h3><p>형식 v{preview.format_version} · 데이터베이스 스키마 {preview.database_schema} · 공지 {preview.documents.toLocaleString('ko-KR')}건 · 첨부 자료 {preview.resources.toLocaleString('ko-KR')}개 ({archiveSize(preview.resource_bytes)})</p><p>생성 시각 {createdAt(preview.created_at)} · 모델 가중치는 포함되지 않습니다.</p><p>복원하면 Rhythm이 종료됩니다. 자동으로 다시 열리지 않으니 Rhythm을 직접 다시 열어 주세요. 다시 열 때 복원이 마무리됩니다.</p></div></div>
-      <div class="inline-controls"><button class="text-button" disabled={busy} onclick={() => { selected = null; preview = null; }}>취소</button><button class="text-button" disabled={busy} onclick={restoreBackup}>이 백업으로 복원</button></div>
+      <div class="inline-controls"><button class="text-button" disabled={busy} onclick={() => { selected = null; preview = null; }}>취소</button><button class="text-button" disabled={busy || restoreAvailable !== true} onclick={restoreBackup}>이 백업으로 복원</button></div>
     {/if}
   {/if}
   {#if error}<p class="archive-error" role="alert">{error}</p>{/if}
