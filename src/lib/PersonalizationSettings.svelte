@@ -90,7 +90,18 @@
     if (saved && interestDraftRevision === draftRevision) clearEditor();
   }
 
-  async function removeInterest(id: number) {
+  async function removeInterest(interest: PersonalInterest) {
+    const { id } = interest;
+    let confirmed: boolean;
+    try {
+      confirmed = await confirmAction(interest.origin === 'learned'
+        ? `학습된 관심사 '${interest.name}'을(를) 삭제할까요?\n\n지금까지의 저장·관심 표시 기록만으로는 다시 만들어지지 않습니다. 보관한 공지와 피드백은 그대로 유지됩니다.`
+        : `관심사 '${interest.name}'을(를) 삭제할까요? 추천에서 이 관심사를 더 이상 반영하지 않습니다. 보관한 공지는 그대로 유지됩니다.`, '삭제');
+    } catch (reason) {
+      error = `${archiveError(reason)} 확인 창을 열지 못해 삭제하지 않았습니다.`;
+      return;
+    }
+    if (!confirmed) return;
     const draftRevision = interestDraftRevision;
     const removed = await action('personalization_remove_interest', { id });
     if (!removed || editingId !== id) return;
@@ -104,7 +115,7 @@
   async function resetPersonalization() {
     let confirmed: boolean;
     try {
-      confirmed = await confirmAction('개인화 프로필, 관심사, 기억과 피드백을 모두 초기화할까요? 보관한 공지는 유지됩니다.', '초기화');
+      confirmed = await confirmAction('개인화 프로필, 관심사, 학습된 기억과 공지별 피드백을 모두 지울까요? 지운 내용은 되돌릴 수 없습니다.\n\n보관한 공지, 읽음·저장 상태와 AI 분석 결과는 유지됩니다.', '초기화');
     } catch (reason) {
       error = `${archiveError(reason)} 확인 창을 열지 못해 초기화하지 않았습니다.`;
       return;
@@ -175,10 +186,10 @@
               </p>
               {#if interest.evidence_summary}<small>{interest.evidence_summary}</small>{/if}
             </div>
-            <button class="text-button" type="button" disabled={busy} onclick={() => edit(interest)}>
+            <button class="text-button" type="button" disabled={busy} aria-label={`${interest.name} ${interest.origin === 'learned' ? '직접 입력으로 수정' : '수정'}`} onclick={() => edit(interest)}>
               {interest.origin === 'learned' ? '직접 입력으로 수정' : '수정'}
             </button>
-            <button class="text-button" type="button" disabled={busy} onclick={() => void removeInterest(interest.id)}>삭제</button>
+            <button class="text-button" type="button" disabled={busy} aria-label={`${interest.name} 삭제`} onclick={() => void removeInterest(interest)}>삭제</button>
           </li>
         {/each}
       </ul>
@@ -217,6 +228,7 @@
       </div>
       <button
         class="switch"
+        class:on={data.learning_enabled}
         role="switch"
         aria-checked={data.learning_enabled}
         aria-label="관심사 학습"

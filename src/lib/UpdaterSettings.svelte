@@ -74,7 +74,7 @@
 
 <section id="about" class="settings-section about-section">
   <div class="section-heading"><h2>정보</h2><p>Rhythm 정보와 앱을 최신 버전으로 유지하는 방법을 확인합니다.</p></div>
-  <div class="about-brand"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><h2>Rhythm</h2><span>0.9.2</span></div>
+  <div class="about-brand"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><h2>Rhythm</h2><span>1.0.0</span></div>
   <p>나의 하루를 정돈하는 로컬 퍼스트 개인 커맨드 센터.</p>
   <p class="muted">조용하게 연결하고, 나에게 중요한 것에 집중합니다.</p>
   <div class="about-meta"><span>MIT 라이선스</span><span>github.com/Hiyabye/Rhythm</span></div>
@@ -85,12 +85,15 @@
     {#if progress}<p class="footnote" role="status">{progress.phase === 'downloading' ? `다운로드 중${progress.total ? ` · ${Math.round((progress.downloaded ?? 0) / progress.total * 100)}%` : '…'}` : progress.phase === 'verifying' ? '다운로드한 서명 검증 중…' : progress.phase === 'installing' ? '검증된 업데이트를 설치 중…' : progress.phase === 'staged' ? '서명된 업데이트를 준비했습니다.' : '앱을 다시 시작합니다…'}</p>{/if}
     {#if error}<div class="banner error" role="alert"><div><strong>업데이트를 완료하지 못했습니다</strong><p>{error}</p></div><button class="text-button" disabled={checking || installing} onclick={check}>다시 시도</button></div>{/if}
   {:else if desktop && configured === false}
-    <div class="setting-row"><div><h3>앱 업데이트</h3><p>이 빌드에는 앱 안에서 업데이트를 받는 공식 채널이 설정되어 있지 않습니다. 새 버전은 직접 설치합니다.</p></div></div>
+    <div class="setting-row"><div><h3>앱 업데이트</h3><p>자동 업데이트는 제공하지 않습니다. 새 버전은 아래 순서로 직접 설치합니다.</p></div></div>
     <ol class="manual-update">
-      <li>새 버전의 Rhythm 앱을 준비합니다. 소스에서 직접 빌드한 앱도 사용할 수 있습니다.</li>
-      <li>Rhythm을 완전히 종료합니다.</li>
-      <li>응용 프로그램 폴더의 Rhythm을 새 앱으로 바꿉니다.</li>
-      <li>Rhythm을 다시 엽니다. 보관한 공지, 설정, AI 모델은 앱과 별도로 저장되어 그대로 유지됩니다.</li>
+      <li>메뉴 막대 아이콘이나 ⌘Q로 Rhythm을 완전히 종료합니다.</li>
+      <li>필요하면 먼저 위의 백업 및 복원에서 백업 파일을 만듭니다.</li>
+      <li>공식 GitHub 저장소(github.com/Hiyabye/Rhythm)의 Releases에서 최신 DMG를 내려받습니다.</li>
+      <li>터미널에서 <code>shasum -a 256</code>으로 DMG의 SHA-256을 확인하고, 릴리스에 게시된 값과 같은지 비교합니다.</li>
+      <li>DMG를 열고 Rhythm을 응용 프로그램 폴더로 끌어 기존 앱을 바꿉니다.</li>
+      <li>Rhythm을 다시 열고 보관한 공지와 설정이 그대로인지 확인합니다. 공지, 설정, AI 모델은 앱과 별도로 저장되어 앱을 바꿔도 지워지지 않습니다.</li>
     </ol>
+    <p class="footnote">Rhythm은 Ad-hoc 서명만 되어 있고 Apple 공증을 받지 않았습니다. 새 버전을 처음 열 때 macOS 보안 경고가 표시될 수 있습니다. 확인 방법은 저장소의 README에 있습니다.</p>
   {:else if !desktop}<p class="footnote">업데이트 확인과 설치는 데스크톱 앱에서 사용할 수 있습니다.</p>{/if}
 </section>

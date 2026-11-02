@@ -200,10 +200,10 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'updater_configured': return options.updaterConfigured ?? false;
           case 'updater_check':
             if (options.updaterCheckError) throw options.updaterCheckError;
-            return options.updateAvailable === false ? null : { version: '0.9.3', currentVersion: '0.9.2', date: null, body: '안정 버전 업데이트' };
+            return options.updateAvailable === false ? null : { version: '1.0.1', currentVersion: '1.0.0', date: null, body: '안정 버전 업데이트' };
           case 'updater_install':
             if (options.updaterInstallError) throw '서명된 업데이트를 설치하지 못했습니다.';
-            return { version: '0.9.3', currentVersion: '0.9.2', date: null, body: '안정 버전 업데이트' };
+            return { version: '1.0.1', currentVersion: '1.0.0', date: null, body: '안정 버전 업데이트' };
           case 'updater_restart':
             if (options.updaterRestartError) throw '업데이트를 적용하며 다시 시작하지 못했습니다.';
             return null;

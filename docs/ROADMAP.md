@@ -340,9 +340,51 @@ Changes:
 
 ## v1.0.0 — Stable release
 
-Planned: stable, macOS-supported local-first daily command-center experience with validated behavior, reliable archives/AI integration, clear privacy controls and supported macOS distribution.
+**Status: implemented and verified locally on macOS 27.2, Apple M1 Pro, 16 GiB. Release artifacts were built locally; nothing was pushed or published.** This is an integration, quality and documentation release; no major features were added and schema 6 is unchanged.
+
+Distribution policy (user decision): the app is **ad-hoc signed with the hardened runtime and not notarized**. Developer ID signing and notarization are intentionally excluded, not pending tasks. Updates are manual app replacement; the production updater stays disabled. README documents the Gatekeeper warning, Apple's per-app "그래도 열기" approval (macOS 27), SHA-256 verification, manual update and backup.
+
+Changes:
+
+- **Version 1.0.0** in both Cargo crates, `Cargo.lock`, `package.json`/lock, `tauri.conf.json`, the sidebar and the About section (a Rust test checks the visible strings).
+- **Bundle metadata:** `LSMinimumSystemVersion` was Tauri's default 10.13 while both binaries target macOS 11.0; it is now 11.0. Only macOS 27.2 was tested.
+- **Settings navigation regression:** v0.9.0 (`d1d5a0f`) dropped the links to General, Extensions, AI, Personalization and Background from the settings side navigation. All twelve sections are linked again; a UI test checks each link has a target.
+- **Placeholder/misleading text:** the General "시작과 종료" row had no control and now links to Background; the extension card said "수동 동기화" although opt-in scheduled sync exists.
+- **Visual state bug:** the "행동으로 배우기" switch never showed its on state (missing `on` class) although it announced the correct state. A UI test fails without the fix.
+- **Confirmations:** clearing notification history and deleting an interest now ask first. The dialogs say what is removed and what is kept (dedupe and rate-limit state survive history clearing; a deleted learned memory is not recreated from past activity). The personalization reset dialog now says it cannot be undone and that read/saved state and AI results remain. Cancelling leaves state unchanged (UI-tested).
+- **Manual update guidance:** Settings lists quitting, optional backup, downloading the DMG from the official GitHub repository, checking `shasum -a 256` against the published value, replacing the app and confirming data. It states that the app is ad-hoc signed and not notarized.
+- **First run:** an empty archive shows a short guide on Today: what Rhythm does, that only verified boards can be subscribed, local storage, optional AI, background features off by default and only while the app runs and the Mac is awake.
+- **Accessibility/polish:** item-specific names for repeated buttons, stored scheduler/history errors are no longer alerts, notification history shows local time instead of raw UTC, source settings show the supported count. See [design](DESIGN.md#interaction-and-accessibility-boundaries).
+- **Docs:** README rewritten for users (install, Gatekeeper, checksum, update, backup, sources, models with license, limits); this roadmap keeps the historical evidence.
+
+### Observed v1.0.0 evidence
+
+- [x] **Rust:** `cargo fmt --all -- --check` clean; `cargo clippy --locked --workspace --all-targets -- -D warnings` clean; `cargo test --locked --workspace` with the real CPU worker configured (`RHYTHM_WORKER_TEST_BIN`): **303 passed, 0 failed** (289 app, 10 worker unit, 4 worker process; 10 opt-in ignored), including the five v0.9.1 fake-worker tests.
+- [x] **Frontend:** `npm run check` zero diagnostics, `npm run build`, `npm run test:desktop` **6** passed, `npm run test:release` **12** passed, `npm run test:ui` **190** Chromium/WebKit mocked-IPC checks passed (new: first-run guide, settings links, switch visual state, confirmation cancel paths, manual-update steps). The new switch-state test was confirmed to fail without the fix. Mocked IPC is not native verification.
+- [x] **Bounded live import (production Rust path):** `bounded_live_import_and_offline_reopen` archived one article from each of the **10** supported sources: 11 files downloaded (7,117,417 bytes), 2 missing, offline reopen verified text/search/user state and hashes; every source stayed deliberately incomplete.
+- [x] **Backup/restore (v1.0.0 code, synthetic, debug build):** `large_profile_backup_restore_benchmark` with 600 notices and 663 files: backup 8.6 s (35,081,693-byte archive), restore verify+stage 4.3 s into a separate profile, next-launch finalize 0.4 s, report flagged one managed model needing reinstall; integrity/foreign-key/FTS checks, 24 table digests and all 663 SHA-256s matched; cancellation left no archive, staging or journal. Hostile/corrupt archive rejection and interrupted-restore recovery are covered by the workspace tests above. The v0.9.2 10,000-notice Release measurements remain the large-profile reference.
+- [x] **Release build:** Metal worker (build log line checked). `Rhythm_1.0.0_aarch64.dmg` **44,514,931 bytes**, `hdiutil verify` valid, SHA-256 `c6b513423f8ac14334b0d5aaddebed77e2259a0a15858d8c1269286ba093ea42` (computed from the final DMG). App 122 MiB; identifier `io.github.hiyabye.rhythm`, version 1.0.0, `LSMinimumSystemVersion` 11.0; app and worker arm64 only, minos 11.0, ad-hoc signed with the hardened runtime; `codesign --verify --deep --strict` passes; `spctl` **rejects** the app and the DMG (expected: not notarized). Contents: two executables, icon, Pretendard OFL; worker links Metal; only system libraries; no databases, keys or secrets. Binaries embed dependency source paths under the builder's `~/.cargo/registry` (panic locations); no build-tree path is used at runtime.
+- [x] **Copied-app native run (production identity, isolated `HOME`, bundle executable launched directly; LaunchServices not used because it would open the real profile):** app copied out of the read-only DMG. Fresh profile: window and first-run guide rendered, worker child started in ≈1.5 s (first-launch policy check), schema 6 created only in the isolated profile, no TCP listener, menu quit stopped app and worker in ≈0.2 s. Driven through the Accessibility API: enabled the notice extension, subscribed to 공과대학 학사공지, imported its **5 live public notices** (2 files downloaded, 1 unsupported legacy attachment reported; history complete at the board's public end), Korean search "수강" returned 3 (matches an independent SQLite count), opened a notice (read state persisted). Registered the pinned 2B GGUF as an external reference (hash `aaf42c8b…` verified), loaded it: Settings showed **"실제 불러온 백엔드: Metal"**, worker RSS ≈2.8 GB. Real Korean analysis of a live notice completed in **19.8 s** with evidence disclosures and was cached. Added an explicit interest; Today ranked matching notices with the reason "관심 분야 ‘수강신청’에 맞는 공지". Feedback set then reversed (row removed); a saved notice appeared in 보관함. A native confirmation sheet for interest deletion showed the specific message; 취소 kept the interest.
+- [x] **Background:** enabled close-to-background and scheduled sync. Closing the window kept the app and worker running with zero windows. A second launch exited 0 and restored the existing window (single instance). With the window hidden, the scheduler ran the subscribed source at its 30-minute Balanced default (outcome success, 0 new notices, next run scheduled), with no duplicates and no notification events from the initial backfill. Menu quit while hidden stopped app and worker.
+- [x] **Manual replacement:** after quitting, the installed copy was replaced with the second v1.0.0 build. The new executable and worker (new inodes) ran on the same isolated profile; document/revision/resource/read-saved/AI result/interest/model rows and all resource SHA-256s were identical, integrity check ok, no second profile created, one instance only, model reference still installed (no re-download).
+
+### Remaining limits (accepted or unverified)
+
+- **Accepted distribution tradeoffs:** ad-hoc signature only, no notarization, Gatekeeper rejects first launch until the user approves the app; no automatic updater. A quarantined download and the "그래도 열기" flow were not exercised on this Mac (the README steps follow Apple's macOS 27 guide).
+- **Not natively verified this release:** LaunchServices/Finder launch of the production identity (it would open the real profile; v0.9.2 covered LaunchServices with a validation identity); clicking the tray menu (System Events cannot reach the status-item menu; restore was exercised via second launch); native notification permission and presentation (authorization is per bundle identifier and would change the real app's system state; covered by deterministic tests and the earlier isolated synthetic-bundle evidence); sleep/wake; real login autostart; the native save/open panels for backup and restore (UI automation of the system panel was stopped after keystrokes misfired; backend paths verified above, native panel flow last verified in v0.9.1).
+- **Accessibility:** spoken VoiceOver output, OS text size/zoom, increased contrast and OS reduced motion remain unverified.
+- **AI quality:** the live-notice 2B analysis was schema-valid and grounded but contained semantic errors (it said submission happens through the homepage and turned "9학기" into "9학점"). This is model behavior, disclosed in README, not a runtime defect. 4B CPU, 9B and non-Apple-Silicon backends are unverified.
+- **Archive:** full historical import across all supported sources was not run.
+- **Privacy note:** release binaries contain the builder's home-directory path in dependency panic locations; this exposes the build username only. `--remap-path-prefix` could remove it in a later release.
+- **Platforms:** Windows, Linux and Intel Macs are not supported.
 
 ## After v1.0.0
+
+Possible platform and distribution work, each a future product decision:
+
+- Windows and Linux support (the historical Linux `glib 0.18.5` finding must be re-reviewed first) and Intel macOS.
+- Developer ID signing and Apple notarization, if justified.
+- A production Tauri updater with a protected signing key.
 
 Possible built-in extensions:
 

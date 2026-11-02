@@ -22,7 +22,9 @@
     { id: 'settings', label: '설정', caption: '나의 방식으로 Rhythm을 조율하세요' },
   ];
   const categories = [
-    ['notification-history', '알림 기록'], ['energy', '성능 및 전원'], ['data', '데이터 및 개인정보'], ['data-backup', '백업 및 복원'], ['about', '정보'],
+    ['general', '일반'], ['extensions', '확장 기능'], ['ai', 'AI 모델'], ['ai-processing', 'AI 처리'], ['personalization', '개인화'],
+    ['background', '백그라운드'], ['notifications', '알림'], ['notification-history', '알림 기록'], ['energy', '성능 및 전원'],
+    ['data', '데이터 및 개인정보'], ['data-backup', '백업 및 복원'], ['about', '정보'],
   ];
   const themes: { id: Theme; label: string; icon: string }[] = [
     { id: 'light', label: '라이트', icon: 'today' },
@@ -217,7 +219,7 @@
         </button>
       {/each}
     </nav>
-    <div class="sidebar-bottom"><span class="local-dot"></span><span>내 기기에 머무는 정보</span><small>v0.9.2</small></div>
+    <div class="sidebar-bottom"><span class="local-dot"></span><span>내 기기에 머무는 정보</span><small>v1.0.0</small></div>
   </aside>
 
   <main id="main" tabindex="-1">
@@ -236,10 +238,10 @@
           <section id="general" class="settings-section"><div class="section-heading"><h2>일반</h2><p>편안하게 집중할 수 있는 환경을 만드세요.</p></div>
             <div class="setting-row"><div><h3>화면 테마</h3><p>시스템 설정에 맞추거나 직접 선택하세요.</p></div><div class="segmented" role="group" aria-label="화면 테마">{#each themes as option}<button disabled={!snapshot || busy} class:selected={theme === option.id} aria-pressed={theme === option.id} onclick={() => save({ theme: option.id })}><Icon name={option.icon} size={16} />{option.label}</button>{/each}</div></div>
             <div class="setting-row"><div><h3>앱 언어</h3><p>Rhythm은 한국어로 함께합니다.</p></div><span class="value">한국어</span></div>
-            <div class="setting-row"><div><h3>시작과 종료</h3><p>백그라운드 실행, 로그인 시 자동 시작과 시작 창 표시를 설정할 수 있습니다.</p></div></div>
+            <div class="setting-row"><div><h3>시작과 종료</h3><p>창을 닫은 뒤 백그라운드 실행, 로그인 시 자동 시작과 자동 동기화는 모두 꺼진 상태로 시작합니다.</p></div><a class="text-button" href="#background">백그라운드 설정</a></div>
           </section>
           <section id="extensions" class="settings-section"><div class="section-heading"><h2>확장 기능</h2><p>필요한 정보원만 선택하세요. 꺼도 저장된 정보는 지워지지 않습니다.</p></div>
-            {#if snapshot}{#each snapshot.extensions as extension}<div class="extension-row"><div class="extension-symbol"><Icon name="inbox" size={22} /></div><div class="extension-description"><h3>{extension.display_name}</h3><p>{extension.description}</p><span class="availability">{extension.available ? '사용 가능 · 수동 동기화' : '현재 사용할 수 없습니다'}</span></div><button class="switch" class:on={extension.enabled} role="switch" aria-checked={extension.enabled} aria-label={`${extension.display_name} 사용 설정`} disabled={busy} onclick={() => toggleExtension(extension.id, !extension.enabled)}><span></span></button></div>{/each}{:else}<p class="muted">{loading ? '확장 기능을 불러오는 중입니다.' : '데스크톱 앱에서 등록된 확장 기능을 확인할 수 있습니다.'}</p>{/if}
+            {#if snapshot}{#each snapshot.extensions as extension}<div class="extension-row"><div class="extension-symbol"><Icon name="inbox" size={22} /></div><div class="extension-description"><h3>{extension.display_name}</h3><p>{extension.description}</p><span class="availability">{extension.available ? '사용 가능 · 직접 가져오기와 선택적 자동 동기화' : '현재 사용할 수 없습니다'}</span></div><button class="switch" class:on={extension.enabled} role="switch" aria-checked={extension.enabled} aria-label={`${extension.display_name} 사용 설정`} disabled={busy} onclick={() => toggleExtension(extension.id, !extension.enabled)}><span></span></button></div>{/each}{:else}<p class="muted">{loading ? '확장 기능을 불러오는 중입니다.' : '데스크톱 앱에서 등록된 확장 기능을 확인할 수 있습니다.'}</p>{/if}
             {#if noticesEnabled}<SourceSettings enabled={noticesEnabled} />{:else}<p class="footnote">서강대학교 공지를 켜면 정보원을 구독하고 자료를 가져올 수 있습니다. 꺼도 이미 보관한 공지와 구독 설정은 유지됩니다.</p>{/if}
           </section>
           <AiSettings {desktop} onsetup={() => setupNeeded = false} />

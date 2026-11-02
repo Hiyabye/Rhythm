@@ -261,6 +261,20 @@
   <section class="archive-view" aria-busy={loading}>
     {#if page === 'today'}
       <div class="archive-intro"><span class="section-kicker">내 기기에 쌓이는 학교 소식</span><h2>오늘도, 필요한 소식부터.</h2><p>직접 보관한 공지와 이미 분석한 핵심을 차분히 살펴보세요. {hasPreferences ? '관심사와 보관 행동을 바탕으로 정렬한 추천입니다.' : '아직 개인화 선호가 없어 최근 공지부터 보여드립니다.'}</p></div>
+      {#if desktop && summary?.documents === 0}
+        <section class="first-run" aria-labelledby="first-run-heading">
+          <h2 id="first-run-heading">Rhythm 시작하기</h2>
+          <p>Rhythm은 서강대학교의 공개 공지를 이 Mac에 보관해 인터넷 없이도 읽고 검색할 수 있게 합니다. 계정이나 클라우드 없이 모든 자료와 설정은 이 기기에만 저장됩니다.</p>
+          <ol>
+            <li>설정 → 확장 기능에서 서강대학교 공지를 켜고 게시판을 구독합니다. 원문 수집을 확인한 게시판만 구독할 수 있습니다.</li>
+            <li>과거 자료 가져오기를 누르면 공지를 내려받습니다. 직접 시작하거나 자동 동기화를 켠 경우에만 네트워크를 사용합니다.</li>
+            <li>로컬 AI 모델은 선택 사항입니다. 모델 없이도 읽기, 검색과 추천을 사용할 수 있습니다.</li>
+            <li>백그라운드 실행, 자동 동기화와 알림은 처음에 모두 꺼져 있습니다. 켜더라도 Rhythm이 실행 중이고 Mac이 깨어 있을 때만 동작합니다.</li>
+          </ol>
+          <p>데이터 저장 위치는 설정 → 데이터 및 개인정보에서 확인할 수 있습니다.</p>
+          <button class="button secondary small" onclick={onsettings}>설정에서 시작하기</button>
+        </section>
+      {/if}
       <dl class="archive-statistics">
         <div><dt>보관된 공지</dt><dd>{summary?.documents ?? '—'}</dd></div>
         <div><dt>읽지 않은 공지</dt><dd>{summary?.unread ?? '—'}</dd></div>

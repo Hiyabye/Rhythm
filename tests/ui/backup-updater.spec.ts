@@ -95,14 +95,18 @@ test('unconfigured updater shows manual update guidance instead of a failing che
   const updater = await openUpdater(page);
 
   // Static guidance, not a live announcement on every visit to Settings.
-  await expect(updater).toContainText('공식 채널이 설정되어 있지 않습니다');
+  await expect(updater).toContainText('자동 업데이트는 제공하지 않습니다');
   await expect(updater.getByRole('status')).toHaveCount(0);
-  await expect(updater.getByRole('listitem')).toHaveCount(4);
+  await expect(updater.getByRole('listitem')).toHaveCount(6);
   await expect(updater).toContainText('Rhythm을 완전히 종료합니다.');
-  await expect(updater).toContainText('보관한 공지, 설정, AI 모델은 앱과 별도로 저장되어 그대로 유지됩니다.');
+  await expect(updater).toContainText('shasum -a 256');
+  await expect(updater).toContainText('github.com/Hiyabye/Rhythm');
+  await expect(updater).toContainText('Apple 공증을 받지 않았습니다');
+  await expect(updater).not.toContainText('공증된');
+  await expect(updater).toContainText('공지, 설정, AI 모델은 앱과 별도로 저장되어 앱을 바꿔도 지워지지 않습니다.');
   await expect(updater.getByRole('button', { name: '업데이트 확인', exact: true })).toHaveCount(0);
   await expect(updater.getByRole('alert')).toHaveCount(0);
-  await expect(updater).toContainText('0.9.2');
+  await expect(updater).toContainText('1.0.0');
   expect(await callCount(page, 'updater_configured')).toBe(1);
   expect(await callCount(page, 'updater_check')).toBe(0);
 });

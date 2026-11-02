@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mockDesktop, callCount } from './fixture';
+import { mockDesktop, callCount, answerDialogs, dialogMessages } from './fixture';
 
 async function openSettings(page: import('@playwright/test').Page) {
   await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name: '설정', exact: true }).click();
@@ -63,7 +63,10 @@ test('proactive settings save OS lifecycle, sync cadence, notifications and quie
   await expect(schedulerStatus).toContainText('최근 실행:');
   await expect(schedulerStatus).toContainText('다음 확인 예정: 예약된 작업 없음');
   await expect(schedulerStatus).toContainText('실패');
-  await expect(page.getByText('최근 오류: 자동 동기화에 실패했습니다.', { exact: true })).toBeVisible();
+  await expect(schedulerStatus).toContainText('최근 오류: 자동 동기화에 실패했습니다.');
+  await expect(schedulerStatus).toContainText('다음 확인 때 자동으로 다시 시도합니다');
+  // A stored scheduler error is status, not a fresh announcement on every visit.
+  await expect(schedulerStatus.getByRole('alert')).toHaveCount(0);
 
   const notifications = page.getByRole('switch', { name: '알림 활성화', exact: true });
   await notifications.click();
@@ -149,10 +152,21 @@ test('history can be cleared and opens its stable document destination in the ar
   await openSettings(page);
   await expect(page.getByRole('heading', { name: '한국어 공지 01', exact: true })).toBeVisible();
   expect(await callCount(page, 'proactive_history')).toBeGreaterThan(0);
-  await page.getByRole('button', { name: '공지 열기', exact: true }).click();
+  await page.getByRole('button', { name: '한국어 공지 01 공지 열기', exact: true }).click();
   await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 01');
   await page.keyboard.press('Escape');
   await openSettings(page);
+
+  // Cancelling the confirmation leaves the history untouched.
+  await page.getByRole('button', { name: '알림 기록 비우기', exact: true }).click();
+  await expect.poll(() => dialogMessages(page).then((messages) => messages.length)).toBe(1);
+  const [confirmation] = await dialogMessages(page);
+  expect(confirmation).toContain('되돌릴 수 없습니다');
+  expect(confirmation).toContain('중복 방지 정보');
+  await expect(page.getByRole('heading', { name: '한국어 공지 01', exact: true })).toBeVisible();
+  expect(await callCount(page, 'proactive_clear_history')).toBe(0);
+
+  await answerDialogs(page, 'ok');
   await page.getByRole('button', { name: '알림 기록 비우기', exact: true }).click();
   await expect(page.getByText('저장된 알림 기록이 없습니다.', { exact: true })).toBeVisible();
   expect(await callCount(page, 'proactive_clear_history')).toBe(1);
@@ -187,6 +201,7 @@ test('OS lifecycle and history-clear failures retain authoritative values and di
   await closeToBackground.click();
   await expect(closeToBackground).toHaveAttribute('aria-checked', 'false');
   await expect(page.getByRole('alert')).toContainText('운영체제 시작 설정을 바꾸지 못했습니다.');
+  await answerDialogs(page, 'ok');
   await page.getByRole('button', { name: '알림 기록 비우기', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('알림 기록을 비우지 못했습니다.');
   await expect(page.getByRole('heading', { name: '한국어 공지 01', exact: true })).toBeVisible();

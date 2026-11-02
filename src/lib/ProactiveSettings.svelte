@@ -3,6 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import type { LifecycleStatus, NotificationAuthorization, ProactiveHistoryItem, ProactiveSettings as Settings, ProactiveSnapshot } from './types';
   import { archiveError } from './archive-format';
+  import { confirmAction } from './confirm';
 
   let { desktop, onopen }: { desktop: boolean; onopen: (documentId: number, revisionId: number, eventId: number, attemptCount?: number, eventIds?: number[]) => void } = $props();
   let data = $state<ProactiveSnapshot | null>(null);
@@ -94,9 +95,17 @@
 
   async function clearHistory() {
     if (!data || busy || historyBusy) return;
-    historyBusy = true;
     error = '';
     notice = '';
+    let confirmed: boolean;
+    try {
+      confirmed = await confirmAction('표시된 알림 기록을 모두 지울까요? 지운 기록은 되돌릴 수 없습니다.\n\n보관한 공지와 알림 설정은 그대로이며, 같은 공지를 다시 알리지 않도록 하는 중복 방지 정보와 최근 알림 횟수 제한도 유지됩니다.', '기록 비우기');
+    } catch (reason) {
+      error = `${archiveError(reason)} 확인 창을 열지 못해 기록을 비우지 않았습니다.`;
+      return;
+    }
+    if (!confirmed || historyBusy) return;
+    historyBusy = true;
     try {
       data = await invoke<ProactiveSnapshot>('proactive_clear_history');
       notice = '알림 기록을 비웠습니다.';
@@ -138,7 +147,7 @@
     <div class="setting-row"><div><h3>자동 동기화 일시 중지</h3><p>다시 켜면 저장된 간격으로 확인을 이어갑니다.</p></div><button class="switch" class:on={data.settings.scheduler_paused} role="switch" aria-label="자동 동기화 일시 중지" aria-checked={data.settings.scheduler_paused} disabled={busy || !data.settings.scheduler_enabled} onclick={() => save({ scheduler_paused: !data?.settings.scheduler_paused })}><span></span></button></div>
     <label class="field-label" for="scheduler-interval">확인 간격</label><select id="scheduler-interval" value={String(data.settings.scheduler_interval_minutes)} disabled={busy || !data.settings.scheduler_enabled} onchange={(event) => save({ scheduler_interval_minutes: Number(event.currentTarget.value) })}><option value="0">전원 모드 기본값</option><option value="15">15분</option><option value="30">30분</option><option value="60">1시간</option><option value="120">2시간</option><option value="240">4시간</option><option value="720">12시간</option></select>
     <p class="footnote">전원 모드 기본값은 절전 60분, 균형 30분, 성능 15분입니다. 직접 간격을 선택하면 전원 모드와 관계없이 해당 간격으로 확인합니다.</p>
-    <div class="privacy-note"><p>상태: {data.scheduler.paused ? '일시 중지' : data.scheduler.enabled ? '사용 중' : '꺼짐'} · 대기 중인 알림 {data.scheduler.pending_events}개</p><p>최근 실행: {localTimestamp(data.scheduler.last_run_at, '아직 실행하지 않음')}{#if data.scheduler.last_outcome} · {outcomeLabel(data.scheduler.last_outcome)}{/if}</p><p>다음 확인 예정: {localTimestamp(data.scheduler.next_task_at, '예약된 작업 없음')}</p>{#if data.scheduler.last_error}<p role="alert">최근 오류: {data.scheduler.last_error}</p>{/if}</div>
+    <div class="privacy-note"><p>상태: {data.scheduler.paused ? '일시 중지' : data.scheduler.enabled ? '사용 중' : '꺼짐'} · 대기 중인 알림 {data.scheduler.pending_events}개</p><p>최근 실행: {localTimestamp(data.scheduler.last_run_at, '아직 실행하지 않음')}{#if data.scheduler.last_outcome} · {outcomeLabel(data.scheduler.last_outcome)}{/if}</p><p>다음 확인 예정: {localTimestamp(data.scheduler.next_task_at, '예약된 작업 없음')}</p>{#if data.scheduler.last_error}<p>최근 오류: {archiveError(data.scheduler.last_error)} · 네트워크 연결을 확인하면 다음 확인 때 자동으로 다시 시도합니다.</p>{/if}</div>
     <button class="text-button" type="button" disabled={busy} onclick={load}>백그라운드 상태 새로고침</button>
 
     <h3 id="notifications">알림</h3>
@@ -171,7 +180,7 @@
   {#if !desktop}<p class="muted">알림 기록은 데스크톱 앱에서 확인할 수 있습니다.</p>
   {:else if data}
     {#if data.history.length}
-      <ul aria-label="알림 기록">{#each data.history as item (item.id)}<li class="setting-row"><div><h3>{item.title}</h3><p>{historyLabel(item)} · {item.created_at}</p>{#if item.error}<p role="alert">{item.error}</p>{/if}{#if item.reason}<p>{item.reason}</p>{/if}</div><button class="text-button" type="button" disabled={historyBusy} onclick={() => onopen(item.document_id, item.revision_id, item.id, item.attempt_count, [item.id])}>공지 열기</button></li>{/each}</ul>
+      <ul aria-label="알림 기록">{#each data.history as item (item.id)}<li class="setting-row"><div><h3>{item.title}</h3><p>{historyLabel(item)} · {localTimestamp(item.created_at)}</p>{#if item.error}<p>{item.error}</p>{/if}{#if item.reason}<p>{item.reason}</p>{/if}</div><button class="text-button" type="button" disabled={historyBusy} aria-label={`${item.title} 공지 열기`} onclick={() => onopen(item.document_id, item.revision_id, item.id, item.attempt_count, [item.id])}>공지 열기</button></li>{/each}</ul>
       <button class="text-button" type="button" disabled={historyBusy} onclick={clearHistory}>{historyBusy ? '기록을 비우는 중…' : '알림 기록 비우기'}</button>
     {:else}<p class="muted">저장된 알림 기록이 없습니다.</p>{/if}
   {:else if loading}<p class="loading" role="status">알림 기록을 불러오는 중입니다…</p>

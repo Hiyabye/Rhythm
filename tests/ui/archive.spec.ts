@@ -130,6 +130,36 @@ test('successful empty archive is distinct from loading and errors', async ({ pa
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
+test('an empty archive explains first steps, local storage and optional AI on Today', async ({ page }) => {
+  await mockDesktop(page, { count: 0 });
+  await page.goto('/');
+  const start = page.getByRole('region', { name: 'Rhythm 시작하기' });
+  await expect(start).toContainText('이 기기에만 저장됩니다');
+  await expect(start).toContainText('원문 수집을 확인한 게시판만 구독할 수 있습니다');
+  await expect(start).toContainText('로컬 AI 모델은 선택 사항입니다');
+  await expect(start).toContainText('처음에 모두 꺼져 있습니다');
+  await start.getByRole('button', { name: '설정에서 시작하기', exact: true }).click();
+  await expect(page.getByRole('heading', { level: 1, name: '설정', exact: true })).toBeVisible();
+});
+
+test('a populated archive does not repeat the first-run guide', async ({ page }) => {
+  await mockDesktop(page);
+  await page.goto('/');
+  await expect(page.getByRole('region', { name: '오늘의 추천' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Rhythm 시작하기' })).toHaveCount(0);
+});
+
+test('settings navigation links every settings section', async ({ page }) => {
+  await mockDesktop(page);
+  await page.goto('/');
+  await navigate(page, '설정');
+  const links = page.getByRole('navigation', { name: '설정 항목', exact: true }).getByRole('link');
+  await expect(links).toHaveText(['일반', '확장 기능', 'AI 모델', 'AI 처리', '개인화', '백그라운드', '알림', '알림 기록', '성능 및 전원', '데이터 및 개인정보', '백업 및 복원', '정보']);
+  for (const href of await links.evaluateAll((items) => items.map((item) => item.getAttribute('href')))) {
+    await expect(page.locator(href!)).toHaveCount(1);
+  }
+});
+
 test('settings failure rolls back optimistic theme; system theme follows OS', async ({ page }) => {
   await mockDesktop(page, { settingsError: true });
   await page.goto('/');

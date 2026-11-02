@@ -89,7 +89,7 @@ test('explicit interests can be edited in place instead of being deleted and rec
   const personal = page.locator('#personalization');
   await personal.getByLabel('관심사 이름').fill('분산 시스템');
   await personal.getByRole('button', { name: '관심사 추가' }).click();
-  await personal.getByRole('button', { name: '수정', exact: true }).click();
+  await personal.getByRole('button', { name: '분산 시스템 수정', exact: true }).click();
   await personal.getByLabel('관심사 이름').fill('분산 컴퓨팅');
   await personal.getByRole('button', { name: '관심사 변경 저장' }).click();
   const calls = (await fixtureCalls(page)).filter((call) => call.command === 'personalization_save_interest');
@@ -106,8 +106,9 @@ test('removing an edited interest preserves a newer draft as an addition', async
   const personal = page.locator('#personalization');
   const name = personal.getByLabel('관심사 이름');
   const aliases = personal.getByLabel('별칭');
-  await personal.getByRole('button', { name: '수정', exact: true }).click();
-  await personal.getByRole('button', { name: '삭제', exact: true }).click();
+  await personal.getByRole('button', { name: '분산 시스템 수정', exact: true }).click();
+  await answerDialogs(page, 'ok');
+  await personal.getByRole('button', { name: '분산 시스템 삭제', exact: true }).click();
   await name.fill('C++');
   await aliases.fill('systems programming');
   await expect(personal.getByRole('status')).toContainText('개인화 설정을 저장했습니다.');
@@ -135,7 +136,13 @@ test('learned interest can be corrected into an explicit preference', async ({ p
 test('learning toggle and reset call the reversible personalization commands', async ({ page }) => {
   await mockDesktop(page); await page.goto('/'); await navigate(page, '설정');
   const personal = page.locator('#personalization');
-  await personal.getByRole('switch', { name: '관심사 학습' }).click();
+  const learning = personal.getByRole('switch', { name: '관심사 학습' });
+  await expect(learning).toHaveAttribute('aria-checked', 'true');
+  await expect(learning).toHaveClass(/\bon\b/);
+  await learning.click();
+  await expect(learning).toHaveAttribute('aria-checked', 'false');
+  // The visible switch must agree with the announced state.
+  await expect(learning).not.toHaveClass(/\bon\b/);
   await answerDialogs(page, 'cancel');
   await personal.getByRole('button', { name: '개인화 데이터 초기화' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__fixture.dialogs.length)).toBe(1);
@@ -191,7 +198,16 @@ test('learned memory can be removed from the settings review list', async ({ pag
   await page.goto('/'); await navigate(page, '설정');
   const personal = page.locator('#personalization');
   await expect(personal.getByText('행동 근거 기반 학습 제안 · 근거 2건')).toBeVisible();
-  await personal.getByRole('button', { name: '삭제', exact: true }).click();
+
+  // Cancelling keeps the memory; the dialog says it cannot be recreated from past activity.
+  await personal.getByRole('button', { name: '인턴십 삭제', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__fixture.dialogs.length)).toBe(1);
+  expect(await page.evaluate(() => (window as any).__fixture.dialogs[0])).toContain('다시 만들어지지 않습니다');
+  await expect(personal.getByText('인턴십', { exact: true })).toBeVisible();
+  expect(await callCount(page, 'personalization_remove_interest')).toBe(0);
+
+  await answerDialogs(page, 'ok');
+  await personal.getByRole('button', { name: '인턴십 삭제', exact: true }).click();
   await expect(personal.getByText('인턴십', { exact: true })).toHaveCount(0);
   expect((await fixtureCalls(page)).some((call) => call.command === 'personalization_remove_interest' && call.args.id === 1)).toBeTruthy();
 });

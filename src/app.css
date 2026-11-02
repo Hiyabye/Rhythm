@@ -1439,6 +1439,25 @@ select:focus-visible {
   font-size: 13px;
   line-height: 1.9;
 }
+.first-run {
+  max-width: 640px;
+  margin: 0 0 30px;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--secondary);
+  font-size: 13px;
+  line-height: 1.8;
+  word-break: keep-all;
+}
+.first-run h2 {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+.first-run p { margin: 0 0 8px; }
+.first-run ol { margin: 0 0 8px; padding-left: 20px; }
 .archive-statistics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

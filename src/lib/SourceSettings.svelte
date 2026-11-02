@@ -108,7 +108,7 @@
   <p class="archive-feedback" role="status">{feedback}</p>
   <label class="field-label" for="source-search">학과 또는 게시판 찾기</label>
   <input id="source-search" class="source-search" type="search" bind:value={filter} placeholder="예: 소프트웨어융합대학, 학사, 전자공학" />
-  <div class="source-catalog-heading"><span>정보원 {visibleSources.length}개 · 구독 {subscribed.length}개</span>{#if summary}<span>공지 {summary.documents}개 · 자료 {archiveSize(summary.resource_bytes)}</span>{/if}</div>
+  <div class="source-catalog-heading"><span>정보원 {visibleSources.length}개 · 수집 지원 {visibleSources.filter((source) => source.supported).length}개 · 구독 {subscribed.length}개</span>{#if summary}<span>공지 {summary.documents}개 · 자료 {archiveSize(summary.resource_bytes)}</span>{/if}</div>
   {#if loading}<p class="loading" role="status">정보원 목록을 불러오는 중입니다…</p>{/if}
   {#each organizations as organization}
     <section class="source-group" aria-label={organization}>
