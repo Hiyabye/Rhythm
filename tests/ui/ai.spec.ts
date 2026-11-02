@@ -19,9 +19,29 @@ test('first-run AI setup never blocks archived notices or starts a download', as
   await expect(page.getByRole('heading', { name: '로컬 AI 시작하기' })).toBeVisible();
 });
 
+test('AI setup stays visible after a delayed long source list and settings links reach their sections', async ({ page }) => {
+  await mockDesktop(page, { aiSetupNeeded: true, sourceCount: 32, sourceDelay: 1200 });
+  await page.goto('/');
+  await page.getByRole('button', { name: '로컬 AI 설정하기', exact: true }).click();
+  const heading = page.locator('#ai h2');
+  await expect(heading).toBeFocused();
+  await expect(page.getByLabel('서강대학교 공지 정보원 관리')).toHaveAttribute('aria-busy', 'false');
+  await expect(heading).toBeInViewport();
+  const nav = page.getByRole('navigation', { name: '설정 항목' });
+  for (const [label, id] of [['일반', 'general'], ['정보원', 'extensions'], ['AI 모델', 'ai'], ['AI 처리', 'ai-processing'], ['개인화', 'personalization'], ['백그라운드', 'background'], ['알림', 'notifications']]) {
+    await expect(nav.getByRole('link', { name: label, exact: true })).toHaveAttribute('href', `#${id}`);
+  }
+  await nav.getByRole('link', { name: '일반', exact: true }).click();
+  await nav.getByRole('link', { name: 'AI 모델', exact: true }).click();
+  await expect(heading).toBeInViewport();
+});
+
 test('catalog installation progress, cancellation, selection, loading and setup completion', async ({ page }) => {
   await mockDesktop(page, { aiSetupNeeded: true, aiDelay: 2300 }); await page.goto('/');
   await page.getByRole('button', { name: '로컬 AI 설정하기' }).click();
+  await expect(page.getByText('한 장학 사례의 자동 검사는 통과했지만 일반적인 정확도를 보장하지 않으며', { exact: false })).toBeVisible();
+  await expect(page.getByText('장학 공지 분류 오류와 발표 시점 표현 누락이 발견되어', { exact: false })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Qwen3.5 4B 다운로드 및 설치', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: 'Qwen3.5 4B 다운로드 및 설치', exact: true }).click();
   await expect(page.getByRole('progressbar')).toBeVisible();
   await page.getByRole('button', { name: '다운로드 중단', exact: true }).click();
@@ -207,9 +227,11 @@ test('successful model refresh clears a transient read error', async ({ page }) 
   await mockDesktop(page, { aiInstalled: true }); await page.goto('/');
   await page.getByRole('button', { name: '설정', exact: true }).click();
   await expect(page.getByRole('button', { name: '선택한 모델 불러오기', exact: true })).toBeVisible();
-  await page.evaluate(() => { (window as any).__fixture.snapshotFailures = 1; });
+  // Keep the failure observable even if the background poll runs before the assertion.
+  await page.evaluate(() => { (window as any).__fixture.snapshotFailures = 100; });
   await page.getByRole('button', { name: 'AI 엔진 상태 새로고침', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveText('모델 정보를 일시적으로 확인하지 못했습니다.');
+  await page.evaluate(() => { (window as any).__fixture.snapshotFailures = 0; });
   await page.getByRole('button', { name: '모델 정보 다시 확인', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveCount(0);
 });

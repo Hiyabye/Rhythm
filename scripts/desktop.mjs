@@ -1,43 +1,36 @@
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, copyFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-function run(command, args) {
-  const result = spawnSync(command, args, { stdio: 'inherit' });
-  if (result.error) throw result.error;
-  if (result.status !== 0) process.exit(result.status ?? 1);
+export function desktop({ platform = process.platform, arch = process.arch, env = process.env,
+  args = process.argv.slice(2), cwd = process.cwd(), spawn = spawnSync,
+  copy = copyFileSync, mkdir = mkdirSync } = {}) {
+  if (platform !== 'win32' || arch !== 'x64') throw new Error('Rhythm desktop requires Windows 11 x64.');
+  if (env.RHYTHM_AI_BACKEND && env.RHYTHM_AI_BACKEND !== 'cpu') throw new Error('This Windows release supports the cpu backend only.');
+  const flags = [env.RUSTFLAGS, env.CARGO_ENCODED_RUSTFLAGS, env.CARGO_BUILD_RUSTFLAGS,
+    env.CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS].filter(Boolean).join(' ');
+  if (/target-cpu\s*=\s*native/.test(flags)) throw new Error('Portable Windows releases cannot use target-cpu=native.');
+  const [mode = 'dev', ...extra] = args;
+  if (!['dev', 'build'].includes(mode)) throw new Error('Expected dev or build.');
+  if (extra.some((arg) => arg === '--target' || arg.startsWith('--target='))) throw new Error('Cross compilation is not supported. Use the x64 MSVC host.');
+  const run = (command, argv, capture = false) => {
+    const result = spawn(command, argv, { cwd, env, windowsHide: true, ...(capture ? { encoding: 'utf8' } : { stdio: 'inherit' }) });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(command + ' failed (' + (result.status ?? 'signal') + ').');
+    return result;
+  };
+  const target = run('rustc', ['-vV'], true).stdout.match(/^host: (.+)$/m)?.[1]?.trim();
+  if (target !== 'x86_64-pc-windows-msvc') throw new Error('Install the x86_64-pc-windows-msvc Rust toolchain.');
+  const release = mode === 'build' && !extra.includes('--debug');
+  console.log('Building Windows x64 CPU worker. Model weights are installed separately in the app.');
+  run('cargo', ['build', '--locked', '-p', 'rhythm-ai-worker', ...(release ? ['--release'] : [])]);
+  const targetDir = resolve(cwd, env.CARGO_TARGET_DIR || 'target');
+  const binary = join(targetDir, release ? 'release' : 'debug', 'rhythm-ai-worker.exe');
+  const staged = join(cwd, 'src-tauri', 'binaries', 'rhythm-ai-worker-' + target + '.exe');
+  mkdir(dirname(staged), { recursive: true });
+  copy(binary, staged);
+  // Direct JS invocation preserves argument boundaries without npm.cmd/shell quoting.
+  run(process.execPath, [join(cwd, 'node_modules', '@tauri-apps', 'cli', 'tauri.js'), mode, ...extra]);
 }
-
-if (process.platform !== 'darwin') {
-  throw new Error('Rhythm desktop builds are supported on macOS only.');
-}
-
-const mode = process.argv[2] ?? 'dev';
-const args = process.argv.slice(3);
-const release = mode === 'build' && !args.includes('--debug');
-const requestedBackend = process.env.RHYTHM_AI_BACKEND;
-const availableMetal = !requestedBackend && process.arch === 'arm64'
-  && spawnSync('xcrun', ['metal', '--version'], { stdio: 'ignore' }).status === 0;
-const backend = requestedBackend ?? (availableMetal ? 'metal' : 'cpu');
-if (!['cpu', 'metal'].includes(backend)) {
-  throw new Error('RHYTHM_AI_BACKEND must be cpu or metal on macOS.');
-}
-if (backend === 'metal' && process.arch !== 'arm64') {
-  throw new Error('The Metal backend requires Apple Silicon; use cpu on Intel Macs.');
-}
-const rust = spawnSync('rustc', ['-vV'], { encoding: 'utf8' });
-if (rust.status !== 0) {
-  throw new Error('Rust toolchain not found. Install Rust and put cargo/rustc on PATH.');
-}
-const target = rust.stdout.match(/host: (.+)/)?.[1]?.trim();
-if (!target) {
-  throw new Error('Unable to determine the Rust host target.');
-}
-
-console.log(`Building Rhythm AI worker with ${backend} backend; no toolchains or weights are installed automatically.`);
-run('cargo', ['build', '--locked', '-p', 'rhythm-ai-worker',
-  ...(release ? ['--release'] : []), ...(backend === 'metal' ? ['--features', 'metal'] : [])]);
-const binary = join('target', release ? 'release' : 'debug', 'rhythm-ai-worker');
-mkdirSync('src-tauri/binaries', { recursive: true });
-copyFileSync(binary, join('src-tauri/binaries', `rhythm-ai-worker-${target}`));
-run('npm', ['exec', 'tauri', '--', mode, ...args]);
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) desktop();

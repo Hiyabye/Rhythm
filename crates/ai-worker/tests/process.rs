@@ -103,10 +103,7 @@ fn executable_protocol_survives_bad_requests_and_exits_cleanly() {
         responses[2]["result"]["analysis_json_v1"],
         cfg!(feature = "inference")
     );
-    assert!(matches!(
-        responses[2]["result"]["build_backend"].as_str(),
-        Some("cpu" | "metal" | "cuda")
-    ));
+    assert_eq!(responses[2]["result"]["build_backend"], "cpu");
     assert_eq!(responses[3]["ok"], false);
     assert_eq!(responses[4]["ok"], false);
     assert_eq!(responses[5]["result"]["shutdown"], true);
@@ -202,7 +199,10 @@ fn actual_local_inference() {
         writeln!(input, "{request}").unwrap();
     }
     drop(input);
-    let output = wait_with_deadline(child, Duration::from_secs(180));
+    // The real CPU test includes a cold load and two generations. Keep the
+    // lifecycle-only tests' short deadlines; allow this explicit opt-in run a
+    // bounded longer window appropriate to the production inference deadlines.
+    let output = wait_with_deadline(child, Duration::from_secs(1260));
     assert!(output.status.success());
     let output = String::from_utf8(output.stdout).unwrap();
     let responses: Vec<Value> = output
@@ -238,10 +238,7 @@ fn actual_local_inference() {
         assert!(result["usage"]["avg_compl_tok_per_sec"].as_f64().unwrap() >= 0.0);
     }
     let backend = responses[0]["result"]["loaded_backend"].as_str().unwrap();
-    assert!(matches!(backend, "cpu" | "metal" | "cuda" | "unknown"));
-    if !cfg!(any(feature = "metal", feature = "cuda")) {
-        assert_eq!(backend, "cpu");
-    }
+    assert_eq!(backend, "cpu");
     assert_eq!(
         responses[0]["result"]["loaded_backend"],
         responses[2]["result"]["loaded_backend"]

@@ -2,15 +2,16 @@
 name = "rhythm-ai-worker"
 version = "0.9.2"
 edition = "2021"
-rust-version = "1.90"
+rust-version = "1.94"
 license = "MIT"
 description = "Rhythm's isolated, local-only AI worker"
+
+[build-dependencies]
+static_vcruntime = "3.0"
 
 [features]
 default = ["inference"]
 inference = ["dep:mistralrs"]
-metal = ["inference", "mistralrs/metal"]
-cuda = ["inference", "mistralrs/cuda"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

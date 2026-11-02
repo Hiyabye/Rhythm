@@ -94,7 +94,19 @@ pub struct AutostartStatus {
     pub enabled: bool,
 }
 
-/// Installs the monochrome Beat template icon and its native menu.
+#[cfg(windows)]
+pub(crate) fn autostart_snapshot() -> Result<super::windows_autostart::Snapshot, String> {
+    super::windows_autostart::snapshot().map_err(|error| autostart_error("확인하지", error))
+}
+
+#[cfg(windows)]
+pub(crate) fn restore_autostart(
+    snapshot: &super::windows_autostart::Snapshot,
+) -> Result<(), String> {
+    super::windows_autostart::restore(snapshot).map_err(|error| autostart_error("복구하지", error))
+}
+
+/// Installs the tray icon and its native menu.
 ///
 /// A failure is reported to the caller; the application continues without a
 /// tray, and close-to-background is then refused by the command layer.
@@ -104,7 +116,7 @@ pub fn install_tray(app: &AppHandle) -> tauri::Result<()> {
         .separator()
         .text(TRAY_QUIT, "Rhythm 종료")
         .build()?;
-    let icon = tauri::image::Image::from_bytes(include_bytes!("../../icons/tray-template.png"))?;
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../../icons/32x32.png"))?;
     let builder = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .tooltip("Rhythm")
@@ -115,8 +127,7 @@ pub fn install_tray(app: &AppHandle) -> tauri::Result<()> {
             TRAY_QUIT => app.exit(0),
             _ => {}
         });
-    #[cfg(target_os = "macos")]
-    let builder = builder.icon_as_template(true);
+
     builder.build(app)?;
     Ok(())
 }
@@ -127,15 +138,8 @@ fn main_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
 }
 
 /// Shows, unminimizes and focuses the existing window. Used for tray restore,
-/// macOS reopen and a second instance; it never creates another window or core.
+/// a second instance; it never creates another window or core.
 pub fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        if let Err(error) = app.show() {
-            // The window can still be restored even if app unhiding fails.
-            eprintln!("Lifecycle: 앱을 다시 표시하지 못했습니다: {error}");
-        }
-    }
     let window = main_window(app)?;
     window.show()?;
     window.unminimize()?;
@@ -164,7 +168,7 @@ fn hide_main_window(app: &AppHandle) -> tauri::Result<()> {
 /// With close-to-background disabled (the conservative default) the window
 /// close is an explicit quit, which runs the existing `RunEvent::Exit`
 /// cleanup. With it enabled the window is hidden and the application keeps
-/// running for tray restore, macOS reopen and second-instance activation.
+/// running for tray restore and second-instance activation.
 pub fn handle_main_close(
     app: &AppHandle,
     label: &str,
@@ -182,15 +186,6 @@ pub fn handle_main_close(
         }
     } else {
         app.exit(0);
-    }
-}
-
-/// macOS dock-icon activation. `has_visible_windows` is false when the window
-/// was hidden or closed to the background.
-#[cfg(target_os = "macos")]
-pub fn handle_reopen(app: &AppHandle, has_visible_windows: bool) {
-    if !has_visible_windows {
-        restore_main_window(app);
     }
 }
 
@@ -222,52 +217,47 @@ pub fn handle_second_instance(app: &AppHandle, launch: LaunchMode) {
 fn autostart_error(action: &str, error: impl std::fmt::Display) -> String {
     eprintln!("Autostart ({action}): {error}");
     format!(
-        "로그인 시 자동 실행을 {action} 못했습니다. 운영체제의 로그인 항목 설정과 앱 설치 위치를 확인해 주세요."
+        "로그인 시 자동 실행을 {action} 못했습니다. Windows 시작 앱 설정과 앱 설치 위치를 확인해 주세요."
     )
 }
 
 /// Reads the actual OS login-registration state.
 pub fn autostart_status(app: &AppHandle) -> Result<AutostartStatus, String> {
-    use tauri_plugin_autostart::ManagerExt as _;
-
-    app.autolaunch()
-        .is_enabled()
-        .map(|enabled| AutostartStatus { enabled })
-        .map_err(|error| autostart_error("확인하지", error))
+    let _ = app;
+    #[cfg(windows)]
+    {
+        super::windows_autostart::status()
+            .map(|enabled| AutostartStatus { enabled })
+            .map_err(|error| autostart_error("확인하지", error))
+    }
+    #[cfg(not(windows))]
+    {
+        Err(autostart_error(
+            "확인하지",
+            "이 운영체제에서는 지원하지 않습니다.",
+        ))
+    }
 }
 
 /// Enables or disables OS login registration and verifies the result by
 /// reading the OS state again. A silent platform failure is an error, not a
 /// success.
 pub fn set_autostart(app: &AppHandle, enabled: bool) -> Result<AutostartStatus, String> {
-    use tauri_plugin_autostart::ManagerExt as _;
-
-    let manager = app.autolaunch();
-    let result = if enabled {
-        manager.enable()
-    } else {
-        manager.disable()
-    };
-    if let Err(error) = result {
-        return Err(autostart_error(
-            if enabled { "켜지" } else { "끄지" },
-            error,
-        ));
+    let _ = app;
+    #[cfg(windows)]
+    {
+        super::windows_autostart::set(enabled)
+            .map(|enabled| AutostartStatus { enabled })
+            .map_err(|error| autostart_error(if enabled { "켜지" } else { "끄지" }, error))
     }
-    let actual = manager
-        .is_enabled()
-        .map_err(|error| autostart_error("확인하지", error))?;
-    if actual != enabled {
-        return Err(autostart_error(
-            if enabled {
-                "등록하지"
-            } else {
-                "해제하지"
-            },
-            "운영체제가 변경을 반영하지 않았습니다.",
-        ));
+    #[cfg(not(windows))]
+    {
+        let _ = enabled;
+        Err(autostart_error(
+            "변경하지",
+            "이 운영체제에서는 지원하지 않습니다.",
+        ))
     }
-    Ok(AutostartStatus { enabled: actual })
 }
 
 #[cfg(test)]

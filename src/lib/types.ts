@@ -103,6 +103,11 @@ export interface ProactiveSnapshot {
   pending_activation: ProactiveActivation | null;
 }
 export type NotificationAuthorization = 'granted' | 'denied' | 'not_determined' | 'unknown' | 'unavailable';
+export type PlatformCapabilities = {
+  notifications: { available: boolean; reason: string | null };
+  restore: { available: boolean; reason: string | null };
+  updater: { available: boolean; reason: string | null };
+};
 export interface LifecycleStatus {
   close_to_background: boolean;
   start_hidden: boolean;
@@ -201,7 +206,7 @@ export interface CatalogEntry {
   id: string; name: string; parameters: string; quantization: string;
   bytes: number; memory_bytes: number; description: string; use_case: string;
   repository: string; revision: string; filename: string; sha256: string; license: string;
-  compatibility: 'verified' | 'experimental' | 'unsupported'; reason: string | null;
+  compatibility: 'verified' | 'available' | 'experimental' | 'unsupported'; reason: string | null;
 }
 export interface AiModel {
   id: string; catalog_id: string | null; name: string; ownership: 'managed' | 'external'; path: string;

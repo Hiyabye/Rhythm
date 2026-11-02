@@ -391,13 +391,17 @@ fn assert_database_consistent(path: &Path) {
         .unwrap();
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn populated_profile_round_trips_every_table_resource_and_model_decision() {
     let workspace = tempfile::tempdir().unwrap();
     let source = workspace.path().join("source");
     let mut store = populated_profile(&source);
     complete_job(&mut store);
+    rusqlite::Connection::open(source.join("rhythm.sqlite3")).unwrap().execute(
+        "INSERT INTO notification_activation_tokens(token_hash,attempts_json,expires_at) VALUES(?1,'[]','2999-01-01T00:00:00Z')",
+        ["a".repeat(64)],
+    ).unwrap();
 
     // Online snapshot while another connection keeps committing in WAL mode.
     let writer_path = source.join("rhythm.sqlite3");
@@ -512,20 +516,11 @@ fn populated_profile_round_trips_every_table_resource_and_model_decision() {
     let prior_rows = table_rows(&target.join("rhythm.sqlite3"));
     fs::create_dir_all(target.join("models")).unwrap();
     fs::write(target.join("models/managed.gguf"), MANAGED_WEIGHTS).unwrap();
-    let stage = target.join(STAGING);
-    let staged = extract_verified(&archive, &stage).unwrap();
-    fs::create_dir_all(stage.join("resources")).unwrap();
     let cancellation = BackupCancellation(AtomicU8::new(CANCELLABLE));
-    reconcile_model_inventory(&stage, &target.join("models"), &cancellation).unwrap();
-    validate_staged_database(
-        &stage,
-        staged.database_schema,
-        staged.documents,
-        staged.resources,
-    )
-    .unwrap();
-    let previous = format!("{PREVIOUS_PREFIX}populated");
-    write_journal(&target, &previous, true, &staged).unwrap();
+    stage_restore(&target, &archive, &cancellation).unwrap();
+    let journal: RestoreJournal =
+        serde_json::from_slice(&fs::read(target.join(JOURNAL)).unwrap()).unwrap();
+    let previous = journal.previous;
     let outcome = recover_pending_restore(&target).unwrap().unwrap();
     assert_eq!(
         outcome,
@@ -542,6 +537,17 @@ fn populated_profile_round_trips_every_table_resource_and_model_decision() {
     assert_database_consistent(&restored);
     let mut restored_rows = table_rows(&restored);
     let mut expected = source_rows.clone();
+    assert_eq!(
+        expected
+            .remove("notification_activation_tokens")
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(restored_rows
+        .remove("notification_activation_tokens")
+        .unwrap()
+        .is_empty());
     // The only intended difference: a managed model without matching local
     // weights is marked missing and stops being the active model.
     let models = |rows: &mut std::collections::BTreeMap<String, Vec<String>>| {
@@ -605,7 +611,7 @@ fn populated_profile_round_trips_every_table_resource_and_model_decision() {
 
 /// Mirrors the rename order of `recover_pending_restore` to leave the data
 /// directory in each state a crash between two durable steps can produce.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn recovery_resumes_from_every_interruption_point_and_is_idempotent() {
     const STEPS: usize = 7;
@@ -750,10 +756,11 @@ fn manifest_for(entries: &[(&str, &[u8])]) -> Manifest {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn hostile_archives_are_rejected_without_writing_outside_staging() {
     let workspace = tempfile::tempdir().unwrap();
+    let absolute_escape = workspace.path().join("absolute-escape");
+    let absolute_name = absolute_escape.to_string_lossy().replace('\\', "/");
     let db_path = workspace.path().join("db.sqlite3");
     tests::database(&db_path, 0, None);
     let db = fs::read(&db_path).unwrap();
@@ -767,9 +774,9 @@ fn hostile_archives_are_rejected_without_writing_outside_staging() {
             "absolute path",
             vec![
                 Item::File("rhythm.sqlite3", &db),
-                Item::File("/tmp/rhythm-escape", payload),
+                Item::File(&absolute_name, payload),
             ],
-            manifest_for(&[("rhythm.sqlite3", &db), ("/tmp/rhythm-escape", payload)]),
+            manifest_for(&[("rhythm.sqlite3", &db), (&absolute_name, payload)]),
         ),
         (
             "parent traversal",
@@ -874,7 +881,7 @@ fn hostile_archives_are_rejected_without_writing_outside_staging() {
             "{case} wrote {listed:?}"
         );
     }
-    assert!(!Path::new("/tmp/rhythm-escape").exists());
+    assert!(!absolute_escape.exists());
     assert!(!workspace.path().join("escape").exists());
 }
 
@@ -998,6 +1005,7 @@ fn write_populated_native_profile() {
 
 /// Streams every user table into one digest per table, so a large restored
 /// profile can be compared without holding its rows in memory.
+#[cfg(unix)]
 fn table_digests(path: &Path) -> std::collections::BTreeMap<String, (u64, String)> {
     let connection =
         rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -1031,6 +1039,7 @@ fn table_digests(path: &Path) -> std::collections::BTreeMap<String, (u64, String
         .collect()
 }
 
+#[cfg(unix)]
 fn directory_bytes(path: &Path) -> u64 {
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return 0;
@@ -1044,6 +1053,7 @@ fn directory_bytes(path: &Path) -> u64 {
         .sum()
 }
 
+#[cfg(unix)]
 fn bench_env(name: &str, default: u64) -> u64 {
     std::env::var(name)
         .ok()
@@ -1052,6 +1062,7 @@ fn bench_env(name: &str, default: u64) -> u64 {
 }
 
 /// Deterministic Korean notice text of roughly `chars` characters.
+#[cfg(unix)]
 fn korean_text(chars: usize, seed: u64) -> String {
     const WORDS: &[&str] = &[
         "장학금",
@@ -1098,6 +1109,7 @@ fn korean_text(chars: usize, seed: u64) -> String {
     text
 }
 
+#[cfg(unix)]
 const BENCH_SOURCES: &[&str] = &[
     "sogang-academic",
     "computing-academic",
@@ -1108,6 +1120,7 @@ const BENCH_SOURCES: &[&str] = &[
 ];
 
 /// Builds a large synthetic profile through the real Store APIs.
+#[cfg(unix)]
 fn generate_large_profile(root: &Path, documents: u64, resource_mib: u64) {
     let mut store = Store::open(&root.join("rhythm.sqlite3")).unwrap();
     store.catalog(&crate::archive::definitions()).unwrap();

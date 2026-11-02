@@ -1400,6 +1400,87 @@ async fn resource_retry_keeps_good_offline_copy_and_repairs_corrupt_or_oversized
     );
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn unicode_data_path_recovers_a_temporarily_locked_resource() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().join("자료 보관 (한글)");
+    std::fs::create_dir(&root).unwrap();
+    let database = root.join("rhythm.sqlite3");
+    let db = Store::open(&database).unwrap();
+    db.catalog(&catalog::definitions()).unwrap();
+    db.set_enabled("sogang_notices", true).unwrap();
+    db.subscribe(MAIN, true).unwrap();
+    let store = Arc::new(Mutex::new(db));
+    let fake = Fake::new(vec![vec![2]]);
+    fake.resources.store(true, Ordering::Release);
+    run(
+        &Controller::new(),
+        &store,
+        &root,
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    let id = items(&store)[0].id;
+    let resource = with_store(&store, |s| s.document(id, None))
+        .unwrap()
+        .resources
+        .into_iter()
+        .find(|r| r.kind == "image")
+        .unwrap();
+    let path = root.join(resource.local_path.as_ref().unwrap());
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&path)
+        .unwrap();
+    let policy = Robots::parse(&Url::parse(PNG_URL).unwrap(), "User-agent: *\nAllow: /\n").unwrap();
+    assert!(download_resource(
+        &store,
+        &root,
+        &fake,
+        &AtomicBool::new(false),
+        &policy,
+        &resource,
+        &mut 0
+    )
+    .await
+    .unwrap()
+    .into_result()
+    .is_err());
+    drop(lock);
+    assert_eq!(std::fs::read(&path).unwrap(), png());
+    let failed = with_store(&store, |s| s.resource(resource.id)).unwrap();
+    assert_eq!(failed.status, "failed");
+    download_resource(
+        &store,
+        &root,
+        &fake,
+        &AtomicBool::new(false),
+        &policy,
+        &failed,
+        &mut 0,
+    )
+    .await
+    .unwrap()
+    .into_result()
+    .unwrap();
+    drop(store);
+    let reopened = Arc::new(Mutex::new(Store::open(&database).unwrap()));
+    assert_eq!(
+        local_resource(&reopened, &root, resource.id)
+            .await
+            .unwrap()
+            .1,
+        png()
+    );
+}
+
 #[tokio::test]
 #[ignore = "explicit bounded live university import; never run in ordinary CI"]
 async fn bounded_live_import_and_offline_reopen() {

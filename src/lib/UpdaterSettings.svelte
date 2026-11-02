@@ -1,96 +1,17 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core';
-  import { listen } from '@tauri-apps/api/event';
-  import { confirmAction } from './confirm';
-
-  type UpdateInfo = { version: string; currentVersion: string; date: string | null; body: string | null };
-  type Progress = { phase: 'downloading' | 'verifying' | 'installing' | 'staged' | 'restarting'; version?: string; downloaded?: number; total?: number | null };
   let { desktop }: { desktop: boolean } = $props();
-  // null until the build reports whether a trusted update key is embedded.
-  let configured = $state<boolean | null>(null);
-  let checked = $state(false);
-  let checking = $state(false);
-  let installing = $state(false);
-  let error = $state('');
-  let progress = $state<Progress | null>(null);
-
-  $effect(() => {
-    if (!desktop) return;
-    void invoke<boolean>('updater_configured').then((value) => { configured = value; }).catch(() => { configured = false; });
-  });
-
-  $effect(() => {
-    if (!desktop || !configured) return;
-    let mounted = true;
-    let stop: (() => void) | undefined;
-    void listen<Progress>('updater://progress', (event) => { progress = event.payload; }).then((unlisten) => {
-      if (mounted) stop = unlisten;
-      else unlisten();
-    }).catch((reason) => { error = String(reason); });
-    return () => { mounted = false; stop?.(); };
-  });
-
-  let update = $state<UpdateInfo | null>(null);
-  async function check() {
-    if (!desktop || !configured || checking || installing) return;
-    checking = true;
-    checked = false;
-    error = '';
-    update = null;
-    progress = null;
-    try {
-      update = await invoke<UpdateInfo | null>('updater_check');
-      checked = true;
-    } catch (reason) { error = String(reason); }
-    finally { checking = false; }
-  }
-  async function install() {
-    if (!desktop || !configured || installing || !update) return;
-    if (progress?.phase === 'staged') {
-      installing = true;
-      error = '';
-      try {
-        if (await confirmAction('서명 검증이 끝난 업데이트를 지금 설치하고 앱을 다시 시작할까요?', '설치 및 다시 시작')) {
-          await invoke('updater_restart', { confirmed: true });
-        }
-      }
-      // A failed install leaves the verified package staged in the backend.
-      catch (reason) { error = String(reason); progress = { phase: 'staged', version: update.version }; }
-      finally { installing = false; }
-      return;
-    }
-    installing = true;
-    error = '';
-    progress = null;
-    try {
-      update = await invoke<UpdateInfo>('updater_install');
-      const restart = await confirmAction('서명 검증을 마쳤습니다. 지금 업데이트를 설치하고 앱을 다시 시작할까요? 취소하면 업데이트는 이번 실행 중에만 준비된 상태로 유지됩니다.', '설치 및 다시 시작');
-      if (restart) await invoke('updater_restart', { confirmed: true });
-      else progress = { phase: 'staged', version: update.version };
-    } catch (reason) { error = String(reason); progress = null; }
-    finally { installing = false; }
-  }
 </script>
-
 <section id="about" class="settings-section about-section">
-  <div class="section-heading"><h2>정보</h2><p>Rhythm 정보와 앱을 최신 버전으로 유지하는 방법을 확인합니다.</p></div>
-  <div class="about-brand"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><h2>Rhythm</h2><span>0.9.2</span></div>
-  <p>나의 하루를 정돈하는 로컬 퍼스트 개인 커맨드 센터.</p>
-  <p class="muted">조용하게 연결하고, 나에게 중요한 것에 집중합니다.</p>
-  <div class="about-meta"><span>MIT 라이선스</span><span>github.com/Hiyabye/Rhythm</span></div>
-  {#if desktop && configured}
-    <div class="setting-row"><div><h3>앱 업데이트</h3><p>고정된 GitHub 안정 채널에서 서명과 현재 기기용 아키텍처를 확인합니다. 앱을 다시 시작할지는 설치 후 선택합니다.</p></div><button class="text-button" disabled={checking || installing} onclick={check}>{checking ? '확인 중…' : '업데이트 확인'}</button></div>
-    {#if update}<div class="setting-row"><div><h3>새 버전 {update.version}</h3><p>{update.body ?? '서명된 안정 버전을 설치할 수 있습니다.'}</p></div><button class="text-button" disabled={installing} onclick={install}>{installing ? '업데이트 중…' : progress?.phase === 'staged' ? '설치 및 다시 시작' : '다운로드 및 설치'}</button></div>{/if}
-    {#if checked && !update}<p class="footnote" role="status">현재 최신 버전을 사용하고 있습니다.</p>{/if}
-    {#if progress}<p class="footnote" role="status">{progress.phase === 'downloading' ? `다운로드 중${progress.total ? ` · ${Math.round((progress.downloaded ?? 0) / progress.total * 100)}%` : '…'}` : progress.phase === 'verifying' ? '다운로드한 서명 검증 중…' : progress.phase === 'installing' ? '검증된 업데이트를 설치 중…' : progress.phase === 'staged' ? '서명된 업데이트를 준비했습니다.' : '앱을 다시 시작합니다…'}</p>{/if}
-    {#if error}<div class="banner error" role="alert"><div><strong>업데이트를 완료하지 못했습니다</strong><p>{error}</p></div><button class="text-button" disabled={checking || installing} onclick={check}>다시 시도</button></div>{/if}
-  {:else if desktop && configured === false}
-    <div class="setting-row"><div><h3>앱 업데이트</h3><p>이 빌드에는 앱 안에서 업데이트를 받는 공식 채널이 설정되어 있지 않습니다. 새 버전은 직접 설치합니다.</p></div></div>
-    <ol class="manual-update">
-      <li>새 버전의 Rhythm 앱을 준비합니다. 소스에서 직접 빌드한 앱도 사용할 수 있습니다.</li>
-      <li>Rhythm을 완전히 종료합니다.</li>
-      <li>응용 프로그램 폴더의 Rhythm을 새 앱으로 바꿉니다.</li>
-      <li>Rhythm을 다시 엽니다. 보관한 공지, 설정, AI 모델은 앱과 별도로 저장되어 그대로 유지됩니다.</li>
-    </ol>
-  {:else if !desktop}<p class="footnote">업데이트 확인과 설치는 데스크톱 앱에서 사용할 수 있습니다.</p>{/if}
+  <div class="section-heading"><h2>정보</h2><p>Rhythm Windows 버전과 업데이트 안내입니다.</p></div>
+  <div class="about-brand"><h2>Rhythm</h2><span>0.9.2</span></div>
+  <p>Windows 11 x64 · 로컬 CPU AI · MIT 라이선스</p>
+  <div class="setting-row"><div><h3>앱 업데이트</h3><p>새 Windows 설치 파일로 직접 업데이트합니다. 앱 안 자동 업데이트는 제공하지 않습니다.</p></div></div>
+  <ol class="manual-update">
+    <li>새 설치 파일의 출처와 제공된 SHA-256을 확인합니다.</li>
+    <li>Rhythm을 트레이 메뉴에서 완전히 종료합니다.</li>
+    <li>새 설치 파일을 실행해 같은 사용자 계정에 설치합니다.</li>
+    <li>Rhythm을 다시 엽니다. 공지, 설정과 모델은 프로그램과 별도 폴더에 유지됩니다.</li>
+  </ol>
+  <p class="footnote">이 배포 파일에는 정식 코드 서명이 없어 Windows 보안 경고가 나타날 수 있습니다.</p>
+  {#if !desktop}<p class="footnote">설치와 업데이트 확인은 Windows 앱에서 진행하세요.</p>{/if}
 </section>

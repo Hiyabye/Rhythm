@@ -1,3 +1,4 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod archive;
 mod backup;
 mod core;
@@ -6,6 +7,7 @@ mod intelligence;
 mod notification_permission;
 pub(crate) mod operation_gate;
 mod personalization;
+mod platform_support;
 mod proactive;
 mod storage;
 mod updater;
@@ -297,14 +299,28 @@ async fn lifecycle_set_launch_at_login(
         .map_err(|_| "자동 실행 설정 잠금을 획득하지 못했습니다.".to_string())?;
     let previous = core::lifecycle::autostart_status(&app)?;
     let changed = previous.enabled != enabled;
+    #[cfg(windows)]
+    let autostart_snapshot = if changed {
+        Some(core::lifecycle::autostart_snapshot()?)
+    } else {
+        None
+    };
     if changed {
         core::lifecycle::set_autostart(&app, enabled)?;
     }
     if let Err(error) = save_proactive(state.inner(), |settings| settings.launch_at_login = enabled)
     {
         if changed {
-            return match core::lifecycle::set_autostart(&app, previous.enabled) {
-                Ok(_) => Err(format!("{error} 자동 실행은 이전 상태로 되돌렸습니다.")),
+            #[cfg(windows)]
+            let rollback = core::lifecycle::restore_autostart(
+                autostart_snapshot
+                    .as_ref()
+                    .expect("snapshot captured before changing autostart"),
+            );
+            #[cfg(not(windows))]
+            let rollback = core::lifecycle::set_autostart(&app, previous.enabled).map(|_| ());
+            return match rollback {
+                Ok(()) => Err(format!("{error} 자동 실행은 이전 상태로 되돌렸습니다.")),
                 Err(rollback) => {
                     eprintln!("Lifecycle: 자동 실행 롤백 실패: {rollback}");
                     Err(format!(
@@ -356,32 +372,146 @@ async fn worker_status(state: tauri::State<'_, AppState>) -> Result<WorkerStatus
         Err(_) => Ok(runtime_status(&state)),
     }
 }
+#[cfg(windows)]
+#[derive(Default)]
+struct NotificationLaunchQueue {
+    ready: bool,
+    pending: std::collections::VecDeque<String>,
+}
+
+#[cfg(windows)]
+impl NotificationLaunchQueue {
+    fn offer(&mut self, uri: String) -> Result<Option<String>, ()> {
+        if self.ready {
+            return Ok(Some(uri));
+        }
+        if self.pending.len() >= 64 {
+            return Err(());
+        }
+        self.pending.push_back(uri);
+        Ok(None)
+    }
+
+    fn mark_ready(&mut self) -> Vec<String> {
+        self.ready = true;
+        self.pending.drain(..).collect()
+    }
+}
+
+#[cfg(windows)]
+static NOTIFICATION_LAUNCHES: std::sync::OnceLock<Mutex<NotificationLaunchQueue>> =
+    std::sync::OnceLock::new();
+
+#[cfg(windows)]
+fn notification_launches() -> &'static Mutex<NotificationLaunchQueue> {
+    NOTIFICATION_LAUNCHES.get_or_init(|| Mutex::new(NotificationLaunchQueue::default()))
+}
+
+#[cfg(windows)]
+fn spawn_notification_activation(app: &tauri::AppHandle, uri: String) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Some(state) = app.try_state::<AppState>() {
+            if let Err(error) = state.proactive.handle_windows_activation(&uri).await {
+                eprintln!("알림을 열지 못했습니다: {error}");
+            }
+        } else {
+            eprintln!("알림을 처리할 앱 상태를 사용할 수 없습니다.");
+        }
+    });
+}
+
+fn dispatch_notification_arguments(app: &tauri::AppHandle, arguments: &[String]) -> bool {
+    #[cfg(windows)]
+    if let Some(uri) = arguments
+        .iter()
+        .find(|value| value.starts_with("rhythm-win://notification/"))
+    {
+        if proactive::windows_notification::token_from_uri(uri).is_none() {
+            eprintln!("올바르지 않은 알림 연결을 거부했습니다.");
+            return true;
+        }
+        // Readiness and enqueue are guarded together, preventing a notification
+        // arriving at the end of setup from falling between the two paths.
+        let action = notification_launches()
+            .lock()
+            .map(|mut queue| queue.offer(uri.clone()));
+        match action {
+            Ok(Ok(Some(uri))) => spawn_notification_activation(app, uri),
+            Ok(Ok(None)) => {}
+            _ => eprintln!("대기 중인 알림이 너무 많거나 상태를 확인할 수 없습니다."),
+        }
+        return true;
+    }
+    let _ = (app, arguments);
+    false
+}
+
+#[cfg(windows)]
+fn notification_launches_ready(app: &tauri::AppHandle) {
+    let pending = match notification_launches().lock() {
+        Ok(mut queue) => queue.mark_ready(),
+        Err(_) => {
+            eprintln!("대기 중인 알림을 확인할 수 없습니다.");
+            return;
+        }
+    };
+    // Before the WebView listener exists, the existing snapshot carries one
+    // activation. Preserve the user's latest queued selection and leave older
+    // tokens unconsumed; no lock crosses dispatch or an async boundary.
+    if let Some(uri) = pending.into_iter().last() {
+        spawn_notification_activation(app, uri);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod notification_launch_queue_tests {
+    use super::NotificationLaunchQueue;
+    #[test]
+    fn bounded_queue_drains_once_and_later_clicks_dispatch_immediately() {
+        let mut queue = NotificationLaunchQueue::default();
+        for i in 0..64 {
+            assert_eq!(queue.offer(i.to_string()), Ok(None));
+        }
+        assert_eq!(queue.offer("overflow".into()), Err(()));
+        let pending = queue.mark_ready();
+        assert_eq!(pending, (0..64).map(|i| i.to_string()).collect::<Vec<_>>());
+        assert!(queue.mark_ready().is_empty());
+        assert_eq!(queue.offer("later".into()), Ok(Some("later".into())));
+    }
+}
+
 fn main() {
-    let mut builder = tauri::Builder::default()
+    #[cfg(windows)]
+    if let Err(error) = proactive::windows_notification::initialize_process_identity() {
+        eprintln!("Windows 알림 프로세스 식별자를 설정하지 못했습니다: {error}");
+    }
+    let builder = tauri::Builder::default()
         // The single-instance check runs before windows, the data lock and every
         // store/worker initialization. A second process exits in plugin setup.
         .plugin(tauri_plugin_single_instance::init(
             |app, arguments, _cwd| {
+                if dispatch_notification_arguments(app, &arguments) {
+                    return;
+                }
                 core::lifecycle::handle_second_instance(
                     app,
                     core::lifecycle::LaunchMode::from_args(arguments),
                 );
             },
         ))
-        .plugin(
-            tauri_plugin_autostart::Builder::new()
-                .app_name("Rhythm")
-                .arg(core::lifecycle::AUTOSTART_ARG)
-                .build(),
-        )
         .plugin(tauri_plugin_dialog::init());
-    if let Some(key) = option_env!("RHYTHM_UPDATER_PUBKEY").filter(|key| !key.trim().is_empty()) {
-        builder = builder.plugin(tauri_plugin_updater::Builder::new().pubkey(key).build());
-    }
     let app = builder
         .setup(|app| {
             core::install_menu(app.handle())?;
-            let data_root = app.path().app_data_dir()?;
+            let data_root = if app.config().identifier.ends_with(".validation") {
+                std::env::var_os("RHYTHM_VALIDATION_DATA_DIR")
+                    .map(PathBuf::from)
+                    .filter(|path| path.is_absolute())
+                    .unwrap_or(app.path().app_local_data_dir()?)
+            } else {
+                app.path().app_local_data_dir()?
+            };
             let instance_lock = match core::lock_data_dir(&data_root) {
                 Ok(lock) => lock,
                 Err(error) => {
@@ -400,7 +530,7 @@ fn main() {
                     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
                     let handle = app.handle().clone();
                     app.dialog()
-                        .message(format!("{error}\n\n기존 데이터는 삭제하지 않았습니다. Rhythm을 다시 열면 복원 마무리를 다시 시도합니다."))
+                        .message(format!("{error}\n\n기존 파일은 보존했습니다. 오류 원인을 확인한 뒤 다시 실행해 주세요."))
                         .title("백업 복원을 마무리하지 못했습니다")
                         .kind(MessageDialogKind::Error)
                         .show(move |_| handle.exit(1));
@@ -451,7 +581,7 @@ fn main() {
             let executable = std::env::current_exe()?
                 .parent()
                 .ok_or("실행 파일 경로를 찾을 수 없습니다.")?
-                .join("rhythm-ai-worker");
+                .join(format!("rhythm-ai-worker{}", std::env::consts::EXE_SUFFIX));
             let worker = tauri::async_runtime::block_on(async {
                 let mut worker = Worker::launch(&executable);
                 worker.refresh().await;
@@ -459,7 +589,6 @@ fn main() {
             });
             let hardware = intelligence::models::hardware(&data_root);
             let maintenance_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            app.manage(updater::State::default());
             app.manage(AppState {
                 launch_at_login: Mutex::new(()),
                 _instance_lock: instance_lock,
@@ -481,6 +610,9 @@ fn main() {
                 operation_gate,
                 restore_outcome,
             });
+            dispatch_notification_arguments(app.handle(), &std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>());
+            #[cfg(windows)]
+            notification_launches_ready(app.handle());
             tauri::async_runtime::spawn(intelligence::maintenance::run(
                 app.handle().clone(),
                 maintenance_shutdown,
@@ -498,6 +630,8 @@ fn main() {
             backup::backup_restore,
             backup::backup_cancel,
             backup::backup_restore_outcome,
+            backup::backup_restore_support,
+            platform_support::platform_capabilities,
             updater::updater_configured,
             updater::updater_check,
             updater::updater_install,
@@ -570,11 +704,6 @@ fn main() {
             let close_to_background = state.tray_available && state.lifecycle.close_to_background();
             core::lifecycle::handle_main_close(handle, &label, &api, close_to_background);
         }
-        #[cfg(target_os = "macos")]
-        tauri::RunEvent::Reopen {
-            has_visible_windows,
-            ..
-        } => core::lifecycle::handle_reopen(handle, has_visible_windows),
         tauri::RunEvent::Exit => {
             let Some(state) = handle.try_state::<AppState>() else {
                 return; // A rejected second launch never opened the store or worker.

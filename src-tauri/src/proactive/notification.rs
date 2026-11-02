@@ -137,43 +137,6 @@ pub(super) fn digest_text(items: &[DeliveryItem]) -> Option<(String, String)> {
     Some((title, body))
 }
 
-pub(super) fn activation_for_items(items: &[DeliveryItem]) -> Option<NotificationActivation> {
-    let first = items.first()?;
-    Some(NotificationActivation {
-        event_id: first.event_id,
-        document_id: first.document_id,
-        revision_id: first.revision_id,
-        attempt_count: first.attempt_count,
-        event_ids: items.iter().map(|item| item.event_id).collect(),
-        event_attempts: items
-            .iter()
-            .map(|item| (item.event_id, item.attempt_count))
-            .collect(),
-    })
-}
-
-#[cfg(target_os = "macos")]
-pub(super) async fn show_digest(
-    app: &AppHandle,
-    items: &[DeliveryItem],
-) -> Result<Option<mac_usernotifications::NotificationHandle>, String> {
-    use std::time::Duration;
-    let Some((title, body)) = digest_text(items) else {
-        return Ok(None);
-    };
-    let _ = app;
-    // The crate closes the delivered alert when this elapses and resolves the
-    // response as `Expired`. Thirty minutes keeps the notice visible while the
-    // user is away without leaving a response task pending indefinitely.
-    mac_usernotifications::Notification::new()
-        .title(title)
-        .message(body)
-        .timeout(Duration::from_secs(1_800))
-        .send()
-        .await
-        .map(Some)
-        .map_err(|error| error.to_string())
-}
 pub(super) fn emit_activation(app: &AppHandle, activation: NotificationActivation) {
     let _ = app.emit("proactive://notification-clicked", activation);
 }

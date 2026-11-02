@@ -13,6 +13,7 @@ export interface FixtureOptions {
   unsupportedBody?: boolean;
   imageError?: boolean;
   imageDelay?: number;
+  imageGate?: boolean;
   queryGate?: boolean;
   aiInstalled?: boolean;
   aiResult?: boolean;
@@ -30,6 +31,7 @@ export interface FixtureOptions {
   analysisContract?: 'current' | 'prompt-v2';
   initialInterests?: PersonalInterest[];
   feedbackWriteDelay?: number;
+  feedbackWriteGate?: boolean;
   profileSaveDelay?: number;
   interestSaveDelay?: number;
   interestRemovalDelay?: number;
@@ -40,18 +42,18 @@ export interface FixtureOptions {
   schedulerError?: boolean;
   pendingActivation?: ProactiveActivation;
   notificationAuthorization?: string;
+  initialNotificationsEnabled?: boolean;
+  capabilitiesError?: boolean;
   notificationRequestResult?: string;
+  notificationTestRequested?: boolean;
   notificationRequestError?: boolean;
+  sourceCount?: number;
+  sourceDelay?: number;
   backupInspectError?: boolean;
   backupRestoreError?: boolean;
+  restoreSupportError?: string;
   restoreOutcome?: { documents: number; resources: number; unavailable_resources: number; models_needing_reinstall: number };
-  // Real builds embed no update key; only explicit tests exercise a configured channel.
-  updaterConfigured?: boolean;
   dialogError?: boolean;
-  updaterCheckError?: string;
-  updaterInstallError?: boolean;
-  updaterRestartError?: boolean;
-  updateAvailable?: boolean;
 }
 
 // Only the IPC boundary is faked: tests exercise the production Svelte build,
@@ -73,9 +75,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     { id: 'unsupported-board', name: '미검증 게시판', organization: '다른 학과', description: '아직 검증되지 않은 게시판',
       url: 'https://example.invalid', family: 'cms', supported: false, subscribed: false, last_attempt: null, last_success: null,
       last_error: null, next_page: 1, history_complete: false, status: 'idle', discovered: 0, archived: 0, failed: 0 }];
+    if ((options.sourceCount ?? 0) > sources.length) {
+      sources.push(...Array.from({ length: options.sourceCount! - sources.length }, (_, index) => ({
+        ...sources[0], id: `extra-source-${index}`, name: `추가 정보원 ${index + 1}`,
+      })));
+    }
     const proactiveSettings: ProactiveSettings = { close_to_background: false, launch_at_login: false, start_hidden: false,
       scheduler_enabled: false, scheduler_paused: false, scheduler_interval_minutes: 0, scheduler_retry_minutes: 15,
-      notifications_enabled: false, notification_sensitivity: 'important',
+      notifications_enabled: options.initialNotificationsEnabled ?? false, notification_sensitivity: 'important',
       quiet_hours: { enabled: false, start: '22:00', end: '07:00' }, updated_at: '2026-10-27T12:00:00Z' };
     const scheduler = { enabled: false, paused: false, interval_minutes: 60, retry_minutes: 15,
       notifications_enabled: false, notification_sensitivity: 'important', quiet_hours: copy(proactiveSettings.quiet_hours),
@@ -86,7 +93,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       delivered_at: null, error: null, reason: null, created_at: '2026-10-27T12:00:00Z',
       updated_at: '2026-10-27T12:00:01Z', title: entries[0]?.title ?? '한국어 공지 01', category: '장학', source_id: 'computing-updates' }];
     let pendingActivation = options.pendingActivation ? copy(options.pendingActivation) : null;
-    let notificationAuthorization = options.notificationAuthorization ?? 'not_determined';
+    let notificationAuthorization = options.notificationAuthorization ?? 'authorized';
     const proactiveSnapshot = (consumeActivation = false) => {
       const snapshot = { settings: copy(proactiveSettings), scheduler: copy(scheduler), history: copy(history),
         notification_permission: 'unknown' as const, pending_activation: copy(pendingActivation) };
@@ -95,7 +102,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     };
     const snapshot = { settings: { theme: 'light', energy_profile: 'eco', interests: '' },
       extensions: [{ id: 'sogang_notices', display_name: '서강대학교 공지', description: '학교 소식 보관', available: true, enabled: options.enabled ?? true }],
-      storage: { path: '/isolated/rhythm.sqlite3', bytes: 4096, schema_version: 5 },
+      storage: { path: 'C:\\Rhythm-test\\rhythm.sqlite3', bytes: 4096, schema_version: 7 },
       worker: { state: 'ready', runtime_available: true, model: null, detail: null }, proactive: copy(proactiveSettings) };
     let sync = { running: false, source_id: null as string | null, mode: 'historical', page: 0, message: '수집 대기 중입니다.' };
     const model = (id = 'qwen35-4b') => ({ id, catalog_id: id, name: id === 'qwen35-4b' ? 'Qwen3.5 4B' : 'Qwen3.5 2B', ownership: 'managed', path: `models/${id}.gguf`, sha256: 'a'.repeat(64), expected_sha256: 'a'.repeat(64), expected_bytes: 2740937888, bytes: 2740937888, source_revision: 'pinned-revision', source_filename: `${id}.gguf`, status: 'installed', downloaded_bytes: 2740937888, resume_etag: null, error: null as string | null, created_at: '2026-10-24 12:00:00', updated_at: '2026-10-24 12:00:00' });
@@ -122,7 +129,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       duration_ms: 1250,
       created_at: '2026-10-24 12:00:00',
     });
-    const ai = { catalog: ['qwen35-4b', 'qwen35-2b'].map((id) => ({ id, name: id === 'qwen35-4b' ? 'Qwen3.5 4B' : 'Qwen3.5 2B', parameters: id === 'qwen35-4b' ? '4B' : '2B', quantization: 'Q4_K_M', bytes: 2740937888, memory_bytes: 6000000000, description: '한국어 공지 분석용 로컬 모델', use_case: '균형 잡힌 공지 분석', repository: 'unsloth/Qwen3.5-4B-GGUF', revision: 'pinned-revision', filename: `${id}.gguf`, sha256: 'a'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null })), models: options.aiInstalled ? [model()] : [], preferences: { active_model_id: options.aiInstalled ? 'qwen35-4b' : null as string | null, setup_completed: !options.aiSetupNeeded, processing_mode: 'explicit', automatic_limit: 3, max_tokens: 1024 }, jobs: [] as any[], runtime: { state: 'ready', runtime_available: true, model: null as string | null, detail: null }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, operation: null as AiOperation | null, progress: null as any, analysis_contract: { prompt_version: contract.prompt_version, schema_version: contract.schema_version, configuration_hash: 'b'.repeat(64) } };
+    const ai = { catalog: ['qwen35-4b', 'qwen35-2b'].map((id) => ({ id, name: id === 'qwen35-4b' ? 'Qwen3.5 4B' : 'Qwen3.5 2B', parameters: id === 'qwen35-4b' ? '4B' : '2B', quantization: 'Q4_K_M', bytes: 2740937888, memory_bytes: id === 'qwen35-4b' ? 10737418240 : 5368709120, description: '한국어 공지 분석용 로컬 모델', use_case: '균형 잡힌 공지 분석', repository: 'unsloth/Qwen3.5-4B-GGUF', revision: 'pinned-revision', filename: `${id}.gguf`, sha256: 'a'.repeat(64), license: 'Apache-2.0', compatibility: 'available', reason: id === 'qwen35-4b' ? 'Windows CPU(i5-10300H, RAM 16GB)에서 제한된 공지로 추론과 복구를 시험했습니다. 한 장학 사례의 자동 검사는 통과했지만 일반적인 정확도를 보장하지 않으며, 결과를 원문과 대조해야 합니다. 실제 메모리 사용량은 환경에 따라 달라집니다.' : 'Windows CPU(i5-10300H, RAM 16GB)에서 제한된 공지로 시험했습니다. 장학 공지 분류 오류와 발표 시점 표현 누락이 발견되어 결과를 원문과 대조해야 합니다. 실제 메모리 사용량은 환경에 따라 달라집니다.' })), models: options.aiInstalled ? [model()] : [], preferences: { active_model_id: options.aiInstalled ? 'qwen35-4b' : null as string | null, setup_completed: !options.aiSetupNeeded, processing_mode: 'explicit', automatic_limit: 3, max_tokens: 1024 }, jobs: [] as any[], runtime: { state: 'ready', runtime_available: true, model: null as string | null, detail: null }, hardware: { os: 'windows', arch: 'x86_64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, operation: null as AiOperation | null, progress: null as any, analysis_contract: { prompt_version: contract.prompt_version, schema_version: contract.schema_version, configuration_hash: 'b'.repeat(64) } };
     const analyses = options.aiResult ? [analysis(1, 1, 1)] : [];
     let personalization = { profile: { university: '', department: '', study_level: '' }, interests: copy(options.initialInterests ?? []), learning_enabled: true };
     const documentFeedback = new Map<number, string>();
@@ -131,18 +138,21 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     const callbacks = new Map<number, (event: { event: string; id: number; payload: unknown }) => void>();
     let callbackId = 0;
     let eventId = 0;
-    let updaterHandler: number | null = null;
     let notificationHandler: number | null = null;
-    const fixture = { ai, analyses, options, entries, calls: [] as { command: string; args: any }[], sourceDelay: 0,
+    const fixture = { ai, analyses, options, entries, calls: [] as { command: string; args: any }[], sourceDelay: options.sourceDelay ?? 0,
+      setNotificationAuthorization: (status: string) => { notificationAuthorization = status; },
       dialogs: [] as string[], dialogAnswers: [] as ('ok' | 'cancel')[],
       stateDelay: 0, subscribeError: false, snapshotFailures: 0, resultsFailures: 0, documentJobs: [] as any[], retryMessage: '자료를 내려받지 못했습니다. 연결을 확인해 주세요.',
       queryResolvers: [] as Array<() => void>,
-      emitUpdater: (payload: unknown) => {
-        if (updaterHandler !== null) callbacks.get(updaterHandler)?.({ event: 'updater://progress', id: ++eventId, payload: copy(payload) });
-      },
+      imageResolvers: [] as Array<() => void>, imageCompleted: 0,
+      releaseImages() { this.imageResolvers.splice(0).forEach((release) => release()); },
+      feedbackResolvers: [] as Array<() => void>,
+      releaseFeedback() { this.feedbackResolvers.splice(0).forEach((release) => release()); },
       releaseQueries() { this.queryResolvers.splice(0).forEach((release) => release()); },
-      emitNotification: (payload: { event_id: number; document_id: number; revision_id: number }) => {
-        if (notificationHandler !== null) callbacks.get(notificationHandler)?.({ event: 'proactive://notification-clicked', id: eventId, payload: { ...copy(payload), attempt_count: 1, event_ids: [payload.event_id] } });
+      emitNotification: (payload: { event_id: number; document_id: number; revision_id: number; attempt_count?: number }, keepPending = false) => {
+        const activation = { ...copy(payload), attempt_count: payload.attempt_count ?? 1, event_ids: [payload.event_id] };
+        if (keepPending) pendingActivation = copy(activation);
+        if (notificationHandler !== null) callbacks.get(notificationHandler)?.({ event: 'proactive://notification-clicked', id: eventId, payload: activation });
       },
       completeSync: () => { sync = { ...sync, running: false, message: '가져오기를 마쳤습니다.' }; } };
     let operationStarted = 0;
@@ -157,7 +167,6 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     }
     Object.assign(window, { isTauri: true, __fixture: fixture, __TAURI_EVENT_PLUGIN_INTERNALS__: {
       unregisterListener: (event: string, _id: number) => {
-        if (event === 'updater://progress') updaterHandler = null;
         if (event === 'proactive://notification-clicked') notificationHandler = null;
       },
     }, __TAURI_INTERNALS__: {
@@ -170,12 +179,10 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         fixture.calls.push({ command, args: copy(args) });
         switch (command) {
           case 'plugin:event|listen':
-            if (args.event === 'updater://progress') updaterHandler = args.handler;
             if (args.event === 'proactive://notification-clicked') notificationHandler = args.handler;
             eventId += 1;
             return eventId;
           case 'plugin:event|unlisten':
-            if (args.event === 'updater://progress') updaterHandler = null;
             if (args.event === 'proactive://notification-clicked') notificationHandler = null;
             return null;
           case 'plugin:dialog|message': {
@@ -186,32 +193,32 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             const custom = args.buttons?.OkCancelCustom as [string, string] | undefined;
             return custom ? custom[ok ? 0 : 1] : ok ? 'Ok' : 'Cancel';
           }
-          case 'plugin:dialog|open': return '/fixtures/Rhythm-backup.rhythm-backup';
-          case 'plugin:dialog|save': return '/fixtures/Rhythm-backup.rhythm-backup';
+          case 'plugin:dialog|open': return 'C:\\fixtures\\Rhythm-backup.rhythm-backup';
+          case 'plugin:dialog|save': return 'C:\\fixtures\\Rhythm-backup.rhythm-backup';
+          case 'backup_restore_support':
+            if (options.restoreSupportError) throw options.restoreSupportError;
+            return null;
           case 'backup_inspect':
             if (options.backupInspectError) throw '백업 파일의 형식이 올바르지 않습니다.';
-            return { format_version: 1, created_at: '1793404800', database_schema: 6, documents: 12, resources: 3,
+            return { format_version: 1, created_at: '1793404800', database_schema: 7, documents: 12, resources: 3,
               resource_bytes: 1536, includes_model_weights: false };
           case 'backup_restore':
             if (options.backupRestoreError) throw '백업 데이터를 복원하지 못했습니다.';
             return null;
           case 'backup_cancel': return true;
           case 'backup_restore_outcome': return options.restoreOutcome ?? null;
-          case 'updater_configured': return options.updaterConfigured ?? false;
-          case 'updater_check':
-            if (options.updaterCheckError) throw options.updaterCheckError;
-            return options.updateAvailable === false ? null : { version: '0.9.3', currentVersion: '0.9.2', date: null, body: '안정 버전 업데이트' };
-          case 'updater_install':
-            if (options.updaterInstallError) throw '서명된 업데이트를 설치하지 못했습니다.';
-            return { version: '0.9.3', currentVersion: '0.9.2', date: null, body: '안정 버전 업데이트' };
-          case 'updater_restart':
-            if (options.updaterRestartError) throw '업데이트를 적용하며 다시 시작하지 못했습니다.';
-            return null;
           case 'notification_authorization': return notificationAuthorization;
+          case 'platform_capabilities':
+            if (options.capabilitiesError) throw '사용 가능 여부를 확인하지 못했습니다.';
+            return {
+            notifications: { available: ['authorized', 'granted', 'not_determined'].includes(notificationAuthorization), reason: ['authorized', 'granted'].includes(notificationAuthorization) ? null : 'Windows 알림 설정과 앱 설치 상태를 확인해 주세요.' },
+            restore: { available: !options.restoreSupportError, reason: options.restoreSupportError ?? null },
+            updater: { available: false, reason: '새 설치 파일로 수동 업데이트합니다.' },
+          };
           case 'notification_request_permission':
             if (options.notificationRequestError) throw '알림 권한 요청을 사용할 수 없습니다.';
             notificationAuthorization = options.notificationRequestResult ?? 'authorized';
-            return notificationAuthorization;
+            return { status: notificationAuthorization, test_notification_requested: options.notificationTestRequested ?? true };
           case 'get_snapshot': return copy(snapshot);
           case 'proactive_snapshot': return copy(proactiveSnapshot(true));
           case 'proactive_history': return copy(history.slice(0, args.limit ?? 200));
@@ -233,7 +240,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'lifecycle_set_start_hidden':
           case 'lifecycle_set_launch_at_login': {
             if (options.lifecycleError) throw '운영체제 시작 설정을 바꾸지 못했습니다.';
-            if (command === 'lifecycle_set_close_to_background' && args.enabled && !lifecycle.tray_available) throw '메뉴 막대 아이콘을 사용할 수 없습니다.';
+            if (command === 'lifecycle_set_close_to_background' && args.enabled && !lifecycle.tray_available) throw '알림 영역 아이콘을 사용할 수 없습니다.';
             const field = command === 'lifecycle_set_close_to_background' ? 'close_to_background'
               : command === 'lifecycle_set_start_hidden' ? 'start_hidden' : 'launch_at_login';
             lifecycle[field] = args.enabled;
@@ -275,6 +282,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (options.feedbackReadDelay) await wait(options.feedbackReadDelay);
             return documentFeedback.get(args.documentId) ?? null;
           case 'personalization_set_feedback':
+            if (options.feedbackWriteGate) await new Promise<void>((resolve) => fixture.feedbackResolvers.push(resolve));
             await wait(options.feedbackWriteDelay ?? 0);
             if (args.feedback) documentFeedback.set(args.documentId, args.feedback); else documentFeedback.delete(args.documentId);
             return documentFeedback.get(args.documentId) ?? null;
@@ -390,7 +398,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'archive_start': sync = { running: true, source_id: 'computing-updates', mode: args.mode, page: 1, message: '공개 공지를 가져오는 중입니다.' }; return copy(sync);
           case 'archive_cancel': sync = { ...sync, running: false, message: '가져오기를 중단했습니다.' }; return copy(sync);
           case 'archive_resource_image':
+            if (options.imageGate) await new Promise<void>((resolve) => fixture.imageResolvers.push(resolve));
             await wait(options.imageDelay ?? 0);
+            fixture.imageCompleted += 1;
             if (options.imageError) throw '로컬 자료가 손상되었습니다. 다시 내려받아 주세요.';
             return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4WQAAAAASUVORK5CYII=';
           case 'archive_retry_resource':

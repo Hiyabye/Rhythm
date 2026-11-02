@@ -9,7 +9,6 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test:ui": "playwright test",
     "test:desktop": "node --test tests/desktop.test.mjs",
-    "test:release": "node --test tests/update-signature.test.mjs tests/macos-release.test.mjs",
     "tauri": "tauri",
     "desktop": "node scripts/desktop.mjs dev",
     "desktop:build": "node scripts/desktop.mjs build"
@@ -23,7 +22,7 @@
     "@playwright/test": "^1.64.1",
     "@sveltejs/vite-plugin-svelte": "^6.2.1",
     "@tailwindcss/vite": "^4.1.18",
-    "@tauri-apps/cli": "^2.12.4",
+    "@tauri-apps/cli": "2.12.4",
     "@types/node": "^24.10.0",
     "svelte": "^5.57.2",
     "svelte-check": "^4.3.3",

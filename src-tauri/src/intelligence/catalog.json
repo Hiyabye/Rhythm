@@ -5,7 +5,7 @@
     "parameters": "2B",
     "quantization": "Q4_K_M",
     "bytes": 1280835840,
-    "memory_bytes": 4294967296,
+    "memory_bytes": 5368709120,
     "description": "한국어 공지 요약과 정보 추출을 위한 로컬 모델",
     "use_case": "적은 메모리 · 간단한 요약",
     "repository": "unsloth/Qwen3.5-2B-GGUF",
@@ -13,8 +13,8 @@
     "filename": "Qwen3.5-2B-Q4_K_M.gguf",
     "sha256": "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
     "license": "Apache-2.0",
-    "compatibility": "verified",
-    "reason": "macOS Apple Silicon · Metal에서 실제 한국어 분석을 확인했습니다. CPU·Windows·Linux는 미검증이며 메모리 부족 시 불러오지 못할 수 있습니다."
+    "compatibility": "available",
+    "reason": "Windows CPU(i5-10300H, RAM 16GB)에서 제한된 공지로 시험했습니다. 장학 공지 분류 오류와 발표 시점 표현 누락이 발견되어 결과를 원문과 대조해야 합니다. 실제 메모리 사용량은 환경에 따라 달라집니다."
   },
   {
     "id": "qwen35-4b",
@@ -22,7 +22,7 @@
     "parameters": "4B",
     "quantization": "Q4_K_M",
     "bytes": 2740937888,
-    "memory_bytes": 7516192768,
+    "memory_bytes": 10737418240,
     "description": "한국어 공지 요약과 정보 추출을 위한 로컬 모델",
     "use_case": "균형 잡힌 공지 분석",
     "repository": "unsloth/Qwen3.5-4B-GGUF",
@@ -30,8 +30,8 @@
     "filename": "Qwen3.5-4B-Q4_K_M.gguf",
     "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
     "license": "Apache-2.0",
-    "compatibility": "verified",
-    "reason": "macOS Apple Silicon · Metal에서 실제 한국어 분석을 확인했습니다. CPU·Windows·Linux는 미검증이며 메모리 부족 시 불러오지 못할 수 있습니다."
+    "compatibility": "available",
+    "reason": "Windows CPU(i5-10300H, RAM 16GB)에서 제한된 공지로 추론과 복구를 시험했습니다. 한 장학 사례의 자동 검사는 통과했지만 일반적인 정확도를 보장하지 않으며, 결과를 원문과 대조해야 합니다. 실제 메모리 사용량은 환경에 따라 달라집니다."
   },
   {
     "id": "qwen35-9b",

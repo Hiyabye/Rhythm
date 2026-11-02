@@ -651,6 +651,11 @@ h1 {
   padding: 16px 0;
 }
 
+.setting-row > .text-button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .setting-row+.setting-row {
   border-top: 1px solid var(--line);
 }

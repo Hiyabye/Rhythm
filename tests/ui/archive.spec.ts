@@ -267,13 +267,14 @@ test('obsolete searches cannot overwrite newer filters or clamp their page', asy
 
 test('closing during image hydration stops subsequent obsolete image reads', async ({ page }) => {
   const resources = [image, { ...image, id: 8, url: `${image.url}?two` }, { ...image, id: 9, url: `${image.url}?three` }];
-  await mockDesktop(page, { resources, imageDelay: 250, body: resources.map((item) => `<img data-resource-url="${item.url}">`).join('') });
+  await mockDesktop(page, { resources, imageGate: true, body: resources.map((item) => `<img data-resource-url="${item.url}">`).join('') });
   await page.goto('/');
   await page.locator('#notice-1').click();
   await expect.poll(() => callCount(page, 'archive_resource_image')).toBe(1);
   await page.getByRole('button', { name: /목록으로 돌아가기/ }).click();
   await expect(page.locator('.notice-list')).toBeVisible();
-  await page.waitForTimeout(350); // Observe completion of the one already admitted local read.
+  await page.evaluate(() => (window as any).__fixture.releaseImages());
+  await expect.poll(() => page.evaluate(() => (window as any).__fixture.imageCompleted)).toBe(1);
   expect(await callCount(page, 'archive_resource_image')).toBe(1);
   await expect(page.locator('.archive-reader')).toHaveCount(0);
 });

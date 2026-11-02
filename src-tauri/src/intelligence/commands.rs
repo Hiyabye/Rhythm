@@ -48,6 +48,22 @@ async fn reset_worker(
     }
 }
 
+async fn stop_inventory_worker(
+    worker: &tokio::sync::Mutex<super::Worker>,
+    shutdown: &AtomicBool,
+) -> Result<(), String> {
+    let mut worker = tokio::select! {
+        biased;
+        _ = exiting(shutdown) => return Err(EXIT_ERROR.into()),
+        worker = worker.lock() => worker,
+    };
+    tokio::select! {
+        biased;
+        _ = exiting(shutdown) => Err(EXIT_ERROR.into()),
+        result = worker.stop_for_inventory() => result,
+    }
+}
+
 #[derive(Serialize)]
 pub struct Snapshot {
     catalog: Vec<models::CatalogEntry>,
@@ -142,7 +158,7 @@ async fn verified(
 }
 
 enum WorkerAction<'a> {
-    Reset,
+    StopForInventory,
     Load(&'a Path),
     Setup(&'a Path),
 }
@@ -163,9 +179,9 @@ async fn operation_worker(
         error = operation.interrupted(shutdown) => Err(error),
         result = async {
             match action {
-                WorkerAction::Reset => {
-                    operation.phase("restarting");
-                    worker.unload().await.map(|_| ())
+                WorkerAction::StopForInventory => {
+                    operation.phase("stopping");
+                    worker.stop_for_inventory().await
                 }
                 WorkerAction::Load(file) | WorkerAction::Setup(file) => {
                     operation.phase("loading");
@@ -277,7 +293,7 @@ pub async fn ai_register(state: tauri::State<'_, AppState>, path: String) -> Res
         &state.worker,
         &state.maintenance_shutdown,
         &operation,
-        WorkerAction::Reset,
+        WorkerAction::StopForInventory,
     )
     .await?;
     operation.phase("verifying");
@@ -321,7 +337,7 @@ pub async fn ai_select(
             .filter(|m| m.status == "installed")
             .ok_or("설치된 모델을 선택해 주세요.")?;
     }
-    reset_worker(&state.worker, &state.maintenance_shutdown).await?;
+    stop_inventory_worker(&state.worker, &state.maintenance_shutdown).await?;
     prefs.active_model_id = id;
     with_store(&state, |s| s.ai_save_preferences(&prefs))
 }
@@ -382,7 +398,7 @@ pub async fn ai_remove(
     let previous_preferences = with_store(&state, |s| s.ai_preferences())?;
     let mut prefs = previous_preferences.clone();
     // Unload even if an earlier selection was cleared, so no mapped model file is deleted.
-    reset_worker(&state.worker, &state.maintenance_shutdown).await?;
+    stop_inventory_worker(&state.worker, &state.maintenance_shutdown).await?;
     if prefs.active_model_id.as_deref() == Some(&id) {
         prefs.active_model_id = None;
         with_store(&state, |s| s.ai_save_preferences(&prefs))?;
@@ -508,6 +524,89 @@ mod tests {
     use super::*;
     use std::{path::Path, sync::Arc, time::Duration};
     use tokio::{sync::Mutex, time::timeout};
+
+    #[tokio::test]
+    async fn unavailable_worker_allows_external_inventory_changes_without_deleting_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("external.gguf");
+        let mut bytes = b"GGUF".to_vec();
+        bytes.extend(3u32.to_le_bytes());
+        bytes.extend(1u64.to_le_bytes());
+        bytes.extend(1u64.to_le_bytes());
+        bytes.extend(20u64.to_le_bytes());
+        bytes.extend(b"general.architecture");
+        bytes.extend(8u32.to_le_bytes());
+        bytes.extend(5u64.to_le_bytes());
+        bytes.extend(b"qwen3");
+        bytes.extend([0u8; 256]);
+        std::fs::write(&file, &bytes).unwrap();
+        let store = Arc::new(std::sync::Mutex::new(
+            crate::Store::open(&directory.path().join("rhythm.sqlite3")).unwrap(),
+        ));
+        let worker = Mutex::new(super::super::Worker::launch(
+            &directory.path().join("nonexistent-worker.exe"),
+        ));
+        let shutdown = AtomicBool::new(false);
+        let controller = operations::Controller::default();
+        let operation = controller.begin("register").unwrap();
+        operation_worker(
+            &worker,
+            &shutdown,
+            &operation,
+            WorkerAction::StopForInventory,
+        )
+        .await
+        .unwrap();
+        let model = models::register(store.clone(), file.clone(), operation.cancel.clone())
+            .await
+            .unwrap();
+        drop(operation);
+        assert_eq!(model.ownership, "external");
+        assert!(worker.lock().await.child.is_none());
+
+        // Selection and removal share the same process-release boundary.
+        stop_inventory_worker(&worker, &shutdown).await.unwrap();
+        let mut preferences = store.lock().unwrap().ai_preferences().unwrap();
+        preferences.active_model_id = Some(model.id.clone());
+        store
+            .lock()
+            .unwrap()
+            .ai_save_preferences(&preferences)
+            .unwrap();
+        stop_inventory_worker(&worker, &shutdown).await.unwrap();
+        preferences.active_model_id = None;
+        store
+            .lock()
+            .unwrap()
+            .ai_save_preferences(&preferences)
+            .unwrap();
+        models::remove(
+            store.clone(),
+            directory.path().into(),
+            model.id.clone(),
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(store.lock().unwrap().ai_model(&model.id).unwrap().is_none());
+        assert_eq!(std::fs::read(&file).unwrap(), bytes);
+        assert!(worker.lock().await.child.is_none());
+    }
+
+    #[tokio::test]
+    async fn inventory_stop_reaps_running_worker_without_relaunching() {
+        let worker = Mutex::new(unresponsive_worker());
+        assert!(worker.lock().await.child.is_some());
+        timeout(
+            Duration::from_secs(5),
+            stop_inventory_worker(&worker, &AtomicBool::new(false)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let worker = worker.lock().await;
+        assert!(worker.child.is_none() && worker.input.is_none() && worker.output.is_none());
+    }
 
     fn unresponsive_worker() -> super::super::Worker {
         static FIXTURE: std::sync::OnceLock<(tempfile::TempDir, PathBuf)> =

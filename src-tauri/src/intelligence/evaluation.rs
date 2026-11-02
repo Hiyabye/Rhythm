@@ -131,29 +131,95 @@ pub(super) fn write_report(path: &Path, report: &Value) {
     std::fs::write(path, serde_json::to_vec_pretty(report).unwrap()).unwrap();
     eprintln!("Actual inference evaluation report: {}", path.display());
 }
-fn worker_pid(path: &Path) -> Option<u32> {
-    let output = std::process::Command::new("/bin/ps")
-        .args(["-axo", "pid=,comm="])
-        .output()
-        .ok()?;
-    let expected = path.to_str()?;
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .find_map(|line| {
-            let line = line.trim();
-            let (pid, executable) = line.split_once(char::is_whitespace)?;
-            (executable.trim() == expected)
-                .then(|| pid.parse().ok())
-                .flatten()
-        })
-}
-pub(super) fn worker_rss_kib(path: &Path) -> Option<u64> {
-    let pid = worker_pid(path)?;
+#[cfg(unix)]
+pub(super) fn worker_rss_kib(pid: Option<u32>) -> Option<u64> {
+    let pid = pid?;
     let output = std::process::Command::new("/bin/ps")
         .args(["-o", "rss=", "-p", &pid.to_string()])
         .output()
         .ok()?;
     String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+#[cfg(windows)]
+pub(super) fn worker_rss_kib(pid: Option<u32>) -> Option<u64> {
+    use windows::Win32::{
+        Foundation::CloseHandle,
+        System::{
+            ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
+            Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ},
+        },
+    };
+    // SAFETY: The process handle is closed once and the output structure is valid.
+    unsafe {
+        let handle = OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
+            false,
+            pid?,
+        )
+        .ok()?;
+        let mut counters = PROCESS_MEMORY_COUNTERS {
+            cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+            ..Default::default()
+        };
+        let size = counters.cb;
+        let result = GetProcessMemoryInfo(handle, &mut counters, size)
+            .ok()
+            .map(|()| counters.WorkingSetSize as u64 / 1024);
+        let _ = CloseHandle(handle);
+        result
+    }
+}
+#[cfg(not(any(unix, windows)))]
+pub(super) fn worker_rss_kib(_pid: Option<u32>) -> Option<u64> {
+    None
+}
+
+#[cfg(unix)]
+struct WorkerTerminator(u32);
+#[cfg(unix)]
+impl WorkerTerminator {
+    fn open(pid: u32) -> Option<Self> {
+        Some(Self(pid))
+    }
+    fn terminate(&self) -> bool {
+        std::process::Command::new("/bin/kill")
+            .args(["-KILL", &self.0.to_string()])
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+}
+#[cfg(windows)]
+struct WorkerTerminator(windows::Win32::Foundation::HANDLE);
+#[cfg(windows)]
+impl WorkerTerminator {
+    fn open(pid: u32) -> Option<Self> {
+        use windows::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE};
+        // SAFETY: pid belongs to this test's child; the owned handle is closed on drop.
+        unsafe { OpenProcess(PROCESS_TERMINATE, false, pid).ok().map(Self) }
+    }
+    fn terminate(&self) -> bool {
+        // SAFETY: the handle identifies the specific child opened before inference,
+        // even if the child exits and Windows later reuses its numeric PID.
+        unsafe { windows::Win32::System::Threading::TerminateProcess(self.0, 1).is_ok() }
+    }
+}
+#[cfg(windows)]
+impl Drop for WorkerTerminator {
+    fn drop(&mut self) {
+        // SAFETY: this object owns the handle, which is closed exactly once.
+        let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+#[cfg(not(any(unix, windows)))]
+struct WorkerTerminator;
+#[cfg(not(any(unix, windows)))]
+impl WorkerTerminator {
+    fn open(_pid: u32) -> Option<Self> {
+        None
+    }
+    fn terminate(&self) -> bool {
+        false
+    }
 }
 async fn settle(controller: &analysis::Controller) {
     tokio::time::timeout(Duration::from_secs(1500), controller.wait())
@@ -227,6 +293,26 @@ fn assess(case: &Case, result: &Value, partial: bool) -> Value {
         "human_review_required":true,"review_note":case.note})
 }
 
+fn recovery_eligible(job_status: &str, assessment: &Value) -> bool {
+    job_status == "completed"
+        && assessment["schema_valid"] == true
+        && assessment["literal_grounding_valid"] == true
+}
+
+#[test]
+fn recovery_eligibility_is_independent_of_semantic_quality() {
+    let assessment = json!({"schema_valid":true,"literal_grounding_valid":true,
+        "category_correct":false,"deadline_correct":true});
+    assert!(recovery_eligible("completed", &assessment));
+    assert!(!recovery_eligible("failed", &assessment));
+    let mut invalid = assessment.clone();
+    invalid["schema_valid"] = json!(false);
+    assert!(!recovery_eligible("completed", &invalid));
+    invalid = assessment;
+    invalid["literal_grounding_valid"] = json!(false);
+    assert!(!recovery_eligible("completed", &invalid));
+}
+
 async fn inference_request_entered(controller: &analysis::Controller) -> bool {
     tokio::time::timeout(Duration::from_secs(300), async {
         loop {
@@ -247,12 +333,50 @@ async fn inference_request_entered(controller: &analysis::Controller) -> bool {
     .await
     .unwrap_or(false)
 }
+
+// This is used only by the explicitly ignored, isolated real-model evaluation.
+// A separate OS thread bounds cleanup even if an OS file/SQLite call blocks the
+// current-thread async runtime. Ending the test process closes its worker Job
+// Object, and must be treated as a failed test, not successful recovery.
+async fn cancel_and_join_or_exit(
+    controller: &analysis::Controller,
+    store: &Arc<Mutex<Store>>,
+    job_id: i64,
+) {
+    let (finished, watch) = std::sync::mpsc::channel::<()>();
+    let watchdog = std::thread::Builder::new()
+        .name("rhythm-eval-cleanup-watchdog".into())
+        .spawn(move || {
+            if watch.recv_timeout(Duration::from_secs(45)).is_err() {
+                eprintln!("evaluation cleanup did not complete in 45 seconds; terminating isolated test process");
+                std::process::exit(1);
+            }
+        })
+        .unwrap_or_else(|error| {
+            eprintln!("could not start evaluation cleanup watchdog: {error}");
+            std::process::exit(1);
+        });
+    if let Err(error) = controller.cancel(store, job_id) {
+        // The attempt may already be terminal; still wait for its owner to exit.
+        eprintln!("evaluation cancellation could not be recorded: {error}");
+    }
+    if tokio::time::timeout(Duration::from_secs(30), controller.wait())
+        .await
+        .is_err()
+    {
+        eprintln!(
+            "evaluation cleanup did not join in 30 seconds; terminating isolated test process"
+        );
+        std::process::exit(1);
+    }
+    let _ = finished.send(());
+    let _ = watchdog.join();
+}
 async fn exercise_recovery(
     controller: &analysis::Controller,
     store: &Arc<Mutex<Store>>,
     worker: &Arc<AsyncMutex<Worker>>,
     root: &Path,
-    executable: &Path,
     document_id: i64,
     revision_id: i64,
 ) -> Value {
@@ -275,6 +399,7 @@ async fn exercise_recovery(
         .job
         .unwrap();
     if !inference_request_entered(controller).await {
+        cancel_and_join_or_exit(controller, store, cancelled.id).await;
         return json!({"recovered":false,"error":"cancel sample never reached inference IPC phase"});
     }
     controller.cancel(store, cancelled.id).unwrap();
@@ -292,6 +417,18 @@ async fn exercise_recovery(
         .ai_document_results(document_id, Some(revision_id), 100)
         .unwrap()
         .len();
+    // Cancellation reaps the prior child. Start and record the PID of this
+    // isolated test-owned child before its mutex is held by the next inference.
+    let terminator = {
+        let mut engine = worker.lock().await;
+        if engine.restart().await.is_err() {
+            return json!({"recovered":false,"error":"could not restart child"});
+        }
+        engine.process_id().and_then(WorkerTerminator::open)
+    };
+    let Some(terminator) = terminator else {
+        return json!({"recovered":false,"error":"could not open this test-specific child"});
+    };
     let crashed = controller
         .start(
             store.clone(),
@@ -305,19 +442,11 @@ async fn exercise_recovery(
         .job
         .unwrap();
     if !inference_request_entered(controller).await {
+        cancel_and_join_or_exit(controller, store, crashed.id).await;
         return json!({"recovered":false,"cancelled_status":cancelled_status,"error":"crash sample never reached inference IPC phase"});
     }
-    let Some(pid) = worker_pid(executable) else {
-        controller.cancel(store, crashed.id).unwrap();
-        settle(controller).await;
-        return json!({"recovered":false,"error":"could not identify this test-specific child PID"});
-    };
     // Only the child copied into this test's unique directory is deliberately killed.
-    let killed = std::process::Command::new("/bin/kill")
-        .args(["-KILL", &pid.to_string()])
-        .status()
-        .unwrap()
-        .success();
+    let killed = terminator.terminate();
     settle(controller).await;
     let crashed_status = store
         .lock()
@@ -346,10 +475,21 @@ async fn exercise_recovery(
         .unwrap()
         .unwrap()
         .status;
+    // Forced reanalysis creates a new result for the same cache key. Identify
+    // it by the actual recovery job rather than assuming the original ID.
+    let recovered_result_id = store
+        .lock()
+        .unwrap()
+        .ai_document_results(document_id, Some(revision_id), 100)
+        .unwrap()
+        .into_iter()
+        .find(|result| result.job_id == recovered.id)
+        .map(|result| result.id);
     json!({"interruption_boundary":"parent inference IPC phase; not proof of an active model kernel",
         "cancelled_status":cancelled_status,"prior_result_preserved":before == after_cancel,
         "child_killed":killed,"crashed_status":crashed_status,"recovery_status":recovered_status,
-        "recovered":cancelled_status == "cancelled" && before == after_cancel && killed && crashed_status == "failed" && recovered_status == "completed"})
+        "recovered_result_id":recovered_result_id,
+        "recovered":cancelled_status == "cancelled" && before == after_cancel && killed && crashed_status == "failed" && recovered_status == "completed" && recovered_result_id.is_some()})
 }
 
 /// Same artifact/document/configuration, cold model then forced warm regeneration and cache.
@@ -362,7 +502,10 @@ async fn actual_analysis_latency_benchmark() {
     let id = std::env::var("RHYTHM_MODEL_EVAL_ID").unwrap_or_else(|_| "qwen35-2b".into());
     let model = installed_model(&root, &id);
     let directory = tempfile::tempdir().unwrap();
-    let local_worker = directory.path().join("rhythm-benchmark-worker");
+    let local_worker = directory.path().join(format!(
+        "rhythm-benchmark-worker{}",
+        std::env::consts::EXE_SUFFIX
+    ));
     std::fs::copy(&executable, &local_worker).unwrap();
     let store = Store::open(&directory.path().join("benchmark.sqlite3")).unwrap();
     seed(&store);
@@ -408,7 +551,7 @@ async fn actual_analysis_latency_benchmark() {
             .ai_document_results(document_id, Some(revision_id), 10)
             .unwrap();
         let mut sample = json!({"mode":mode,"wall_ms":wall_ms,"admission_ms":admitted.admission_ms,
-            "job":job,"diagnostics":controller.diagnostics(job_id),"worker_rss_kib":worker_rss_kib(&local_worker)});
+            "job":job,"diagnostics":controller.diagnostics(job_id),"worker_rss_kib":worker_rss_kib(worker.lock().await.process_id())});
         if job.status == "completed" {
             let result = results.first().unwrap();
             sample["assessment"] = assess(&case, &result.result, result.partial);
@@ -528,13 +671,14 @@ async fn actual_qwen35_analysis_evaluation() {
         "prompt_version":analysis::PROMPT_VERSION,"schema_version":analysis::SCHEMA_VERSION,
         "decoding_mode":analysis::decoding_mode(),
         "max_tokens":1024,"samples":[],"native_ui_verified":false,
+        "final_cache_check":{"status":"pending"},
         "network_note":"test constructs no HTTP client; this alone is not OS-enforced network denial"
     });
     let report_file = report_path(&id);
     let load_started = Instant::now();
     let loaded = worker.lock().await.load(Path::new(&model.path)).await;
     report["load_ms"] = json!(load_started.elapsed().as_millis());
-    report["post_load_worker_rss_kib"] = json!(worker_rss_kib(&local_worker));
+    report["post_load_worker_rss_kib"] = json!(worker_rss_kib(worker.lock().await.process_id()));
     if let Err(error) = loaded {
         report["load_error"] = json!(error);
         write_report(&report_file, &report);
@@ -548,7 +692,9 @@ async fn actual_qwen35_analysis_evaluation() {
         .clamp(1, 18);
     let filter = std::env::var("RHYTHM_AI_EVAL_CASES").ok();
     let mut failures = Vec::new();
+    let mut quality_failures = Vec::new();
     let mut completed = Vec::new();
+    let mut recovery_candidate = None;
     for case in cases()
         .into_iter()
         .filter(|case| {
@@ -592,7 +738,7 @@ async fn actual_qwen35_analysis_evaluation() {
         };
         let mut sample = json!({"case":case.id,"job":job,"wall_ms":started.elapsed().as_millis(),
             "diagnostics":controller.diagnostics(job_id),
-            "worker_rss_kib":worker_rss_kib(&local_worker)});
+            "worker_rss_kib":worker_rss_kib(worker.lock().await.process_id())});
         if let Some(result) = results.first() {
             sample["assessment"] = assess(&case, &result.result, result.partial);
             sample["result"] = json!(result);
@@ -613,6 +759,9 @@ async fn actual_qwen35_analysis_evaluation() {
             assert_eq!(cached.cached.unwrap().id, result.id);
             sample["cache_reused"] = json!(true);
             completed.push((document_id, revision_id, result.id));
+            if recovery_eligible(&job.status, &sample["assessment"]) {
+                recovery_candidate.get_or_insert((document_id, revision_id));
+            }
             if sample["assessment"]["schema_valid"] != true
                 || sample["assessment"]["literal_grounding_valid"] != true
                 || sample["assessment"]["category_correct"] != true
@@ -623,7 +772,9 @@ async fn actual_qwen35_analysis_evaluation() {
                     .unwrap()
                     .is_empty()
             {
-                failures.push(format!("{}: quality assertion failed", case.id));
+                let failure = format!("{}: quality assertion failed", case.id);
+                quality_failures.push(failure.clone());
+                failures.push(failure);
             }
             // A real new archived revision must not accidentally reuse the old revision cache.
             let mut revised = case.article();
@@ -669,24 +820,58 @@ async fn actual_qwen35_analysis_evaluation() {
         report["samples"].as_array_mut().unwrap().push(sample);
         write_report(&report_file, &report);
     }
-    if failures.is_empty() && std::env::var("RHYTHM_AI_EVAL_RECOVERY").as_deref() == Ok("1") {
-        if let Some((document_id, revision_id, _)) = completed.first() {
-            let recovery = exercise_recovery(
+    let samples_count = report["samples"].as_array().unwrap().len();
+    let quality_status = if !quality_failures.is_empty() {
+        "failed"
+    } else if samples_count == 0 || completed.len() != samples_count {
+        "incomplete"
+    } else {
+        "passed"
+    };
+    if quality_status == "incomplete" {
+        failures.push("quality evaluation incomplete".into());
+    }
+    report["quality"] = json!({"status":quality_status,"failures":quality_failures});
+    report["failures"] = json!(failures);
+    write_report(&report_file, &report);
+    if std::env::var("RHYTHM_AI_EVAL_RECOVERY").as_deref() == Ok("1") {
+        if let Some((document_id, revision_id)) = recovery_candidate {
+            report["recovery"] = json!({"status":"running"});
+            write_report(&report_file, &report);
+            let mut recovery = exercise_recovery(
                 &controller,
                 &store,
                 &worker,
                 directory.path(),
-                &local_worker,
-                *document_id,
-                *revision_id,
+                document_id,
+                revision_id,
             )
             .await;
+            if let Some(recovered_result_id) = recovery["recovered_result_id"].as_i64() {
+                if let Some((_, _, expected_id)) = completed
+                    .iter_mut()
+                    .find(|(doc, revision, _)| *doc == document_id && *revision == revision_id)
+                {
+                    *expected_id = recovered_result_id;
+                }
+            }
             if recovery["recovered"] != true {
                 failures.push("real-worker recovery failed".into());
+                recovery["status"] = json!("failed");
+            } else {
+                recovery["status"] = json!("passed");
             }
             report["recovery"] = recovery;
+        } else {
+            report["recovery"] = json!({"recovered":false,"status":"skipped",
+                "error":"no completed result passed schema and literal grounding checks"});
+            failures.push("real-worker recovery skipped: no eligible completed result".into());
         }
+    } else {
+        report["recovery"] = json!({"status":"not_requested"});
     }
+    report["failures"] = json!(failures);
+    write_report(&report_file, &report);
     worker.lock().await.shutdown().await;
     controller.stop();
     controller.wait().await;
@@ -697,6 +882,7 @@ async fn actual_qwen35_analysis_evaluation() {
     let cache_controller = analysis::Controller::default();
     // An explicitly stopped worker must remain stopped across persisted cache reads.
     worker.lock().await.stop().await;
+    let mut cache_checks = Vec::new();
     for (document_id, revision_id, result_id) in &completed {
         let cached = cache_controller
             .start(
@@ -708,11 +894,32 @@ async fn actual_qwen35_analysis_evaluation() {
                 false,
             )
             .unwrap();
-        assert!(cached.job.is_none());
-        assert_eq!(cached.cached.unwrap().id, *result_id);
-        assert_eq!(worker.lock().await.status().state, "unavailable");
+        let cached_id = cached.cached.map(|result| result.id);
+        let worker_stopped = worker.lock().await.status().state == "unavailable";
+        let passed = cached.job.is_none() && cached_id == Some(*result_id) && worker_stopped;
+        if !passed {
+            failures.push(format!(
+                "persisted cache check failed for document {document_id}"
+            ));
+        }
+        cache_checks.push(json!({"document_id":document_id,"revision_id":revision_id,
+            "expected_result_id":result_id,"cached_result_id":cached_id,
+            "worker_stopped":worker_stopped,"passed":passed}));
     }
-    report["reopened_cache_reads_with_worker_stopped"] = json!(completed.len());
+    let passed_cache_checks = cache_checks
+        .iter()
+        .filter(|check| check["passed"] == true)
+        .count();
+    let cache_status = if cache_checks.is_empty() {
+        failures.push("persisted cache check incomplete: no completed result".into());
+        "incomplete"
+    } else if passed_cache_checks == cache_checks.len() {
+        "passed"
+    } else {
+        "failed"
+    };
+    report["final_cache_check"] = json!({"status":cache_status,"checks":cache_checks});
+    report["reopened_cache_reads_with_worker_stopped"] = json!(passed_cache_checks);
     report["current_revision_result_count"] = json!(reopened
         .lock()
         .unwrap()

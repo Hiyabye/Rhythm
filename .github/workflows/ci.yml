@@ -1,37 +1,17 @@
-name: Checks
-
-on:
-  push:
-  pull_request:
-
+name: Windows checks
+on: [push, pull_request]
 permissions:
   contents: read
-
 jobs:
-  ui:
-    name: Frontend interactions (Chromium + WebKit)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run test:desktop
-      - run: npm run test:release
-      - run: npx playwright install --with-deps chromium webkit
-      - run: npm run test:ui
-
-  desktop:
-    name: macOS desktop (Apple Silicon)
-    runs-on: macos-14
+  windows:
+    runs-on: windows-latest
     env:
-      CARGO_TERM_COLOR: always
       CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
     defaults:
       run:
-        shell: bash
+        shell: pwsh
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -45,13 +25,18 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm run build
+      - run: npm run test:desktop
+      - run: npx playwright install chromium webkit
+      - run: npm run test:ui
       - run: cargo fmt --all -- --check
-      - name: Build and stage worker for Tauri checks
+      - name: Build real CPU worker and stage for app tests
         run: |
           cargo build --locked -p rhythm-ai-worker
-          node -e 'const fs=require("node:fs"),p=require("node:path"),cp=require("node:child_process");const target=cp.execFileSync("rustc",["-vV"],{encoding:"utf8"}).match(/host: (.+)/)[1].trim();if(target!=="aarch64-apple-darwin")throw new Error(`Unexpected CI target: ${target}`);const bin=p.resolve("target/debug/rhythm-ai-worker");fs.mkdirSync("src-tauri/binaries",{recursive:true});fs.copyFileSync(bin,"src-tauri/binaries/rhythm-ai-worker-"+target);fs.appendFileSync(process.env.GITHUB_ENV,"RHYTHM_WORKER_TEST_BIN="+bin+"\n");'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force src-tauri/binaries | Out-Null
+          Copy-Item target/debug/rhythm-ai-worker.exe src-tauri/binaries/rhythm-ai-worker-x86_64-pc-windows-msvc.exe
+          "RHYTHM_WORKER_TEST_BIN=$((Resolve-Path target/debug/rhythm-ai-worker.exe).Path)" >> $env:GITHUB_ENV
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - name: Test storage and worker lifecycle (no model weights)
-        run: cargo test --locked --workspace
-      - name: Build native desktop executable
-        run: npm run desktop:build -- --no-bundle
+      - run: cargo test --locked --workspace
+      - name: Build unsigned NSIS installer (no publish)
+        run: npm run desktop:build

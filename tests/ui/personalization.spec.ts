@@ -231,12 +231,13 @@ test('document feedback supports reversal and per-document commands', async ({ p
 });
 
 test('feedback completion after a revision change releases reader controls', async ({ page }) => {
-  await mockDesktop(page, { revisions: true, feedbackWriteDelay: 500 }); await page.goto('/');
+  await mockDesktop(page, { revisions: true, feedbackWriteGate: true }); await page.goto('/');
   await page.getByRole('button', { name: /한국어 공지 01/ }).first().click();
   const interested = page.getByRole('button', { name: '관심 있어요' });
   await interested.click();
   await expect(interested).toBeDisabled();
   await page.getByLabel('보관 이력').selectOption('2');
+  await page.evaluate(() => (window as any).__fixture.releaseFeedback());
   await expect(interested).toBeEnabled();
   await expect(interested).toHaveAttribute('aria-pressed', 'true');
 });

@@ -13,13 +13,10 @@ use crate::{
         Settings, Store,
     },
 };
+use std::future::Future;
 use std::{
-    future::Future,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use tauri::async_runtime::JoinHandle;
@@ -37,50 +34,11 @@ pub struct Scheduler {
     operation_gate: Arc<AdmissionGate>,
     control: Mutex<Control>,
     pending_activation: Arc<Mutex<Option<notification::NotificationActivation>>>,
-    accepting_callbacks: Arc<AtomicBool>,
-    callback_gate: Arc<Mutex<()>>,
 }
 struct Control {
     sender: watch::Sender<bool>,
     task: Option<JoinHandle<()>>,
     task_done: Option<oneshot::Receiver<()>>,
-}
-
-/// One tracked task waits for each delivered macOS alert's user response. Alerts
-/// expire after 30 minutes while the rate limit allows three per ten minutes, so
-/// this bound leaves headroom instead of stalling new deliveries.
-const MAX_PENDING_RESPONSE_TASKS: usize = 12;
-
-#[derive(Default)]
-pub(super) struct ResponseTasks(tokio::task::JoinSet<()>);
-
-impl ResponseTasks {
-    pub(super) fn is_full(&self) -> bool {
-        self.0.len() >= MAX_PENDING_RESPONSE_TASKS
-    }
-
-    pub(super) fn spawn(&mut self, task: impl Future<Output = ()> + Send + 'static) -> bool {
-        if self.is_full() {
-            return false;
-        }
-        self.0.spawn(task);
-        true
-    }
-
-    pub(super) async fn drain(&mut self) {
-        while self.0.join_next().await.is_some() {}
-    }
-}
-
-struct NotificationState {
-    #[cfg(target_os = "macos")]
-    pending_activation: Arc<Mutex<Option<notification::NotificationActivation>>>,
-    #[cfg(target_os = "macos")]
-    accepting_callbacks: Arc<AtomicBool>,
-    #[cfg(target_os = "macos")]
-    callback_gate: Arc<Mutex<()>>,
-    response_tasks: ResponseTasks,
-    operation_gate: Arc<AdmissionGate>,
 }
 
 impl Scheduler {
@@ -93,9 +51,7 @@ impl Scheduler {
         operation_gate: Arc<AdmissionGate>,
     ) -> Result<Self, String> {
         let (sender, _) = watch::channel(false);
-        let callback_gate = Arc::new(Mutex::new(()));
         let pending_activation = Arc::new(Mutex::new(None));
-        let accepting_callbacks = Arc::new(AtomicBool::new(true));
         Ok(Self {
             store,
             archive,
@@ -109,8 +65,6 @@ impl Scheduler {
                 task_done: None,
             }),
             pending_activation,
-            accepting_callbacks,
-            callback_gate,
         })
     }
 
@@ -132,18 +86,7 @@ impl Scheduler {
         let archive = self.archive.clone();
         let network = self.network.clone();
         let root = self.root.clone();
-        let app = self.app.clone();
         let operation_gate = self.operation_gate.clone();
-        let mut notification_state = NotificationState {
-            #[cfg(target_os = "macos")]
-            pending_activation: self.pending_activation.clone(),
-            #[cfg(target_os = "macos")]
-            accepting_callbacks: self.accepting_callbacks.clone(),
-            #[cfg(target_os = "macos")]
-            callback_gate: self.callback_gate.clone(),
-            response_tasks: ResponseTasks::default(),
-            operation_gate: operation_gate.clone(),
-        };
         let (done_sender, done_receiver) = oneshot::channel();
         control.task = Some(tauri::async_runtime::spawn(async move {
             let mut interval = tokio::time::interval(WAKE_INTERVAL);
@@ -156,19 +99,15 @@ impl Scheduler {
                                 &archive,
                                 &network,
                                 &root,
-                                &app,
-                                &mut notification_state,
                                 &mut stop,
                             ).await {
                                 eprintln!("Proactive scheduler: {error}");
                             }
                         }
                     }
-                    _ = notification_state.response_tasks.0.join_next(), if !notification_state.response_tasks.0.is_empty() => {},
                     changed = stop.changed() => if changed.is_err() || *stop.borrow() { break; },
                 }
             }
-            notification_state.response_tasks.drain().await;
             let _ = done_sender.send(());
         }));
         control.task_done = Some(done_receiver);
@@ -176,9 +115,6 @@ impl Scheduler {
     }
 
     pub async fn shutdown(&self) {
-        let _callback_gate = self.callback_gate.lock();
-        self.accepting_callbacks.store(false, Ordering::Release);
-        drop(_callback_gate);
         self.quiesce().await;
     }
 
@@ -228,6 +164,43 @@ impl Scheduler {
             .lock()
             .map(|mut activation| activation.take())
             .map_err(|_| "알림 이동 정보를 확인할 수 없습니다.".into())
+    }
+
+    /// Consume a Windows protocol activation after the store is initialized.
+    /// Both startup argv and second-instance argv must call this same method.
+    #[cfg(windows)]
+    pub async fn handle_windows_activation(&self, uri: &str) -> Result<bool, String> {
+        let Some(token) = super::windows_notification::token_from_uri(uri) else {
+            return Ok(false);
+        };
+        let _lease = self.operation_gate.shared().await?;
+        let batch = with_store(&self.store, |store| store.notification_token_consume(token))?;
+        let Some(batch) = batch else {
+            return Ok(false);
+        };
+        let (event_id, attempt_count) = batch.attempts[0];
+        let activation = notification::NotificationActivation {
+            event_id,
+            document_id: batch.document_id,
+            revision_id: batch.revision_id,
+            attempt_count,
+            event_ids: batch.attempts.iter().map(|(id, _)| *id).collect(),
+            event_attempts: batch.attempts,
+        };
+        *self
+            .pending_activation
+            .lock()
+            .map_err(|_| "알림 이동 정보를 저장할 수 없습니다.")? = Some(activation.clone());
+        let app = self.app.clone();
+        self.app
+            .run_on_main_thread(move || {
+                if let Err(error) = crate::core::lifecycle::show_main_window(&app) {
+                    eprintln!("Lifecycle: 알림 창 복원 실패: {error}");
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        notification::emit_activation(&self.app, activation);
+        Ok(true)
     }
 }
 
@@ -440,8 +413,6 @@ async fn cycle(
     archive: &Arc<Controller>,
     network: &archive::Client,
     root: &Path,
-    app: &AppHandle,
-    notifications: &mut NotificationState,
     stop: &mut watch::Receiver<bool>,
 ) -> Result<(), String> {
     let (prefs, energy) = settings(store)?;
@@ -469,9 +440,6 @@ async fn cycle(
             let (outcome, discovery_error) = wait_for_scheduled_task_and_notifications(
                 run_scheduled_task(store, archive, root, network, task, &mut task_stop),
                 store,
-                app,
-                notifications,
-                stop,
             )
             .await?;
             if notification_error.is_none() {
@@ -496,7 +464,7 @@ async fn cycle(
                 Ok(can_admit_task(stop, &updated, extension, subscribed))
             })?;
             if active {
-                discover_and_deliver(store, &updated, app, notifications, stop).await?;
+                discover_and_deliver(store, &updated).await?;
             }
         }
         if !due.is_empty() {
@@ -529,7 +497,7 @@ async fn cycle(
     if !stop_requested(stop) {
         let (current, _) = settings(store)?;
         if should_discover_notifications(&current) {
-            discover_and_deliver(store, &current, app, notifications, stop).await?;
+            discover_and_deliver(store, &current).await?;
         }
     }
     Ok(())
@@ -538,9 +506,6 @@ async fn cycle(
 async fn wait_for_scheduled_task_and_notifications<F>(
     task: F,
     store: &sync::SharedStore,
-    app: &AppHandle,
-    notifications: &mut NotificationState,
-    stop: &mut watch::Receiver<bool>,
 ) -> Result<(ProactiveOutcome, Option<String>), String>
 where
     F: Future<Output = Result<ProactiveOutcome, String>>,
@@ -558,7 +523,7 @@ where
                 match settings(store) {
                     Ok((prefs, _)) if should_discover_notifications(&prefs) => {
                         if let Err(error) =
-                            discover_and_deliver(store, &prefs, app, notifications, stop).await
+                            discover_and_deliver(store, &prefs).await
                         {
                             notification_error.get_or_insert(error);
                         }
@@ -589,17 +554,18 @@ pub(super) fn should_discover_notifications(prefs: &ProactiveSettings) -> bool {
     prefs.notifications_enabled
 }
 
+pub(super) fn notification_authorization_permits(authorization: &str) -> bool {
+    authorization == "authorized"
+}
+
 pub(super) fn available_notification_slots(recent_attempts: u32) -> usize {
     notification::RATE_LIMIT.saturating_sub(recent_attempts) as usize
 }
 
 pub(super) fn revalidate_delivery_batch(
-    store: &sync::SharedStore,
+    store: &Store,
     items: Vec<DeliveryItem>,
 ) -> Result<Vec<DeliveryItem>, String> {
-    let store = store
-        .lock()
-        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
     let prefs = store.proactive_settings()?;
     let local_minutes = store.proactive_local_minutes()?;
     let quiet_delay = quiet_end_delay_minutes(&prefs.quiet_hours, local_minutes);
@@ -649,35 +615,80 @@ pub(super) fn revalidate_delivery_batch(
         item.title = candidate.title;
         eligible.push(item);
     }
-    if eligible.is_empty() {
-        return Ok(eligible);
+    Ok(eligible)
+}
+
+/// The final policy check, durable reservation and synchronous handoff share
+/// one store lock. Settings or subscriptions cannot change between them.
+#[cfg(any(windows, test))]
+pub(super) fn handoff_validated<P>(
+    shared: &sync::SharedStore,
+    items: Vec<DeliveryItem>,
+    token: &str,
+    prepare: impl FnOnce(&Store, &[DeliveryItem]) -> Result<P, String>,
+    send: impl FnOnce(P) -> Result<(), String>,
+) -> Result<(), String> {
+    let store = shared
+        .lock()
+        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
+    let items = revalidate_delivery_batch(&store, items)?;
+    if items.is_empty() {
+        return Ok(());
     }
-    let attempts = eligible
+    let attempts = items
         .iter()
         .map(|item| (item.event_id, item.attempt_count))
         .collect::<Vec<_>>();
-    if !store.proactive_reserve_delivery_attempts(&attempts)? {
-        for item in &eligible {
-            store.proactive_defer_event(
-                item.event_id,
-                item.attempt_count,
-                1,
-                Some("알림 전송 한도에 도달해 나중에 다시 확인합니다."),
-            )?;
+    let defer = |reason: &str| -> Result<(), String> {
+        for (id, attempt) in &attempts {
+            store.proactive_defer_event(*id, *attempt, 1, Some(reason))?;
         }
-        return Ok(Vec::new());
+        Ok(())
+    };
+    let prepared = match prepare(&store, &items) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            defer("알림을 준비할 수 없어 나중에 다시 확인합니다.")?;
+            return Err(error);
+        }
+    };
+    if let Err(error) = store.notification_token_create(token, &attempts) {
+        defer("알림을 준비할 수 없어 나중에 다시 확인합니다.")?;
+        return Err(error);
     }
-    Ok(eligible)
+    match store.proactive_reserve_delivery_attempts(&attempts) {
+        Ok(true) => {}
+        Ok(false) => {
+            store.notification_token_revoke(token)?;
+            defer("알림 전송 한도에 도달해 나중에 다시 확인합니다.")?;
+            return Ok(());
+        }
+        Err(error) => {
+            store.notification_token_revoke(token)?;
+            defer("알림을 준비할 수 없어 나중에 다시 확인합니다.")?;
+            return Err(error);
+        }
+    }
+    match send(prepared) {
+        Ok(()) => {
+            store.proactive_mark_attempted_batch(&attempts)?;
+            Ok(())
+        }
+        Err(error) => {
+            store.notification_token_revoke(token)?;
+            for (id, attempt) in &attempts {
+                store.proactive_fail_delivery(*id, *attempt, &error)?;
+            }
+            Err(error)
+        }
+    }
 }
 
 async fn discover_and_deliver(
     store: &sync::SharedStore,
     prefs: &ProactiveSettings,
-    app: &AppHandle,
-    notifications: &mut NotificationState,
-    stop: &mut watch::Receiver<bool>,
 ) -> Result<(), String> {
-    if !should_discover_notifications(prefs) || notifications.response_tasks.is_full() {
+    if !should_discover_notifications(prefs) {
         return Ok(());
     }
     let (local_minutes, quiet) = with_store(store, |store| {
@@ -692,9 +703,13 @@ async fn discover_and_deliver(
         None
     };
     let authorization = crate::notification_permission::notification_authorization_status().await;
-    if !quiet && matches!(authorization.as_str(), "denied" | "not_determined") {
+    // No Windows sender may claim or reserve events when native display is
+    // blocked or unavailable, even during quiet hours.
+    if !notification_authorization_permits(&authorization) {
         return Ok(());
     }
+    #[cfg(windows)]
+    let windows_token = super::windows_notification::new_token()?;
     let recent = with_store(store, |store| {
         store.proactive_recent_delivery_attempts(notification::RATE_WINDOW_SECS)
     })?;
@@ -813,105 +828,19 @@ async fn discover_and_deliver(
     }
     // Re-read the complete delivery policy and current source/document state under
     // one lock immediately before handing the digest to the operating system.
-    let deliver = revalidate_delivery_batch(store, deliver)?;
-    if deliver.is_empty() {
-        return Ok(());
-    }
-    #[cfg(target_os = "macos")]
-    match notification::show_digest(app, &deliver).await {
-        Ok(Some(handle)) => {
-            let attempts = deliver
-                .iter()
-                .map(|item| (item.event_id, item.attempt_count))
-                .collect::<Vec<_>>();
-            with_store(store, |store| {
-                store.proactive_mark_attempted_batch(&attempts).map(|_| ())
-            })?;
-            let store = store.clone();
-            let app = app.clone();
-            let pending_activation = notifications.pending_activation.clone();
-            let accepting_callbacks = notifications.accepting_callbacks.clone();
-            let callback_gate = notifications.callback_gate.clone();
-            let operation_gate = notifications.operation_gate.clone();
-            let mut stop = stop.clone();
-            notifications.response_tasks.spawn(async move {
-                let response = tokio::select! {
-                    _ = stop.changed() => return,
-                    response = handle.response() => response,
-                };
-                let Ok(_lease) = operation_gate.shared().await else {
-                    return;
-                };
-                let Ok(_callback_guard) = callback_gate.lock() else {
-                    return;
-                };
-                if !accepting_callbacks.load(Ordering::Acquire) {
-                    return;
-                }
-                match response {
-                    Ok(response) => {
-                        use mac_usernotifications::response::CloseReason;
-                        if response.is_default_action()
-                            && response.close_reason != Some(CloseReason::Dismissed)
-                            && response.close_reason != Some(CloseReason::Expired)
-                        {
-                            if let Some(activation) = notification::activation_for_items(&deliver) {
-                                if !accepting_callbacks.load(Ordering::Acquire) {
-                                    return;
-                                }
-                                let attempts = activation.event_attempts.to_vec();
-                                if let Err(error) = with_store(&store, |store| {
-                                    store.proactive_mark_delivered_batch(&attempts).map(|_| ())
-                                }) {
-                                    eprintln!("Proactive notification activation: {error}");
-                                    return;
-                                }
-                                if !accepting_callbacks.load(Ordering::Acquire) {
-                                    return;
-                                }
-                                if let Ok(mut pending) = pending_activation.lock() {
-                                    *pending = Some(activation.clone());
-                                }
-                                drop(_lease);
-                                let handle = app.clone();
-                                let main_thread_gate = callback_gate.clone();
-                                let main_thread_accepting = accepting_callbacks.clone();
-                                if let Err(error) = app.run_on_main_thread(move || {
-                                    let Ok(_main_thread_guard) = main_thread_gate.lock() else {
-                                        return;
-                                    };
-                                    if !main_thread_accepting.load(Ordering::Acquire) {
-                                        return;
-                                    }
-                                    if let Err(error) =
-                                        crate::core::lifecycle::show_main_window(&handle)
-                                    {
-                                        eprintln!("Lifecycle: 알림 창 복원 실패: {error}");
-                                    }
-                                }) {
-                                    eprintln!("Lifecycle: 알림 창 복원 예약 실패: {error}");
-                                    return;
-                                }
-                                notification::emit_activation(&app, activation);
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        eprintln!("Proactive notification response error: {error}");
-                    }
-                }
-            });
-        }
-        Ok(None) => {}
-        Err(error) => {
-            for item in deliver {
-                with_store(store, |store| {
-                    store
-                        .proactive_fail_delivery(item.event_id, item.attempt_count, &error)
-                        .map(|_| ())
-                })?;
-            }
-        }
+    #[cfg(windows)]
+    {
+        handoff_validated(
+            store,
+            deliver,
+            &windows_token,
+            |_, deliver| {
+                let (title, body) =
+                    notification::digest_text(deliver).ok_or("알림 내용을 만들지 못했습니다.")?;
+                super::windows_notification::prepare(&title, &body, &windows_token)
+            },
+            super::windows_notification::show,
+        )?;
     }
     Ok(())
 }

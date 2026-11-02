@@ -22,6 +22,8 @@
     { id: 'settings', label: '설정', caption: '나의 방식으로 Rhythm을 조율하세요' },
   ];
   const categories = [
+    ['general', '일반'], ['extensions', '정보원'], ['ai', 'AI 모델'], ['ai-processing', 'AI 처리'],
+    ['personalization', '개인화'], ['background', '백그라운드'], ['notifications', '알림'],
     ['notification-history', '알림 기록'], ['energy', '성능 및 전원'], ['data', '데이터 및 개인정보'], ['data-backup', '백업 및 복원'], ['about', '정보'],
   ];
   const themes: { id: Theme; label: string; icon: string }[] = [
@@ -42,9 +44,9 @@
   let notice = $state('');
   let desktop = $state(false);
   let proactiveActivation = $state<ProactiveActivation | null>(null);
-  let handledActivationEventId = 0;
-  let handledActivationAt = 0;
+  const handledActivations = new Set<string>();
   let setupNeeded = $state(false);
+  let pendingAiScroll = false;
   let restoreOutcome = $state<RestoreOutcome | null>(null);
   let noticesEnabled = $derived(snapshot?.extensions.some((extension) => extension.id === 'sogang_notices' && extension.enabled) ?? false);
   let theme = $state<Theme>('system');
@@ -111,10 +113,11 @@
       || !Number.isSafeInteger(payload.revision_id) || payload.revision_id <= 0
       || !Number.isSafeInteger(payload.event_id) || payload.event_id <= 0
       || !Number.isSafeInteger(payload.attempt_count) || payload.attempt_count < 0) return;
-    const now = Date.now();
-    if (handledActivationEventId === payload.event_id && now - handledActivationAt < 1500) return;
-    handledActivationEventId = payload.event_id;
-    handledActivationAt = now;
+    // The same activation can arrive through the event and the one-shot snapshot,
+    // even long after the first delivery. A later attempt is a distinct click.
+    const activationKey = `${payload.event_id}:${payload.attempt_count}`;
+    if (handledActivations.has(activationKey)) return;
+    handledActivations.add(activationKey);
     const eventIds = Array.isArray(payload.event_ids)
       ? payload.event_ids.filter((id) => Number.isSafeInteger(id) && id > 0) : [payload.event_id];
     void openProactiveDocument(payload.document_id, payload.revision_id, payload.event_id, payload.attempt_count, eventIds);
@@ -173,10 +176,21 @@
   }
 
   async function aiSettings() {
+    pendingAiScroll = true;
     await navigate('settings');
     await tick();
     document.getElementById('ai')?.scrollIntoView({ block: 'start', behavior: 'instant' });
     document.getElementById('ai')?.querySelector('h2')?.focus({ preventScroll: true });
+  }
+
+  function sourceSettingsReady() {
+    if (!pendingAiScroll) return;
+    pendingAiScroll = false;
+    const heading = document.getElementById('ai')?.querySelector('h2');
+    // Do not move the user back after they have focused another control.
+    if (page === 'settings' && heading && document.activeElement === heading) {
+      heading.scrollIntoView({ block: 'start', behavior: 'instant' });
+    }
   }
 
   async function openProactiveDocument(documentId: number, revisionId: number, eventId: number, attemptCount = 1, eventIds: number[] = [eventId]) {
@@ -240,11 +254,11 @@
           </section>
           <section id="extensions" class="settings-section"><div class="section-heading"><h2>확장 기능</h2><p>필요한 정보원만 선택하세요. 꺼도 저장된 정보는 지워지지 않습니다.</p></div>
             {#if snapshot}{#each snapshot.extensions as extension}<div class="extension-row"><div class="extension-symbol"><Icon name="inbox" size={22} /></div><div class="extension-description"><h3>{extension.display_name}</h3><p>{extension.description}</p><span class="availability">{extension.available ? '사용 가능 · 수동 동기화' : '현재 사용할 수 없습니다'}</span></div><button class="switch" class:on={extension.enabled} role="switch" aria-checked={extension.enabled} aria-label={`${extension.display_name} 사용 설정`} disabled={busy} onclick={() => toggleExtension(extension.id, !extension.enabled)}><span></span></button></div>{/each}{:else}<p class="muted">{loading ? '확장 기능을 불러오는 중입니다.' : '데스크톱 앱에서 등록된 확장 기능을 확인할 수 있습니다.'}</p>{/if}
-            {#if noticesEnabled}<SourceSettings enabled={noticesEnabled} />{:else}<p class="footnote">서강대학교 공지를 켜면 정보원을 구독하고 자료를 가져올 수 있습니다. 꺼도 이미 보관한 공지와 구독 설정은 유지됩니다.</p>{/if}
+            {#if noticesEnabled}<SourceSettings enabled={noticesEnabled} oninitialload={sourceSettingsReady} />{:else}<p class="footnote">서강대학교 공지를 켜면 정보원을 구독하고 자료를 가져올 수 있습니다. 꺼도 이미 보관한 공지와 구독 설정은 유지됩니다.</p>{/if}
           </section>
           <AiSettings {desktop} onsetup={() => setupNeeded = false} />
           <PersonalizationSettings {desktop} />
-          <ProactiveSettings {desktop} onopen={openProactiveDocument} />
+          <ProactiveSettings {desktop} onopen={openProactiveDocument} onactivation={handleProactiveActivation} />
           <section id="energy" class="settings-section"><div class="section-heading"><h2>성능 및 전원</h2><p>기기에 맞는 작업 방식을 선택하세요.</p></div><div class="energy-options" role="group" aria-label="에너지 프로필">{#each energyProfiles as option}<button disabled={!snapshot || busy} class:selected={snapshot?.settings.energy_profile === option.id} aria-pressed={snapshot?.settings.energy_profile === option.id} onclick={() => save({ energy_profile: option.id })}><span class="option-title">{option.label}{#if snapshot?.settings.energy_profile === option.id}<Icon name="check" size={17} />{/if}</span><span>{option.description}</span></button>{/each}</div><p class="footnote">AI는 한 번에 한 공지만 분석합니다. 절전에서는 직접 요청을 우선하며, 모델 유지와 최근 공지의 소량 처리는 선택한 프로필과 AI 처리 설정을 따릅니다. 자동 동기화는 켜 둔 경우 앱이 실행 중일 때 동작하며, 앱을 종료하면 멈춥니다.</p></section>
           <section id="data" class="settings-section"><div class="section-heading"><h2>데이터 및 개인정보</h2><p>내 정보는 내 기기에. 클라우드 계정이나 동기화가 필요하지 않습니다.</p></div>
             <div class="setting-row"><div><h3>로컬 데이터베이스</h3><p>SQLite · {snapshot ? `스키마 버전 ${snapshot.storage.schema_version}` : '앱에서 확인 가능'}</p></div><span class="value">{snapshot ? storageSize(snapshot.storage.bytes) : '—'}</span></div>

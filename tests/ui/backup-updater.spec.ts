@@ -29,7 +29,7 @@ test('backup restore inspects selected file before confirmation and only invokes
 
   await backup.getByRole('button', { name: '백업 파일 선택', exact: true }).click();
   await expect(backup.getByRole('heading', { name: '복원할 백업 확인', exact: true })).toBeVisible();
-  await expect(backup).toContainText('형식 v1 · 데이터베이스 스키마 6 · 공지 12건 · 첨부 자료 3개');
+  await expect(backup).toContainText('형식 v1 · 데이터베이스 스키마 7 · 공지 12건 · 첨부 자료 3개');
   await expect(backup).toContainText('모델 가중치는 포함되지 않습니다.');
   await expect(backup).toContainText('자동으로 다시 열리지 않으니 Rhythm을 직접 다시 열어 주세요.');
   expect(await callCount(page, 'backup_inspect')).toBe(1);
@@ -51,7 +51,7 @@ test('backup restore inspects selected file before confirmation and only invokes
   await expect(backup.getByRole('status').filter({ hasText: '복원을 준비했습니다.' })).toBeVisible();
   expect(await callCount(page, 'backup_restore')).toBe(1);
   const restore = await commandArgs(page, 'backup_restore');
-  expect(restore).toMatchObject({ source: '/fixtures/Rhythm-backup.rhythm-backup', confirmed: true });
+  expect(restore).toMatchObject({ source: 'C:\\fixtures\\Rhythm-backup.rhythm-backup', confirmed: true });
 });
 
 test('backup inspection failures explain the error and do not expose a restore action', async ({ page }) => {
@@ -89,85 +89,25 @@ test('backup preview can be cancelled without invoking restore', async ({ page }
   expect(await callCount(page, 'backup_restore')).toBe(0);
 });
 
-test('unconfigured updater shows manual update guidance instead of a failing check', async ({ page }) => {
+test('Windows build offers manual updates without invoking updater commands', async ({ page }) => {
   await mockDesktop(page);
   await page.goto('/');
   const updater = await openUpdater(page);
-
-  // Static guidance, not a live announcement on every visit to Settings.
-  await expect(updater).toContainText('공식 채널이 설정되어 있지 않습니다');
-  await expect(updater.getByRole('status')).toHaveCount(0);
-  await expect(updater.getByRole('listitem')).toHaveCount(4);
-  await expect(updater).toContainText('Rhythm을 완전히 종료합니다.');
-  await expect(updater).toContainText('보관한 공지, 설정, AI 모델은 앱과 별도로 저장되어 그대로 유지됩니다.');
+  await expect(updater).toContainText('새 Windows 설치 파일로 직접 업데이트합니다.');
+  await expect(updater).toContainText('트레이 메뉴에서 완전히 종료');
   await expect(updater.getByRole('button', { name: '업데이트 확인', exact: true })).toHaveCount(0);
-  await expect(updater.getByRole('alert')).toHaveCount(0);
-  await expect(updater).toContainText('0.9.2');
-  expect(await callCount(page, 'updater_configured')).toBe(1);
   expect(await callCount(page, 'updater_check')).toBe(0);
+  expect(await callCount(page, 'updater_install')).toBe(0);
 });
 
-test('configured updater reports genuine check failures', async ({ page }) => {
-  await mockDesktop(page, { updaterConfigured: true, updaterCheckError: '업데이트 정보를 확인하지 못했습니다: 네트워크 오류' });
+test('unavailable restore shows the actual reason while backup creation remains enabled', async ({ page }) => {
+  await mockDesktop(page, { restoreSupportError: '이 저장소는 복원을 지원하지 않습니다.' });
   await page.goto('/');
-  const updater = await openUpdater(page);
-  await updater.getByRole('button', { name: '업데이트 확인', exact: true }).click();
-
-  await expect(updater.getByRole('alert')).toContainText('업데이트 정보를 확인하지 못했습니다');
-  await expect(updater.getByText('현재 최신 버전을 사용하고 있습니다.', { exact: true })).toHaveCount(0);
-  await expect(updater.getByRole('listitem')).toHaveCount(0);
-  expect(await callCount(page, 'updater_check')).toBe(1);
-});
-
-test('updater installation errors remain recoverable', async ({ page }) => {
-  await mockDesktop(page, { updaterConfigured: true, updaterInstallError: true });
-  await page.goto('/');
-  const updater = await openUpdater(page);
-  await updater.getByRole('button', { name: '업데이트 확인', exact: true }).click();
-  await updater.getByRole('button', { name: '다운로드 및 설치', exact: true }).click();
-
-  await expect(updater.getByRole('alert')).toContainText('서명된 업데이트를 설치하지 못했습니다.');
-  await expect(updater.getByRole('button', { name: '다시 시도', exact: true })).toBeEnabled();
-  expect(await callCount(page, 'updater_install')).toBe(1);
-  expect(await callCount(page, 'updater_restart')).toBe(0);
-});
-
-test('updater asks before restart both after staging and when restarting is chosen', async ({ page }) => {
-  await mockDesktop(page, { updaterConfigured: true });
-  await page.goto('/');
-  const updater = await openUpdater(page);
-  await updater.getByRole('button', { name: '업데이트 확인', exact: true }).click();
-
-  await answerDialogs(page, 'cancel');
-  await updater.getByRole('button', { name: '다운로드 및 설치', exact: true }).click();
-  await expect(updater.getByText('서명된 업데이트를 준비했습니다.', { exact: true })).toBeVisible();
-  await expect(updater.getByRole('button', { name: '설치 및 다시 시작', exact: true })).toBeVisible();
-  expect(await callCount(page, 'updater_restart')).toBe(0);
-
-  await answerDialogs(page, 'cancel');
-  await updater.getByRole('button', { name: '설치 및 다시 시작', exact: true }).click();
-  await expect.poll(() => dialogMessages(page).then((messages) => messages.length)).toBe(2);
-  expect((await dialogMessages(page))[1]).toContain('서명 검증이 끝난 업데이트');
-  await expect(updater.getByRole('button', { name: '설치 및 다시 시작', exact: true })).toBeEnabled();
-  expect(await callCount(page, 'updater_restart')).toBe(0);
-
-  await answerDialogs(page, 'ok');
-  await updater.getByRole('button', { name: '설치 및 다시 시작', exact: true }).click();
-  await expect.poll(() => callCount(page, 'updater_restart')).toBe(1);
-  const restart = await commandArgs(page, 'updater_restart');
-  expect(restart).toEqual({ confirmed: true });
-});
-
-test('restart failure is surfaced after explicit confirmation', async ({ page }) => {
-  await mockDesktop(page, { updaterConfigured: true, updaterRestartError: true });
-  await page.goto('/');
-  const updater = await openUpdater(page);
-  await updater.getByRole('button', { name: '업데이트 확인', exact: true }).click();
-  await answerDialogs(page, 'ok');
-  await updater.getByRole('button', { name: '다운로드 및 설치', exact: true }).click();
-
-  await expect(updater.getByRole('alert')).toContainText('업데이트를 적용하며 다시 시작하지 못했습니다.');
-  expect(await callCount(page, 'updater_restart')).toBe(1);
+  const backup = await openBackup(page);
+  await expect(backup).toContainText('이 저장소는 복원을 지원하지 않습니다.');
+  await expect(backup.getByRole('button', { name: '백업 파일 선택', exact: true })).toBeDisabled();
+  await expect(backup.getByRole('button', { name: '백업 파일 저장', exact: true })).toBeEnabled();
+  expect(await callCount(page, 'backup_inspect')).toBe(0);
 });
 
 test('a finalized restore is reported once the reopened window loads', async ({ page }) => {

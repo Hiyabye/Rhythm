@@ -75,6 +75,7 @@ test('proactive settings save OS lifecycle, sync cadence, notifications and quie
   await quietStart.fill('23:30');
   await expect(quietStart).toBeEnabled();
   await quietEnd.fill('07:30');
+  await quietEnd.blur();
   await expect(quietEnd).toBeEnabled();
   await expect(page.getByText('권한 허용은 알림 전달을 보장하지 않습니다.', { exact: false })).toBeVisible();
   await expect.poll(() => page.evaluate(() => {
@@ -84,53 +85,78 @@ test('proactive settings save OS lifecycle, sync cadence, notifications and quie
   expect(await callCount(page, 'notification_request_permission')).toBe(0);
 });
 
-test('notification permission is queried without prompting and granted only after an explicit request', async ({ page }) => {
-  await mockDesktop(page, { notificationAuthorization: 'not_determined', notificationRequestResult: 'authorized' });
+test('Windows notifications stay disabled until OS availability is confirmed', async ({ page }) => {
+  await mockDesktop(page, { notificationAuthorization: 'denied' });
   await page.goto('/');
   await openSettings(page);
-
-  await expect(page.getByText('운영체제 알림 권한: 아직 결정되지 않음', { exact: true })).toBeVisible();
-  expect(await callCount(page, 'notification_authorization')).toBe(1);
-  expect(await callCount(page, 'notification_request_permission')).toBe(0);
-  await page.getByRole('button', { name: '운영체제 알림 권한 요청', exact: true }).click();
-  await expect(page.getByText('운영체제 알림 권한: 허용됨', { exact: true })).toBeVisible();
-  expect(await callCount(page, 'notification_request_permission')).toBe(1);
-});
-
-test('denied permission remains denied after an explicit request', async ({ page }) => {
-  await mockDesktop(page, { notificationAuthorization: 'denied', notificationRequestResult: 'denied' });
-  await page.goto('/');
-  await openSettings(page);
-
   await expect(page.getByText('운영체제 알림 권한: 거부됨', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Windows 설정 → 시스템 → 알림/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '시험 알림으로 연결 확인' })).toHaveCount(0);
+  const toggle = page.getByRole('switch', { name: '알림 활성화', exact: true });
+  await expect(toggle).toBeDisabled();
   expect(await callCount(page, 'notification_request_permission')).toBe(0);
-  await page.getByRole('button', { name: '운영체제 알림 권한 요청', exact: true }).click();
-  await expect(page.getByText('운영체제 알림 권한: 거부됨', { exact: true })).toBeVisible();
-  expect(await callCount(page, 'notification_request_permission')).toBe(1);
+  await page.evaluate(() => (window as any).__fixture.setNotificationAuthorization('authorized'));
+  await page.getByRole('button', { name: '알림 권한 상태 새로고침', exact: true }).click();
+  await expect(toggle).toBeEnabled();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
 });
 
-test('unavailable permission request is reported without claiming delivery', async ({ page }) => {
-  await mockDesktop(page, { notificationAuthorization: 'not_determined', notificationRequestResult: 'unavailable' });
+test('first notification connection requires an explicit test and separate opt-in', async ({ page }) => {
+  await mockDesktop(page, { notificationAuthorization: 'not_determined' });
   await page.goto('/');
   await openSettings(page);
-
+  const toggle = page.getByRole('switch', { name: '알림 활성화', exact: true });
+  const testButton = page.getByRole('button', { name: '시험 알림으로 연결 확인', exact: true });
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await expect(toggle).toBeDisabled();
+  await expect(testButton).toBeVisible();
   expect(await callCount(page, 'notification_request_permission')).toBe(0);
-  await page.getByRole('button', { name: '운영체제 알림 권한 요청', exact: true }).click();
-  await expect(page.getByText('운영체제 알림 권한: 이 환경에서 사용할 수 없음', { exact: true })).toBeVisible();
-  await expect(page.getByText(/권한 허용은 알림 전달을 보장하지 않습니다/)).toBeVisible();
+  await testButton.click();
+  await expect(page.getByText('Windows에 시험 알림 표시를 요청했습니다. 실제 화면 표시 여부는 확인하지 못했습니다.', { exact: true })).toBeVisible();
+  await expect(toggle).toBeEnabled();
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
   expect(await callCount(page, 'notification_request_permission')).toBe(1);
+  expect(await callCount(page, 'proactive_save')).toBe(0);
 });
 
-test('unsupported notification permission APIs are reported as unavailable and cannot be requested', async ({ page }) => {
+test('unsent notification test is not reported as requested or enabled', async ({ page }) => {
+  await mockDesktop(page, { notificationAuthorization: 'not_determined', notificationRequestResult: 'not_determined', notificationTestRequested: false });
+  await page.goto('/');
+  await openSettings(page);
+  await page.getByRole('button', { name: '시험 알림으로 연결 확인', exact: true }).click();
+  await expect(page.getByText('시험 알림을 요청하지 못했습니다. Windows 알림 상태를 확인해 주세요.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('switch', { name: '알림 활성화', exact: true })).toBeDisabled();
+  expect(await callCount(page, 'proactive_save')).toBe(0);
+});
+
+test('unavailable notification APIs are reported without claiming delivery', async ({ page }) => {
   await mockDesktop(page, { notificationAuthorization: 'unavailable' });
   await page.goto('/');
   await openSettings(page);
-
   await expect(page.getByText('운영체제 알림 권한: 이 환경에서 사용할 수 없음', { exact: true })).toBeVisible();
-  await expect(page.getByText('이 환경에서는 운영체제 알림 권한 상태를 확인하거나 요청할 수 없습니다. 알림 전달 가능 여부는 운영체제 설정에서 확인하세요.', { exact: true })).toBeVisible();
-  expect(await callCount(page, 'notification_authorization')).toBe(1);
+  await expect(page.getByText(/Windows 알림 상태를 확인할 수 없습니다/)).toBeVisible();
+  await expect(page.getByRole('switch', { name: '알림 활성화', exact: true })).toBeDisabled();
   expect(await callCount(page, 'notification_request_permission')).toBe(0);
-  await expect(page.getByRole('button', { name: '운영체제 알림 권한 요청', exact: true })).toBeDisabled();
+});
+
+test('an existing enabled setting can be switched off when Windows notifications become unavailable', async ({ page }) => {
+  await mockDesktop(page, { notificationAuthorization: 'denied', initialNotificationsEnabled: true });
+  await page.goto('/');
+  await openSettings(page);
+  const toggle = page.getByRole('switch', { name: '알림 활성화', exact: true });
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await expect(toggle).toBeDisabled();
+});
+
+test('an unavailable capability check does not enable notifications', async ({ page }) => {
+  await mockDesktop(page, { capabilitiesError: true });
+  await page.goto('/');
+  await openSettings(page);
+  await expect(page.getByText('알림 사용 가능 여부를 확인하지 못했습니다.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('switch', { name: '알림 활성화', exact: true })).toBeDisabled();
 });
 
 test('failed proactive save retains the saved value and exposes the backend error', async ({ page }) => {
@@ -197,4 +223,39 @@ test('cold-start notification activation is recovered from the one-shot proactiv
   await page.goto('/');
   await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 02');
   expect(await callCount(page, 'proactive_snapshot')).toBe(1);
+});
+
+test('notification event and snapshot share deduplication without blocking a later attempt', async ({ page }) => {
+  await mockDesktop(page);
+  await page.goto('/');
+  await expect.poll(() => callCount(page, 'proactive_snapshot')).toBe(1);
+  await page.evaluate(() => (window as any).__fixture.emitNotification({ event_id: 12, document_id: 1, revision_id: 1 }, true));
+  await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 01');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(1600);
+  await openSettings(page);
+  await expect(page.getByRole('heading', { name: '알림 기록', exact: true })).toBeVisible();
+  await expect.poll(() => callCount(page, 'proactive_snapshot')).toBe(2);
+  await expect(page.getByRole('button', { name: '알림 권한 상태 새로고침', exact: true })).toBeVisible();
+  await expect(page.locator('.reader-header h2')).toHaveCount(0);
+
+  // A separate attempt for the same event and document remains actionable.
+  await page.evaluate(() => (window as any).__fixture.emitNotification({ event_id: 12, document_id: 1, revision_id: 1, attempt_count: 2 }));
+  await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 01');
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => (window as any).__fixture.emitNotification({ event_id: 13, document_id: 1, revision_id: 1 }));
+  await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 01');
+});
+
+test('snapshot-first activation ignores a late event but manual history can reopen it', async ({ page }) => {
+  await mockDesktop(page, { pendingActivation: { event_id: 12, document_id: 1, revision_id: 1, attempt_count: 1, event_ids: [12] } });
+  await page.goto('/');
+  await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 01');
+  await page.keyboard.press('Escape');
+  await openSettings(page);
+  await expect(page.getByRole('button', { name: '공지 열기', exact: true })).toBeVisible();
+  await page.evaluate(() => (window as any).__fixture.emitNotification({ event_id: 12, document_id: 1, revision_id: 1 }));
+  await expect(page.locator('.reader-header h2')).toHaveCount(0);
+  await page.getByRole('button', { name: '공지 열기', exact: true }).click();
+  await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 01');
 });

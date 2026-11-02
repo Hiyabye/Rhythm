@@ -8,13 +8,15 @@ mod archive_tests;
 pub mod intelligence;
 #[cfg(test)]
 mod intelligence_tests;
+#[cfg(any(windows, test))]
+pub(crate) mod notification_activation;
 pub mod personalization;
 #[cfg(test)]
 mod personalization_tests;
 pub mod proactive;
 #[cfg(test)]
 mod proactive_tests;
-pub(crate) const SCHEMA_VERSION: i64 = 6;
+pub(crate) const SCHEMA_VERSION: i64 = 7;
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
     let migrations = [
@@ -24,6 +26,7 @@ fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
         include_str!("../../migrations/004_personalization.sql"),
         include_str!("../../migrations/005_proactive.sql"),
         include_str!("../../migrations/006_notification_attempts.sql"),
+        include_str!("../../migrations/007_notification_activation.sql"),
     ];
     for migration in migrations.iter().skip(version as usize) {
         let transaction = connection.transaction().map_err(|e| e.to_string())?;
