@@ -100,6 +100,7 @@ pub(super) fn installed_model(root: &Path, id: &str) -> AiModel {
         name: entry.name,
         ownership: "external".into(),
         path: path.canonicalize().unwrap().to_string_lossy().into_owned(),
+        storage_directory: None,
         sha256: Some(entry.sha256.clone()),
         expected_sha256: Some(entry.sha256),
         expected_bytes: Some(entry.bytes),

@@ -24,6 +24,7 @@ fn execution_preference_migrates_schema_seven_and_persists_without_resetting_arc
     let store = Store::open(&path).unwrap();
     let mut preferences = store.ai_preferences().unwrap();
     assert_eq!(preferences.execution_mode, "auto");
+    assert_eq!(preferences.model_directory, None);
     assert_eq!(preferences.max_tokens, 2048);
     assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
     assert_eq!(
@@ -61,6 +62,151 @@ fn execution_preference_old_payload_defaults_to_auto() {
     }))
     .unwrap();
     assert_eq!(preferences.execution_mode, "auto");
+    assert_eq!(preferences.model_directory, None);
+}
+
+#[test]
+fn model_directory_migrates_schema_eight_without_relocating_models() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    populated_schema_two(&path);
+    let connection = Connection::open(&path).unwrap();
+    for migration in [
+        include_str!("../../migrations/003_intelligence.sql"),
+        include_str!("../../migrations/004_personalization.sql"),
+        include_str!("../../migrations/005_proactive.sql"),
+        include_str!("../../migrations/006_notification_attempts.sql"),
+        include_str!("../../migrations/007_notification_activation.sql"),
+        include_str!("../../migrations/008_ai_execution_mode.sql"),
+    ] {
+        connection.execute_batch(migration).unwrap();
+    }
+    connection
+        .execute_batch(
+            "UPDATE ai_preferences SET execution_mode='gpu',max_tokens=2048;
+         INSERT INTO ai_models(id,name,ownership,path,status,downloaded_bytes,resume_etag)
+         VALUES('old','Existing model','managed','models/old.gguf','cancelled',47,'old-etag');",
+        )
+        .unwrap();
+    drop(connection);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, 9);
+    let preferences = store.ai_preferences().unwrap();
+    assert_eq!(preferences.model_directory, None);
+    assert_eq!(preferences.execution_mode, "gpu");
+    assert_eq!(preferences.max_tokens, 2048);
+    let old = store.ai_model("old").unwrap().unwrap();
+    assert_eq!(old.storage_directory, None);
+    assert_eq!(old.path, "models/old.gguf");
+    assert_eq!(old.downloaded_bytes, 47);
+    assert_eq!(old.resume_etag.as_deref(), Some("old-etag"));
+    assert_eq!(store.document(1, None).unwrap().item.title, "장학 공지");
+    integrity(&store);
+}
+
+#[test]
+fn model_directory_persists_independently_from_each_models_original_location() {
+    let (directory, store) = database();
+    let original = directory
+        .path()
+        .join("한글 모델 폴더")
+        .to_string_lossy()
+        .into_owned();
+    let next = directory
+        .path()
+        .join("next models")
+        .to_string_lossy()
+        .into_owned();
+    store.ai_save_model_directory(Some(&original)).unwrap();
+    let mut existing = model("resume", "managed");
+    existing.path = Path::new(&original)
+        .join("resume.gguf")
+        .to_string_lossy()
+        .into_owned();
+    existing.storage_directory = Some(original.clone());
+    existing.status = "cancelled".into();
+    existing.downloaded_bytes = 47;
+    existing.resume_etag = Some("continue-this-file".into());
+    store.ai_upsert_model(&existing).unwrap();
+    store.ai_save_model_directory(Some(&next)).unwrap();
+    let mut preferences = store.ai_preferences().unwrap();
+    preferences.execution_mode = "cpu".into();
+    store.ai_save_preferences(&preferences).unwrap();
+    drop(store);
+    let reopened = Store::open(&directory.path().join("db")).unwrap();
+    assert_eq!(
+        reopened
+            .ai_preferences()
+            .unwrap()
+            .model_directory
+            .as_deref(),
+        Some(next.as_str())
+    );
+    let retained = reopened.ai_model("resume").unwrap().unwrap();
+    assert_eq!(
+        retained.storage_directory.as_deref(),
+        Some(original.as_str())
+    );
+    assert_eq!(retained.path, existing.path);
+    assert_eq!(retained.downloaded_bytes, 47);
+    assert_eq!(retained.resume_etag, existing.resume_etag);
+    reopened.ai_save_model_directory(None).unwrap();
+    assert_eq!(reopened.ai_preferences().unwrap().model_directory, None);
+    assert_eq!(reopened.ai_preferences().unwrap().execution_mode, "cpu");
+    assert_eq!(
+        reopened.ai_models().unwrap()[0].storage_directory,
+        Some(original)
+    );
+    let mut legacy = serde_json::to_value(&existing).unwrap();
+    legacy.as_object_mut().unwrap().remove("storage_directory");
+    assert_eq!(
+        serde_json::from_value::<AiModel>(legacy)
+            .unwrap()
+            .storage_directory,
+        None
+    );
+    integrity(&reopened);
+}
+
+#[test]
+fn model_directory_rejects_malformed_input_without_changing_preferences_or_inventory() {
+    let (directory, store) = database();
+    let valid = directory
+        .path()
+        .join("models")
+        .to_string_lossy()
+        .into_owned();
+    store.ai_save_model_directory(Some(&valid)).unwrap();
+    let initial = store.ai_preferences().unwrap();
+    let mut existing = model("unchanged", "managed");
+    existing.storage_directory = Some(valid.clone());
+    store.ai_upsert_model(&existing).unwrap();
+    for invalid in [
+        String::new(),
+        "relative/models".into(),
+        "D:relative".into(),
+        format!("{valid}\0hidden"),
+        format!("{valid}{}", "a".repeat(4097)),
+    ] {
+        assert!(store.ai_save_model_directory(Some(&invalid)).is_err());
+        let mut preferences = initial.clone();
+        preferences.model_directory = Some(invalid.clone());
+        preferences.execution_mode = "gpu".into();
+        assert!(store.ai_save_preferences(&preferences).is_err());
+        assert_eq!(store.ai_preferences().unwrap(), initial);
+        existing.storage_directory = Some(invalid);
+        assert!(store.ai_upsert_model(&existing).is_err());
+        assert_eq!(
+            store
+                .ai_model("unchanged")
+                .unwrap()
+                .unwrap()
+                .storage_directory
+                .as_deref(),
+            Some(valid.as_str())
+        );
+    }
+    integrity(&store);
 }
 
 #[test]
@@ -163,6 +309,7 @@ fn model(id: &str, ownership: &str) -> AiModel {
         name: "Qwen test".into(),
         ownership: ownership.into(),
         path: format!("/tmp/{id}.gguf"),
+        storage_directory: None,
         sha256: Some("a".repeat(64)),
         expected_sha256: None,
         expected_bytes: None,

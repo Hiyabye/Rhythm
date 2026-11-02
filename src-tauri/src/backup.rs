@@ -1683,7 +1683,73 @@ fn reconcile_model_inventory(
     if !has_inventory {
         return Ok(());
     }
-    let mut query = connection
+    let has_custom_directories: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('ai_models') WHERE name='storage_directory')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| "백업 모델 폴더 정보를 확인하지 못했습니다.")?;
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|_| "백업 모델 상태를 갱신하지 못했습니다.")?;
+    if has_custom_directories {
+        // A backup must never grant permission to delete or resume writing to
+        // an arbitrary directory outside this installation's model folder.
+        // Keep the old path and analysis history as registration hints only.
+        transaction
+            .execute_batch(
+                "UPDATE ai_preferences SET model_directory=NULL;
+                 UPDATE ai_preferences SET active_model_id=NULL WHERE active_model_id IN (
+                     SELECT id FROM ai_models WHERE ownership='managed' AND storage_directory IS NOT NULL
+                 );",
+            )
+            .map_err(|_| "백업의 외부 모델 폴더 권한을 초기화하지 못했습니다.")?;
+        let custom_models = transaction
+            .prepare("SELECT id,path,storage_directory FROM ai_models WHERE ownership='managed' AND storage_directory IS NOT NULL")
+            .map_err(|_| "백업의 외부 모델 목록을 읽지 못했습니다.")?
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))
+            .map_err(|_| "백업의 외부 모델 목록을 읽지 못했습니다.")?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "백업의 외부 모델 목록을 읽지 못했습니다.")?;
+        for (id, path, directory) in custom_models {
+            check_cancellation(Some(cancellation))?;
+            let absolute = restored_custom_model_path(&directory, &path);
+            let already_external: bool = match absolute.as_deref() {
+                Some(path) => transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM ai_models WHERE ownership='external' AND path=?1 AND id<>?2)",
+                    rusqlite::params![path, id],
+                    |row| row.get(0),
+                ).map_err(|_| "백업의 중복 모델 등록을 확인하지 못했습니다.")?,
+                None => false,
+            };
+            if already_external {
+                // A managed file may also have been explicitly registered as
+                // external. Keep that existing reference and remove only the
+                // duplicate inventory row; analysis history has no model FK.
+                transaction
+                    .execute("DELETE FROM ai_models WHERE id=?1", [&id])
+                    .map_err(|_| "백업의 중복 모델 등록을 정리하지 못했습니다.")?;
+                continue;
+            }
+            let error = if absolute.is_some() {
+                "다른 저장 폴더의 모델은 복원 후 다시 등록하거나 설치해 주세요. 원본 파일은 변경하지 않았습니다."
+            } else {
+                "백업의 모델 경로를 확인하지 못했습니다. 원본 파일을 다시 등록하거나 설치해 주세요. 원본 파일은 변경하지 않았습니다."
+            };
+            transaction
+                .execute(
+                    "UPDATE ai_models SET ownership='external',status='missing',path=?2,
+                    downloaded_bytes=0,resume_etag=NULL,error=?3 WHERE id=?1",
+                    rusqlite::params![id, absolute.unwrap_or(path), error],
+                )
+                .map_err(|_| "백업의 외부 모델 폴더 권한을 초기화하지 못했습니다.")?;
+        }
+        transaction
+            .execute("UPDATE ai_models SET storage_directory=NULL", [])
+            .map_err(|_| "백업의 외부 모델 폴더 권한을 초기화하지 못했습니다.")?;
+    }
+    let mut query = transaction
         .prepare("SELECT id,path,sha256,bytes FROM ai_models WHERE ownership='managed' AND status='installed'")
         .map_err(|_| "백업 모델 목록을 확인하지 못했습니다.")?;
     let rows = query
@@ -1712,9 +1778,6 @@ fn reconcile_model_inventory(
         }
     }
     drop(query);
-    let transaction = connection
-        .unchecked_transaction()
-        .map_err(|_| "백업 모델 상태를 갱신하지 못했습니다.")?;
     for id in missing {
         transaction.execute("UPDATE ai_models SET status='missing',error='해당 모델 파일이 없거나 무결성 확인에 실패했습니다. 다시 설치해 주세요.' WHERE id=?1", [&id])
             .map_err(|_| "백업 모델 상태를 갱신하지 못했습니다.")?;
@@ -1729,6 +1792,41 @@ fn reconcile_model_inventory(
         .commit()
         .map_err(|_| "백업 모델 상태를 저장하지 못했습니다.")?;
     Ok(())
+}
+
+/// Reconstructs a registration hint without opening any path from the backup.
+/// Missing drives and files are deliberately allowed; deletion authority is not.
+fn restored_custom_model_path(directory: &str, relative: &str) -> Option<String> {
+    use std::path::Component;
+    let directory_path = Path::new(directory);
+    if directory.len() > 4096
+        || directory.contains('\0')
+        || !directory_path.is_absolute()
+        || directory_path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
+    {
+        return None;
+    }
+    let relative = Path::new(relative);
+    if relative.components().count() != 2
+        || relative.parent() != Some(Path::new("models"))
+        || relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return None;
+    }
+    let name = relative.file_name()?.to_str()?;
+    let hash = name.strip_suffix(".gguf")?;
+    if hash.len() != 64
+        || !hash
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return None;
+    }
+    Some(directory_path.join(name).to_string_lossy().into_owned())
 }
 
 fn managed_model_matches(
@@ -2014,7 +2112,7 @@ pub(crate) struct RestoreOutcome {
     resources: u64,
     /// Resource rows the backup itself recorded as not downloaded.
     unavailable_resources: u64,
-    /// Managed models whose local weights did not match the restored inventory.
+    /// Models that require installation or registration after restoration.
     models_needing_reinstall: u64,
 }
 
@@ -2038,7 +2136,7 @@ fn restore_outcome(root: &Path, journal: &RestoreJournal) -> Result<RestoreOutco
         resources: journal.resources,
         unavailable_resources: count("SELECT COUNT(*) FROM resources WHERE status<>'downloaded'")?,
         models_needing_reinstall: if has_models {
-            count("SELECT COUNT(*) FROM ai_models WHERE ownership='managed' AND status='missing'")?
+            count("SELECT COUNT(*) FROM ai_models WHERE status='missing'")?
         } else {
             0
         },

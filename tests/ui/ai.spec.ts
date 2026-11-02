@@ -37,6 +37,103 @@ test('execution device save failure restores the persisted choice and shows fall
   expect(await callCount(page, 'ai_install')).toBe(0);
 });
 
+test('model installation folder changes persist and only new downloads use the chosen location', async ({ page }) => {
+  const directory = 'D:\\로컬 모델\\Rhythm';
+  await mockDesktop(page, { aiInstalled: true, aiModelDirectoryChoice: directory, aiDelay: 10000 });
+  await page.goto('/');
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  const storage = page.getByRole('group', { name: '모델 설치 폴더', exact: true });
+  await expect(storage.getByText('C:\\Rhythm-test\\models', { exact: true })).toBeVisible();
+  await expect(storage.getByRole('button', { name: '기본 위치로 되돌리기', exact: true })).toBeDisabled();
+  await storage.getByRole('button', { name: '설치 폴더 선택', exact: true }).click();
+  await expect(storage.getByText(directory, { exact: true })).toBeVisible();
+  const existing = page.locator('.ai-installed').filter({ has: page.getByRole('heading', { name: 'Qwen3.5 4B', exact: true }) });
+  await expect(existing.getByText('models/qwen35-4b.gguf', { exact: true })).toBeVisible();
+  await expect(existing.getByText(directory, { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await expect(storage.getByText(directory, { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Qwen3.5 2B 다운로드 및 설치', exact: true }).click();
+  const added = page.locator('.ai-installed').filter({ has: page.getByRole('heading', { name: 'Qwen3.5 2B', exact: true }) });
+  await expect(added.getByText(directory, { exact: true })).toBeVisible();
+  await expect(added.getByText(`${directory}\\qwen35-2b.gguf`, { exact: true })).toBeVisible();
+  await expect(storage.getByRole('button', { name: '설치 폴더 선택', exact: true })).toBeDisabled();
+  await expect(storage.getByRole('button', { name: '기본 위치로 되돌리기', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '다운로드 중단', exact: true }).click();
+  await storage.getByRole('button', { name: '기본 위치로 되돌리기', exact: true }).click();
+  await expect(storage.getByText('C:\\Rhythm-test\\models', { exact: true })).toBeVisible();
+  await expect(added.getByText(directory, { exact: true })).toBeVisible();
+  expect(await callCount(page, 'ai_preferences')).toBe(0);
+  expect(await callCount(page, 'ai_reset_model_directory')).toBe(1);
+});
+
+test('cancelling the model installation folder picker preserves the selected folder', async ({ page }) => {
+  const directory = 'D:\\현재 모델';
+  await mockDesktop(page, { aiModelDirectory: directory, aiModelDirectoryChoice: null });
+  await page.goto('/');
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  const storage = page.getByRole('group', { name: '모델 설치 폴더', exact: true });
+  await storage.getByRole('button', { name: '설치 폴더 선택', exact: true }).click();
+  await expect(storage.getByRole('button', { name: '설치 폴더 선택', exact: true })).toBeEnabled();
+  await expect(storage.getByText(directory, { exact: true })).toBeVisible();
+  await expect(page.getByText('새 모델을 설치할 폴더를 변경했습니다. 기존 모델은 이동하지 않습니다.', { exact: true })).toHaveCount(0);
+  expect(await callCount(page, 'ai_choose_model_directory')).toBe(1);
+  expect(await callCount(page, 'ai_preferences')).toBe(0);
+  expect(await callCount(page, 'ai_install')).toBe(0);
+});
+
+test('model installation folder save and reset errors leave the previous location visible', async ({ page }) => {
+  const directory = 'D:\\현재 모델';
+  await mockDesktop(page, { aiModelDirectory: directory, aiModelDirectoryError: true });
+  await page.goto('/');
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  const storage = page.getByRole('group', { name: '모델 설치 폴더', exact: true });
+  await storage.getByRole('button', { name: '설치 폴더 선택', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: '모델 설치 폴더를 저장하지 못했습니다. 기존 위치를 유지합니다.' })).toBeVisible();
+  await expect(storage.getByText(directory, { exact: true })).toBeVisible();
+  await storage.getByRole('button', { name: '기본 위치로 되돌리기', exact: true }).click();
+  await expect(storage.getByText(directory, { exact: true })).toBeVisible();
+  await expect(storage.getByRole('button', { name: '기본 위치로 되돌리기', exact: true })).toBeEnabled();
+  expect(await callCount(page, 'ai_reset_model_directory')).toBe(1);
+  expect(await callCount(page, 'ai_preferences')).toBe(0);
+});
+
+test('model installation folder changes explain and preserve a cancelled download location when resuming', async ({ page }) => {
+  await mockDesktop(page, { aiDelay: 10000 });
+  await page.goto('/');
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await page.getByRole('button', { name: 'Qwen3.5 4B 다운로드 및 설치', exact: true }).click();
+  await page.getByRole('button', { name: '다운로드 중단', exact: true }).click();
+  const storage = page.getByRole('group', { name: '모델 설치 폴더', exact: true });
+  await storage.getByRole('button', { name: '설치 폴더 선택', exact: true }).click();
+  await expect(storage.getByText('이어받기는 원래 폴더에서 계속합니다.', { exact: false })).toBeVisible();
+  await expect(storage.getByText('D:\\로컬 모델\\Rhythm', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Qwen3.5 4B 설치 다시 시도 / 이어받기', exact: true }).click();
+  const installed = page.locator('.ai-installed');
+  await expect(installed.getByText('C:\\Rhythm-test\\models', { exact: true })).toBeVisible();
+  await expect(installed.getByText('C:\\Rhythm-test\\models\\qwen35-4b.gguf', { exact: true })).toBeVisible();
+  await expect(installed.getByText('D:\\로컬 모델\\Rhythm', { exact: true })).toHaveCount(0);
+  expect(await callCount(page, 'ai_install')).toBe(2);
+});
+
+test('model installation folder picker locks its controls while pending and reports unavailable storage', async ({ page }) => {
+  await mockDesktop(page, { aiModelDirectory: 'D:\\현재 모델', aiModelDirectoryGate: true, aiModelStorageAvailable: null, aiModelStorageError: '설치 폴더에 접근할 수 없습니다. 다른 폴더를 선택해 주세요.' });
+  await page.goto('/');
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  const storage = page.getByRole('group', { name: '모델 설치 폴더', exact: true });
+  await expect(storage.getByText('이 폴더의 남은 저장 공간: 확인하지 못함', { exact: true })).toBeVisible();
+  await expect(storage.getByRole('alert')).toHaveText('설치 폴더에 접근할 수 없습니다. 다른 폴더를 선택해 주세요.');
+  await storage.getByRole('button', { name: '설치 폴더 선택', exact: true }).click();
+  await expect(storage.getByRole('button', { name: '설치 폴더 선택', exact: true })).toBeDisabled();
+  await expect(storage.getByRole('button', { name: '기본 위치로 되돌리기', exact: true })).toBeDisabled();
+  await page.evaluate(() => (window as any).__fixture.releaseModelDirectory());
+  await expect(storage.getByText('D:\\로컬 모델\\Rhythm', { exact: true })).toBeVisible();
+  await expect(storage.getByRole('alert')).toHaveCount(0);
+  await page.evaluate(() => { (window as any).__fixture.ai.model_storage.available_bytes = 0; });
+  await page.getByRole('button', { name: 'AI 엔진 상태 새로고침', exact: true }).click();
+  await expect(storage.getByText('이 폴더의 남은 저장 공간: 0 B', { exact: true })).toBeVisible();
+});
+
 test('first-run AI setup never blocks archived notices or starts a download', async ({ page }) => {
   await mockDesktop(page, { aiSetupNeeded: true }); await page.goto('/');
   await expect(page.getByRole('button', { name: '로컬 AI 설정하기' })).toBeVisible();
@@ -150,6 +247,37 @@ test('cached output is escaped, partial processing is honest, disabled connector
   expect(await callCount(page, 'ai_analyze')).toBe(0);
 });
 
+test('managed model removal can keep files after an inaccessible folder error and still requires confirmation', async ({ page }) => {
+  await mockDesktop(page, { aiInstalled: true, aiResult: true, aiRemoveError: true });
+  await page.goto('/');
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await page.getByRole('button', { name: '모델 삭제', exact: true }).click();
+  const confirmation = page.getByRole('group', { name: 'Qwen3.5 4B 삭제 확인', exact: true });
+  await expect(confirmation).toContainText('폴더에 접근할 수 없거나 다른 위치에 다시 설치하려면 파일을 남기고 목록에서 제거하세요.');
+  await confirmation.getByRole('button', { name: '취소', exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
+  expect(await callCount(page, 'ai_remove')).toBe(0);
+  await page.getByRole('button', { name: '모델 삭제', exact: true }).click();
+  await confirmation.getByRole('button', { name: '확인하고 삭제', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: '모델 폴더에 접근할 수 없습니다.' })).toBeVisible();
+  await expect(page.locator('.ai-installed')).toHaveCount(1);
+  await page.getByRole('button', { name: '모델 삭제', exact: true }).click();
+  await page.evaluate(() => { (window as any).__fixture.ai.operation = { kind: 'load', phase: 'verifying', elapsed_ms: 0, cancelling: false }; });
+  await page.getByRole('button', { name: 'AI 엔진 상태 새로고침', exact: true }).click();
+  await expect(confirmation.getByRole('button', { name: '파일을 남기고 목록에서 제거', exact: true })).toBeDisabled();
+  await page.evaluate(() => { (window as any).__fixture.ai.operation = null; });
+  await page.getByRole('button', { name: 'AI 엔진 상태 새로고침', exact: true }).click();
+  await confirmation.getByRole('button', { name: '파일을 남기고 목록에서 제거', exact: true }).click();
+  await expect(page.locator('.ai-installed')).toHaveCount(0);
+  await expect(page.getByText('파일을 남기고 모델을 목록에서 제거했습니다. 기존 분석은 유지됩니다.', { exact: true })).toBeVisible();
+  const calls = await page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'ai_remove'));
+  expect(calls).toHaveLength(2);
+  expect(calls[0].args).toEqual({ id: 'qwen35-4b', confirmed: true });
+  expect(calls[1].args).toEqual({ id: 'qwen35-4b', confirmed: true, keepFiles: true });
+  await reader(page);
+  await expect(page.getByRole('region', { name: '공지 AI 분석' }).getByText('장학금 신청 일정과 제출 서류를 확인하세요.', { exact: true })).toBeVisible();
+});
+
 test('model switching and confirmed external unregister preserve results', async ({ page }) => {
   await mockDesktop(page, { aiInstalled: true, aiResult: true }); await page.goto('/');
   await page.getByRole('button', { name: '설정', exact: true }).click();
@@ -161,6 +289,7 @@ test('model switching and confirmed external unregister preserve results', async
   await page.getByRole('button', { name: '참조 해제', exact: true }).click();
   expect(await callCount(page, 'ai_remove')).toBe(0);
   await expect(page.getByText('등록된 참조만 해제합니다. 외부 원본 파일은 삭제하지 않습니다.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '파일을 남기고 목록에서 제거', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '확인하고 참조 해제', exact: true }).click();
   expect(await callCount(page, 'ai_remove')).toBe(1);
   await reader(page); await expect(page.getByRole('region', { name: '공지 AI 분석' }).getByText('장학금 신청 일정과 제출 서류를 확인하세요.', { exact: true })).toBeVisible();

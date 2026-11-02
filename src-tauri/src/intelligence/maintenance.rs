@@ -231,6 +231,7 @@ mod tests {
             automatic_limit: 20,
             max_tokens: 1024,
             execution_mode: "auto".into(),
+            model_directory: None,
         }
     }
     #[test]

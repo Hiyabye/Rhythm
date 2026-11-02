@@ -231,14 +231,14 @@
         </button>
       {/each}
     </nav>
-    <div class="sidebar-bottom"><span class="local-dot"></span><span>내 기기에 머무는 정보</span><small>v0.9.3</small></div>
+    <div class="sidebar-bottom"><span class="local-dot"></span><span>내 기기에 머무는 정보</span><small>v0.9.4</small></div>
   </aside>
 
   <main id="main" tabindex="-1">
     <header class="page-header"><div><div class="eyebrow">{page === 'today' ? date : '나의 커맨드 센터'}</div><h1>{heading.label}</h1><p>{heading.caption}</p></div><span class="header-note"><Icon name="lock" size={14} /> 로컬 퍼스트</span></header>
     {#if !desktop && !loading}<div class="banner browser-notice" role="status"><Icon name="info" /><div><strong>데스크톱 앱에서 시작해 주세요</strong><p>브라우저에서는 화면만 둘러볼 수 있습니다. 설정 저장과 로컬 데이터 접근은 Rhythm 앱에서 사용할 수 있습니다.</p></div></div>{/if}
     {#if error}<div class="banner error" role="alert"><Icon name="info" /><div><strong>작업을 완료하지 못했습니다</strong><p>{error}</p></div>{#if !snapshot && desktop}<button class="text-button" onclick={load}>다시 시도</button>{/if}</div>{/if}
-    {#if restoreOutcome}<div class="banner" role="status"><Icon name="info" /><div><strong>백업 복원을 마쳤습니다</strong><p>공지 {restoreOutcome.documents.toLocaleString('ko-KR')}건과 첨부 자료 {restoreOutcome.resources.toLocaleString('ko-KR')}개를 복원하고 무결성을 확인했습니다.{#if restoreOutcome.unavailable_resources} 백업 당시 내려받지 못한 첨부 자료 {restoreOutcome.unavailable_resources.toLocaleString('ko-KR')}개는 포함되지 않았습니다.{/if}{#if restoreOutcome.models_needing_reinstall} 이 기기에 맞는 파일이 없는 AI 모델 {restoreOutcome.models_needing_reinstall.toLocaleString('ko-KR')}개는 다시 설치해야 합니다.{/if} 이전 데이터는 데이터 폴더에 복구용으로 보관되어 있습니다.</p></div><button class="text-button" onclick={() => restoreOutcome = null}>닫기</button></div>{/if}
+    {#if restoreOutcome}<div class="banner" role="status"><Icon name="info" /><div><strong>백업 복원을 마쳤습니다</strong><p>공지 {restoreOutcome.documents.toLocaleString('ko-KR')}건과 첨부 자료 {restoreOutcome.resources.toLocaleString('ko-KR')}개를 복원하고 무결성을 확인했습니다.{#if restoreOutcome.unavailable_resources} 백업 당시 내려받지 못한 첨부 자료 {restoreOutcome.unavailable_resources.toLocaleString('ko-KR')}개는 포함되지 않았습니다.{/if}{#if restoreOutcome.models_needing_reinstall} 사용할 수 없는 AI 모델 {restoreOutcome.models_needing_reinstall.toLocaleString('ko-KR')}개는 다시 등록하거나 설치해 주세요.{/if} 이전 데이터는 데이터 폴더에 복구용으로 보관되어 있습니다.</p></div><button class="text-button" onclick={() => restoreOutcome = null}>닫기</button></div>{/if}
     {#if desktop && setupNeeded && page !== 'settings'}<div class="banner ai-setup-banner" role="status"><Icon name="cpu" /><div><strong>나의 기기에서 공지의 핵심을 정리하세요</strong><p>로컬 AI 모델을 선택하면 한국어 요약과 일정의 근거를 확인할 수 있습니다. 준비 전이나 오프라인에서도 공지는 계속 읽을 수 있습니다.</p></div><button class="text-button" onclick={aiSettings}>로컬 AI 설정하기</button><button class="text-button" onclick={() => setupNeeded = false}>나중에</button></div>{/if}
     <div class="save-notice" class:visible={Boolean(notice)} role="status" aria-live="polite">{#if notice}<Icon name="check" size={15} />{notice}{/if}</div>
 

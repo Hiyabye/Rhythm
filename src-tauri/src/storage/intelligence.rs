@@ -11,6 +11,8 @@ pub struct AiModel {
     pub name: String,
     pub ownership: String,
     pub path: String,
+    #[serde(default)]
+    pub storage_directory: Option<String>,
     pub sha256: Option<String>,
     pub expected_sha256: Option<String>,
     pub expected_bytes: Option<u64>,
@@ -36,6 +38,8 @@ pub struct AiPreferences {
     pub max_tokens: u32,
     #[serde(default = "default_execution_mode")]
     pub execution_mode: String,
+    #[serde(default)]
+    pub model_directory: Option<String>,
 }
 
 fn default_execution_mode() -> String {
@@ -82,7 +86,7 @@ pub struct AiResult {
     pub created_at: String,
 }
 
-const MODEL_COLUMNS: &str = "id,catalog_id,name,ownership,path,sha256,expected_sha256,expected_bytes,bytes,source_revision,source_filename,status,downloaded_bytes,resume_etag,error,created_at,updated_at";
+const MODEL_COLUMNS: &str = "id,catalog_id,name,ownership,path,sha256,expected_sha256,expected_bytes,bytes,source_revision,source_filename,status,downloaded_bytes,resume_etag,error,created_at,updated_at,storage_directory";
 const JOB_COLUMNS: &str = "id,document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,priority,status,error,duration_ms,created_at,updated_at";
 const RESULT_COLUMNS: &str = "id,job_id,document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,result_json,partial,processed_chars,total_chars,duration_ms,created_at";
 const KEY_WHERE: &str = "document_id=?1 AND revision_id=?2 AND task=?3 AND model_sha256=?4 AND prompt_version=?5 AND schema_version=?6 AND configuration_hash=?7";
@@ -126,6 +130,7 @@ fn model_row(row: &Row<'_>) -> rusqlite::Result<AiModel> {
         error: row.get(14)?,
         created_at: row.get(15)?,
         updated_at: row.get(16)?,
+        storage_directory: row.get(17)?,
     })
 }
 fn job_row(row: &Row<'_>) -> rusqlite::Result<AiJob> {
@@ -160,6 +165,18 @@ fn valid_hash(value: &str) -> bool {
         && value
             .bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+// Filesystem permissions, link checks and canonicalization belong to the caller.
+// The persistence boundary still rejects malformed or relative directory input.
+fn validate_model_directory(directory: Option<&str>) -> Result<(), String> {
+    if directory.is_some_and(|directory| {
+        directory.len() > 4096
+            || directory.contains('\0')
+            || !std::path::Path::new(directory).is_absolute()
+    }) {
+        return Err("모델 저장 폴더는 올바른 절대 경로로 지정해 주세요.".into());
+    }
+    Ok(())
 }
 fn validate_key(key: &AnalysisKey) -> Result<(), String> {
     if key.document_id <= 0
@@ -210,6 +227,7 @@ impl Store {
     }
     /// Caller owns filesystem validation; `installed` requires an actual artifact identity.
     pub fn ai_upsert_model(&self, model: &AiModel) -> Result<(), String> {
+        validate_model_directory(model.storage_directory.as_deref())?;
         if model.bytes > i64::MAX as u64
             || model.downloaded_bytes > i64::MAX as u64
             || model.expected_bytes.is_some_and(|v| v > i64::MAX as u64)
@@ -238,7 +256,7 @@ impl Store {
         {
             return Err("모델 등록 정보를 확인해 주세요.".into());
         }
-        self.connection.execute("INSERT INTO ai_models(id,catalog_id,name,ownership,path,sha256,expected_sha256,expected_bytes,bytes,source_revision,source_filename,status,downloaded_bytes,resume_etag,error) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15) ON CONFLICT(id) DO UPDATE SET catalog_id=excluded.catalog_id,name=excluded.name,ownership=excluded.ownership,path=excluded.path,sha256=excluded.sha256,expected_sha256=excluded.expected_sha256,expected_bytes=excluded.expected_bytes,bytes=excluded.bytes,source_revision=excluded.source_revision,source_filename=excluded.source_filename,status=excluded.status,downloaded_bytes=excluded.downloaded_bytes,resume_etag=excluded.resume_etag,error=excluded.error,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')", params![model.id,model.catalog_id,model.name,model.ownership,model.path,model.sha256,model.expected_sha256,model.expected_bytes.map(|v|v as i64),model.bytes as i64,model.source_revision,model.source_filename,model.status,model.downloaded_bytes as i64,model.resume_etag,model.error]).map_err(|e|e.to_string())?;
+        self.connection.execute("INSERT INTO ai_models(id,catalog_id,name,ownership,path,sha256,expected_sha256,expected_bytes,bytes,source_revision,source_filename,status,downloaded_bytes,resume_etag,error,storage_directory) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16) ON CONFLICT(id) DO UPDATE SET catalog_id=excluded.catalog_id,name=excluded.name,ownership=excluded.ownership,path=excluded.path,sha256=excluded.sha256,expected_sha256=excluded.expected_sha256,expected_bytes=excluded.expected_bytes,bytes=excluded.bytes,source_revision=excluded.source_revision,source_filename=excluded.source_filename,status=excluded.status,downloaded_bytes=excluded.downloaded_bytes,resume_etag=excluded.resume_etag,error=excluded.error,storage_directory=excluded.storage_directory,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')", params![model.id,model.catalog_id,model.name,model.ownership,model.path,model.sha256,model.expected_sha256,model.expected_bytes.map(|v|v as i64),model.bytes as i64,model.source_revision,model.source_filename,model.status,model.downloaded_bytes as i64,model.resume_etag,model.error,model.storage_directory]).map_err(|e|e.to_string())?;
         Ok(())
     }
     /// Removes inventory only. Never deletes files or historical results.
@@ -250,9 +268,10 @@ impl Store {
         )
     }
     pub fn ai_preferences(&self) -> Result<AiPreferences, String> {
-        self.connection.query_row("SELECT active_model_id,setup_completed,processing_mode,automatic_limit,max_tokens,execution_mode FROM ai_preferences WHERE id=1",[],|r|Ok(AiPreferences { active_model_id:r.get(0)?,setup_completed:r.get(1)?,processing_mode:r.get(2)?,automatic_limit:r.get(3)?,max_tokens:r.get(4)?,execution_mode:r.get(5)? })).map_err(|e|e.to_string())
+        self.connection.query_row("SELECT active_model_id,setup_completed,processing_mode,automatic_limit,max_tokens,execution_mode,model_directory FROM ai_preferences WHERE id=1",[],|r|Ok(AiPreferences { active_model_id:r.get(0)?,setup_completed:r.get(1)?,processing_mode:r.get(2)?,automatic_limit:r.get(3)?,max_tokens:r.get(4)?,execution_mode:r.get(5)?,model_directory:r.get(6)? })).map_err(|e|e.to_string())
     }
     pub fn ai_save_preferences(&self, preferences: &AiPreferences) -> Result<(), String> {
+        validate_model_directory(preferences.model_directory.as_deref())?;
         if let Some(id) = &preferences.active_model_id {
             if self.ai_model(id)?.is_none_or(|m| m.status != "installed") {
                 return Err("설치가 완료된 모델을 선택해 주세요.".into());
@@ -265,7 +284,18 @@ impl Store {
         {
             return Err("AI 처리 설정을 확인해 주세요.".into());
         }
-        self.connection.execute("UPDATE ai_preferences SET active_model_id=?1,setup_completed=?2,processing_mode=?3,automatic_limit=?4,max_tokens=?5,execution_mode=?6 WHERE id=1", params![preferences.active_model_id,preferences.setup_completed,preferences.processing_mode,preferences.automatic_limit,preferences.max_tokens,preferences.execution_mode]).map_err(|e|e.to_string())?;
+        self.connection.execute("UPDATE ai_preferences SET active_model_id=?1,setup_completed=?2,processing_mode=?3,automatic_limit=?4,max_tokens=?5,execution_mode=?6,model_directory=?7 WHERE id=1", params![preferences.active_model_id,preferences.setup_completed,preferences.processing_mode,preferences.automatic_limit,preferences.max_tokens,preferences.execution_mode,preferences.model_directory]).map_err(|e|e.to_string())?;
+        Ok(())
+    }
+    /// Changes only the destination for future downloads, never model inventory.
+    pub fn ai_save_model_directory(&self, directory: Option<&str>) -> Result<(), String> {
+        validate_model_directory(directory)?;
+        self.connection
+            .execute(
+                "UPDATE ai_preferences SET model_directory=?1 WHERE id=1",
+                [directory],
+            )
+            .map_err(|error| error.to_string())?;
         Ok(())
     }
     /// Deduplicates pending/running attempts. Cache lookup is explicit via `ai_cached_result`.

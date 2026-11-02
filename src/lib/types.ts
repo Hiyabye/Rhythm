@@ -210,6 +210,7 @@ export interface CatalogEntry {
 }
 export interface AiModel {
   id: string; catalog_id: string | null; name: string; ownership: 'managed' | 'external'; path: string;
+  storage_directory?: string | null;
   sha256: string | null; expected_sha256: string | null; expected_bytes: number | null; bytes: number;
   source_revision: string | null; source_filename: string | null; status: string;
   downloaded_bytes: number; resume_etag: string | null; error: string | null; created_at: string; updated_at: string;
@@ -218,6 +219,7 @@ export interface AiPreferences {
   active_model_id: string | null; setup_completed: boolean; processing_mode: 'explicit' | 'recent';
   automatic_limit: number; max_tokens: number;
   execution_mode: 'auto' | 'cpu' | 'gpu';
+  model_directory: string | null;
 }
 export interface AnalysisKey {
   document_id: number; revision_id: number; task: string; model_sha256: string;
@@ -253,6 +255,7 @@ export interface AiDiagnostics {
 export interface AiSnapshot {
   catalog: CatalogEntry[]; models: AiModel[]; preferences: AiPreferences; jobs: AiJob[]; runtime: WorkerStatus;
   hardware: { os: string; arch: string; ram_bytes: number; disk_available_bytes: number; backend: string };
+  model_storage: { directory: string; custom: boolean; available_bytes: number | null; error: string | null };
   busy: boolean;
   operation?: AiOperation | null;
   progress?: AiDiagnostics | null;

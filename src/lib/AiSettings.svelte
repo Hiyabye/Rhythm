@@ -60,7 +60,19 @@
     } catch (reason) { if (!disposed) error = archiveError(reason); }
     finally { if (!disposed) cancelling = false; }
   }
-  async function preference(patch: Partial<AiPreferences>) {
+  async function chooseModelDirectory() {
+    if (controlsBusy || data?.busy) return;
+    busy = true; error = ''; feedback = '';
+    try {
+      const selected = await invoke<boolean>('ai_choose_model_directory');
+      if (!disposed) {
+        if (selected) feedback = '새 모델을 설치할 폴더를 변경했습니다. 기존 모델은 이동하지 않습니다.';
+        await refresh();
+      }
+    } catch (reason) { if (!disposed) { error = archiveError(reason); await refresh(); } }
+    finally { if (!disposed) busy = false; }
+  }
+  async function preference(patch: Partial<Omit<AiPreferences, 'model_directory'>>) {
     if (!data) return;
     await action('ai_preferences', { preferences: { ...data.preferences, ...patch } }, 'AI 처리 설정을 저장했습니다.');
   }
@@ -85,6 +97,17 @@
     <p class="footnote">장치를 바꾸면 불러온 모델을 해제하고 다음 분석부터 적용합니다. GPU 전용에서는 GPU를 사용할 수 없을 때 오류를 알립니다. 실제 실행 장치와 CPU 전환 이유는 아래 AI 엔진 상태에서 확인하세요.</p>
     {#if data.operation}<div class="ai-operation" aria-label="진행 중인 AI 작업"><h3>{operationName[data.operation.kind] ?? '로컬 AI 작업'}</h3><p role="status">{operationPhase[data.operation.cancelling ? 'cancelling' : data.operation.phase] ?? '로컬 AI 작업을 처리하고 있습니다'} · 경과 {(data.operation.elapsed_ms / 1000).toFixed(0)}초</p><p class="footnote">준비하는 동안 다른 화면과 보관된 공지를 계속 사용할 수 있습니다.</p><button class="text-button" disabled={cancelling || data.operation.cancelling} onclick={() => interrupt('ai_cancel_operation', {}, '작업 중단을 요청했습니다. 정리가 끝날 때까지 기다려 주세요.')}>{data.operation.cancelling ? '중단하는 중…' : '현재 AI 작업 취소'}</button></div>{/if}
     <div class="setting-row"><div><h3>AI 엔진</h3><p>{data.runtime.state === 'busy' ? '로컬 AI 작업 중' : data.runtime.state === 'loading' ? '모델을 불러오는 중' : data.runtime.state === 'ready' ? (data.runtime.model ? '모델 준비됨' : '모델 없이 대기 중') : '엔진 확인 필요'}</p>{#if data.runtime.detail}<p>{data.runtime.detail}</p>{/if}</div><div class="inline-controls"><button class="text-button" disabled={busy || data.busy} onclick={() => action('ai_restart', {}, 'AI 엔진을 다시 시작했습니다.')}>엔진 다시 시작</button><button class="text-button" aria-label="AI 엔진 상태 새로고침" onclick={refresh}>상태 새로고침</button></div></div>
+    <div class="ai-model-storage" role="group" aria-label="모델 설치 폴더">
+      <h3>모델 설치 폴더</h3>
+      <p>{data.model_storage.custom ? '선택한 위치' : '기본 위치'} · <code>{data.model_storage.directory}</code></p>
+      <p>이 폴더의 남은 저장 공간: {data.model_storage.available_bytes === null ? '확인하지 못함' : archiveSize(data.model_storage.available_bytes)}</p>
+      {#if data.model_storage.error}<p class="archive-error" role="alert">{data.model_storage.error}</p>{/if}
+      <div class="inline-controls">
+        <button class="text-button" disabled={controlsBusy || data.busy} onclick={chooseModelDirectory}>설치 폴더 선택</button>
+        <button class="text-button" disabled={controlsBusy || data.busy || !data.model_storage.custom} onclick={() => action('ai_reset_model_directory', {}, '새 모델의 설치 폴더를 기본 위치로 되돌렸습니다. 기존 모델은 이동하지 않습니다.')}>기본 위치로 되돌리기</button>
+      </div>
+      <p class="footnote">선택한 폴더는 새로 설치하는 모델에만 적용됩니다. 이미 설치한 모델과 중단한 다운로드는 이동하지 않으며, 이어받기는 원래 폴더에서 계속합니다. 기본 위치로 되돌려도 기존 파일은 이동하거나 삭제하지 않습니다.</p>
+    </div>
     <div class="ai-catalog" aria-label="모델 카탈로그">
       {#each data.catalog as entry}
         {@const installed = data.models.find((model) => model.catalog_id === entry.id)}
@@ -104,7 +127,8 @@
       <article class="ai-installed">
         <div class="ai-model-heading"><h3>{model.name}</h3><span class="ai-tag">{data.preferences.active_model_id === model.id ? '선택한 모델 · ' : ''}{modelStatus[model.status] ?? model.status}</span></div>
         <p>{model.ownership === 'external' ? '외부 파일 참조 · Rhythm에서 원본 파일을 삭제하지 않습니다.' : 'Rhythm이 관리하는 파일'} · {archiveSize(model.bytes || model.downloaded_bytes)}</p>
-        <code>{model.path}</code>
+        {#if model.ownership === 'managed' && model.storage_directory}<p class="footnote">저장 폴더 · <code>{model.storage_directory}</code></p>{/if}
+        <p class="footnote">{model.ownership === 'external' ? '참조 파일' : '저장 파일'} · <code>{model.path}</code></p>
         {#if model.status === 'downloading' || model.status === 'verifying' || model.status === 'pending'}
           {#if model.status === 'verifying'}<p role="status">다운로드를 마쳤습니다. 모델 파일 무결성을 확인하고 있습니다.</p>{:else}<label class="ai-progress">모델 다운로드<progress max={model.expected_bytes || 1} value={model.downloaded_bytes}></progress><span>{archiveSize(model.downloaded_bytes)} / {archiveSize(model.expected_bytes ?? 0)}</span></label>{/if}
           <button class="text-button" disabled={cancelling} onclick={() => interrupt('ai_cancel_download', {}, '다운로드 중단을 요청했습니다. 받은 부분은 이어받기를 위해 유지합니다.')}>다운로드 중단</button>
@@ -114,7 +138,15 @@
           {#if model.status === 'installed'}<button class="button secondary small" disabled={busy || data.busy || data.preferences.active_model_id === model.id} onclick={() => action('ai_select', { id: model.id }, '사용할 모델을 선택했습니다.')}>{data.preferences.active_model_id === model.id ? '선택됨' : `${model.name} 선택`}</button>{/if}
           {#if removal !== model.id}<button class="text-button" disabled={busy || data.busy} onclick={() => removal = model.id}>{model.ownership === 'external' ? '참조 해제' : '모델 삭제'}</button>{/if}
         </div>
-        {#if removal === model.id}<div class="ai-confirm" role="group" aria-label={`${model.name} 삭제 확인`}><p>{model.ownership === 'external' ? '등록된 참조만 해제합니다. 외부 원본 파일은 삭제하지 않습니다.' : '모델 파일을 삭제할까요? 공지와 기존 AI 분석은 유지됩니다.'}</p><button class="button secondary small" disabled={busy || data.busy} onclick={async () => { await action('ai_remove', { id: model.id, confirmed: true }, '모델 등록을 정리했습니다. 기존 분석은 유지됩니다.'); removal = null; }}>확인하고 {model.ownership === 'external' ? '참조 해제' : '삭제'}</button><button class="text-button" onclick={() => removal = null}>취소</button></div>{/if}
+        {#if removal === model.id}
+          <div class="ai-confirm" role="group" aria-label={`${model.name} 삭제 확인`}>
+            <p>{model.ownership === 'external' ? '등록된 참조만 해제합니다. 외부 원본 파일은 삭제하지 않습니다.' : '모델 파일을 삭제할까요? 공지와 기존 AI 분석은 유지됩니다.'}</p>
+            {#if model.ownership === 'managed'}<p class="footnote">폴더에 접근할 수 없거나 다른 위치에 다시 설치하려면 파일을 남기고 목록에서 제거하세요.</p>{/if}
+            <button class="button secondary small" disabled={busy || data.busy} onclick={async () => { await action('ai_remove', { id: model.id, confirmed: true }, '모델 등록을 정리했습니다. 기존 분석은 유지됩니다.'); removal = null; }}>확인하고 {model.ownership === 'external' ? '참조 해제' : '삭제'}</button>
+            {#if model.ownership === 'managed'}<button class="text-button" disabled={busy || data.busy} onclick={async () => { await action('ai_remove', { id: model.id, confirmed: true, keepFiles: true }, '파일을 남기고 모델을 목록에서 제거했습니다. 기존 분석은 유지됩니다.'); removal = null; }}>파일을 남기고 목록에서 제거</button>{/if}
+            <button class="text-button" onclick={() => removal = null}>취소</button>
+          </div>
+        {/if}
       </article>
     {/each}
     <div class="ai-actions"><button class="button small" disabled={busy || data.busy || !data.preferences.active_model_id} onclick={() => action('ai_load', {}, '모델을 불러왔습니다.')}>선택한 모델 불러오기</button><button class="button secondary small" disabled={busy || data.busy || !data.runtime.model} onclick={() => action('ai_unload', {}, '모델 메모리를 해제했습니다.')}>모델 메모리 해제</button></div>
@@ -122,6 +154,12 @@
     <details class="ai-register"><summary>이미 가진 로컬 GGUF 등록</summary><p>파일을 복사하지 않고 참조합니다. 지원되는 GGUF 파일의 전체 경로를 입력하세요. 외부 파일은 앱에서 삭제하지 않습니다.</p><label class="field-label" for="local-model-path">로컬 GGUF 전체 경로</label><input id="local-model-path" type="text" bind:value={path} placeholder="C:\모델\model.gguf" spellcheck="false" /><button class="button secondary small" disabled={busy || data.busy || !path.trim()} onclick={() => action('ai_register', { path: path.trim() }, '로컬 모델을 등록했습니다. 선택한 뒤 불러와 호환성을 확인하세요.')}>외부 파일 참조로 등록</button></details>
   {/if}
 </section>
+
+<style>
+  .ai-model-storage { padding: 18px 0; border-bottom: 1px solid var(--line); min-width: 0; }
+  .ai-model-storage p { font-size: 12px; line-height: 1.8; }
+  .ai-model-storage code { display: block; overflow-wrap: anywhere; font-size: 11px; color: var(--secondary); user-select: text; }
+</style>
 
 <section id="ai-processing" class="settings-section">
   <div class="section-heading"><h2>AI 처리</h2><p>전체 보관함을 한꺼번에 분석하지 않습니다. 공지를 읽고 필요할 때 요청하세요.</p></div>

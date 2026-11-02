@@ -662,6 +662,8 @@ fn main() {
             set_extension,
             worker_status,
             intelligence::commands::ai_snapshot,
+            intelligence::commands::ai_choose_model_directory,
+            intelligence::commands::ai_reset_model_directory,
             intelligence::commands::ai_install,
             intelligence::commands::ai_cancel_download,
             intelligence::commands::ai_cancel_operation,

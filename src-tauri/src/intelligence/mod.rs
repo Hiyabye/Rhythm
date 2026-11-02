@@ -7,6 +7,7 @@ mod evaluation;
 #[cfg(all(test, windows))]
 mod gpu_tests;
 pub mod maintenance;
+pub(crate) mod model_storage;
 pub mod models;
 pub mod operations;
 #[cfg(test)]

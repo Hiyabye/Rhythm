@@ -116,7 +116,7 @@ test('a finalized restore is reported once the reopened window loads', async ({ 
   const banner = page.getByRole('status').filter({ hasText: '백업 복원을 마쳤습니다' });
   await expect(banner).toContainText('공지 1,240건과 첨부 자료 37개를 복원하고 무결성을 확인했습니다.');
   await expect(banner).toContainText('내려받지 못한 첨부 자료 2개는 포함되지 않았습니다.');
-  await expect(banner).toContainText('AI 모델 1개는 다시 설치해야 합니다.');
+  await expect(banner).toContainText('사용할 수 없는 AI 모델 1개는 다시 등록하거나 설치해 주세요.');
   await banner.getByRole('button', { name: '닫기', exact: true }).click();
   await expect(banner).toHaveCount(0);
 });
@@ -126,7 +126,7 @@ test('a complete restore without gaps reports no missing items', async ({ page }
   await page.goto('/');
   const banner = page.getByRole('status').filter({ hasText: '백업 복원을 마쳤습니다' });
   await expect(banner).toContainText('공지 3건과 첨부 자료 0개를 복원하고 무결성을 확인했습니다.');
-  await expect(banner).not.toContainText('다시 설치');
+  await expect(banner).not.toContainText('다시 등록하거나 설치');
   await expect(banner).not.toContainText('포함되지 않았습니다');
 });
 

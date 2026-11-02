@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashSet, VecDeque},
     io::Read,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -777,33 +777,9 @@ fn verified_path(
     model: &AiModel,
     cancellation: &Cancellation,
 ) -> Result<PathBuf, String> {
-    let supplied = Path::new(&model.path);
-    let path = if model.ownership == "managed" {
-        if supplied.is_absolute()
-            || supplied
-                .components()
-                .any(|part| !matches!(part, Component::Normal(_)))
-        {
-            return Err("관리 모델 경로가 올바르지 않습니다.".into());
-        }
-        let root = root
-            .canonicalize()
-            .map_err(|_| "모델 저장 위치를 찾을 수 없습니다.")?;
-        let path = root
-            .join(supplied)
-            .canonicalize()
-            .map_err(|_| "모델 파일을 찾을 수 없습니다.")?;
-        if !path.starts_with(&root) {
-            return Err("모델 파일이 관리 저장 위치 밖에 있습니다.".into());
-        }
-        path
-    } else if model.ownership == "external" && supplied.is_absolute() {
-        supplied
-            .canonicalize()
-            .map_err(|_| "등록한 외부 모델 파일을 찾을 수 없습니다.")?
-    } else {
-        return Err("모델 등록 경로가 올바르지 않습니다.".into());
-    };
+    let path = super::model_storage::resolve_model_path(root, model)?
+        .canonicalize()
+        .map_err(|_| "모델 파일을 찾을 수 없습니다.")?;
     let mut file = std::fs::File::open(&path).map_err(|_| "모델 파일을 읽을 수 없습니다.")?;
     let metadata = file
         .metadata()
@@ -2186,6 +2162,7 @@ mod tests {
                 name: "deterministic test engine".into(),
                 ownership: "external".into(),
                 path: path.to_string_lossy().into_owned(),
+                storage_directory: None,
                 sha256: Some(format!("{:x}", Sha256::digest(bytes))),
                 expected_sha256: None,
                 expected_bytes: None,
@@ -2690,6 +2667,7 @@ fn main() {{
             name: "fixture".into(),
             ownership: "external".into(),
             path: file.to_string_lossy().into_owned(),
+            storage_directory: None,
             sha256: Some(format!("{:x}", Sha256::digest(bytes))),
             expected_sha256: None,
             expected_bytes: None,
@@ -2712,6 +2690,17 @@ fn main() {{
         assert_ne!(first, gpu);
         assert_ne!(cpu, gpu);
         assert!(key_for_mode(1, 1, &model, 1024, "invalid").is_err());
+        let custom = directory.path().join("별도 모델 폴더");
+        std::fs::create_dir(&custom).unwrap();
+        let filename = format!("{}.gguf", model.sha256.as_ref().unwrap());
+        std::fs::copy(&file, custom.join(&filename)).unwrap();
+        model.ownership = "managed".into();
+        model.path = format!("models/{filename}");
+        model.storage_directory = Some(custom.to_string_lossy().into_owned());
+        assert_eq!(
+            verified_path(directory.path(), &model, &Cancellation::default()).unwrap(),
+            custom.join(filename).canonicalize().unwrap()
+        );
         model.sha256 = Some("0".repeat(64));
         assert!(verified_path(directory.path(), &model, &Cancellation::default()).is_err());
         model.ownership = "managed".into();

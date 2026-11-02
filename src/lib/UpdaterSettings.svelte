@@ -3,7 +3,7 @@
 </script>
 <section id="about" class="settings-section about-section">
   <div class="section-heading"><h2>정보</h2><p>Rhythm Windows 버전과 업데이트 안내입니다.</p></div>
-  <div class="about-brand"><h2>Rhythm</h2><span>0.9.3</span></div>
+  <div class="about-brand"><h2>Rhythm</h2><span>0.9.4</span></div>
   <p>Windows 11 x64 · 로컬 CPU AI · MIT 라이선스</p>
   <div class="setting-row"><div><h3>앱 업데이트</h3><p>새 Windows 설치 파일로 직접 업데이트합니다. 앱 안 자동 업데이트는 제공하지 않습니다.</p></div></div>
   <ol class="manual-update">

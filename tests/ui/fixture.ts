@@ -22,7 +22,14 @@ export interface FixtureOptions {
   aiExecutionMode?: 'auto' | 'cpu' | 'gpu';
   aiExecutionError?: boolean;
   aiRuntimeDetail?: string;
+  aiModelDirectory?: string;
+  aiModelDirectoryChoice?: string | null;
+  aiModelDirectoryError?: boolean;
+  aiModelDirectoryGate?: boolean;
+  aiModelStorageError?: string;
+  aiModelStorageAvailable?: number | null;
   aiInstallError?: boolean;
+  aiRemoveError?: boolean;
   aiInferenceError?: boolean;
   aiDelay?: number;
   aiText?: string;
@@ -108,7 +115,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       storage: { path: 'C:\\Rhythm-test\\rhythm.sqlite3', bytes: 4096, schema_version: 7 },
       worker: { state: 'ready', runtime_available: true, model: null, detail: null }, proactive: copy(proactiveSettings) };
     let sync = { running: false, source_id: null as string | null, mode: 'historical', page: 0, message: '수집 대기 중입니다.' };
-    const model = (id = 'qwen35-4b') => ({ id, catalog_id: id, name: id === 'qwen35-4b' ? 'Qwen3.5 4B' : 'Qwen3.5 2B', ownership: 'managed', path: `models/${id}.gguf`, sha256: 'a'.repeat(64), expected_sha256: 'a'.repeat(64), expected_bytes: 2740937888, bytes: 2740937888, source_revision: 'pinned-revision', source_filename: `${id}.gguf`, status: 'installed', downloaded_bytes: 2740937888, resume_etag: null, error: null as string | null, created_at: '2026-10-24 12:00:00', updated_at: '2026-10-24 12:00:00' });
+    const defaultModelDirectory = 'C:\\Rhythm-test\\models';
+    const modelStorage = { directory: options.aiModelDirectory ?? defaultModelDirectory, custom: Boolean(options.aiModelDirectory), available_bytes: options.aiModelStorageAvailable === undefined ? 27000000000 : options.aiModelStorageAvailable, error: options.aiModelStorageError ?? null as string | null };
+    const model = (id = 'qwen35-4b') => ({ id, catalog_id: id, name: id === 'qwen35-4b' ? 'Qwen3.5 4B' : 'Qwen3.5 2B', ownership: 'managed', path: `models/${id}.gguf`, storage_directory: null as string | null, sha256: 'a'.repeat(64), expected_sha256: 'a'.repeat(64), expected_bytes: 2740937888, bytes: 2740937888, source_revision: 'pinned-revision', source_filename: `${id}.gguf`, status: 'installed', downloaded_bytes: 2740937888, resume_etag: null, error: null as string | null, created_at: '2026-10-24 12:00:00', updated_at: '2026-10-24 12:00:00' });
     const analysis = (id: number, documentId: number, revisionId: number) => ({
       id, job_id: id, document_id: documentId, revision_id: revisionId, task: 'notice_analysis',
       model_sha256: 'a'.repeat(64),
@@ -132,7 +141,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       duration_ms: 1250,
       created_at: '2026-10-24 12:00:00',
     });
-    const ai = { catalog: ['qwen35-4b', 'qwen35-2b'].map((id) => ({ id, name: id === 'qwen35-4b' ? 'Qwen3.5 4B' : 'Qwen3.5 2B', parameters: id === 'qwen35-4b' ? '4B' : '2B', quantization: 'Q4_K_M', bytes: 2740937888, memory_bytes: id === 'qwen35-4b' ? 10737418240 : 5368709120, description: '한국어 공지 분석용 로컬 모델', use_case: '균형 잡힌 공지 분석', repository: 'unsloth/Qwen3.5-4B-GGUF', revision: 'pinned-revision', filename: `${id}.gguf`, sha256: 'a'.repeat(64), license: 'Apache-2.0', compatibility: 'available', reason: id === 'qwen35-4b' ? 'Windows CPU(i5-10300H, RAM 16GB)에서 제한된 공지로 추론과 복구를 시험했습니다. 한 장학 사례의 자동 검사는 통과했지만 일반적인 정확도를 보장하지 않으며, 결과를 원문과 대조해야 합니다. 실제 메모리 사용량은 환경에 따라 달라집니다.' : 'Windows CPU(i5-10300H, RAM 16GB)에서 제한된 공지로 시험했습니다. 장학 공지 분류 오류와 발표 시점 표현 누락이 발견되어 결과를 원문과 대조해야 합니다. 실제 메모리 사용량은 환경에 따라 달라집니다.' })), models: options.aiInstalled ? [model()] : [], preferences: { active_model_id: options.aiInstalled ? 'qwen35-4b' : null as string | null, setup_completed: !options.aiSetupNeeded, processing_mode: 'explicit', automatic_limit: 3, max_tokens: 1024, execution_mode: options.aiExecutionMode ?? 'auto' }, jobs: [] as any[], runtime: { state: 'ready', runtime_available: true, model: null as string | null, detail: options.aiRuntimeDetail ?? null }, hardware: { os: 'windows', arch: 'x86_64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, operation: null as AiOperation | null, progress: null as any, analysis_contract: { prompt_version: contract.prompt_version, schema_version: contract.schema_version, configuration_hash: 'b'.repeat(64) } };
+    const ai = { model_storage: modelStorage, catalog: ['qwen35-4b', 'qwen35-2b'].map((id) => ({ id, name: id === 'qwen35-4b' ? 'Qwen3.5 4B' : 'Qwen3.5 2B', parameters: id === 'qwen35-4b' ? '4B' : '2B', quantization: 'Q4_K_M', bytes: 2740937888, memory_bytes: id === 'qwen35-4b' ? 10737418240 : 5368709120, description: '한국어 공지 분석용 로컬 모델', use_case: '균형 잡힌 공지 분석', repository: 'unsloth/Qwen3.5-4B-GGUF', revision: 'pinned-revision', filename: `${id}.gguf`, sha256: 'a'.repeat(64), license: 'Apache-2.0', compatibility: 'available', reason: id === 'qwen35-4b' ? 'Windows CPU(i5-10300H, RAM 16GB)에서 제한된 공지로 추론과 복구를 시험했습니다. 한 장학 사례의 자동 검사는 통과했지만 일반적인 정확도를 보장하지 않으며, 결과를 원문과 대조해야 합니다. 실제 메모리 사용량은 환경에 따라 달라집니다.' : 'Windows CPU(i5-10300H, RAM 16GB)에서 제한된 공지로 시험했습니다. 장학 공지 분류 오류와 발표 시점 표현 누락이 발견되어 결과를 원문과 대조해야 합니다. 실제 메모리 사용량은 환경에 따라 달라집니다.' })), models: options.aiInstalled ? [model()] : [], preferences: { active_model_id: options.aiInstalled ? 'qwen35-4b' : null as string | null, setup_completed: !options.aiSetupNeeded, processing_mode: 'explicit', automatic_limit: 3, max_tokens: 1024, execution_mode: options.aiExecutionMode ?? 'auto', model_directory: options.aiModelDirectory ?? null as string | null }, jobs: [] as any[], runtime: { state: 'ready', runtime_available: true, model: null as string | null, detail: options.aiRuntimeDetail ?? null }, hardware: { os: 'windows', arch: 'x86_64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, operation: null as AiOperation | null, progress: null as any, analysis_contract: { prompt_version: contract.prompt_version, schema_version: contract.schema_version, configuration_hash: 'b'.repeat(64) } };
     const analyses = options.aiResult ? [analysis(1, 1, 1)] : [];
     let personalization = { profile: { university: '', department: '', study_level: '' }, interests: copy(options.initialInterests ?? []), learning_enabled: true };
     const documentFeedback = new Map<number, string>();
@@ -147,6 +156,8 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       dialogs: [] as string[], dialogAnswers: [] as ('ok' | 'cancel')[],
       stateDelay: 0, subscribeError: false, snapshotFailures: 0, resultsFailures: 0, documentJobs: [] as any[], retryMessage: '자료를 내려받지 못했습니다. 연결을 확인해 주세요.',
       queryResolvers: [] as Array<() => void>,
+      modelDirectoryResolvers: [] as Array<() => void>,
+      releaseModelDirectory() { this.modelDirectoryResolvers.splice(0).forEach((release) => release()); },
       imageResolvers: [] as Array<() => void>, imageCompleted: 0,
       releaseImages() { this.imageResolvers.splice(0).forEach((release) => release()); },
       feedbackResolvers: [] as Array<() => void>,
@@ -314,7 +325,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (fixture.snapshotFailures > 0) { fixture.snapshotFailures -= 1; throw '모델 정보를 일시적으로 확인하지 못했습니다.'; }
             if (ai.operation) ai.operation.elapsed_ms = Date.now() - operationStarted;
             if (ai.progress && analysisStarted) ai.progress.elapsed_ms = Date.now() - analysisStarted;
-            ai.busy = Boolean(ai.operation) || ai.jobs.some((job) => ['pending', 'running'].includes(job.status));
+            ai.busy = Boolean(ai.operation) || ai.jobs.some((job) => ['pending', 'running'].includes(job.status)) || ai.models.some((model) => ['pending', 'downloading', 'verifying'].includes(model.status));
             return copy(ai);
           }
           case 'ai_document_jobs': return copy([...ai.jobs, ...fixture.documentJobs].filter((job) => job.document_id === args.documentId && job.revision_id === args.revisionId).sort((a, b) => b.id - a.id));
@@ -326,7 +337,12 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             return copy(analyses.filter((result) => result.document_id === args.documentId && result.revision_id === args.revisionId).sort((a, b) => b.id - a.id));
           case 'ai_install': {
             let installed = ai.models.find((value) => value.id === args.catalogId);
-            if (!installed) { installed = model(args.catalogId); ai.models.push(installed); }
+            if (!installed) {
+              installed = model(args.catalogId);
+              installed.storage_directory = ai.model_storage.directory;
+              installed.path = `${ai.model_storage.directory}\\${args.catalogId}.gguf`;
+              ai.models.push(installed);
+            }
             installed.status = 'downloading'; installed.downloaded_bytes = 1200000000; installed.bytes = 0; installed.error = null;
             setTimeout(() => { if (installed!.status !== 'downloading') return; installed!.status = options.aiInstallError ? 'failed' : 'installed'; installed!.error = options.aiInstallError ? '모델 다운로드에 실패했습니다. 연결을 확인하고 이어받아 주세요.' : null; installed!.bytes = options.aiInstallError ? 0 : 2740937888; }, options.aiDelay ?? 1800);
             return null;
@@ -338,14 +354,31 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'ai_cancel_operation': if (ai.operation) ai.operation.cancelling = true; return null;
           case 'ai_unload':
           case 'ai_restart': ai.runtime.model = null; return null;
+          case 'ai_choose_model_directory': {
+            if (options.aiModelDirectoryGate) await new Promise<void>((resolve) => fixture.modelDirectoryResolvers.push(resolve));
+            if (options.aiModelDirectoryChoice === null) return false;
+            if (options.aiModelDirectoryError) throw '모델 설치 폴더를 저장하지 못했습니다. 기존 위치를 유지합니다.';
+            const directory = options.aiModelDirectoryChoice ?? 'D:\\로컬 모델\\Rhythm';
+            ai.preferences.model_directory = directory;
+            Object.assign(ai.model_storage, { directory, custom: true, error: null });
+            return true;
+          }
+          case 'ai_reset_model_directory':
+            if (options.aiModelDirectoryError) throw '모델 설치 폴더를 저장하지 못했습니다. 기존 위치를 유지합니다.';
+            ai.preferences.model_directory = null;
+            Object.assign(ai.model_storage, { directory: defaultModelDirectory, custom: false, error: null });
+            return null;
           case 'ai_preferences':
+            if (args.preferences.model_directory !== ai.preferences.model_directory) throw '모델 설치 폴더는 폴더 선택 명령으로 변경해 주세요.';
             if (args.preferences.execution_mode !== ai.preferences.execution_mode) {
               if (options.aiExecutionError) throw '실행 장치를 저장하지 못했습니다. 다시 시도해 주세요.';
               ai.runtime.model = null;
             }
             if (args.preferences.setup_completed && !ai.preferences.setup_completed) await operation('setup', options.aiSetupDelay ?? 0);
             Object.assign(ai.preferences, args.preferences); return null;
-          case 'ai_remove': ai.models = ai.models.filter((model) => model.id !== args.id); if (ai.preferences.active_model_id === args.id) ai.preferences.active_model_id = null; return null;
+          case 'ai_remove':
+            if (options.aiRemoveError && !args.keepFiles && ai.models.find((model) => model.id === args.id)?.ownership === 'managed') throw '모델 폴더에 접근할 수 없습니다.';
+            ai.models = ai.models.filter((model) => model.id !== args.id); if (ai.preferences.active_model_id === args.id) ai.preferences.active_model_id = null; return null;
           case 'ai_analyze': {
             const cached = analyses.find((result) => result.document_id === args.documentId && result.revision_id === args.revisionId);
             if (cached && !args.regenerate) return { cached: copy(cached), job: null };

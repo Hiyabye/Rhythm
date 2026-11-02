@@ -1,8 +1,10 @@
 # Roadmap
 
-Version numbers describe product milestones, not promises that future functionality exists. Rhythm stays local-first and Korean-first throughout. **Current target: Windows 11 x64, CPU inference, per-user NSIS and manual updates.** The port is under implementation and verification; see [Windows validation](WINDOWS_VALIDATION.md) for current evidence and open gates. Platform builds, CI and native behavior under earlier milestones are historical evidence for those versions. Implementation, automated checks, bounded live collection and native/platform verification are separate claims.
+Version numbers describe product milestones, not promises that future functionality exists. Rhythm stays local-first and Korean-first throughout. **Current target: Windows 11 x64, CPU and NVIDIA Vulkan inference, per-user NSIS and manual updates.** The port is under implementation and verification; see [Windows validation](WINDOWS_VALIDATION.md) for current evidence and open gates. Platform builds, CI and native behavior under earlier milestones are historical evidence for those versions. Implementation, automated checks, bounded live collection and native/platform verification are separate claims.
 
 ## Windows 11 x64 port — current work
+
+- 0.9.4 model destination: native folder choice/reset for new downloads, capacity/error display and per-model destination tracking in schema 9. Existing files and interrupted downloads retain their original location. Restore clears the preference and converts custom managed models to external/missing references without deleting their files. Native picker selection/cancel, persistence after relaunch and reset passed in an isolated debug app on the development PC; final installed-app verification remains pending. The user's exclusion of summary correctness from the build criteria does not remove source/output validators.
 
 - GPU follow-up: persisted automatic/CPU/NVIDIA-GPU execution choice, optional llama.cpp/Vulkan worker and CPU fallback. GTX 10/16 and RTX 20/30/40/50 are target generations, not a blanket tested-hardware claim. Schema 8 adds execution preference; semantic cache identity separates explicit modes and saved results retain actual backend provenance. Hardware, model, failure recovery and packaged-app evidence must be recorded separately before claiming support for each combination.
 

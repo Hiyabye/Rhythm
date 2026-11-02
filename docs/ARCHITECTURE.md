@@ -16,7 +16,7 @@ Rust application (src-tauri)
   │     ├─ public Sogang sources → normalized archive records
   │     └─ app_data_dir()/resources/ → verified local files
   └─ intelligence: curated model manager, analysis queue and worker process owner
-        ├─ app_data_dir()/models/ → verified managed GGUF files
+        ├─ app_data_dir()/models/ or selected model directory → verified managed GGUF files
         ├─ stored document revision → validated result → SQLite cache
         │ versioned JSON lines over stdin/stdout
 selected isolated worker
@@ -46,13 +46,15 @@ The Windows notification path uses WinRT Toasts, the installed `app.rhythm.windo
 
 `intelligence/commands.rs` exposes `ai_snapshot`, install/cancel/register/remove/select/load/unload/restart controls, `ai_preferences`, `ai_analyze`, `ai_cancel`, revision-local results/jobs and bounded recent results. Additive `ai_cancel_operation` cancels command-owned preparation; `ai_diagnostics` reads transient per-job timing/count reports. Snapshots include operation/progress state and the current prompt/schema/configuration contract. Worker operations are serialized; model removal requires confirmation, no conflicting work, unloading and selection clearing. Analysis/results do not require the notice extension to remain enabled.
 
+`ai_choose_model_directory` opens the native folder picker, validates the selected directory and write access, then persists the choice; cancellation changes nothing. `ai_reset_model_directory` restores the default for future installations. Both share AI/maintenance admission; ordinary `ai_preferences` cannot change this field. `model_storage.rs` resolves each managed model through its recorded storage directory while retaining generated relative filenames and rejecting links/traversal. Snapshot `model_storage` reports the effective destination, available space and access error. Existing installations and interrupted downloads retain their original destination, independent of later preference changes; no move operation is implied.
+
 `intelligence/operations.rs` owns in-memory load/setup/register phases and cancellation independently of Settings component lifetime. Leaving and remounting Settings observes the same operation. Cancellation joins cooperative blocking verification or stops/reaps interrupted worker IPC before admission is released. Setup persists completion only after its real inference succeeds. This adds no database job kind or migration. Snapshot disk capacity is refreshed; physical RAM is labeled as physical capacity, not available loader memory.
 
 Before `Store::open` can recover interrupted work, `core::lock_data_dir` obtains a process-lifetime OS file lock on `app_data_dir()/rhythm.lock`. A second owner of that data directory is rejected with a Korean diagnostic and normal exit before opening the store/worker; Tauri's setup-error panic is avoided. The OS releases the lock after process termination; startup does not infer ownership from an old file's mere existence. This complements the controller's in-process single-job admission and prevents concurrent instances from racing checkpoints or temporary resource files.
 
 Rust owns persistence; browser previews do not substitute localStorage or simulate success. A startup or migration failure prevents launch rather than replacing user data. Theme changes are optimistic and revert on save failure; system mode follows OS preference. Energy profile controls app-open inference admission/residency and scheduled sync cadence only when the scheduler interval is set to automatic (`0`). Schema-4 profile, interests, feedback and learned evidence remain local; deterministic ranking does not depend on an AI model or inference result.
 
-## SQLite schemas 5–8 and upgrade compatibility
+## SQLite schemas 5–9 and upgrade compatibility
 
 `storage/mod.rs` opens `app_data_dir()/rhythm.sqlite3` for `io.github.hiyabye.rhythm`, enables foreign keys, WAL and a five-second busy timeout, and applies ordered transactional migrations using `PRAGMA user_version`. A newer schema is rejected before changing journal mode. Migrations `001`–`004` remain unchanged; `005_proactive.sql` adds lifecycle/scheduler settings, per-source scheduler tasks and outcomes, notification baseline/dedupe/events and `sources.seed_complete`.
 
@@ -67,6 +69,8 @@ Schema 6 adds a bounded handoff-attempt ledger independent of visible notificati
 Schema 7 adds expiring notification activation-token hashes bound to event attempts. The raw token is carried by the Windows activation URL and is consumed at most once. Restoring a backup clears token records in staging so an old notification cannot activate a different restored database.
 
 Schema 8 adds `ai_preferences.execution_mode` with `auto` (default), `cpu`, and `gpu` choices. Existing migrations are unchanged. Device changes share AI admission, refuse active analysis, stop/reap the worker before applying the new choice, and restore the prior in-memory choice if persistence fails. Startup reads the persisted mode. Automatic mode can fall back to the CPU worker; explicit GPU mode reports failure rather than silently using CPU.
+
+Schema 9 adds nullable `ai_preferences.model_directory` and `ai_models.storage_directory`, preserving prior migrations and legacy default-directory models. A new managed download captures the current preference; retry/resume keeps the model's captured location. Backup restore clears the folder preference and removes custom managed-file deletion authority: affected models become external/missing references requiring registration or installation, their original files are preserved, and their active selection is cleared. Weights remain excluded from backups. Browser tests do not establish native folder-picker or installed-app behavior.
 
 The optional GPU worker uses llama.cpp/Vulkan over the existing bounded JSON-lines pipe, without an inference HTTP server. NVIDIA GTX 10/16 and RTX 20/30/40/50 are implementation targets; the target list is not evidence of testing every GPU. GPU runtime availability, model memory admission and successful inference are separate claims. Semantic cache identity includes the requested execution mode and `llama-vulkan-v1` runtime policy; changing between explicit CPU/GPU modes does not silently reuse the other mode's result. Automatic mode may reuse a result created during fallback. Successful results retain their observed backend in `model_identity.loaded_backend`, committed atomically with the result, so a later GPU-capable session does not relabel an earlier CPU analysis. Missing historical provenance remains unknown.
 
