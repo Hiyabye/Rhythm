@@ -2162,32 +2162,35 @@ mod tests {
         store.ai_save_preferences(&preferences).unwrap();
         (directory, Arc::new(Mutex::new(store)), id, revision)
     }
+    /// Hard-links one shared compiled engine into `directory`: the same file is
+    /// launched without another first-launch check, and the process reads its
+    /// per-test control files beside the invoked path, so restarts keep them.
     fn fake_engine(directory: &Path) -> SharedWorker {
-        let source = directory.join("engine.rs");
-        let executable = directory.join(format!("engine{}", std::env::consts::EXE_SUFFIX));
-        let text = serde_json::to_string(&generated().to_string()).unwrap();
-        let delay = serde_json::to_string(&directory.join("delay").to_string_lossy()).unwrap();
-        let entered = serde_json::to_string(&directory.join("entered").to_string_lossy()).unwrap();
-        let malformed =
-            serde_json::to_string(&directory.join("malformed").to_string_lossy()).unwrap();
-        let repair_once =
-            serde_json::to_string(&directory.join("repair-once").to_string_lossy()).unwrap();
-        let requests =
-            serde_json::to_string(&directory.join("requests").to_string_lossy()).unwrap();
-        std::fs::write(&source, format!(r#####"
+        static FIXTURE: std::sync::OnceLock<(tempfile::TempDir, std::path::PathBuf)> =
+            std::sync::OnceLock::new();
+        let (_, shared) = FIXTURE.get_or_init(|| {
+            let fixture = tempfile::tempdir().unwrap();
+            let text = serde_json::to_string(&generated().to_string()).unwrap();
+            let executable = crate::intelligence::test_worker::compile(
+                fixture.path(),
+                "analysis-fake-engine",
+                &format!(
+                    r#####"
 use std::io::{{self, BufRead, Write}};
 fn main() {{
+    let invoked = std::path::PathBuf::from(std::env::args_os().next().unwrap());
+    let control = invoked.parent().unwrap();
     for line in io::stdin().lock().lines() {{
         let line = line.unwrap();
         let id = line.split("\"id\":").nth(1).unwrap().split(|c: char| !c.is_ascii_digit()).next().unwrap();
         if line.contains("\"infer\"") {{
-            std::fs::write({entered}, b"entered").unwrap();
-            if std::path::Path::new({delay}).exists() {{ std::thread::sleep(std::time::Duration::from_secs(60)); }}
-            let text = if std::path::Path::new({malformed}).exists() {{
-                if std::path::Path::new({repair_once}).exists() {{ std::fs::remove_file({malformed}).unwrap(); }}
+            std::fs::write(control.join("entered"), b"entered").unwrap();
+            if control.join("delay").exists() {{ std::thread::sleep(std::time::Duration::from_secs(60)); }}
+            let text = if control.join("malformed").exists() {{
+                if control.join("repair-once").exists() {{ std::fs::remove_file(control.join("malformed")).unwrap(); }}
                 "\"not structured JSON\""
             }} else {{ r####"{text}"#### }};
-            let mut requests = std::fs::OpenOptions::new().create(true).append(true).open({requests}).unwrap();
+            let mut requests = std::fs::OpenOptions::new().create(true).append(true).open(control.join("requests")).unwrap();
             writeln!(requests, "infer").unwrap();
             println!("{{{{\"version\":1,\"id\":{{}},\"ok\":true,\"result\":{{{{\"text\":{{}},\"generation_ms\":17,\"loaded_backend\":\"cpu\"}}}}}}}}", id, text);
         }} else {{
@@ -2196,19 +2199,13 @@ fn main() {{
         io::stdout().flush().unwrap();
     }}
 }}
-"#####)).unwrap();
-        let result = std::process::Command::new("rustc")
-            .args(["--edition=2021", "--crate-name", "analysis_fake_engine"])
-            .arg(source)
-            .arg("-o")
-            .arg(&executable)
-            .output()
-            .unwrap();
-        assert!(
-            result.status.success(),
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
-        );
+"#####
+                ),
+            );
+            (fixture, executable)
+        });
+        let executable = directory.join(format!("engine{}", std::env::consts::EXE_SUFFIX));
+        std::fs::hard_link(shared, &executable).unwrap();
         Arc::new(AsyncMutex::new(Worker::launch(&executable)))
     }
     async fn settle(controller: &Controller) {

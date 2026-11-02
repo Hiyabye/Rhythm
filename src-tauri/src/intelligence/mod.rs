@@ -7,6 +7,8 @@ mod evaluation;
 pub mod maintenance;
 pub mod models;
 pub mod operations;
+#[cfg(test)]
+mod test_worker;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -510,11 +512,10 @@ mod tests {
         static FIXTURE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
         let directory = FIXTURE.get_or_init(|| {
             let directory = tempfile::tempdir().unwrap();
-            let source = directory.path().join("worker.rs");
-            std::fs::write(&source, r###"
+            test_worker::compile(directory.path(), "fake-worker", r###"
 use std::io::{self, BufRead, Write};
 fn main() {
-    let mode = std::env::args().nth(1).unwrap();
+    let Some(mode) = std::env::args().nth(1) else { return };
     if mode == "analysis-capable" || mode == "legacy-multi" {
         let mut id = 0;
         let mut inference = 0;
@@ -583,12 +584,7 @@ fn main() {
     // the parent kill and reap a still-running process, not merely observe exit.
     if mode != "incomplete" { std::thread::sleep(std::time::Duration::from_secs(60)); }
 }
-"###).unwrap();
-            let executable = directory.path().join(format!("fake-worker{}", std::env::consts::EXE_SUFFIX));
-            let result = std::process::Command::new("rustc")
-                .args(["--edition=2021", "--crate-name", "fake_worker"])
-                .arg(&source).arg("-o").arg(&executable).output().unwrap();
-            assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+"###);
             directory
         });
         let mut command = Command::new(

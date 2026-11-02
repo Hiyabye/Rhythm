@@ -510,45 +510,33 @@ mod tests {
     use tokio::{sync::Mutex, time::timeout};
 
     fn unresponsive_worker() -> super::super::Worker {
-        static FIXTURE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-        let directory = FIXTURE.get_or_init(|| {
+        static FIXTURE: std::sync::OnceLock<(tempfile::TempDir, PathBuf)> =
+            std::sync::OnceLock::new();
+        let (_, executable) = FIXTURE.get_or_init(|| {
             let directory = tempfile::tempdir().unwrap();
-            let source = directory.path().join("worker.rs");
-            std::fs::write(
-                &source,
-                "fn main() { std::thread::sleep(std::time::Duration::from_secs(60)); }",
-            )
-            .unwrap();
-            let executable = directory.path().join(format!(
-                "unresponsive-worker{}",
-                std::env::consts::EXE_SUFFIX
-            ));
-            let output = std::process::Command::new("rustc")
-                .args(["--edition=2021", "--crate-name", "unresponsive_worker"])
-                .arg(source)
-                .arg("-o")
-                .arg(&executable)
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
+            // Accept a request but never answer it; exit only when stdin closes.
+            let executable = crate::intelligence::test_worker::compile(
+                directory.path(),
+                "unresponsive-worker",
+                r#"
+use std::io::BufRead;
+fn main() {
+    if std::io::stdin().lock().lines().next().is_some() {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+}
+"#,
             );
-            directory
+            (directory, executable)
         });
-        super::super::Worker::launch(&directory.path().join(format!(
-            "unresponsive-worker{}",
-            std::env::consts::EXE_SUFFIX
-        )))
+        super::super::Worker::launch(executable)
     }
 
     fn delayed_model_worker(setup: bool) -> (super::super::Worker, PathBuf) {
         static FIXTURE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
         let directory = FIXTURE.get_or_init(|| {
             let directory = tempfile::tempdir().unwrap();
-            let source = directory.path().join("worker.rs");
-            std::fs::write(&source, r#"
+            let source = r#"
 use std::io::{self, BufRead, Write};
 fn main() {
     let executable = std::env::current_exe().unwrap();
@@ -565,13 +553,10 @@ fn main() {
         io::stdout().flush().unwrap();
     }
 }
-"#).unwrap();
-            let executable = directory.path().join(format!("delayed-load{}", std::env::consts::EXE_SUFFIX));
-            let output = std::process::Command::new("rustc")
-                .args(["--edition=2021", "--crate-name", "delayed_model_worker"])
-                .arg(source).arg("-o").arg(&executable).output().unwrap();
-            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-            std::fs::copy(executable, directory.path().join(format!("delayed-setup{}", std::env::consts::EXE_SUFFIX))).unwrap();
+"#;
+            for name in ["delayed-load", "delayed-setup"] {
+                crate::intelligence::test_worker::compile(directory.path(), name, source);
+            }
             directory
         });
         let executable = directory.path().join(format!(
