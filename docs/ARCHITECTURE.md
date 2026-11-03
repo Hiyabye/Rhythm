@@ -25,7 +25,7 @@ one llama-server process per loaded model (bundled resources, pinned upstream bu
   └─ Windows: llama/vulkan/ (NVIDIA only) or llama/cpu/
 ```
 
-There are two Cargo workspace members: the Tauri app and the former worker crate (`crates/ai-worker`), which the app no longer builds, bundles or runs. Collection never waits for inference or writes AI results. Release builds are ad-hoc signed (macOS) or unsigned (Windows) by policy; the updater stays disabled without a configured public key.
+The Cargo workspace has one member, the Tauri app (`src-tauri`). Collection never waits for inference or writes AI results. Release builds are ad-hoc signed (macOS) or unsigned (Windows) by policy; the updater stays disabled without a configured public key.
 
 ## Application ownership and commands
 

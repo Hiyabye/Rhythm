@@ -91,7 +91,6 @@ function Install-LocalBuildTools {
     $arguments = @('--quiet', '--wait', '--norestart', '--nocache', '--installPath', ('"{0}"' -f $vsRoot),
         '--add', 'Microsoft.VisualStudio.Workload.VCTools',
         '--add', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
-        '--add', 'Microsoft.VisualStudio.Component.VC.CMake.Project',
         '--add', 'Microsoft.VisualStudio.Component.Windows11SDK.26100')
     $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru -WindowStyle Hidden
     if ($process.ExitCode -eq 3010) { throw 'Build Tools 설치에 다시 시작이 필요합니다. 자동 재부팅하지 않았습니다.' }

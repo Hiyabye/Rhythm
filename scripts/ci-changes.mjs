@@ -9,7 +9,7 @@ const workflow = /^\.github\//;
 const rules = {
   frontend: [/^src\//, /^tests\//, /^scripts\//, /^package(-lock)?\.json$/, /^index\.html$/,
     /^vite\.config\.ts$/, /^tsconfig\.json$/, /^playwright\.config\.ts$/],
-  rust: [/^src-tauri\//, /^crates\//, /^Cargo\.(toml|lock)$/, /^\.cargo\//, /^rust-toolchain/,
+  rust: [/^src-tauri\//, /^Cargo\.(toml|lock)$/, /^\.cargo\//, /^rust-toolchain/,
     /^(rustfmt|clippy)\.toml$/,
     // Windows CI runs these PowerShell scripts before its Rust tests.
     /^scripts\/[^/]+\.ps1$/,
@@ -19,11 +19,11 @@ const rules = {
     /^src\/lib\/analysis-contract\.json$/, /^src\/lib\/UpdaterSettings\.svelte$/],
   // Release builds run on main only; a pull request never builds packages.
   packaging: [/^scripts\//, /^src-tauri\/(tauri[^/]*\.conf\.json|build\.rs|Cargo\.toml)$/,
-    /^src-tauri\/(icons|capabilities)\//, /^crates\/ai-worker\//, /^Cargo\.(toml|lock)$/,
+    /^src-tauri\/(icons|capabilities)\//, /^Cargo\.(toml|lock)$/,
     /^package(-lock)?\.json$/],
 };
 
-// Markdown under src-tauri/, crates/ or scripts/ is documentation; no Rust
+// Markdown under src-tauri/ or scripts/ is documentation; no Rust
 // build or test reads it.
 const markdown = /\.md$/i;
 const ignoresMarkdown = new Set(['rust', 'packaging']);
