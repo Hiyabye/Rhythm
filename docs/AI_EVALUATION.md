@@ -33,9 +33,9 @@ Evidence from the former mistral.rs worker (same artifacts, different engine), n
 - **4B on Metal** produced useful, validated Korean analysis of synthetic notices.
 - **v1.0.0 installed app**, live notice, 2B/Metal: analysis completed in 19.8 s and was cached; Settings showed the loaded backend as Metal.
 - **Native flows (2B/Metal, isolated profiles):** download cancel/resume, setup, reader analysis, OS-network-denied regeneration, cancellation and worker-crash recovery, Eco idle unload, load progress surviving a Settings remount.
-- **Windows:** CPU and GTX 1650 GPU observations are in [Windows validation](WINDOWS_VALIDATION.md#ai-on-windows).
+**llama-server b12068, Windows 11, GTX 1650:** 2B and 4B on Vulkan and 2B on CPU completed 18/18 fixtures, 4B on CPU the first 4; an isolated installed app analyzed one synthetic notice on GPU and CPU. Details in [Windows validation](WINDOWS_VALIDATION.md#ai-on-windows).
 
-Not verified with llama-server: 4B, CPU inference, Windows (CPU or Vulkan), the installed app's native AI flows. Never verified: 0.8B, NVIDIA GPUs other than one GTX 1650, Intel Macs, and any broad accuracy rate.
+Not verified with llama-server: 4B and CPU inference on macOS, the macOS installed app's native AI flows, and cancellation or crash recovery in any installed app. Never verified: 0.8B, NVIDIA GPUs other than one GTX 1650, Intel Macs, and any broad accuracy rate.
 
 ## Known quality limits
 

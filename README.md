@@ -106,7 +106,7 @@ Windows 설치 파일은 공식 저장소의 Releases에 `Rhythm_<버전>_x64-se
 
 설치 파일에 코드 서명이 없어 Windows SmartScreen이 경고를 표시할 수 있습니다. 공식 저장소에서 받았고 체크섬이 일치할 때만 실행 여부를 직접 판단하세요. Windows 보안 기능을 끄지 마세요.
 
-AI는 CPU와 NVIDIA GPU(Vulkan, GTX 10·16·RTX 20–50 시리즈 대상)를 지원하며 **설정 → AI 모델 → AI 실행 장치**에서 자동·CPU·GPU를 고릅니다. 현재 엔진의 GPU 실행은 아직 Windows 기기에서 확인하지 않았습니다. 자동 모드는 GPU를 쓸 수 없으면 CPU로 전환하고 그 이유를 표시합니다.
+AI는 CPU와 NVIDIA GPU(Vulkan, GTX 10·16·RTX 20–50 시리즈 대상)를 지원하며 **설정 → AI 모델 → AI 실행 장치**에서 자동·CPU·GPU를 고릅니다. GPU 실행은 GTX 1650 한 대에서만 확인했습니다. 자동 모드는 GPU를 쓸 수 없으면 CPU로 전환하고 그 이유를 표시합니다.
 
 ## 시작하기
 

@@ -11,7 +11,7 @@ v1.1.0 adds:
 - Windows 11 x64 support from contributor PR #1: per-user NSIS installer, CPU and NVIDIA Vulkan AI workers, WinRT notifications (schema 7), AI execution mode (schema 8). See [Windows](WINDOWS.md).
 - A chosen folder for new model downloads on both platforms (schema 9).
 
-Unreleased on `main`: local AI runs in upstream `llama-server` (llama.cpp b12068, bundled and supervised by Rhythm) instead of the AI workers, on both platforms (#8, #61). Earlier results read as outdated until they are regenerated. Windows inference with it is not yet verified.
+Unreleased on `main`: local AI runs in upstream `llama-server` (llama.cpp b12068, bundled and supervised by Rhythm) instead of the AI workers, on both platforms (#8, #61). Earlier results read as outdated until they are regenerated. On Windows it was observed on one GTX 1650 PC (Vulkan and CPU).
 - Model catalog: Qwen3.5 0.8B added as experimental; 9B removed (existing installs keep working).
 - Native-macOS redesign of the app shell and Today.
 - CI split by concern and gated by changed paths; a tag-triggered workflow (`release.yml`) that builds both platforms and creates a draft release. v1.1.0 is its first run.

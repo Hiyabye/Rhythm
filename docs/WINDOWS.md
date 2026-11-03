@@ -52,7 +52,7 @@ npm run desktop:build
 
 ## GPU (Vulkan)
 
-- Targets NVIDIA GTX 10/16 and RTX 20/30/40/50. GPU inference through the bundled `llama-server` has not been run on Windows yet; the GTX 1650 results in [Windows validation](WINDOWS_VALIDATION.md) are from the former worker.
+- Targets NVIDIA GTX 10/16 and RTX 20/30/40/50. GPU inference through the bundled `llama-server` was observed only on one GTX 1650; see [Windows validation](WINDOWS_VALIDATION.md#ai-on-windows).
 - Before loading, Rhythm runs `llama-server --list-devices` and uses only the first NVIDIA Vulkan device. A load counts as GPU only when the server log shows every layer offloaded; anything else is a GPU failure.
 - Context is 8192 tokens (input plus output) on Vulkan and 32768 on CPU. An input that does not fit is rejected with `토큰 한도를 넘습니다`.
 - The server listens on 127.0.0.1 on a port the OS chooses, and every request needs a random key written for that launch only; the key file is deleted once the server is ready.
