@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { win32 } from 'node:path';
 import { desktop } from '../scripts/desktop-windows.mjs';
 
@@ -107,4 +108,14 @@ test('an unexpected installer set is never published', () => {
   }
   const { files } = build({ args: ['build', '--debug'] });
   assert.equal(files.written.size, 0);
+});
+
+test('the installer template builds without the Rhythm hooks file', () => {
+  const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+  const template = read('scripts/installer-template.nsi').split(/\r?\n/).map((line) => line.trim());
+  const hooks = [...read('scripts/installer-hooks.nsh').matchAll(/^!macro (\w+)/gm)].map(([, name]) => name);
+  template.forEach((line, index) => {
+    const name = line.match(/^!insertmacro (\w+)$/)?.[1];
+    if (hooks.includes(name)) assert.equal(template[index - 1], `!ifmacrodef ${name}`, `unguarded ${name}`);
+  });
 });

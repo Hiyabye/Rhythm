@@ -518,8 +518,13 @@ Function .onInit
   !insertmacro SetContext
 
   ReadRegStr $RhythmPreviousInstallDir HKCU "${MANUPRODUCTKEY}" ""
-  !insertmacro RHYTHM_CHECK_PROTOCOL_OWNER
-  !insertmacro RHYTHM_CHECK_AUMID_OWNER
+  ; Defined by installer-hooks.nsh, which also registers what they protect.
+  !ifmacrodef RHYTHM_CHECK_PROTOCOL_OWNER
+    !insertmacro RHYTHM_CHECK_PROTOCOL_OWNER
+  !endif
+  !ifmacrodef RHYTHM_CHECK_AUMID_OWNER
+    !insertmacro RHYTHM_CHECK_AUMID_OWNER
+  !endif
 
   ${If} $INSTDIR == "${PLACEHOLDER_INSTALL_DIR}"
     ; Set default install location
