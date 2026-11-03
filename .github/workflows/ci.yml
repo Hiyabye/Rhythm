@@ -155,4 +155,7 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
       - name: Build unsigned NSIS installer (no publish)
-        run: npm run desktop:build
+        run: |
+          # Keep child scripts on the CI host with its matching PowerShell modules.
+          $env:RHYTHM_POWERSHELL = Join-Path $PSHOME 'pwsh.exe'
+          npm run desktop:build
