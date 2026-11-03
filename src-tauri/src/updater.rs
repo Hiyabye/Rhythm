@@ -69,7 +69,16 @@ fn ensure_signing_key() -> Result<(), String> {
 }
 /// Natural Korean for the failures a user can act on; plugin details are English.
 fn update_error(stage: &str, error: &tauri_plugin_updater::Error) -> String {
+    use std::io::ErrorKind;
     use tauri_plugin_updater::Error;
+    // The macOS install moves the old bundle aside first; if the new one could
+    // not be placed and the old one not put back, say where the old app is.
+    if let Error::PreviousAppNotRestored(kept) = error {
+        return format!(
+            "{stage} 이전 앱을 원래 위치로 되돌리지 못했습니다. 이전 앱은 {}에 있습니다. 이 앱을 응용 프로그램 폴더로 옮기거나 새 버전을 직접 설치해 주세요. 데이터는 그대로입니다.",
+            kept.display()
+        );
+    }
     let reason = match error {
         Error::Minisign(_)
         | Error::Base64(_)
@@ -82,7 +91,21 @@ fn update_error(stage: &str, error: &tauri_plugin_updater::Error) -> String {
             "네트워크 연결을 확인한 뒤 다시 시도해 주세요. 현재 앱과 데이터는 그대로입니다."
         }
         Error::UnsupportedArch | Error::UnsupportedOs | Error::TargetNotFound(_) | Error::TargetsNotFound(_) => {
-            "이 Mac에 맞는 업데이트가 아직 없습니다."
+            "이 기기에 맞는 업데이트가 아직 없습니다."
+        }
+        // A disk image or a translocated (quarantined, never moved) app is
+        // read-only, and its temporary folder lies on another volume.
+        Error::TempDirNotOnSameMountPoint => {
+            "앱을 응용 프로그램 폴더로 옮겨 실행한 뒤 다시 시도해 주세요. 현재 앱과 데이터는 그대로입니다."
+        }
+        Error::Io(io) if io.kind() == ErrorKind::ReadOnlyFilesystem => {
+            "앱을 응용 프로그램 폴더로 옮겨 실행한 뒤 다시 시도해 주세요. 현재 앱과 데이터는 그대로입니다."
+        }
+        Error::AuthenticationFailed => {
+            "관리자 승인이 취소되었거나 실패했습니다. 현재 앱과 데이터는 그대로입니다."
+        }
+        Error::Io(io) if io.kind() == ErrorKind::PermissionDenied => {
+            "앱이 설치된 폴더에 쓸 권한이 없거나 관리자 승인이 취소되었습니다. 현재 앱과 데이터는 그대로입니다."
         }
         Error::ReleaseNotFound | Error::Serialization(_) | Error::Semver(_) | Error::InvalidUpdaterFormat => {
             "업데이트 정보가 올바르지 않습니다. 잠시 후 다시 확인해 주세요."
@@ -167,6 +190,18 @@ pub async fn updater_restart(
     ensure_signing_key()?;
     let _operation = state.exclusive_maintenance().await?;
     let active = acquire(&updater)?;
+    // Maintenance stops jobs but not a loaded model's server, which runs from
+    // the install folder. The Windows installer would find its executable
+    // locked (the plugin exits the app with `process::exit`, skipping the
+    // normal shutdown), and on macOS it would keep running from the replaced
+    // bundle. Admission stays closed, so nothing restarts it before install.
+    state
+        .worker
+        .lock()
+        .await
+        .stop_for_inventory()
+        .await
+        .map_err(|e| format!("AI 엔진을 멈추지 못해 업데이트를 설치하지 않았습니다. {e}"))?;
     let mut staged = updater
         .staged
         .lock()
@@ -280,6 +315,47 @@ mod tests {
         let message = super::update_error("업데이트를 내려받거나 검증하지 못했습니다.", &error);
         assert!(message.contains("서명이 이 앱의 공식 키와 일치하지 않아 설치하지 않았습니다"));
         assert!(!message.is_ascii() && !message.contains("signature"));
+    }
+
+    #[test]
+    fn install_location_failures_name_the_action_to_take() {
+        use std::io::{Error as IoError, ErrorKind};
+        use tauri_plugin_updater::Error;
+        let stage = "업데이트를 설치하지 못했습니다.";
+        let move_app = "응용 프로그램 폴더로 옮겨 실행한 뒤";
+        assert!(super::update_error(stage, &Error::TempDirNotOnSameMountPoint).contains(move_app));
+        let read_only = Error::Io(IoError::from(ErrorKind::ReadOnlyFilesystem));
+        assert!(super::update_error(stage, &read_only).contains(move_app));
+        let denied = Error::Io(IoError::from(ErrorKind::PermissionDenied));
+        assert!(super::update_error(stage, &denied).contains("쓸 권한이 없거나"));
+        assert!(super::update_error(stage, &Error::AuthenticationFailed).contains("관리자 승인"));
+        let kept = Error::PreviousAppNotRestored("/Users/someone/Rhythm.app".into());
+        let message = super::update_error(stage, &kept);
+        assert!(message.starts_with(stage));
+        assert!(message.contains("/Users/someone/Rhythm.app에 있습니다"));
+        assert!(!message.contains("그대로입니다. 잠시"));
+    }
+
+    #[test]
+    fn missing_platform_targets_are_not_described_as_mac_only() {
+        let message = super::update_error(
+            "업데이트 정보를 확인하지 못했습니다.",
+            &tauri_plugin_updater::Error::TargetNotFound("windows-x86_64".into()),
+        );
+        assert!(message.contains("이 기기에 맞는 업데이트"));
+        assert!(!message.contains("Mac"));
+    }
+
+    #[test]
+    fn windows_updates_run_the_installer_in_passive_mode() {
+        // Passive shows only progress, skips the uninstall and shortcut pages
+        // through /UPDATE, and relaunches the app with /R.
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.windows.conf.json")).unwrap();
+        assert_eq!(
+            config["plugins"]["updater"]["windows"]["installMode"],
+            "passive"
+        );
     }
 
     #[test]
