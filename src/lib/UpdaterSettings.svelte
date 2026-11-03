@@ -75,7 +75,7 @@
 
 <section id="about" class="settings-section about-section">
   <div class="section-heading"><h2>정보</h2><p>Rhythm 정보와 앱을 최신 버전으로 유지하는 방법을 확인합니다.</p></div>
-  <div class="about-brand"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><h2>Rhythm</h2><span>1.0.0</span></div>
+  <div class="about-brand"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><h2>Rhythm</h2><span>1.1.0</span></div>
   <p>나의 하루를 정돈하는 로컬 퍼스트 개인 커맨드 센터.</p>
   <p class="muted">조용하게 연결하고, 나에게 중요한 것에 집중합니다.</p>
   <div class="about-meta"><span>MIT 라이선스</span><span>github.com/Hiyabye/Rhythm</span></div>
