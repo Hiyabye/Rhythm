@@ -13,6 +13,9 @@ const rules = {
     /^(rustfmt|clippy)\.toml$/,
     // Windows CI runs these PowerShell scripts before its Rust tests.
     /^scripts\/[^/]+\.ps1$/,
+    // Native CI stages and verifies workers through this shared build path.
+    /^scripts\/(desktop(?:-windows)?|worker-artifacts)\.mjs$/,
+    /^package(-lock)?\.json$/,
     // Rust tests read these through include_str!.
     /^src\/lib\/analysis-contract\.json$/, /^src\/lib\/UpdaterSettings\.svelte$/],
   // Release builds run on main only; a pull request never builds packages.

@@ -102,9 +102,11 @@ jobs:
       # Tauri embeds the built frontend at compile time.
       - run: npm run build
       - name: Build and stage worker for Tauri checks
+        env:
+          RHYTHM_AI_BACKEND: cpu
         run: |
-          cargo build --locked -p rhythm-ai-worker
-          node -e 'const fs=require("node:fs"),p=require("node:path"),cp=require("node:child_process");const target=cp.execFileSync("rustc",["-vV"],{encoding:"utf8"}).match(/host: (.+)/)[1].trim();if(target!=="aarch64-apple-darwin")throw new Error(`Unexpected CI target: ${target}`);const bin=p.resolve("target/debug/rhythm-ai-worker");fs.mkdirSync("src-tauri/binaries",{recursive:true});fs.copyFileSync(bin,"src-tauri/binaries/rhythm-ai-worker-"+target);fs.appendFileSync(process.env.GITHUB_ENV,"RHYTHM_WORKER_TEST_BIN="+bin+"\n");'
+          npm run worker:build -- --debug
+          node -e 'const fs=require("node:fs"),p=require("node:path"),cp=require("node:child_process");const target=cp.execFileSync("rustc",["-vV"],{encoding:"utf8"}).match(/host: (.+)/)[1].trim();if(target!=="aarch64-apple-darwin")throw new Error(`Unexpected CI target: ${target}`);const bin=p.resolve("src-tauri/binaries/rhythm-ai-worker-"+target);fs.appendFileSync(process.env.GITHUB_ENV,"RHYTHM_WORKER_TEST_BIN="+bin+"\n");'
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Test storage and worker lifecycle (no model weights)
         run: cargo test --locked --workspace
@@ -153,20 +155,12 @@ jobs:
       - uses: ./.github/actions/windows-build-tools
       - run: npm ci
       - run: npm run build
-      - name: Build real CPU worker and stage for app tests
+      - name: Build and verify CPU and GPU workers for app tests (no model weights)
         run: |
-          cargo build --locked -p rhythm-ai-worker
+          $env:RHYTHM_POWERSHELL = Join-Path $PSHOME 'pwsh.exe'
+          npm run worker:build -- --debug
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          New-Item -ItemType Directory -Force src-tauri/binaries | Out-Null
-          Copy-Item target/debug/rhythm-ai-worker.exe src-tauri/binaries/rhythm-ai-worker-x86_64-pc-windows-msvc.exe
-          "RHYTHM_WORKER_TEST_BIN=$((Resolve-Path target/debug/rhythm-ai-worker.exe).Path)" >> $env:GITHUB_ENV
-      - name: Stage verified app-local Microsoft runtime files
-        run: ./scripts/stage-vc-runtime.ps1
-      - name: Build and stage GPU worker (compilation is not GPU hardware validation)
-        run: |
-          cargo build --locked -p rhythm-ai-worker --target-dir $env:RHYTHM_GPU_TARGET_DIR --no-default-features --features gpu-inference
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          Copy-Item "$env:RHYTHM_GPU_TARGET_DIR/debug/rhythm-ai-worker.exe" src-tauri/binaries/rhythm-ai-worker-gpu-x86_64-pc-windows-msvc.exe
+          "RHYTHM_WORKER_TEST_BIN=$((Resolve-Path src-tauri/binaries/rhythm-ai-worker-x86_64-pc-windows-msvc.exe).Path)" >> $env:GITHUB_ENV
       - run: cargo clippy --locked -p rhythm-ai-worker --target-dir $env:RHYTHM_GPU_TARGET_DIR --no-default-features --features gpu-inference --all-targets -- -D warnings
       - run: cargo test --locked -p rhythm-ai-worker --target-dir $env:RHYTHM_GPU_TARGET_DIR --no-default-features --features gpu-inference
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings

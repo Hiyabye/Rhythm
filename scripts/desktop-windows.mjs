@@ -3,9 +3,10 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, copyFileSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { win32 } from 'node:path';
+import { ensureWorkerArtifact } from './worker-artifacts.mjs';
 
 // Windows-only paths, so the orchestration tests behave the same on any host.
-const { join, resolve, dirname } = win32;
+const { join, resolve } = win32;
 
 const realFiles = { readdir: readdirSync, read: readFileSync, write: writeFileSync, remove: rmSync };
 
@@ -14,7 +15,8 @@ const realFiles = { readdir: readdirSync, read: readFileSync, write: writeFileSy
 // effect is injectable so the orchestration is testable on any host.
 export function desktop({ platform = process.platform, arch = process.arch, env = process.env,
   args = process.argv.slice(2), cwd = process.cwd(), spawn = spawnSync,
-  copy = copyFileSync, mkdir = mkdirSync, files = realFiles, home = homedir() } = {}) {
+  copy = copyFileSync, mkdir = mkdirSync, files = realFiles, home = homedir(),
+  ensureWorker = ensureWorkerArtifact } = {}) {
   if (platform !== 'win32' || arch !== 'x64') throw new Error('Rhythm Windows builds require Windows 11 x64.');
   const backend = env.RHYTHM_AI_BACKEND || 'auto';
   if (!['auto', 'cpu', 'gpu'].includes(backend)) throw new Error('RHYTHM_AI_BACKEND must be auto, cpu or gpu.');
@@ -22,7 +24,8 @@ export function desktop({ platform = process.platform, arch = process.arch, env 
     env.CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS].filter(Boolean).join(' ');
   if (/target-cpu\s*=\s*native/.test(flags)) throw new Error('Portable Windows releases cannot use target-cpu=native.');
   const [mode = 'dev', ...extra] = args;
-  if (!['dev', 'build'].includes(mode)) throw new Error('Expected dev or build.');
+  if (!['dev', 'build', 'worker'].includes(mode)) throw new Error('Expected dev, build or worker.');
+  if (mode === 'worker' && extra.some((arg) => arg !== '--debug')) throw new Error('Worker builds only accept --debug.');
   if (backend === 'cpu' && mode === 'build' && !extra.includes('--no-bundle')) {
     throw new Error('CPU-only builds require --no-bundle; distributable installers include both workers.');
   }
@@ -33,10 +36,11 @@ export function desktop({ platform = process.platform, arch = process.arch, env 
     if (result.status !== 0) throw new Error(command + ' failed (' + (result.status ?? 'signal') + ').');
     return result;
   };
-  const target = run('rustc', ['-vV'], true).stdout.match(/^host: (.+)$/m)?.[1]?.trim();
+  const rustIdentity = run('rustc', ['-vV'], true).stdout;
+  const target = rustIdentity.match(/^host: (.+)$/m)?.[1]?.trim();
   if (target !== 'x86_64-pc-windows-msvc') throw new Error('Install the x86_64-pc-windows-msvc Rust toolchain.');
-  const release = mode === 'build' && !extra.includes('--debug');
-  const distribute = release && !extra.some((arg) => arg === '--no-bundle' || arg.startsWith('--bundles') || arg === '-b');
+  const release = mode !== 'dev' && !extra.includes('--debug');
+  const distribute = mode === 'build' && release && !extra.some((arg) => arg === '--no-bundle' || arg.startsWith('--bundles') || arg === '-b');
   const buildEnv = release ? releaseEnv(env, cwd, home) : env;
   const targetDir = resolve(cwd, env.CARGO_TARGET_DIR || 'target');
   const gpuTargetDir = resolve(cwd, env.RHYTHM_GPU_TARGET_DIR || targetDir + '-gpu');
@@ -57,23 +61,25 @@ export function desktop({ platform = process.platform, arch = process.arch, env 
   } catch (cause) {
     throw new Error(`Microsoft VC runtime staging failed using ${powershell}. Set RHYTHM_POWERSHELL to the intended PowerShell executable if needed. The selected host's execution policy is unchanged.`, { cause });
   }
-  console.log('Building Windows x64 CPU worker. Model weights are installed separately in the app.');
-  run('cargo', ['build', '--locked', '-p', 'rhythm-ai-worker', ...(release ? ['--release'] : [])], false, buildEnv);
+  const profile = release ? 'release' : 'debug';
   const binary = join(targetDir, release ? 'release' : 'debug', 'rhythm-ai-worker.exe');
   const staged = join(cwd, 'src-tauri', 'binaries', 'rhythm-ai-worker-' + target + '.exe');
-  mkdir(dirname(staged), { recursive: true });
-  copy(binary, staged);
+  ensureWorker({ cwd, env: buildEnv, target, profile, rustIdentity, engine: 'mistral.rs', backend: 'cpu',
+    cargoArgs: ['build', '--locked', '-p', 'rhythm-ai-worker', ...(release ? ['--release'] : [])],
+    binary, staged, run, spawn, copy, mkdir });
   if (backend !== 'cpu') {
     // Feature sets have independent build output: a GPU build must never replace
     // the known CPU fallback at the ordinary target path.
-    console.log('Building NVIDIA GPU worker (Vulkan) with an independent CPU fallback.');
-    run('cargo', ['build', '--locked', '-p', 'rhythm-ai-worker', '--no-default-features',
-      '--features', 'gpu-inference', ...(release ? ['--release'] : [])], false,
-    { ...buildEnv, CARGO_TARGET_DIR: gpuTargetDir, CMAKE_GENERATOR: 'Ninja', LLAMA_BUILD_SHARED_LIBS: '0',
-      LLAMA_STATIC_CRT: release ? '1' : '0' });
-    copy(join(gpuTargetDir, release ? 'release' : 'debug', 'rhythm-ai-worker.exe'),
-      join(cwd, 'src-tauri', 'binaries', 'rhythm-ai-worker-gpu-' + target + '.exe'));
+    ensureWorker({ cwd, env: { ...buildEnv, CARGO_TARGET_DIR: gpuTargetDir, CMAKE_GENERATOR: 'Ninja',
+      LLAMA_BUILD_SHARED_LIBS: '0', LLAMA_STATIC_CRT: release ? '1' : '0' }, target, profile, rustIdentity,
+      engine: 'llama.cpp', backend: 'vulkan',
+      cargoArgs: ['build', '--locked', '-p', 'rhythm-ai-worker', '--no-default-features',
+        '--features', 'gpu-inference', ...(release ? ['--release'] : [])],
+      binary: join(gpuTargetDir, profile, 'rhythm-ai-worker.exe'),
+      staged: join(cwd, 'src-tauri', 'binaries', 'rhythm-ai-worker-gpu-' + target + '.exe'),
+      run, spawn, copy, mkdir });
   }
+  if (mode === 'worker') return;
   // A CPU-only build must not package an old GPU executable left by another build.
   const config = backend === 'cpu'
     ? ['--config', JSON.stringify({ bundle: { externalBin: ['binaries/rhythm-ai-worker'] } })]

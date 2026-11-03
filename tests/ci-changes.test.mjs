@@ -27,7 +27,7 @@ test('each area selects only its own jobs', () => {
   assert.deepEqual(classify(['src-tauri/src/main.rs']), { ...none, rust: true });
   assert.deepEqual(classify(['crates/ai-worker/src/main.rs']), { ...none, rust: true, packaging: true });
   assert.deepEqual(classify(['Cargo.lock']), { ...none, rust: true, packaging: true });
-  assert.deepEqual(classify(['scripts/desktop.mjs']), { ...none, frontend: true, packaging: true });
+  assert.deepEqual(classify(['scripts/desktop.mjs']), all);
   assert.deepEqual(classify(['src-tauri/tauri.windows.conf.json']), { ...none, rust: true, packaging: true });
 });
 
@@ -37,6 +37,13 @@ test('frontend files read by Rust tests also run the Rust jobs', () => {
   }
   // Windows CI runs its PowerShell scripts before the Rust tests.
   assert.equal(classify(['scripts/stage-vc-runtime.ps1']).rust, true);
+});
+
+test('worker build and verification inputs select native CI as well as packaging', () => {
+  for (const file of ['scripts/desktop.mjs', 'scripts/desktop-windows.mjs', 'scripts/worker-artifacts.mjs', 'package.json', 'package-lock.json']) {
+    assert.deepEqual(classify([file]), all, file);
+    assert.deepEqual(classify([file], { pullRequest: true }), { ...all, packaging: false }, file);
+  }
 });
 
 test('workflow changes and unknown change sets run everything', () => {

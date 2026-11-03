@@ -29,3 +29,11 @@ test('CI and the release share the pinned Windows build tools', () => {
     assert.doesNotMatch(workflow, /vulkansdk-windows|LLVM-.*-win64/, path);
   }
 });
+
+test('native CI uses verified worker artifacts and tests their staged executables', () => {
+  const workflow = read('.github/workflows/ci.yml');
+  assert.equal(workflow.match(/npm run worker:build -- --debug/g)?.length, 2);
+  assert.doesNotMatch(workflow, /cargo build --locked -p rhythm-ai-worker|Copy-Item .*rhythm-ai-worker|fs\.copyFileSync/);
+  assert.match(workflow, /RHYTHM_WORKER_TEST_BIN=\$\(\(Resolve-Path src-tauri\/binaries\/rhythm-ai-worker-x86_64-pc-windows-msvc\.exe/);
+  assert.match(workflow, /p\.resolve\("src-tauri\/binaries\/rhythm-ai-worker-"\+target\)/);
+});

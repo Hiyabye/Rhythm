@@ -177,6 +177,7 @@ impl Engine {
     fn status(&self) -> Value {
         json!({
             "engine": ENGINE_NAME,
+            "build_id": env!("RHYTHM_WORKER_BUILD_ID"),
             "runtime_available": HAS_INFERENCE,
             "analysis_json_v1": HAS_INFERENCE,
             "model": self.model_path,

@@ -21,6 +21,12 @@ function build(options = {}) {
   const files = options.files ?? memoryFiles();
   desktop({ platform: 'win32', arch: 'x64', env: {}, cwd: 'D:\\test folder 한글', args: ['build'], home: 'C:\\Users\\builder',
     spawn: (command, args, options) => { calls.push([command, ...args]); environments.push(options.env); return { status: 0, stdout: 'host: x86_64-pc-windows-msvc\n' }; },
+    // Artifact correctness has filesystem/process tests of its own. Here the
+    // stand-in keeps the build/staging branch visible to orchestration tests.
+    ensureWorker: ({ run, cargoArgs, env, copy, binary, staged }) => {
+      run('cargo', cargoArgs, false, env);
+      copy(binary, staged);
+    },
     copy: (...args) => copies.push(args), mkdir: () => {}, ...options, files });
   return { calls, copies, environments, files };
 }
@@ -153,4 +159,39 @@ test('an unexpected installer set is never published', () => {
   }
   const { files } = build({ args: ['build', '--debug'] });
   assert.equal(files.written.size, 0);
+});
+
+test('verified worker reuse skips Cargo builds and still packages both expected sidecars', () => {
+  const workers = [];
+  const { calls } = build({ args: ['build', '--debug'], ensureWorker: (worker) => workers.push(worker) });
+  assert.equal(calls.length, 3); // rustc, runtime staging, Tauri
+  assert.ok(!calls.some(([command]) => command === 'cargo'));
+  assert.deepEqual(workers.map(({ backend, engine, profile, target }) => ({ backend, engine, profile, target })), [
+    { backend: 'cpu', engine: 'mistral.rs', profile: 'debug', target: 'x86_64-pc-windows-msvc' },
+    { backend: 'vulkan', engine: 'llama.cpp', profile: 'debug', target: 'x86_64-pc-windows-msvc' },
+  ]);
+  assert.equal(workers[0].rustIdentity, 'host: x86_64-pc-windows-msvc\n');
+  assert.match(workers[0].staged, /rhythm-ai-worker-x86_64/);
+  assert.match(workers[1].staged, /rhythm-ai-worker-gpu-x86_64/);
+});
+
+test('worker-only command supports release, debug and CPU selection without invoking Tauri', () => {
+  for (const args of [['worker'], ['worker', '--debug']]) {
+    const { calls, copies, files } = build({ args });
+    assert.equal(calls.length, 4);
+    assert.equal(copies.length, 2);
+    assert.equal(files.removed.length, 0);
+    assert.equal(files.written.size, 0);
+    assert.equal(calls[2].includes('--release'), !args.includes('--debug'));
+  }
+  assert.equal(build({ args: ['worker'], env: { RHYTHM_AI_BACKEND: 'cpu' } }).copies.length, 1);
+  assert.throws(() => build({ args: ['worker', '--no-bundle'] }), /only accept --debug/);
+});
+
+test('artifact verification failure cannot reach Tauri', () => {
+  const commands = [];
+  assert.throws(() => build({ ensureWorker: () => { throw new Error('incompatible build'); },
+    spawn: (command) => { commands.push(command); return { status: 0, stdout: 'host: x86_64-pc-windows-msvc\n' }; },
+  }), /incompatible build/);
+  assert.deepEqual(commands, ['rustc', 'powershell.exe']);
 });

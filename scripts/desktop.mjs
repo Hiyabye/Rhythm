@@ -3,11 +3,13 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, copyFileSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { ensureWorkerArtifact } from './worker-artifacts.mjs';
 
-function run(command, args, env = process.env) {
-  const result = spawnSync(command, args, { stdio: 'inherit', env });
+function run(command, args, capture = false, env = process.env) {
+  const result = spawnSync(command, args, { ...(capture ? { encoding: 'utf8' } : { stdio: 'inherit' }), env });
   if (result.error) throw result.error;
-  if (result.status !== 0) process.exit(result.status ?? 1);
+  if (result.status !== 0) throw new Error(`${command} failed (${result.status ?? 'signal'}).`);
+  return result;
 }
 
 if (process.platform === 'win32') {
@@ -21,7 +23,10 @@ if (process.platform !== 'darwin') {
 
 const mode = process.argv[2] ?? 'dev';
 const args = process.argv.slice(3);
-const release = mode === 'build' && !args.includes('--debug');
+if (!['dev', 'build', 'worker'].includes(mode)) throw new Error('Expected dev, build or worker.');
+if (mode === 'worker' && args.some((arg) => arg !== '--debug')) throw new Error('Worker builds only accept --debug.');
+if (args.some((arg) => arg === '--target' || arg.startsWith('--target='))) throw new Error('Cross compilation is not supported. Use the macOS host target.');
+const release = mode !== 'dev' && !args.includes('--debug');
 const requestedBackend = process.env.RHYTHM_AI_BACKEND;
 if (requestedBackend && !['cpu', 'metal'].includes(requestedBackend)) {
   throw new Error('RHYTHM_AI_BACKEND must be cpu or metal on macOS.');
@@ -64,30 +69,32 @@ function releaseEnv() {
 const env = release ? releaseEnv() : process.env;
 // A default release build produces the distributable DMG. Custom bundle
 // selections and --no-bundle builds are left alone.
-const distribute = release && !args.some((arg) => arg === '--no-bundle' || arg.startsWith('--bundles') || arg === '-b');
+const distribute = mode === 'build' && release && !args.some((arg) => arg === '--no-bundle' || arg.startsWith('--bundles') || arg === '-b');
 
-console.log(`Building Rhythm AI worker with ${backend} backend; no toolchains or weights are installed automatically.`);
-run('cargo', ['build', '--locked', '-p', 'rhythm-ai-worker',
-  ...(release ? ['--release'] : []), ...(backend === 'metal' ? ['--features', 'metal'] : [])], env);
-const binary = join('target', release ? 'release' : 'debug', 'rhythm-ai-worker');
-mkdirSync('src-tauri/binaries', { recursive: true });
-copyFileSync(binary, join('src-tauri/binaries', `rhythm-ai-worker-${target}`));
+const targetDir = resolve(env.CARGO_TARGET_DIR || 'target');
+ensureWorkerArtifact({ cwd: process.cwd(), env, target, profile: release ? 'release' : 'debug',
+  rustIdentity: rust.stdout, engine: 'mistral.rs', backend,
+  cargoArgs: ['build', '--locked', '-p', 'rhythm-ai-worker',
+    ...(release ? ['--release'] : []), ...(backend === 'metal' ? ['--features', 'metal'] : [])],
+  binary: join(targetDir, release ? 'release' : 'debug', 'rhythm-ai-worker'),
+  staged: resolve('src-tauri/binaries', `rhythm-ai-worker-${target}`), run });
+if (mode === 'worker') process.exit(0);
 // Earlier bundles (other versions, validation builds, updater archives) must
 // not sit next to the new artifact.
-if (distribute) rmSync(join('target', 'release', 'bundle'), { recursive: true, force: true });
-run('npm', ['exec', 'tauri', '--', mode, ...args], env);
+if (distribute) rmSync(join(targetDir, 'release', 'bundle'), { recursive: true, force: true });
+run('npm', ['exec', 'tauri', '--', mode, ...args], false, env);
 
 if (distribute) {
   const { version } = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
   const arch = target.split('-')[0];
   const name = `Rhythm_${version}_${arch}.dmg`;
-  const bundle = join('target', 'release', 'bundle', 'dmg');
+  const bundle = join(targetDir, 'release', 'bundle', 'dmg');
   const dmgs = readdirSync(bundle).filter((file) => file.endsWith('.dmg'));
   if (dmgs.length !== 1 || dmgs[0] !== name) {
     throw new Error(`Expected exactly ${name} in ${bundle}, found: ${dmgs.join(', ') || 'none'}`);
   }
   // The distribution folder holds exactly the files to publish.
-  const output = join('target', 'release', 'distribution');
+  const output = join(targetDir, 'release', 'distribution');
   rmSync(output, { recursive: true, force: true });
   mkdirSync(output, { recursive: true });
   copyFileSync(join(bundle, name), join(output, name));
