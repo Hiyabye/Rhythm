@@ -16,7 +16,7 @@ mod personalization_tests;
 pub mod proactive;
 #[cfg(test)]
 mod proactive_tests;
-pub(crate) const SCHEMA_VERSION: i64 = 9;
+pub(crate) const SCHEMA_VERSION: i64 = 10;
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
     let migrations = [
@@ -29,6 +29,7 @@ fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
         include_str!("../../migrations/007_notification_activation.sql"),
         include_str!("../../migrations/008_ai_execution_mode.sql"),
         include_str!("../../migrations/009_ai_model_directory.sql"),
+        include_str!("../../migrations/010_update_check.sql"),
     ];
     for migration in migrations.iter().skip(version as usize) {
         let transaction = connection.transaction().map_err(|e| e.to_string())?;
@@ -120,6 +121,43 @@ impl Store {
             .execute(
                 "UPDATE settings SET theme=?1,energy_profile=?2,interests=?3 WHERE id=1",
                 params![s.theme, s.energy_profile, s.interests],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub fn update_check_enabled(&self) -> Result<bool, String> {
+        self.connection
+            .query_row("SELECT update_check FROM settings WHERE id=1", [], |r| {
+                r.get(0)
+            })
+            .map_err(|e| e.to_string())
+    }
+    pub fn set_update_check(&self, enabled: bool) -> Result<(), String> {
+        self.connection
+            .execute("UPDATE settings SET update_check=?1 WHERE id=1", [enabled])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    /// Whether automatic checks are on and the last successful one is at least
+    /// a day old. A timestamp in the future (the clock moved back) is also due,
+    /// so a clock change cannot postpone checks indefinitely.
+    pub fn update_check_due(&self) -> Result<bool, String> {
+        self.connection
+            .query_row(
+                "SELECT update_check=1 AND (update_checked_at IS NULL
+                   OR update_checked_at<=strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 day')
+                   OR update_checked_at>strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                 FROM settings WHERE id=1",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())
+    }
+    pub fn record_update_check(&self) -> Result<(), String> {
+        self.connection
+            .execute(
+                "UPDATE settings SET update_checked_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=1",
+                [],
             )
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -254,6 +292,82 @@ mod tests {
         s.theme = "invalid".into();
         assert!(db.save(&s).is_err());
         assert_eq!(db.settings().unwrap().theme, "system");
+    }
+    #[test]
+    fn update_checks_default_on_and_persist_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        {
+            let db = Store::open(&path).unwrap();
+            assert!(db.update_check_enabled().unwrap());
+            assert!(db.update_check_due().unwrap());
+            db.set_update_check(false).unwrap();
+            assert!(!db.update_check_due().unwrap());
+        }
+        let db = Store::open(&path).unwrap();
+        assert!(!db.update_check_enabled().unwrap());
+        db.set_update_check(true).unwrap();
+        assert!(Store::open(&path).unwrap().update_check_enabled().unwrap());
+    }
+    #[test]
+    fn schema_nine_upgrade_keeps_settings_and_enables_update_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        {
+            let connection = Connection::open(&path).unwrap();
+            for migration in [
+                include_str!("../../migrations/001_foundation.sql"),
+                include_str!("../../migrations/002_archive.sql"),
+                include_str!("../../migrations/003_intelligence.sql"),
+                include_str!("../../migrations/004_personalization.sql"),
+                include_str!("../../migrations/005_proactive.sql"),
+                include_str!("../../migrations/006_notification_attempts.sql"),
+                include_str!("../../migrations/007_notification_activation.sql"),
+                include_str!("../../migrations/008_ai_execution_mode.sql"),
+                include_str!("../../migrations/009_ai_model_directory.sql"),
+            ] {
+                connection.execute_batch(migration).unwrap();
+            }
+            connection
+                .execute_batch(
+                    "UPDATE settings SET theme='dark',energy_profile='eco',interests='장학금'",
+                )
+                .unwrap();
+        }
+        let db = Store::open(&path).unwrap();
+        assert_eq!(db.info().unwrap().schema_version, SCHEMA_VERSION);
+        let settings = db.settings().unwrap();
+        assert_eq!(
+            (
+                settings.theme.as_str(),
+                settings.energy_profile.as_str(),
+                settings.interests.as_str()
+            ),
+            ("dark", "eco", "장학금")
+        );
+        assert!(db.update_check_enabled().unwrap());
+        assert!(db.update_check_due().unwrap());
+    }
+    #[test]
+    fn update_check_is_due_daily_and_after_a_clock_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Store::open(&dir.path().join("db")).unwrap();
+        db.record_update_check().unwrap();
+        assert!(!db.update_check_due().unwrap());
+        let set = |at: &str| {
+            db.connection
+                .execute(
+                    &format!("UPDATE settings SET update_checked_at=strftime('%Y-%m-%dT%H:%M:%fZ','now','{at}')"),
+                    [],
+                )
+                .unwrap();
+        };
+        set("-23 hours");
+        assert!(!db.update_check_due().unwrap());
+        set("-25 hours");
+        assert!(db.update_check_due().unwrap());
+        set("+2 hours");
+        assert!(db.update_check_due().unwrap());
     }
     #[test]
     fn future_schema_is_rejected() {

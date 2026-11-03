@@ -636,6 +636,10 @@ fn main() {
             dispatch_notification_arguments(app.handle(), &std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>());
             #[cfg(windows)]
             notification_launches_ready(app.handle());
+            tauri::async_runtime::spawn(updater::run_auto_check(
+                app.handle().clone(),
+                maintenance_shutdown.clone(),
+            ));
             tauri::async_runtime::spawn(intelligence::maintenance::run(
                 app.handle().clone(),
                 maintenance_shutdown,
@@ -659,6 +663,8 @@ fn main() {
             updater::updater_check,
             updater::updater_install,
             updater::updater_restart,
+            updater::updater_auto_check,
+            updater::updater_set_auto_check,
             personalization::personalization_get,
             personalization::personalization_save_profile,
             personalization::personalization_save_interest,

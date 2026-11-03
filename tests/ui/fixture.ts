@@ -71,6 +71,10 @@ export interface FixtureOptions {
   updaterInstallError?: boolean;
   updaterRestartError?: boolean;
   updateAvailable?: boolean;
+  // Automatic update checks: the stored preference (default on) and whether a
+  // check already found 1.1.1 before the window subscribed.
+  autoUpdateCheck?: boolean;
+  autoUpdateFound?: boolean;
 }
 
 // Only the IPC boundary is faked: tests exercise the production Svelte build,
@@ -161,6 +165,8 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     let callbackId = 0;
     let eventId = 0;
     let updaterHandler: number | null = null;
+    let availableHandler: number | null = null;
+    let autoUpdateCheck = options.autoUpdateCheck ?? true;
     let notificationHandler: number | null = null;
     const fixture = { ai, analyses, options, entries, calls: [] as { command: string; args: any }[], sourceDelay: options.sourceDelay ?? 0,
       setNotificationAuthorization: (status: string) => { notificationAuthorization = status; },
@@ -171,6 +177,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       queryResolvers: [] as Array<() => void>,
       emitUpdater: (payload: unknown) => {
         if (updaterHandler !== null) callbacks.get(updaterHandler)?.({ event: 'updater://progress', id: ++eventId, payload: copy(payload) });
+      },
+      emitAvailable: (payload: unknown) => {
+        if (availableHandler !== null) callbacks.get(availableHandler)?.({ event: 'updater://available', id: ++eventId, payload: copy(payload) });
       },
       releaseQueries() { this.queryResolvers.splice(0).forEach((release) => release()); },
       emitNotification: (payload: { event_id: number; document_id: number; revision_id: number; attempt_count?: number }, keepPending = false) => {
@@ -192,6 +201,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     Object.assign(window, { isTauri: true, __fixture: fixture, __TAURI_EVENT_PLUGIN_INTERNALS__: {
       unregisterListener: (event: string, _id: number) => {
         if (event === 'updater://progress') updaterHandler = null;
+        if (event === 'updater://available') availableHandler = null;
         if (event === 'proactive://notification-clicked') notificationHandler = null;
       },
     }, __TAURI_INTERNALS__: {
@@ -205,11 +215,13 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         switch (command) {
           case 'plugin:event|listen':
             if (args.event === 'updater://progress') updaterHandler = args.handler;
+            if (args.event === 'updater://available') availableHandler = args.handler;
             if (args.event === 'proactive://notification-clicked') notificationHandler = args.handler;
             eventId += 1;
             return eventId;
           case 'plugin:event|unlisten':
             if (args.event === 'updater://progress') updaterHandler = null;
+            if (args.event === 'updater://available') availableHandler = null;
             if (args.event === 'proactive://notification-clicked') notificationHandler = null;
             return null;
           case 'plugin:dialog|message': {
@@ -247,6 +259,12 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'updater_check':
             if (options.updaterCheckError) throw options.updaterCheckError;
             return options.updateAvailable === false ? null : { version: '1.1.1', currentVersion: '1.1.0', date: null, body: '안정 버전 업데이트' };
+          case 'updater_auto_check':
+            return { enabled: autoUpdateCheck, available: options.updaterConfigured && options.autoUpdateFound
+              ? { version: '1.1.1', currentVersion: '1.1.0', date: null, body: '안정 버전 업데이트' } : null };
+          case 'updater_set_auto_check':
+            autoUpdateCheck = Boolean(args.enabled);
+            return autoUpdateCheck;
           case 'updater_install':
             if (options.updaterInstallError) throw '서명된 업데이트를 설치하지 못했습니다.';
             return { version: '1.1.1', currentVersion: '1.1.0', date: null, body: '안정 버전 업데이트' };

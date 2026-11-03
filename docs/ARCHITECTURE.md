@@ -62,6 +62,7 @@ Rust owns persistence; browser previews never substitute localStorage or simulat
 | `007_notification_activation` | Hashed, expiring Windows activation tokens |
 | `008_ai_execution_mode` | `ai_preferences.execution_mode` (`auto`/`cpu`/`gpu`, used only on Windows) |
 | `009_ai_model_directory` | `ai_preferences.model_directory`, `ai_models.storage_directory` |
+| `010_update_check` | `settings.update_check` (default on), `settings.update_checked_at` (last successful automatic check, UTC) |
 
 ### Archive tables
 
@@ -269,6 +270,8 @@ On Windows, restore additionally requires a local fixed NTFS volume, rejects rep
 Backup, restore and updater share an app-wide `AdmissionGate`: maintenance closes admission, cancels and joins scheduler, archive and AI work, then reopens.
 
 The updater verifies Tauri-signed artifacts against a build-time public key and requires the signed version to match the manifest (`requireSignedVersion`). The plugin registers only when `RHYTHM_UPDATER_PUBKEY` is set at build time; otherwise Settings shows manual update steps (`updater_configured`). Errors are mapped to Korean (`update_error`). The single endpoint is the `latest.json` of the latest published GitHub release; its `darwin-aarch64[-app]` entries point at the signed `Rhythm.app.tar.gz` and its `windows-x86_64[-nsis]` entries at the signed NSIS setup executable. The updater signature is not OS code signing: Gatekeeper and SmartScreen still treat the builds as unsigned on first install. `updater_restart` holds maintenance admission and stops and reaps a loaded `llama-server` before `install`, because the server runs from the install folder and the Windows plugin exits with `process::exit` (no `RunEvent::Exit`). Windows runs the NSIS installer in passive mode (`/P /UPDATE /R`). Install-location failures (read-only volume, translocated app, denied or cancelled authorization, an old bundle that could not be put back) map to Korean guidance.
+
+Automatic checks (`run_auto_check`, keyed builds only, on by default) wake one minute after launch and then hourly, and check when the setting is on and the last successful check is a day old. They use a 30-second timeout, fail silently, keep the found update in `updater::State` and emit `updater://available`; the main window shows a dismissible banner that opens Settings → 정보. They never download or install.
 
 ## Packaging and CI
 

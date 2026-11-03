@@ -90,7 +90,7 @@ fn model_directory_migrates_schema_eight_without_relocating_models() {
         .unwrap();
     drop(connection);
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.info().unwrap().schema_version, 9);
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
     let preferences = store.ai_preferences().unwrap();
     assert_eq!(preferences.model_directory, None);
     assert_eq!(preferences.execution_mode, "gpu");
