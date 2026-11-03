@@ -168,67 +168,6 @@ impl WorkerJob {
         unsafe { AssignProcessToJobObject(HANDLE(self.0.as_raw_handle()), HANDLE(process)) }
             .map_err(|error| format!("AI 작업 보호를 적용하지 못했습니다: {error}"))
     }
-
-    #[cfg(test)]
-    fn set_test_process_memory_limit(&self, bytes: usize) -> Result<(), String> {
-        use std::os::windows::io::AsRawHandle;
-        use windows::Win32::{
-            Foundation::HANDLE,
-            System::JobObjects::{
-                JobObjectExtendedLimitInformation, SetInformationJobObject,
-                JOBOBJECT_BASIC_LIMIT_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
-            },
-        };
-        let limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
-            BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
-                LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY,
-                ..Default::default()
-            },
-            ProcessMemoryLimit: bytes,
-            ..Default::default()
-        };
-        // SAFETY: the job and correctly sized information structure outlive the call.
-        unsafe {
-            SetInformationJobObject(
-                HANDLE(self.0.as_raw_handle()),
-                JobObjectExtendedLimitInformation,
-                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
-                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            )
-        }
-        .map_err(|error| format!("시험 워커 메모리 제한 설정 실패: {error}"))
-    }
-
-    #[cfg(test)]
-    fn test_process_memory_limit(&self) -> Result<usize, String> {
-        use std::os::windows::io::AsRawHandle;
-        use windows::Win32::{
-            Foundation::HANDLE,
-            System::JobObjects::{
-                JobObjectExtendedLimitInformation, QueryInformationJobObject,
-                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-                JOB_OBJECT_LIMIT_PROCESS_MEMORY,
-            },
-        };
-        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        // SAFETY: the owned handle and correctly sized output buffer remain valid for the call.
-        unsafe {
-            QueryInformationJobObject(
-                Some(HANDLE(self.0.as_raw_handle())),
-                JobObjectExtendedLimitInformation,
-                (&mut limits as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
-                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                None,
-            )
-        }
-        .map_err(|error| format!("시험 워커 메모리 제한 확인 실패: {error}"))?;
-        let expected = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
-        if limits.BasicLimitInformation.LimitFlags.0 & expected.0 != expected.0 {
-            return Err("시험 워커 메모리 제한 또는 종료 보호가 설정되지 않았습니다.".into());
-        }
-        Ok(limits.ProcessMemoryLimit)
-    }
 }
 
 /// Fixed system message. Source text arrives as JSON-quoted data in the user
