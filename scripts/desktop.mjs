@@ -23,15 +23,19 @@ const mode = process.argv[2] ?? 'dev';
 const args = process.argv.slice(3);
 const release = mode === 'build' && !args.includes('--debug');
 const requestedBackend = process.env.RHYTHM_AI_BACKEND;
-const availableMetal = !requestedBackend && process.arch === 'arm64'
-  && spawnSync('xcrun', ['metal', '--version'], { stdio: 'ignore' }).status === 0;
-const backend = requestedBackend ?? (availableMetal ? 'metal' : 'cpu');
-if (!['cpu', 'metal'].includes(backend)) {
+if (requestedBackend && !['cpu', 'metal'].includes(requestedBackend)) {
   throw new Error('RHYTHM_AI_BACKEND must be cpu or metal on macOS.');
 }
-if (backend === 'metal' && process.arch !== 'arm64') {
+if (requestedBackend === 'metal' && process.arch !== 'arm64') {
   throw new Error('The Metal backend requires Apple Silicon; use cpu on Intel Macs.');
 }
+const availableMetal = requestedBackend !== 'cpu' && process.arch === 'arm64'
+  && spawnSync('xcrun', ['metal', '--version'], { stdio: 'ignore' }).status === 0;
+// An explicit metal request (release CI) must never become a CPU-only worker.
+if (requestedBackend === 'metal' && !availableMetal) {
+  throw new Error('RHYTHM_AI_BACKEND=metal requires the Metal Toolchain (`xcrun metal --version` failed). Install it with `xcodebuild -downloadComponent metaltoolchain`.');
+}
+const backend = requestedBackend ?? (availableMetal ? 'metal' : 'cpu');
 const rust = spawnSync('rustc', ['-vV'], { encoding: 'utf8' });
 if (rust.status !== 0) {
   throw new Error('Rust toolchain not found. Install Rust and put cargo/rustc on PATH.');

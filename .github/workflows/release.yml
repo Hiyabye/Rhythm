@@ -102,7 +102,19 @@ jobs:
         with:
           save-if: false
       - run: npm ci
-      - run: npm run desktop:build
+      # Without the Metal Toolchain the default build silently selects CPU.
+      # Newer Xcode ships it as a separate component.
+      - name: Ensure the Metal Toolchain
+        run: |
+          set -euo pipefail
+          if ! xcrun metal --version >/dev/null 2>&1; then
+            xcodebuild -downloadComponent metaltoolchain
+          fi
+          xcrun metal --version
+      - name: Build Metal DMG
+        env:
+          RHYTHM_AI_BACKEND: metal
+        run: npm run desktop:build
       # Only the distribution folder is published, never the Tauri bundle folder.
       - uses: actions/upload-artifact@v4
         with:
