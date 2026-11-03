@@ -83,7 +83,8 @@ jobs:
     runs-on: macos-14
     env:
       CARGO_TERM_COLOR: always
-      CARGO_BUILD_JOBS: 2
+      # macos-14 has 3 vCPUs and 7 GB; a cold build with 3 jobs never swapped.
+      CARGO_BUILD_JOBS: 3
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
     defaults:
@@ -131,7 +132,7 @@ jobs:
       CARGO_BUILD_JOBS: 4
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
-      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
       LLAMA_BUILD_SHARED_LIBS: 0
       CMAKE_GENERATOR: Ninja
       RHYTHM_GPU_TARGET_DIR: ${{ github.workspace }}\target-gpu
