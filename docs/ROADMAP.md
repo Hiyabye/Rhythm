@@ -15,6 +15,7 @@ Unreleased on `main`: local AI runs in upstream `llama-server` (llama.cpp b12068
 - Model catalog: Qwen3.5 0.8B added as experimental; 9B removed (existing installs keep working).
 - Native-macOS redesign of the app shell and Today.
 - CI split by concern and gated by changed paths; a tag-triggered workflow (`release.yml`) that builds both platforms and creates a draft release. v1.1.0 is its first run.
+- Release pipeline for in-app updates on unsigned builds: signed updater packages for both platforms and a verified `latest.json` in every release (needs the production updater key). Installed v1.1.0 apps embed no key and need one manual update.
 
 ## Verification status
 
@@ -31,7 +32,7 @@ Native observations are from one Mac (macOS 27.2, M1 Pro, 16 GiB) unless noted, 
 | Login start | Temporary-HOME simulation: plist created and removed; `--autostart` with hidden start opened zero windows | A real user login in an installed app |
 | Notifications | Isolated signed synthetic bundle: authorization prompt granted; a notification seen and clicked, matched by Accessibility and SQLite, not repeated after restart; quiet hours deferred three events, then a grouped alert delivered two while the rate limit held the third | Notifications from live sources; the production identity |
 | Backup and restore | Populated native restore (25 of 26 tables identical; the intended model change) with quit and next-launch finalize; 10,000-notice synthetic release benchmark (backup 0.74 s lock + 15.8 s archive, restore stage 64.5 s, peak RSS ≈34 MB); real `ENOSPC` handled with no partial file; cancellation leaves nothing behind | Native backup/restore panels in v1.0.0; a real user profile larger than the synthetic one |
-| Updater | Validation identity with a disposable key and loopback manifest: tampered archive rejected, genuine update installed and relaunched on the same profile | Any production key or release (none exists by policy) |
+| Updater | Validation identity with a disposable key and loopback manifest (macOS, before llama-server): tampered archive rejected, genuine update installed and relaunched on the same profile. Local macOS `desktop:build` with a disposable key produced a `Rhythm.app.tar.gz` and `.sig` that pass `verify-update.mjs artifact` and `bundle` | In-place update with the current pipeline on macOS or Windows; the Windows NSIS update path; `release.yml` with the production key; any published `latest.json` |
 | Accessibility | Accessibility API review of v0.9.2 and v1.0.0: landmarks, headings, names, states, tab order, focus return, contrast pairs | Spoken VoiceOver output, OS text size, increased contrast and reduced motion; the redesigned shell and Today natively (only Playwright captures) |
 
 Known performance note: restore staging flushes each file with `F_FULLFSYNC` (≈6 ms per file, ≈66 s for 11,081 files). Changing this is a durability decision.
@@ -41,7 +42,7 @@ Known performance note: restore staging flushes each file with `F_FULLFSYNC` (�
 Each is a GitHub issue:
 
 - **Cloud summaries for public notices** (#39 and follow-ups): precompute notice summaries on a backend and keep the local model for personal data. Not decided; the current rules forbid cloud inference.
-- **In-app updates on unsigned builds** (#30 and follow-ups): Tauri updater signatures without OS code signing.
+- **Automatic update checks** (#38): default, schedule and download behavior are undecided.
 - **Build and CI speed** (#9–#14, #17, #20, #23).
 
 ## Possible extensions

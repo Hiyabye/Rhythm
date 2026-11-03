@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, copyFileSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { updaterSigningArgs } from './updater-signing.mjs';
 
 function run(command, args, env = process.env) {
   const result = spawnSync(command, args, { stdio: 'inherit', env });
@@ -51,13 +52,17 @@ const env = release ? releaseEnv() : process.env;
 // A default release build produces the distributable DMG. Custom bundle
 // selections and --no-bundle builds are left alone.
 const distribute = release && !args.some((arg) => arg === '--no-bundle' || arg.startsWith('--bundles') || arg === '-b');
+// Checked before staging so a half-configured key fails fast.
+// Tauri makes the updater archive only from an `app` target, which the
+// committed DMG-only config otherwise builds and discards.
+const signing = distribute ? updaterSigningArgs(process.env, { targets: ['app', 'dmg'] }) : null;
 
 // The pinned, checksum-verified llama.cpp build is bundled as resources.
 run(process.execPath, [join('scripts', 'stage-llama.mjs')]);
 // Earlier bundles (other versions, validation builds, updater archives) must
 // not sit next to the new artifact.
 if (distribute) rmSync(join('target', 'release', 'bundle'), { recursive: true, force: true });
-run('npm', ['exec', 'tauri', '--', mode, ...args], env);
+run('npm', ['exec', 'tauri', '--', mode, ...args, ...(signing ?? [])], env);
 
 if (distribute) {
   const { version } = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
@@ -75,5 +80,8 @@ if (distribute) {
   copyFileSync(join(bundle, name), join(output, name));
   const digest = createHash('sha256').update(readFileSync(join(output, name))).digest('hex');
   writeFileSync(join(output, `${name}.sha256`), `${digest}  ${name}\n`);
-  console.log(`Distribution files in ${output}:\n  ${name}\n  ${name}.sha256 (${digest})`);
+  // The updater archive keeps Tauri's name: its signature binds the file name.
+  const updater = signing ? ['Rhythm.app.tar.gz', 'Rhythm.app.tar.gz.sig'] : [];
+  for (const file of updater) copyFileSync(join('target', 'release', 'bundle', 'macos', file), join(output, file));
+  console.log(`Distribution files in ${output}:\n  ${name}\n  ${name}.sha256 (${digest})${updater.map((file) => `\n  ${file}`).join('')}`);
 }

@@ -4,7 +4,7 @@ Rhythm supports Windows 11 x64 alongside macOS Apple Silicon. The port came from
 
 ## What ships
 
-- A per-user NSIS installer (`installMode: currentUser`, custom `scripts/installer-template.nsi` and `installer-hooks.nsh`), unsigned. SmartScreen warnings are expected. Updates are manual reinstallation; uninstall always keeps user data and models.
+- A per-user NSIS installer (`installMode: currentUser`, custom `scripts/installer-template.nsi` and `installer-hooks.nsh`), unsigned. SmartScreen warnings are expected. Release builds also sign the installer for the Tauri updater (`.sig`); the in-app update path through the custom template is not yet configured or validated, so updates are manual reinstallation today. Uninstall always keeps user data and models.
 - Two pinned upstream llama.cpp builds as resources: `llama\vulkan\` (NVIDIA GPUs over Vulkan) and `llama\cpu\`, each with `llama-server.exe`, its DLLs and a copy of the VC runtime DLLs it imports. Installers always contain both.
 - App-local Microsoft VC runtime DLLs (`msvcp140.dll`, `vcruntime140.dll`, `vcruntime140_1.dll`), copied from the official Visual Studio redistributable with signature and hash checks by `scripts/stage-vc-runtime.ps1`. The app's import scan found an `MSVCP140.dll` dependency, so static CRT linking alone is not relied on. `vulkan-1.dll` and the Vulkan driver come from the user's graphics driver and are never bundled.
 - Windows-only config overrides in `src-tauri/tauri.windows.conf.json` (merge-patched over `tauri.conf.json`; arrays replace).
@@ -40,7 +40,7 @@ npm run desktop:build
 - `npm run desktop` and `npm run desktop:build` delegate to `scripts/desktop-windows.mjs`. It stages the VC runtime first (so missing tools fail early), then the pinned llama.cpp Vulkan and CPU builds (`scripts/stage-llama.mjs`, which copies those VC runtime DLLs beside each build), then runs Tauri.
 - VC runtime staging runs under `RHYTHM_POWERSHELL` (default `powershell.exe`). The script never changes execution policy and never retries under another host.
 - llama.cpp archives are extracted with Windows' own `System32\tar.exe`, because Git's GNU `tar` earlier on PATH cannot read zip files.
-- A release build writes only `Rhythm_<version>_x64-setup.exe` and its `.sha256` to `target/release/distribution/`.
+- A release build writes only `Rhythm_<version>_x64-setup.exe` and its `.sha256` to `target/release/distribution/`, plus `<exe>.sig` when `TAURI_SIGNING_PRIVATE_KEY` and `RHYTHM_UPDATER_PUBKEY` are both set.
 - `target-cpu=native` is rejected because installers must run on other PCs.
 
 ## GPU (Vulkan)

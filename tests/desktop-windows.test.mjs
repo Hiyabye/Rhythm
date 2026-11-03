@@ -119,3 +119,34 @@ test('the installer template builds without the Rhythm hooks file', () => {
     if (hooks.includes(name)) assert.equal(template[index - 1], `!ifmacrodef ${name}`, `unguarded ${name}`);
   });
 });
+
+test('a signing key adds the installer updater signature and embeds the key', () => {
+  const env = { TAURI_SIGNING_PRIVATE_KEY: 'disposable-private', RHYTHM_UPDATER_PUBKEY: 'disposable-public' };
+  const { calls, copies, environments } = build({ env });
+  const config = calls[3].indexOf('--config');
+  assert.deepEqual(JSON.parse(calls[3][config + 1]), { bundle: { createUpdaterArtifacts: true }, plugins: { updater: { pubkey: 'disposable-public' } } });
+  assert.equal(environments[3].RHYTHM_UPDATER_PUBKEY, 'disposable-public');
+  const target = resolve('D:\\test folder 한글', 'target');
+  assert.deepEqual(copies.map(([, to]) => to), [
+    join(target, 'release', 'distribution', 'Rhythm_9.8.7_x64-setup.exe'),
+    join(target, 'release', 'distribution', 'Rhythm_9.8.7_x64-setup.exe.sig'),
+  ]);
+  assert.equal(copies[1][0], join(target, 'release', 'bundle', 'nsis', 'Rhythm_9.8.7_x64-setup.exe.sig'));
+});
+
+test('without a signing key the build requests no updater artifacts', () => {
+  const { calls, copies } = build();
+  assert.ok(!calls[3].includes('--config'));
+  assert.equal(copies.length, 1);
+});
+
+test('a half-configured updater key fails before staging', () => {
+  for (const env of [{ TAURI_SIGNING_PRIVATE_KEY: 'disposable-private' }, { RHYTHM_UPDATER_PUBKEY: 'disposable-public' }]) {
+    const commands = [];
+    assert.throws(() => build({ env, spawn: (command) => {
+      commands.push(command);
+      return { status: 0, stdout: 'host: x86_64-pc-windows-msvc\n' };
+    } }), /needs both/);
+    assert.deepEqual(commands, ['rustc']);
+  }
+});

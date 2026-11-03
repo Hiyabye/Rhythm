@@ -1,8 +1,12 @@
-name: Release (tag, unsigned draft)
+name: Release (tag, draft)
 
-# A pushed version tag builds the existing distribution files on both
-# platforms and attaches them to a draft release. The maintainer reviews and
-# publishes the draft; nothing here publishes, signs or creates updater files.
+# A pushed version tag builds the distribution files and signed updater
+# packages on both platforms, generates and verifies `latest.json`, and
+# attaches everything to a draft release. Builds stay without OS code signing;
+# the updater signature (minisign) only proves the package came from us.
+# The maintainer reviews and publishes the draft, which is when installed apps
+# see the update. Signing secrets live in the `release` environment, which
+# requires reviewer approval; the public key is a repository variable.
 on:
   push:
     tags: ['v*.*.*']
@@ -80,6 +84,7 @@ jobs:
     name: macOS Apple Silicon DMG
     needs: validate
     runs-on: macos-14
+    environment: release
     env:
       CARGO_TERM_COLOR: always
       # macos-14 has 3 vCPUs and 7 GB; a cold build with 3 jobs never swapped.
@@ -103,8 +108,25 @@ jobs:
           save-if: false
       - run: npm ci
       # Stages the pinned llama.cpp build (Metal) and bundles it with the app.
-      - name: Build DMG
-        run: npm run desktop:build
+      # Secrets reach only this step, never npm ci or other steps.
+      - name: Build DMG and signed updater archive
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RHYTHM_UPDATER_PUBKEY: ${{ vars.RHYTHM_UPDATER_PUBKEY }}
+        run: |
+          # A release without updater files would strand installed apps.
+          test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo 'TAURI_SIGNING_PRIVATE_KEY is not configured.'; exit 1; }
+          test -n "$RHYTHM_UPDATER_PUBKEY" || { echo 'RHYTHM_UPDATER_PUBKEY is not configured.'; exit 1; }
+          npm run desktop:build
+      - name: Verify updater signature and bundle contents
+        env:
+          RHYTHM_UPDATER_PUBKEY: ${{ vars.RHYTHM_UPDATER_PUBKEY }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-update.mjs artifact --artifact target/release/distribution/Rhythm.app.tar.gz --version "$RELEASE_VERSION"
+          node scripts/verify-update.mjs bundle --archive target/release/distribution/Rhythm.app.tar.gz --version "$RELEASE_VERSION"
       # Only the distribution folder is published, never the Tauri bundle folder.
       - uses: actions/upload-artifact@v4
         with:
@@ -117,6 +139,7 @@ jobs:
     name: Windows 11 x64 installer
     needs: validate
     runs-on: windows-latest
+    environment: release
     env:
       CARGO_BUILD_JOBS: 4
       CARGO_PROFILE_DEV_DEBUG: 0
@@ -138,11 +161,28 @@ jobs:
           save-if: false
       - uses: ./.github/actions/windows-build-tools
       - run: npm ci
-      - name: Build unsigned NSIS installer
+      # The installer has no Authenticode signature; only its updater
+      # signature is created here.
+      - name: Build NSIS installer and its updater signature
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RHYTHM_UPDATER_PUBKEY: ${{ vars.RHYTHM_UPDATER_PUBKEY }}
         run: |
+          # A release without updater files would strand installed apps.
+          if (-not $env:TAURI_SIGNING_PRIVATE_KEY) { throw 'TAURI_SIGNING_PRIVATE_KEY is not configured.' }
+          if (-not $env:RHYTHM_UPDATER_PUBKEY) { throw 'RHYTHM_UPDATER_PUBKEY is not configured.' }
           # Keep child scripts on the CI host with its matching PowerShell modules.
           $env:RHYTHM_POWERSHELL = Join-Path $PSHOME 'pwsh.exe'
           npm run desktop:build
+      - name: Verify updater signature and embedded key
+        env:
+          RHYTHM_UPDATER_PUBKEY: ${{ vars.RHYTHM_UPDATER_PUBKEY }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          node scripts/verify-update.mjs artifact --artifact "target/release/distribution/Rhythm_$($env:RELEASE_VERSION)_x64-setup.exe" --version $env:RELEASE_VERSION
+          node scripts/verify-update.mjs binary --file target/release/rhythm.exe
       - uses: actions/upload-artifact@v4
         with:
           name: rhythm-windows-x64
@@ -163,6 +203,13 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
+      # Scripts come from the validated tag commit.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
       - uses: actions/download-artifact@v4
         with:
           pattern: rhythm-*
@@ -175,14 +222,24 @@ jobs:
           expected="$(printf '%s\n' \
             "Rhythm_${RELEASE_VERSION}_aarch64.dmg" \
             "Rhythm_${RELEASE_VERSION}_aarch64.dmg.sha256" \
+            "Rhythm.app.tar.gz" \
+            "Rhythm.app.tar.gz.sig" \
             "Rhythm_${RELEASE_VERSION}_x64-setup.exe" \
-            "Rhythm_${RELEASE_VERSION}_x64-setup.exe.sha256" | sort)"
+            "Rhythm_${RELEASE_VERSION}_x64-setup.exe.sha256" \
+            "Rhythm_${RELEASE_VERSION}_x64-setup.exe.sig" | sort)"
           actual="$(ls -A | sort)"
           if [[ "$actual" != "$expected" ]]; then
             printf 'Unexpected release files.\nExpected:\n%s\nActual:\n%s\n' "$expected" "$actual"
             exit 1
           fi
           sha256sum --check --strict -- *.sha256
+      - name: Generate and verify latest.json
+        env:
+          RHYTHM_UPDATER_PUBKEY: ${{ vars.RHYTHM_UPDATER_PUBKEY }}
+        run: |
+          set -euo pipefail
+          node scripts/update-manifest.mjs --assets release-assets --version "$RELEASE_VERSION" --repo "$GH_REPO" --tag "$RELEASE_TAG" --output release-assets/latest.json
+          node scripts/verify-update.mjs manifest --manifest release-assets/latest.json --assets release-assets --version "$RELEASE_VERSION" --repo "$GH_REPO" --tag "$RELEASE_TAG"
       - name: Refuse overwrite and create draft only
         run: |
           set -euo pipefail
@@ -199,4 +256,5 @@ jobs:
           - macOS(Apple Silicon): Ad-hoc 서명이며 Apple Developer ID 서명과 Apple 공증은 없습니다.
           - Windows 11 x64: 설치 파일에 코드 서명이 없어 SmartScreen 경고가 나타날 수 있습니다.
           - 설치 전에 같은 이름의 `.sha256` 파일로 체크섬을 확인하세요. 설치와 업데이트 방법은 README를 참고하세요.
+          - `latest.json`, `Rhythm.app.tar.gz`와 `.sig` 파일은 앱 안 업데이트용입니다. `.sig`는 업데이트 서명이며 운영체제 코드 서명이 아닙니다.
           NOTES

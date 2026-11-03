@@ -10,7 +10,15 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const UPDATER_TARGETS = ['darwin-aarch64', 'darwin-aarch64-app'];
+// The updater tries `{os}-{arch}-{installer}` first, then `{os}-{arch}`.
+// Each target must name the one package format that platform installs.
+const PACKAGES = {
+  'darwin-aarch64': (asset) => asset === 'Rhythm.app.tar.gz',
+  'darwin-aarch64-app': (asset) => asset === 'Rhythm.app.tar.gz',
+  'windows-x86_64': (asset, version) => asset === `Rhythm_${version}_x64-setup.exe`,
+  'windows-x86_64-nsis': (asset, version) => asset === `Rhythm_${version}_x64-setup.exe`,
+};
+export const UPDATER_TARGETS = Object.keys(PACKAGES).sort();
 
 function unwrap(value, what) {
   const text = String(value ?? '').trim();
@@ -82,10 +90,17 @@ export function verifyManifest({ manifest, assetsDir, publicKey, version, repo, 
     const { url, signature } = manifest.platforms[target];
     if (typeof url !== 'string' || !url.startsWith(prefix)) throw new Error(`${target} URL is outside ${prefix}.`);
     const asset = decodeURIComponent(url.slice(prefix.length));
-    if (!asset || asset.includes('/') || !asset.endsWith('.app.tar.gz')) throw new Error(`${target} does not reference a macOS updater archive.`);
+    if (!PACKAGES[target](asset, version)) throw new Error(`${target} does not reference its updater package.`);
     const sigFile = readFileSync(join(assetsDir, `${asset}.sig`), 'utf8').trim();
     if (signature !== sigFile) throw new Error(`${target} signature differs from ${asset}.sig.`);
     verifyArtifact({ bytes: readFileSync(join(assetsDir, asset)), fileName: asset, signature, publicKey, version });
+  }
+}
+
+/** The key is compiled in through option_env!; without it the shipped app cannot verify updates. */
+export function checkEmbeddedKey(binary, publicKey) {
+  if (!readFileSync(binary).includes(Buffer.from(publicKey.trim()))) {
+    throw new Error('The application does not embed the configured updater public key.');
   }
 }
 
@@ -104,10 +119,7 @@ export function inspectBundle({ archive, version, publicKey, appName = 'Rhythm.a
       const archs = execFileSync('lipo', ['-archs', join(app, 'Contents', binary)], { encoding: 'utf8' }).trim();
       if (archs !== 'arm64') throw new Error(`${binary} is built for ${archs}, expected arm64 only.`);
     }
-    // The key is compiled in through option_env!; without it the shipped app cannot verify updates.
-    if (!readFileSync(join(app, 'Contents/MacOS/rhythm')).includes(Buffer.from(publicKey.trim()))) {
-      throw new Error('The application does not embed the configured updater public key.');
-    }
+    checkEmbeddedKey(join(app, 'Contents/MacOS/rhythm'), publicKey);
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
@@ -135,8 +147,12 @@ function main(argv) {
     // Overrides exist only for isolated validation builds; releases use the defaults.
     inspectBundle({ archive: options.archive, version: options.version, publicKey, appName: options['app-name'], identifier: options.identifier });
     console.log(`Inspected ${basename(options.archive)} for ${options.version}`);
+  } else if (command === 'binary') {
+    // Windows: the installer is compressed, so check the app binary it was built from.
+    checkEmbeddedKey(options.file, publicKey);
+    console.log(`${basename(options.file)} embeds the updater public key`);
   } else {
-    throw new Error('Usage: verify-update.mjs bundle --archive <file> --version <v> | artifact --artifact <file> --version <v> | manifest --manifest <file> --assets <dir> --version <v> --repo <owner/name> --tag <tag>');
+    throw new Error('Usage: verify-update.mjs bundle --archive <file> --version <v> | binary --file <exe> | artifact --artifact <file> --version <v> | manifest --manifest <file> --assets <dir> --version <v> --repo <owner/name> --tag <tag>');
   }
 }
 

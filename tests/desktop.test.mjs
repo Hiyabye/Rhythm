@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 
 const script = new URL('../scripts/desktop.mjs', import.meta.url).href;
 // These tests substitute locally authored executables, never Cargo/Tauri/toolchain installs.
-function build({ platform = 'darwin', arch = 'arm64', stageStatus = 0, argv = ['build', '--debug'], setup, inspect } = {}) {
+function build({ platform = 'darwin', arch = 'arm64', stageStatus = 0, argv = ['build', '--debug'], env: extraEnv = {}, setup, inspect } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'rhythm-desktop-test-'));
   try {
     mkdirSync(join(root, 'bin'));
@@ -26,12 +26,19 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 const command = basename(process.argv[1]);
 appendFileSync(process.env.TEST_LOG, JSON.stringify([command, ...process.argv.slice(2)]) + '\\n');
-if (command === 'npm') appendFileSync(process.env.TEST_LOG + '.env', JSON.stringify([command, process.env.CARGO_ENCODED_RUSTFLAGS ?? null]) + '\\n');
+if (command === 'npm') appendFileSync(process.env.TEST_LOG + '.env', JSON.stringify([command, process.env.CARGO_ENCODED_RUSTFLAGS ?? null, process.env.RHYTHM_UPDATER_PUBKEY ?? null]) + '\\n');
 if (command === 'rustc') console.log('host: ' + process.env.TEST_RUST_HOST);
 // Stand-in for a default Tauri release bundle.
 if (command === 'npm' && process.argv.includes('build') && !process.argv.includes('--debug')) {
   mkdirSync('target/release/bundle/dmg', { recursive: true });
   writeFileSync('target/release/bundle/dmg/Rhythm_9.8.7_aarch64.dmg', 'final-dmg');
+  // Like Tauri, the updater archive needs both the flag and an app target.
+  const config = process.argv.includes('--config') ? JSON.parse(process.argv[process.argv.indexOf('--config') + 1]) : {};
+  if (config.bundle?.createUpdaterArtifacts && config.bundle.targets?.includes('app')) {
+    mkdirSync('target/release/bundle/macos', { recursive: true });
+    writeFileSync('target/release/bundle/macos/Rhythm.app.tar.gz', 'updater-archive');
+    writeFileSync('target/release/bundle/macos/Rhythm.app.tar.gz.sig', 'updater-signature');
+  }
 }
 `;
     // .mjs source keeps the stub independent of the temporary directory's package type.
@@ -42,7 +49,7 @@ if (command === 'npm' && process.argv.includes('build') && !process.argv.include
     }
     // The wrapper forwards command name as argv[2].
     writeFileSync(source, mock.replace('process.argv[1]', 'process.argv[2]').replace('slice(2)', 'slice(3)'));
-    const env = { ...process.env, PATH: `${join(root, 'bin')}:${process.env.PATH}`, TEST_LOG: join(root, 'calls'), TEST_RUST_HOST: arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin' };
+    const env = { ...process.env, TAURI_SIGNING_PRIVATE_KEY: '', RHYTHM_UPDATER_PUBKEY: '', ...extraEnv, PATH: `${join(root, 'bin')}:${process.env.PATH}`, TEST_LOG: join(root, 'calls'), TEST_RUST_HOST: arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin' };
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
       Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} });
       Object.defineProperty(process, 'arch', { value: ${JSON.stringify(arch)} });
@@ -122,4 +129,34 @@ test('custom bundle selections do not produce distribution files', options, () =
   const result = build({ argv: ['build', '--no-bundle'], inspect: (root) => ({ distributed: existsSync(join(root, 'target/release/distribution')) }) });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.distributed, false);
+});
+test('a signing key adds exactly the updater archive and its signature', options, () => {
+  const result = build({
+    argv: ['build'],
+    env: { TAURI_SIGNING_PRIVATE_KEY: 'disposable-private', RHYTHM_UPDATER_PUBKEY: 'disposable-public' },
+    inspect: (root) => ({ distribution: readdirSync(join(root, 'target/release/distribution')).sort() }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.distribution, ['Rhythm.app.tar.gz', 'Rhythm.app.tar.gz.sig', 'Rhythm_9.8.7_aarch64.dmg', 'Rhythm_9.8.7_aarch64.dmg.sha256']);
+  const tauri = result.calls.at(-1);
+  assert.deepEqual(tauri.slice(0, 6), ['npm', 'exec', 'tauri', '--', 'build', '--config']);
+  assert.deepEqual(JSON.parse(tauri[6]), { bundle: { targets: ['app', 'dmg'], createUpdaterArtifacts: true }, plugins: { updater: { pubkey: 'disposable-public' } } });
+  // option_env! compiles the same key into the app.
+  assert.equal(result.envs.at(-1)[2], 'disposable-public');
+});
+test('a half-configured updater key fails before staging', options, () => {
+  for (const env of [{ TAURI_SIGNING_PRIVATE_KEY: 'disposable-private' }, { RHYTHM_UPDATER_PUBKEY: 'disposable-public' }]) {
+    const result = build({ argv: ['build'], env });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /needs both TAURI_SIGNING_PRIVATE_KEY and RHYTHM_UPDATER_PUBKEY/);
+    assert.deepEqual(result.calls.map(([command]) => command), ['rustc']);
+  }
+});
+test('non-distribution builds never request updater artifacts', options, () => {
+  const env = { TAURI_SIGNING_PRIVATE_KEY: 'disposable-private', RHYTHM_UPDATER_PUBKEY: 'disposable-public' };
+  for (const argv of [['build', '--debug'], ['build', '--bundles', 'app'], ['build', '--no-bundle']]) {
+    const result = build({ argv, env });
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(!result.calls.at(-1).includes('--config'), argv.join(' '));
+  }
 });
