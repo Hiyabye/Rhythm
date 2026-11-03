@@ -15,9 +15,32 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Each concern runs once, and only when its files changed
+# (scripts/ci-changes.mjs). Skipped jobs report as skipped, not failed.
 jobs:
-  ui:
-    name: Frontend interactions (Chromium + WebKit)
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-24.04
+    outputs:
+      frontend: ${{ steps.classify.outputs.frontend }}
+      rust: ${{ steps.classify.outputs.rust }}
+      packaging: ${{ steps.classify.outputs.packaging }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - id: classify
+        env:
+          CI_BEFORE: ${{ github.event.before }}
+        run: node scripts/ci-changes.mjs
+
+  frontend:
+    name: Frontend and scripts (Chromium + WebKit)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -26,13 +49,32 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run check
+      - run: npm run build
       - run: npm run test:desktop
       - run: npm run test:release
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:ui
 
+  rust-fmt:
+    name: Rust formatting
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  # The desktop/windows job IDs and Cargo/CMake env must stay in step with
+  # release.yml, which restores the rust-cache these jobs save on main.
+  # A packaging-only change also runs clippy and tests; it is rare and main-only.
   desktop:
-    name: macOS desktop (Apple Silicon)
+    name: macOS Rust (Apple Silicon)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.packaging == 'true'
     runs-on: macos-14
     env:
       CARGO_TERM_COLOR: always
@@ -50,16 +92,15 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
       # Only main saves: branch caches are invisible to other branches and
       # pushed the repository past GitHub's 10 GB limit, evicting main's.
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: npm ci
-      - run: npm run check
+      # Tauri embeds the built frontend at compile time.
       - run: npm run build
-      - run: cargo fmt --all -- --check
       - name: Build and stage worker for Tauri checks
         run: |
           cargo build --locked -p rhythm-ai-worker
@@ -67,14 +108,16 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Test storage and worker lifecycle (no model weights)
         run: cargo test --locked --workspace
-      # Release builds take most of the job, so pull requests skip them; main
-      # and manual runs still build the release executable.
+      # Release builds take most of the job; they run on main when packaging
+      # inputs changed and on manual runs, never on pull requests.
       - name: Build native desktop executable
-        if: github.event_name != 'pull_request'
+        if: needs.changes.outputs.packaging == 'true'
         run: npm run desktop:build -- --no-bundle
 
   windows:
-    name: Windows 11 x64 desktop
+    name: Windows Rust (Windows 11 x64)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.packaging == 'true'
     runs-on: windows-latest
     env:
       # windows-latest has 4 vCPUs and 16 GB of memory.
@@ -100,7 +143,7 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -109,10 +152,7 @@ jobs:
             . -> target-gpu
       - uses: ./.github/actions/windows-build-tools
       - run: npm ci
-      - run: npm run check
       - run: npm run build
-      - run: npm run test:desktop
-      - run: cargo fmt --all -- --check
       - name: Build real CPU worker and stage for app tests
         run: |
           cargo build --locked -p rhythm-ai-worker
@@ -132,7 +172,7 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
       - name: Build unsigned NSIS installer (no publish)
-        if: github.event_name != 'pull_request'
+        if: needs.changes.outputs.packaging == 'true'
         run: |
           # Keep child scripts on the CI host with its matching PowerShell modules.
           $env:RHYTHM_POWERSHELL = Join-Path $PSHOME 'pwsh.exe'
