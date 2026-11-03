@@ -179,7 +179,8 @@ test('history can be cleared and opens its stable document destination in the ar
 test('notification activation opens a document by stable identity and missing destinations remain recoverable', async ({ page }) => {
   await mockDesktop(page, { revisions: true });
   await page.goto('/');
-  await expect.poll(() => callCount(page, 'plugin:event|listen')).toBe(1);
+  await expect.poll(() => page.evaluate(() => (window as any).__fixture.calls
+    .filter((call: { command: string; args: { event?: string } }) => call.command === 'plugin:event|listen' && call.args.event === 'proactive://notification-clicked').length)).toBe(1);
   await page.evaluate(() => (window as any).__fixture.emitNotification({ event_id: 12, document_id: 2, revision_id: 2 }));
   await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 02');
   await expect(page.getByLabel('보관 이력')).toHaveValue('2');

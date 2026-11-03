@@ -234,3 +234,60 @@ test('unavailable restore shows the actual reason while backup creation remains 
   await expect(backup.getByRole('button', { name: '백업 파일 저장', exact: true })).toBeEnabled();
   expect(await callCount(page, 'backup_inspect')).toBe(0);
 });
+
+test('an update found before the window opened is announced and opens About without checking again', async ({ page }) => {
+  await mockDesktop(page, { updaterConfigured: true, autoUpdateFound: true });
+  await page.goto('/');
+  const banner = page.getByRole('status').filter({ hasText: 'Rhythm 1.1.1 버전을 설치할 수 있습니다' });
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText('그 전에는 아무것도 바뀌지 않습니다');
+
+  await banner.getByRole('button', { name: '업데이트 보기', exact: true }).click();
+  await expect(page.locator('#about h2').first()).toBeFocused();
+  await expect(page.locator('#about')).toContainText('새 버전 1.1.1');
+  await expect(page.locator('#about').getByRole('button', { name: '다운로드 및 설치', exact: true })).toBeEnabled();
+  // The banner stays out of Settings, where the About section shows the update.
+  await expect(banner).toHaveCount(0);
+  expect(await callCount(page, 'updater_check')).toBe(0);
+  expect(await callCount(page, 'updater_install')).toBe(0);
+});
+
+test('a live update announcement can be dismissed without downloading', async ({ page }) => {
+  await mockDesktop(page, { updaterConfigured: true });
+  await page.goto('/');
+  const banner = page.getByRole('status').filter({ hasText: '버전을 설치할 수 있습니다' });
+  await expect(page.getByRole('heading', { name: '오늘', exact: true })).toBeVisible();
+  await expect(banner).toHaveCount(0);
+  await page.evaluate(() => (window as unknown as { __fixture: { emitAvailable: (payload: unknown) => void } }).__fixture
+    .emitAvailable({ version: '1.1.1', currentVersion: '1.1.0', date: null, body: null }));
+  await expect(banner).toContainText('Rhythm 1.1.1 버전을 설치할 수 있습니다');
+
+  await banner.getByRole('button', { name: '나중에', exact: true }).click();
+  await expect(banner).toHaveCount(0);
+  expect(await callCount(page, 'updater_install')).toBe(0);
+});
+
+test('automatic update checks are on by default and can be turned off', async ({ page }) => {
+  await mockDesktop(page, { updaterConfigured: true });
+  await page.goto('/');
+  const updater = await openUpdater(page);
+  const toggle = updater.getByRole('switch', { name: '자동으로 업데이트 확인', exact: true });
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  await expect(updater).toContainText('내려받기와 설치는 직접 선택할 때만 진행합니다');
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  expect(await commandArgs(page, 'updater_set_auto_check')).toEqual({ enabled: false });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  expect(await callCount(page, 'updater_check')).toBe(0);
+});
+
+test('builds without an update key show no automatic check or announcement', async ({ page }) => {
+  await mockDesktop(page, { autoUpdateFound: true });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '오늘', exact: true })).toBeVisible();
+  await expect(page.getByText('버전을 설치할 수 있습니다')).toHaveCount(0);
+  const updater = await openUpdater(page);
+  await expect(updater.getByRole('switch', { name: '자동으로 업데이트 확인', exact: true })).toHaveCount(0);
+});

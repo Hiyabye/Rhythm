@@ -298,3 +298,7 @@ export interface RestoreOutcome {
   unavailable_resources: number;
   models_needing_reinstall: number;
 }
+
+// updater.rs `UpdateInfo` and `AutoCheck` (camelCase).
+export type UpdateInfo = { version: string; currentVersion: string; date: string | null; body: string | null };
+export type AutoUpdateCheck = { enabled: boolean; available: UpdateInfo | null };

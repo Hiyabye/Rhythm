@@ -4,13 +4,17 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tauri::{AppHandle, Emitter};
+use std::time::Duration;
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 #[derive(Default)]
 pub struct State {
     active: Arc<AtomicBool>,
     staged: std::sync::Mutex<Option<PendingUpdate>>,
+    /// The newest update the last check found, for a window that subscribes
+    /// to `updater://available` after the automatic check emitted it.
+    available: std::sync::Mutex<Option<UpdateInfo>>,
 }
 
 struct PendingUpdate {
@@ -122,8 +126,17 @@ fn require_confirmation(confirmed: bool) -> Result<(), String> {
     }
 }
 
+fn remember(updater: &State, found: Option<&UpdateInfo>) {
+    if let Ok(mut available) = updater.available.lock() {
+        *available = found.cloned();
+    }
+}
+
 #[tauri::command]
-pub async fn updater_check(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+pub async fn updater_check(
+    app: AppHandle,
+    updater: tauri::State<'_, State>,
+) -> Result<Option<UpdateInfo>, String> {
     ensure_signing_key()?;
     let update = app
         .updater()
@@ -131,7 +144,99 @@ pub async fn updater_check(app: AppHandle) -> Result<Option<UpdateInfo>, String>
         .check()
         .await
         .map_err(|e| update_error("업데이트 정보를 확인하지 못했습니다.", &e))?;
-    Ok(update.as_ref().map(info))
+    let found = update.as_ref().map(info);
+    remember(&updater, found.as_ref());
+    Ok(found)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoCheck {
+    enabled: bool,
+    available: Option<UpdateInfo>,
+}
+
+/// The automatic-check preference and any update a check already found.
+#[tauri::command]
+pub fn updater_auto_check(
+    updater: tauri::State<'_, State>,
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<AutoCheck, String> {
+    let enabled = state
+        .store
+        .lock()
+        .map_err(|_| "설정 저장소를 사용할 수 없습니다.".to_string())?
+        .update_check_enabled()?;
+    let available = updater
+        .available
+        .lock()
+        .map_err(|_| "업데이트 상태를 확인하지 못했습니다.".to_string())?
+        .clone();
+    Ok(AutoCheck { enabled, available })
+}
+
+#[tauri::command]
+pub fn updater_set_auto_check(
+    state: tauri::State<'_, crate::AppState>,
+    enabled: bool,
+) -> Result<bool, String> {
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "설정 저장소를 사용할 수 없습니다.".to_string())?;
+    store.set_update_check(enabled)?;
+    store.update_check_enabled()
+}
+
+/// The first wake leaves startup alone; later wakes are hourly, so a failed or
+/// offline check retries within the hour and a successful one waits a day.
+const AUTO_CHECK_FIRST_WAKE: Duration = Duration::from_secs(60);
+const AUTO_CHECK_WAKE: Duration = Duration::from_secs(60 * 60);
+const AUTO_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Checks for updates while the app is open, when the build trusts an update
+/// key and the user has not turned automatic checks off. Failures stay quiet:
+/// the manual check in Settings reports errors. It only announces; downloading
+/// and installing remain explicit.
+pub async fn run_auto_check(app: AppHandle, shutdown: Arc<AtomicBool>) {
+    if !updater_configured() {
+        return;
+    }
+    tokio::time::sleep(AUTO_CHECK_FIRST_WAKE).await;
+    while !shutdown.load(Ordering::Acquire) {
+        auto_check_once(&app).await;
+        tokio::time::sleep(AUTO_CHECK_WAKE).await;
+    }
+}
+
+async fn auto_check_once(app: &AppHandle) {
+    let Some(state) = app.try_state::<crate::AppState>() else {
+        return;
+    };
+    // Never hold the store lock across the network request.
+    let due = state
+        .store
+        .lock()
+        .ok()
+        .and_then(|store| store.update_check_due().ok())
+        .unwrap_or(false);
+    if !due {
+        return;
+    }
+    let Ok(updater) = app.updater_builder().timeout(AUTO_CHECK_TIMEOUT).build() else {
+        return;
+    };
+    let Ok(update) = updater.check().await else {
+        return;
+    };
+    if let Ok(store) = state.store.lock() {
+        let _ = store.record_update_check();
+    }
+    let found = update.as_ref().map(info);
+    remember(&app.state::<State>(), found.as_ref());
+    if let Some(found) = found {
+        let _ = app.emit("updater://available", found);
+    }
 }
 /// Download and cryptographically verify the package while the app-wide
 /// maintenance guard is held. Installation is a separate, confirmed action.

@@ -16,6 +16,7 @@ Unreleased on `main`: local AI runs in upstream `llama-server` (llama.cpp b12068
 - Native-macOS redesign of the app shell and Today.
 - CI split by concern and gated by changed paths; a tag-triggered workflow (`release.yml`) that builds both platforms and creates a draft release. v1.1.0 is its first run.
 - Release pipeline for in-app updates on unsigned builds: signed updater packages for both platforms and a verified `latest.json` in every release (needs the production updater key). Installed v1.1.0 apps embed no key and need one manual update.
+- Automatic update checks, on by default in builds with the key (schema 10): daily while the app is open, announce-only, off switch in Settings → 정보.
 
 ## Verification status
 
@@ -42,7 +43,6 @@ Known performance note: restore staging flushes each file with `F_FULLFSYNC` (�
 Each is a GitHub issue:
 
 - **Cloud summaries for public notices** (#39 and follow-ups): precompute notice summaries on a backend and keep the local model for personal data. Not decided; the current rules forbid cloud inference.
-- **Automatic update checks** (#38): default, schedule and download behavior are undecided.
 - **Build and CI speed** (#9–#14, #17, #20, #23).
 
 ## Possible extensions
