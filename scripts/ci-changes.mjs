@@ -21,11 +21,17 @@ const rules = {
     /^package(-lock)?\.json$/],
 };
 
+// Markdown under src-tauri/, crates/ or scripts/ is documentation; no Rust
+// build or test reads it.
+const markdown = /\.md$/i;
+const ignoresMarkdown = new Set(['rust', 'packaging']);
+
 // `files` is null when the changed set is unknown, which runs everything.
 export function classify(files, { pullRequest = false } = {}) {
   const all = files === null || files.some((file) => workflow.test(file));
   const flags = Object.fromEntries(Object.entries(rules).map(([name, patterns]) =>
-    [name, all || files.some((file) => patterns.some((pattern) => pattern.test(file)))]));
+    [name, all || files.some((file) => !(ignoresMarkdown.has(name) && markdown.test(file))
+      && patterns.some((pattern) => pattern.test(file)))]));
   if (pullRequest) flags.packaging = false;
   return flags;
 }
