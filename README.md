@@ -9,7 +9,7 @@ Rhythm은 학교 공지를 내 Mac에 모아 보관하고, 로컬 AI로 핵심�
 ## 원칙
 
 - **로컬 우선:** 공지, 첨부 자료, 설정, 관심사, 학습한 선호와 AI 분석 결과는 모두 이 Mac에만 저장됩니다. 클라우드 데이터베이스, 원격 AI, 사용자 계정, 텔레메트리가 없습니다.
-- **로컬 AI:** 앱에 포함된 별도 프로세스(`rhythm-ai-worker`)가 이 Mac에서 추론합니다. Ollama, Python, 별도 추론 서버가 필요하지 않습니다.
+- **로컬 AI:** 앱에 포함된 llama.cpp(`llama-server`)를 Rhythm이 직접 실행해 이 기기에서 추론합니다. 이 프로세스에는 Rhythm만 연결할 수 있고, Ollama나 Python 같은 별도 설치가 필요하지 않습니다.
 - **사용자가 결정:** 구독, 수집, 모델 설치, 자동 동기화, 알림은 모두 직접 켭니다. 학습한 선호는 확인·수정·삭제할 수 있습니다.
 - **신뢰성:** 네트워크, AI 모델, 백그라운드 기능을 쓸 수 없어도 이미 보관한 자료는 그대로 열립니다.
 
@@ -51,14 +51,14 @@ Rhythm은 학교 공지를 내 Mac에 모아 보관하고, 로컬 AI로 핵심�
 | 모델 | 상태 | 출처·라이선스 |
 | --- | --- | --- |
 | Qwen3.5 0.8B Q4_K_M (533 MB) | 실험적·미검증, 설치 비활성화 | [unsloth/Qwen3.5-0.8B-GGUF](https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF), Apache-2.0 |
-| Qwen3.5 2B Q4_K_M (1.28 GB) | Apple Silicon에서 Metal과 CPU 모두 실제 한국어 분석 확인 | [unsloth/Qwen3.5-2B-GGUF](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF), Apache-2.0 |
-| Qwen3.5 4B Q4_K_M (2.74 GB) | Apple Silicon Metal에서 분석 확인. CPU는 미검증 | [unsloth/Qwen3.5-4B-GGUF](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF), Apache-2.0 |
+| Qwen3.5 2B Q4_K_M (1.28 GB) | Apple Silicon Metal에서 실제 한국어 분석 확인. CPU는 현재 엔진에서 미검증 | [unsloth/Qwen3.5-2B-GGUF](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF), Apache-2.0 |
+| Qwen3.5 4B Q4_K_M (2.74 GB) | 이전 엔진에서 Apple Silicon Metal 분석 확인. 현재 엔진에서는 미검증 | [unsloth/Qwen3.5-4B-GGUF](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF), Apache-2.0 |
 
 각 파일은 고정된 리비전, 크기, SHA-256으로 검사합니다. 이미 가진 `qwen3`·`qwen35` GGUF 파일을 참조로 등록할 수도 있지만, 등록 검사를 통과해도 추론 성공이 보장되지는 않습니다. 설정에는 실제로 불러온 백엔드(Metal 또는 CPU)가 표시됩니다.
 
 이전 버전에 있던 Qwen3.5 9B는 목록에서 뺐습니다. 이미 설치했다면 **내 모델**에 남아 계속 쓰거나 직접 삭제할 수 있으며, 앱이 파일을 자동으로 지우지 않습니다.
 
-M1 Pro·16 GiB에서 2B로 짧은 공지 하나를 분석하는 데 Metal은 약 13–15초(생성 약 44 토큰/초), CPU는 약 21–24초(약 28–30 토큰/초)가 걸렸습니다. 한 기기·한 입력의 측정값이며 성능을 보장하지 않습니다.
+M1 Pro·16 GiB에서 2B로 시험용 공지 하나를 추론하는 데 Metal로 약 2–10초(생성 약 65 토큰/초)가 걸렸습니다. 분석마다 하는 모델 파일 무결성 검사 시간은 포함하지 않았습니다. 한 기기·18개 시험 입력의 측정값이며 성능을 보장하지 않습니다.
 
 AI 요약과 추출은 구조와 원문 근거를 검사하지만, 의미를 잘못 해석할 수 있습니다. 분류나 마감을 틀린 사례도 있었습니다. **신청 조건과 일정은 반드시 원문에서 확인하세요.** AI가 추출한 날짜는 추천 순위나 알림에 쓰지 않습니다. 긴 공지는 일부 구간만 분석하며, 첨부 파일과 이미지의 내용은 분석하지 않습니다.
 
@@ -126,7 +126,7 @@ AI는 CPU와 NVIDIA GPU(Vulkan, GTX 10·16·RTX 20–50 시리즈 대상)를 지
 
 모두 기본값은 꺼짐입니다.
 
-- **창을 닫을 때 백그라운드에서 실행:** 창을 닫아도 메뉴 막대 아이콘에서 다시 열 수 있습니다. 완전히 끝내려면 ⌘Q 또는 메뉴 막대의 종료를 사용하세요. 종료하면 AI 워커도 함께 끝납니다.
+- **창을 닫을 때 백그라운드에서 실행:** 창을 닫아도 메뉴 막대 아이콘에서 다시 열 수 있습니다. 완전히 끝내려면 ⌘Q 또는 메뉴 막대의 종료를 사용하세요. 종료하면 AI 엔진도 함께 끝납니다.
 - **자동 동기화:** 구독한 지원 게시판의 새 소식과 변경을 정한 간격(15분–12시간, 또는 절전 60·균형 30·성능 15분)으로 확인합니다. 과거 자료 전체 가져오기는 예약하지 않습니다.
 - **알림:** 중요한 공지만 / 관심 분야 관련 공지 / 모든 새 공지와 변경 중에서 고릅니다. 관심 없음 표시나 덜 보고 싶은 주제와 일치하는 공지는 알리지 않습니다. 방해 금지 시간 동안은 미뤘다가 하나의 요약 알림으로 보낼 수 있고, 10분에 최대 세 번까지만 보냅니다. 같은 공지는 앱을 다시 시작해도 다시 알리지 않으며, 처음 가져온 과거 자료로는 알림을 보내지 않습니다. 알림을 누르면 해당 공지가 열립니다.
 - macOS 알림 권한은 **운영체제 알림 권한 요청**을 직접 누를 때만 묻습니다. Windows에는 권한 요청 창이 없으며, Windows 설정에서 알림이 허용된 경우에만 켤 수 있고 **시험 알림으로 연결 확인**으로 연결을 점검할 수 있습니다. 권한이 있어도 집중 모드 등에 따라 알림이 표시되지 않을 수 있습니다.
@@ -173,7 +173,7 @@ Windows에서는 트레이 메뉴에서 Rhythm을 완전히 종료하고, 필요
 - Apple 공증이 없어 처음 실행 시 macOS가 막을 수 있고, Windows 설치 파일은 서명이 없어 SmartScreen 경고가 나타날 수 있습니다. 자동 업데이트도 없습니다.
 - Windows의 실제 로그인 자동 시작, 절전 복귀, 알림 클릭과 다른 PC에서의 설치는 아직 시험하지 않았습니다.
 - 지원 게시판은 10개입니다. 모든 게시판의 전체 과거 이력을 끝까지 가져오는 동작은 시험하지 않았습니다. 오래된 공지의 수정 사항을 매번 전수 재검사하지 않습니다.
-- AI 결과는 틀릴 수 있습니다. 0.8B는 검증하지 않았고, Windows CPU·GPU 추론은 기기 한 대에서 제한적으로만 확인했습니다.
+- AI 결과는 틀릴 수 있습니다. 0.8B는 검증하지 않았고, Windows CPU·GPU 추론은 현재 엔진에서 아직 확인하지 않았습니다.
 - 실제 학교 새 공지로 알림이 표시되는 장면과 실제 로그인 시 자동 시작은 시험하지 않았습니다. 알림 표시와 클릭은 시험용 공지로 확인했습니다.
 - VoiceOver 음성 출력, 시스템 글자 크기, 대비 증가, 동작 줄이기는 충분히 시험하지 않았습니다.
 - 백업 파일은 암호화되지 않습니다.
@@ -190,14 +190,14 @@ npm run desktop:build    # 릴리스 DMG와 체크섬 (target/release/distributi
 
 `target/release/distribution/`에는 배포할 파일 두 개, `Rhythm_<버전>_aarch64.dmg`와 같은 이름의 `.sha256`만 들어갑니다. 빌드할 때마다 이전 결과물을 지우고 새로 만듭니다.
 
-Windows 11 x64에서의 빌드 준비(Visual Studio C++ 도구, GPU 워커용 Vulkan SDK 등)는 [Windows 빌드 안내](docs/WINDOWS.md)를 따르세요. `npm run desktop:build`는 `Rhythm_<버전>_x64-setup.exe`와 `.sha256`을 같은 폴더에 만듭니다.
+Windows 11 x64에서의 빌드 준비(Visual Studio C++ 도구 등)는 [Windows 빌드 안내](docs/WINDOWS.md)를 따르세요. `npm run desktop:build`는 `Rhythm_<버전>_x64-setup.exe`와 `.sha256`을 같은 폴더에 만듭니다.
 
-Apple Silicon에서 Metal 컴파일러(Xcode의 Metal Toolchain)를 쓸 수 있으면 Metal 워커를, 아니면 CPU 워커를 빌드합니다. `RHYTHM_AI_BACKEND=cpu` 또는 `metal`로 직접 고를 수 있습니다. 직접 빌드한 앱도 Ad-hoc 서명이며 공증되지 않습니다.
+빌드할 때 llama.cpp 공식 배포 파일을 GitHub에서 내려받아, 고정해 둔 크기·SHA-256과 일치하는지 검사한 뒤 앱에 넣습니다(인터넷 연결 필요). 직접 빌드한 앱도 Ad-hoc 서명이며 공증되지 않습니다.
 
 [로드맵과 검증 현황](docs/ROADMAP.md) · [아키텍처](docs/ARCHITECTURE.md) · [디자인](docs/DESIGN.md) · [AI 평가](docs/AI_EVALUATION.md) · [Windows 검증](docs/WINDOWS_VALIDATION.md)
 
 ## 라이선스
 
-Rhythm은 [MIT 라이선스](LICENSE), © Jihoon Lee로 배포합니다. 자체 제작한 Beat 로고도 같은 라이선스를 따릅니다. [Pretendard](https://github.com/orioncactus/pretendard)는 SIL Open Font License 1.1이며 [라이선스 사본](assets/licenses/Pretendard-OFL.txt)을 저장소와 앱에 포함합니다. Qwen3.5 모델은 Apache-2.0이며 앱에 포함되지 않습니다. 의존성은 각각의 라이선스를 따릅니다.
+Rhythm은 [MIT 라이선스](LICENSE), © Jihoon Lee로 배포합니다. 자체 제작한 Beat 로고도 같은 라이선스를 따릅니다. [Pretendard](https://github.com/orioncactus/pretendard)는 SIL Open Font License 1.1이며 [라이선스 사본](assets/licenses/Pretendard-OFL.txt)을 저장소와 앱에 포함합니다. 앱에 포함된 [llama.cpp](https://github.com/ggml-org/llama.cpp)는 MIT 라이선스이며 라이선스 사본을 함께 넣습니다. Qwen3.5 모델은 Apache-2.0이며 앱에 포함되지 않습니다. 의존성은 각각의 라이선스를 따릅니다.
 
 학교 공지와 첨부 자료의 권리는 원저작자에게 있으며, Rhythm의 라이선스가 학교 자료의 재배포 권한을 부여하지는 않습니다.

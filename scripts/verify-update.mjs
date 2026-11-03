@@ -100,8 +100,8 @@ export function inspectBundle({ archive, version, publicKey, appName = 'Rhythm.a
     const plist = (key) => execFileSync('plutil', ['-extract', key, 'raw', join(app, 'Contents/Info.plist')], { encoding: 'utf8' }).trim();
     if (plist('CFBundleIdentifier') !== identifier) throw new Error('Updater bundle has the wrong bundle identifier.');
     if (plist('CFBundleShortVersionString') !== version) throw new Error(`Updater bundle is version ${plist('CFBundleShortVersionString')}, expected ${version}.`);
-    for (const binary of ['rhythm', 'rhythm-ai-worker']) {
-      const archs = execFileSync('lipo', ['-archs', join(app, 'Contents/MacOS', binary)], { encoding: 'utf8' }).trim();
+    for (const binary of ['MacOS/rhythm', 'Resources/llama/metal/llama-server']) {
+      const archs = execFileSync('lipo', ['-archs', join(app, 'Contents', binary)], { encoding: 'utf8' }).trim();
       if (archs !== 'arm64') throw new Error(`${binary} is built for ${archs}, expected arm64 only.`);
     }
     // The key is compiled in through option_env!; without it the shipped app cannot verify updates.

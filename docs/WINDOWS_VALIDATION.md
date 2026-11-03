@@ -5,9 +5,10 @@ What has actually been observed on Windows 11 x64. Build setup is in [Windows](W
 ## Sources of evidence
 
 - **Contributor PC (PR #1 and PR #2), 2026-11-02 to 2026-11-03.** One Windows 11 Home x64 PC (build 26300, Intel Core i5-10300H, 16 GB RAM, NVIDIA GTX 1650 4 GiB, driver 552.44). Most installed-app observations used the port's old identifier `app.rhythm.windows` and builds 0.9.2–0.9.4, before the merge into the shared `io.github.hiyabye.rhythm` codebase. They do not verify the current build.
-- **GitHub CI (`windows-latest`).** Every pull request and push to `main` that touches Rust runs Clippy and tests for the workspace and the GPU worker on a hosted Windows Server runner. `main` also builds the NSIS installer when packaging inputs change. CI has no NVIDIA GPU, so GPU tests check protocol and fallback, not inference.
+- **Contributor PC, PR #63 (`llama-server`), 2026-11-03.** The same PC. Model, socket and installed-app runs used commit `bb14e24`; workspace Clippy and tests were re-run on `8354512`, which only restricts one Metal test to macOS.
+- **GitHub CI (`windows-latest`).** Every pull request and push to `main` that touches Rust runs Clippy and tests for the workspace on a hosted Windows Server runner, including GPU fallback tests against a fake `llama-server` and a lifecycle test of the staged real builds without model weights. `main` also builds the NSIS installer when packaging inputs change. CI has no NVIDIA GPU, so these tests check supervision and fallback, not inference.
 
-No installed-app run of the merged build, second PC or VM has been tested.
+No second PC or VM has been tested. The only installed run of the current codebase is the PR #63 build under a separate validation identifier (see [AI on Windows](#ai-on-windows)).
 
 ## Automated checks on the contributor PC (PR #2, shared identifier)
 
@@ -33,15 +34,31 @@ No installed-app run of the merged build, second PC or VM has been tested.
 
 ## AI on Windows
 
-Each row is one case on the contributor PC, often with other builds running, so durations are not benchmarks. Summary correctness was excluded from the GPU feature's completion criteria at the user's direction; validation still rejects ungrounded output.
+Observed with the bundled `llama-server` b12068 (PR #63). Model runs used the pinned 2B/4B Q4_K_M files copied from existing local copies (size and SHA-256 matched); no weights were downloaded.
 
-| Backend / model | Observed |
+| Check | Observed |
 | --- | --- |
-| CPU, 2B | Pinned file downloaded and SHA-256-verified; real download cancel and HTTP 206 resume matched the pinned hash. Synthetic scholarship notice: schema, grounding and deadline passed, category wrong (`학사` instead of `장학`). Cancellation, worker termination and recovery passed. A collected notice passed structure checks, but its deadline stayed unnormalized and the summary dropped a date qualifier. Worker memory-limit (Job Object) and restart test passed |
-| CPU, 4B | Synthetic scholarship case passed quality, recovery and cache checks. Collected notice: structure passed, deadline unnormalized. Peak sampled working set about 8.8 GiB |
-| GPU (Vulkan, GTX 1650), 2B / 4B | Both loaded and generated with 25 / 31 offloaded layers; model reuse, worker termination, reload and shutdown passed. Structured output was valid but both missed the expected category. Through the app pipeline, 2B generated twice and grounding validation rejected the output, so no result was stored |
+| Staging | `stage-llama.mjs` downloaded the Vulkan and CPU archives; size and SHA-256 matched the pins. VC runtime DLLs version 14.44.35211.0, Microsoft signature valid |
+| Workspace Clippy and tests (`8354512`) | Passed: 369 passed, 13 ignored. The 5 `gpu_tests` (fake server) and `real_server_lifecycle_without_model_weights` (real b12068, not skipped) passed |
+| Vulkan device and offload | `using device Vulkan1 (NVIDIA GeForce GTX 1650)`; `offloaded 25/25` (2B) and `33/33` (4B) layers |
+| Unix socket | `llama-server --host <path>.sock` served `GET /health` over a Unix domain socket, with and without a loaded 2B model. The app still uses loopback on Windows |
+| Default `npm run desktop:build` | Succeeded and produced `Rhythm_1.1.0_x64-setup.exe` |
+| Installed app (validation identifier) | A rebuild with identifier `io.github.hiyabye.rhythm.pr63.validation` and an isolated `RHYTHM_VALIDATION_DATA_DIR` installed; all 55 files under `llama/cpu` and `llama/vulkan` matched the staged hashes. In the real window: registered the 2B file, completed setup in `gpu` mode, analyzed one synthetic scholarship notice on GPU (`loaded_backend` vulkan, 12.6 s), switched to `cpu` and analyzed it again (cpu, 61.0 s). Both results had the right category and deadline; the GPU result was marked as differing from the current setting. The app used loopback, and no app or `llama-server` process remained after closing the window |
 
-Not verified: other NVIDIA GPUs or drivers, GPU-less fallback in the installed app, VRAM exhaustion, OS-enforced offline operation, and AI from the installed GPU settings UI.
+Synthetic evaluation (`actual_qwen35_analysis_evaluation`, release build, production controller → validation → Store path). The harness always uses `auto`, so the CPU runs used a resource folder without the Vulkan build; the backend column is the reported `loaded_backend`. Durations are the sum of job wall times, and the first 2B GPU run overlapped a release build.
+
+| Model / backend | Completed | Passed every screening check | Total |
+| --- | ---: | ---: | ---: |
+| 2B / Vulkan | 18/18 | 8/18 | 262 s |
+| 4B / Vulkan | 18/18 | 14/18 | 441 s |
+| 2B / CPU | 18/18 | 7/18 | 941 s |
+| 4B / CPU (first 4 fixtures only) | 4/4 | 4/4 | 537 s |
+
+Screening failures were wrong categories (mostly `학사`), missing or extra deadlines and missing summary terms, as on macOS.
+
+Earlier, with the former worker, the pinned 2B file downloaded with a real cancel and HTTP 206 resume that matched the pinned hash; the downloader is unchanged.
+
+Not verified: other NVIDIA GPUs or drivers, the production-identifier install with protocol/notification registration, uninstall and upgrade, 4B in the installed app, model cancellation or crash recovery in the installed app, VRAM exhaustion, memory limits, peak RAM/VRAM, OS-enforced offline operation.
 
 ## Restore boundaries
 

@@ -18,8 +18,9 @@ test('the tag release workflow creates a draft from distribution files only', ()
   // Write access only in the job that creates the release.
   assert.equal(workflow.match(/contents: write/g)?.length, 1);
   assert.match(workflow, /draft-release:[\s\S]*permissions:\s*\n\s*contents: write/);
-  // The DMG must never ship a CPU-only worker (scripts/desktop.mjs fails instead).
-  assert.match(workflow, /RHYTHM_AI_BACKEND: metal\s*\n\s*run: npm run desktop:build/);
+  // The DMG bundles the pinned llama.cpp build; no worker backend is compiled.
+  assert.match(workflow, /name: Build DMG\s*\n\s*run: npm run desktop:build/);
+  assert.doesNotMatch(workflow, /RHYTHM_AI_BACKEND|metaltoolchain|target-gpu/);
 });
 
 test('CI and the release share the pinned Windows build tools', () => {

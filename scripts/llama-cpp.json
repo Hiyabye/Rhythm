@@ -1,0 +1,20 @@
+{
+  "build": "b12068",
+  "assets": {
+    "metal": {
+      "file": "llama-b12068-bin-macos-arm64.tar.gz",
+      "bytes": 16548390,
+      "sha256": "0b12600a3f04acc4d74e876cbe4ca70be8fe04093bb19d825828bb4f49048936"
+    },
+    "vulkan": {
+      "file": "llama-b12068-bin-win-vulkan-x64.zip",
+      "bytes": 37554335,
+      "sha256": "e9380d6649324e9827cc2f1348c856a2ae3084258c38c4afef1c7d16dd5a8d15"
+    },
+    "cpu": {
+      "file": "llama-b12068-bin-win-cpu-x64.zip",
+      "bytes": 24609139,
+      "sha256": "0d7099439d489de2921e23c16a27cc432e48ad14d6fe80406187368b3928ce43"
+    }
+  }
+}

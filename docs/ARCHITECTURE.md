@@ -2,7 +2,7 @@
 
 ## Boundaries
 
-Rhythm is a Korean-first, local-first modular monolith: one Tauri main window and one isolated AI worker process. It is not a web service. There is no cloud backend, login service, telemetry or localhost inference server.
+Rhythm is a Korean-first, local-first modular monolith: one Tauri main window and, while a model is loaded, one supervised `llama-server` child process. It is not a web service. There is no cloud backend, login service or telemetry, and the inference server is reachable only by Rhythm (a private Unix socket, or loopback with a per-launch key).
 
 Supported platforms are macOS Apple Silicon and Windows 11 x64. Platform code sits behind `cfg(target_os = "macos")`/`cfg(windows)`; both platforms share the bundle identifier `io.github.hiyabye.rhythm`, the schema and the backup format. The app data root (`<data>` below) is `app_data_dir()` on macOS and `app_local_data_dir()` (non-roaming `%LOCALAPPDATA%`) on Windows.
 
@@ -16,16 +16,16 @@ Rust application (src-tauri)
   │     ├─ public Sogang sources → normalized archive records
   │     └─ <data>/resources/ → verified local files
   ├─ proactive: in-process scheduler and notifications
-  └─ intelligence: curated model manager, analysis queue, worker process owner
+  └─ intelligence: curated model manager, analysis queue, llama-server supervisor
         ├─ <data>/models/ or a chosen folder → verified managed GGUF files
         ├─ stored document revision → validated result → SQLite cache
-        │ versioned JSON lines over stdin/stdout
-one isolated worker process at a time
-  ├─ rhythm-ai-worker (crates/ai-worker) → pinned mistral.rs (Metal or CPU) → local GGUF
-  └─ Windows only: rhythm-ai-worker-gpu → pinned llama.cpp / Vulkan → local GGUF
+        │ HTTP/1.1 over <data>/run/llama.sock, or 127.0.0.1 + per-launch key
+one llama-server process per loaded model (bundled resources, pinned upstream build)
+  ├─ macOS: llama/metal/ → Metal, or CPU after a failure
+  └─ Windows: llama/vulkan/ (NVIDIA only) or llama/cpu/
 ```
 
-There are only two Cargo workspace members: the Tauri app and the worker. Collection never waits for inference or writes AI results. Release builds are ad-hoc signed (macOS) or unsigned (Windows) by policy; the updater stays disabled without a configured public key.
+There are two Cargo workspace members: the Tauri app and the former worker crate (`crates/ai-worker`), which the app no longer builds, bundles or runs. Collection never waits for inference or writes AI results. Release builds are ad-hoc signed (macOS) or unsigned (Windows) by policy; the updater stays disabled without a configured public key.
 
 ## Application ownership and commands
 
@@ -41,7 +41,7 @@ Commands:
 
 `AppState` owns an `Arc<Mutex<Store>>`, the archive controller and client, the extension registry, one shared Tokio-mutex worker, model-install and analysis controllers, a transient operation owner and an AI mutation gate. SQLite guards are never held across network, worker or large-file hashing awaits; hashing uses `spawn_blocking`. Health snapshots use `try_lock` instead of waiting behind inference. Search and reader generation guards keep stale responses from replacing newer views.
 
-`intelligence/operations.rs` owns in-memory load/setup/register phases and cancellation independently of Settings' lifetime, so leaving and returning to Settings shows the same operation. Cancellation joins cooperative blocking verification or stops and reaps interrupted worker IPC before admission is released. Setup persists completion only after its real inference succeeds. No database job kind is added for these operations.
+`intelligence/operations.rs` owns in-memory load/setup/register phases and cancellation independently of Settings' lifetime, so leaving and returning to Settings shows the same operation. Cancellation joins cooperative blocking verification or stops and reaps an interrupted server before admission is released. Setup persists completion only after its real inference succeeds. No database job kind is added for these operations.
 
 Before `Store::open` can recover interrupted work, `core::lock_data_dir` takes a process-lifetime OS file lock on `<data>/rhythm.lock`. A second owner gets a Korean diagnostic and exits normally before opening the store or worker. Single-instance handling runs before that lock. The OS releases the lock when the process ends; an old lock file alone means nothing.
 
@@ -216,29 +216,23 @@ Downloads use HTTPS to exact approved Hugging Face/CDN hosts with pinned public 
 
 External registration references a canonical `.gguf` path without copying. Preflight accepts GGUF v2/v3 `qwen3`/`qwen35` metadata; it is not full tensor or runtime validation. Registration computes the full SHA-256, and re-registering a changed file unloads cached weights first. Unregister never deletes external bytes. Managed removal checks containment, removes partial files first, records `missing` before the irreversible unlink and reconciles failures; documents and results stay. Loading and uncached analysis verify the complete file every time; the `sha2` assembly feature (macOS aarch64 only) speeds hashing but never replaces it.
 
-## Worker and IPC
+## Inference process
 
-The parent launches the bundled worker beside its executable, pipes stdin/stdout, drains stderr in 4 KiB chunks and hides a Windows console. The child is kill-on-drop. Malformed health, version, ID or framing responses terminate and reap it. A crash never blocks archive or settings access; the next load or inference starts a replacement.
+`intelligence/server.rs` supervises upstream `llama-server`, bundled as Tauri resources under `llama/` and pinned to one llama.cpp build with per-archive size and SHA-256 (`scripts/llama-cpp.json`). `Worker` in `intelligence/mod.rs` owns it behind the same status/load/infer/unload/stop API the rest of the app uses. No process runs until a model is loaded or a request needs one; status without a process only checks that the bundled executable exists.
 
-Protocol v1 is serial, ID- and version-matched UTF-8 JSON Lines with 1 MiB frames: `ping`, `status`, `load`, `infer`, `unload`, `shutdown`. Analysis negotiates the optional `analysis_json_v1` capability before using that output mode; a static closed schema limits fields, enums and at most six facts. Legacy workers get no unknown parameter and keep working for plain text. Details are in the [worker README](../crates/ai-worker/README.md).
+A load starts `llama-server -m <model> --no-webui --no-slots --jinja -np 1 -c <context> -lv 4` with all layers on the GPU, or `-ngl 0 --device none` for CPU. On Windows the Vulkan build first lists devices and runs only on an NVIDIA one. The server listens on `<data>/run/llama.sock` inside a `0700` directory. When that path exceeds the 103-byte Unix socket limit, or on Windows, it listens on 127.0.0.1 with an OS-chosen port read from its log, and a random key in a `0600` file (deleted once the server is ready) is required on every request. The supervisor waits up to 180 s for `GET /health`, then reads the device and offloaded layer count from the log to report the loaded backend. A Vulkan load counts as GPU only when every layer was offloaded.
 
-```json
-{"version":1,"id":1,"method":"load","params":{"model_path":"/absolute/model.gguf"}}
-{"version":1,"id":2,"method":"infer","params":{"model_path":"/absolute/model.gguf","prompt":"분석 요청과 인용된 데이터","max_tokens":1024}}
-{"version":1,"id":3,"method":"unload"}
-```
+Requests are one HTTP/1.1 exchange per connection to `/v1/chat/completions`, with a 600 s deadline: a fixed system instruction, the prompt, greedy sampling, thinking disabled and, for analysis, the closed generation schema as a JSON-schema `response_format`. Responses need an exact `Content-Length` and are bounded to 4 MiB. Token counts and durations come from the server's `timings`. A context-overflow error maps to a Korean message containing `토큰 한도를 넘습니다`. Stdout is discarded; stderr is drained as bounded diagnostic lines.
 
-One model and one sequence at most. Switching drops the old model first; app-level unload reaps and restarts an empty worker to reclaim memory. Cancellation persists job state, drops the pending request and reaps the process; a late response is never reused. Deadlines: 8 s lifecycle, 180 s load, 600 s inference.
+One model and one sequence at most. Loading another model, unloading and cancelling kill and reap the process; a late response is never reused, and the next request starts a fresh one. A crash is observed on the next status or request and never blocks archive or settings access. On Windows the process is in a kill-on-close job object.
 
-mistral.rs lives only in the worker, pinned to v0.9.1 commit `11f255058573e085afe0a149f8a19cbd39aa1200`. Stdout carries only protocol; diagnostics go to stderr. Direct Cargo builds default to CPU. Accelerated builds retry once with a CPU-forced load after an accelerated-load error, and report compiled and loaded backend separately.
-
-On Windows the separate GPU worker (llama.cpp/Vulkan) uses the same pipe. Only on Windows does the cache configuration hash include the `llama-vulkan-v1` runtime policy and execution mode; elsewhere the hash input is byte-identical to v1.0 so cached results survive upgrades. `auto` falls back to CPU for the session after a device, load or protocol failure, and retries only the affected request on CPU after a context-overflow rejection.
+macOS tries Metal first and falls back to CPU for the session after a load or request failure. On Windows the execution mode picks the build: `gpu` reports errors, `cpu` uses the CPU build, and `auto` falls back to CPU for the session after a device, load or request failure, but retries only that request on CPU after a context overflow (Vulkan context 8192 tokens; CPU and Metal 32768).
 
 ## Analysis, validation and cache
 
-`intelligence/analysis.rs` reads a stored revision through `Store::document`; it never refetches the page or opens attachments. One persistent queue serializes inference. The default is explicit requests; opening an article only reads existing results. Cache lookup happens before any model inspection or worker launch, and pending duplicates share one attempt.
+`intelligence/analysis.rs` reads a stored revision through `Store::document`; it never refetches the page or opens attachments. One persistent queue serializes inference. The default is explicit requests; opening an article only reads existing results. Cache lookup happens before any model inspection or server launch, and pending duplicates share one attempt.
 
-**Cache identity:** document/revision + task + artifact SHA-256 + prompt version + output-schema version + a hash of output-affecting configuration (token limit, source bound, selector and evidence encoding, prompt rules, clock rules, decoding mode, thinking, sampling, repair policy; plus the Windows runtime policy and execution mode). Current prompt version is **3**, selector **head-tail-keywords-v4**, stored schema **1**. Older results stay readable with provenance but never satisfy a newer key; the reader warns when a stored result's contract differs from the current one. Recovered pending attempts with an obsolete identity fail with retry guidance.
+**Cache identity:** document/revision + task + artifact SHA-256 + prompt version + output-schema version + a hash of output-affecting configuration (token limit, source bound, selector and evidence encoding, prompt rules, clock rules, decoding mode, thinking, sampling, repair policy, the `llama-server-v1` engine marker; plus the execution mode on Windows). The engine marker makes results from the former worker read as outdated. Current prompt version is **3**, selector **head-tail-keywords-v4**, stored schema **1**. Older results stay readable with provenance but never satisfy a newer key; the reader warns when a stored result's contract differs from the current one. Recovered pending attempts with an obsolete identity fail with retry guidance.
 
 **Output (stored schema 1):** strict JSON with `short_summary`, `summary`, one of eight `category` values, qualitative `uncertainty` and `facts`. Fact kinds are deadline, event date, eligibility, documents, application method, link and action. Prompt 3 sends selected source passages as `{id,text}` objects, and generation must return exactly `kind`, `label`, `value` and integer `evidence_id` per fact. The backend resolves each ID to the exact archived text and derives date and uncertainty before validating the stored schema. Invalid references, unknown or missing fields, invalid categories, malformed, empty, oversized or repetitive output, control tokens, unsupported evidence and ungrounded links are rejected.
 
@@ -248,9 +242,9 @@ On Windows the separate GPU worker (llama.cpp/Vulkan) uses the same pipe. Only o
 
 **Input bounds:** title and body ranges are selected from head, tail and important passages within 18 KiB of encoded source inside a 24 KiB prompt. Over budget, exact repeated passages are admitted once; table rows are separate evidence units; ordinary passages break at sentences or lines (500-character hard bound). Output is 128–4096 tokens (default 1024). Long documents record `partial` with processed and total characters, and the reader warns that omitted parts may hold dates or requirements. No chunk-and-merge, attachment text or vision.
 
-The worker gets a fixed system instruction and JSON-quoted untrusted source data, no tools. Generated text renders only as escaped Svelte text. There are no model-driven commands or external actions.
+The model gets a fixed system instruction and JSON-quoted untrusted source data, no tools. Generated text renders only as escaped Svelte text. There are no model-driven commands or external actions.
 
-Diagnostics are transient: at most 20 terminal reports in memory with stage timings and worker metrics, no source or generated text.
+Diagnostics are transient: at most 20 terminal reports in memory with stage timings and inference metrics, no source or generated text.
 
 ## Energy policy
 
@@ -278,7 +272,7 @@ The updater verifies Tauri-signed artifacts against a build-time public key and 
 
 ## Packaging and CI
 
-`src-tauri/tauri.conf.json` bundles the host worker as `externalBin`. `scripts/desktop.mjs` builds and stages it, then runs Tauri; it is not a cross-compilation helper. On Apple Silicon it picks Metal when `xcrun metal --version` works, otherwise CPU; `RHYTHM_AI_BACKEND=cpu|metal` overrides, and an explicit `metal` fails if the toolchain is missing. On Windows it delegates to `scripts/desktop-windows.mjs` (VC runtime staging, both workers, NSIS); see [Windows](WINDOWS.md). Scripts never install toolchains or weights. A Tauri build can copy a previously staged sidecar over `target/*/rhythm-ai-worker`, so exact-backend evaluations keep a separately named executable.
+`src-tauri/tauri.conf.json` bundles `src-tauri/binaries/llama/` as the `llama/` resource directory. `scripts/stage-llama.mjs` fills it: it downloads the pinned archives for the host from llama.cpp's GitHub releases into `target/llama-cache/`, rejects any whose size or SHA-256 differs from the pin, and copies `llama-server` with only the libraries it loads (macOS) or with its DLLs plus the VC runtime it imports (Windows). `scripts/desktop.mjs` stages, then runs Tauri; it is not a cross-compilation helper. On Windows it delegates to `scripts/desktop-windows.mjs` (VC runtime, llama.cpp, NSIS); see [Windows](WINDOWS.md). Scripts never install toolchains or weights.
 
 A default release build deletes `target/release/bundle/` and writes exactly two files to `target/release/distribution/`: the DMG or setup executable and its `.sha256`. Release builds remap `$HOME`, `CARGO_HOME` and the checkout with `--remap-path-prefix`. `scripts/macos-release.mjs` (Developer ID signing and notarization) is kept for a possible future decision and refuses to run without credentials; `scripts/verify-update.mjs` independently verifies updater signatures, manifests and archives.
 

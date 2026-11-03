@@ -665,7 +665,7 @@ mod tests {
             .unwrap();
         drop(operation);
         assert_eq!(model.ownership, "external");
-        assert!(worker.lock().await.child.is_none());
+        assert!(worker.lock().await.process_id().is_none());
 
         // Selection and removal share the same process-release boundary.
         stop_inventory_worker(&worker, &shutdown).await.unwrap();
@@ -693,13 +693,14 @@ mod tests {
         .unwrap();
         assert!(store.lock().unwrap().ai_model(&model.id).unwrap().is_none());
         assert_eq!(std::fs::read(&file).unwrap(), bytes);
-        assert!(worker.lock().await.child.is_none());
+        assert!(worker.lock().await.process_id().is_none());
     }
 
     #[tokio::test]
     async fn inventory_stop_reaps_running_worker_without_relaunching() {
-        let worker = Mutex::new(unresponsive_worker());
-        assert!(worker.lock().await.child.is_some());
+        let (_directory, worker) = running_worker().await;
+        let worker = Mutex::new(worker);
+        assert!(worker.lock().await.process_id().is_some());
         timeout(
             Duration::from_secs(5),
             stop_inventory_worker(&worker, &AtomicBool::new(false)),
@@ -707,76 +708,41 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
-        let worker = worker.lock().await;
-        assert!(worker.child.is_none() && worker.input.is_none() && worker.output.is_none());
+        assert!(worker.lock().await.process_id().is_none());
     }
 
-    fn unresponsive_worker() -> super::super::Worker {
-        static FIXTURE: std::sync::OnceLock<(tempfile::TempDir, PathBuf)> =
-            std::sync::OnceLock::new();
-        let (_, executable) = FIXTURE.get_or_init(|| {
-            let directory = tempfile::tempdir().unwrap();
-            // Accept a request but never answer it; exit only when stdin closes.
-            let executable = crate::intelligence::test_worker::compile(
-                directory.path(),
-                "unresponsive-worker",
-                r#"
-use std::io::BufRead;
-fn main() {
-    if std::io::stdin().lock().lines().next().is_some() {
-        std::thread::sleep(std::time::Duration::from_secs(60));
-    }
-}
-"#,
-            );
-            (directory, executable)
-        });
-        super::super::Worker::launch(executable)
+    /// A worker whose fake server is already serving a loaded model.
+    async fn running_worker() -> (tempfile::TempDir, super::super::Worker) {
+        let directory = tempfile::tempdir().unwrap();
+        let (executable, model) =
+            crate::intelligence::test_worker::fake_engine(directory.path(), "ok");
+        let mut worker = super::super::Worker::launch(&executable);
+        worker.load(&model).await.unwrap();
+        (directory, worker)
     }
 
-    fn delayed_model_worker(setup: bool) -> (super::super::Worker, PathBuf) {
-        static FIXTURE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-        let directory = FIXTURE.get_or_init(|| {
-            let directory = tempfile::tempdir().unwrap();
-            let source = r#"
-use std::io::{self, BufRead, Write};
-fn main() {
-    let executable = std::env::current_exe().unwrap();
-    let setup = executable.file_stem().unwrap().to_string_lossy().contains("setup");
-    for line in io::stdin().lock().lines() {
-        let line = line.unwrap();
-        let id = line.split("\"id\":").nth(1).unwrap().split(|c: char| !c.is_ascii_digit()).next().unwrap();
-        if !executable.with_extension("entered").exists()
-            && ((setup && line.contains("\"infer\"")) || (!setup && line.contains("\"load\""))) {
-            std::fs::write(executable.with_extension("entered"), b"entered").unwrap();
-            std::thread::sleep(std::time::Duration::from_secs(60));
-        }
-        println!("{{\"version\":1,\"id\":{},\"ok\":true,\"result\":{{\"engine\":\"mistral.rs\",\"runtime_available\":true,\"model\":\"/fake.gguf\",\"text\":\"로컬 점검을 완료했습니다.\"}}}}", id);
-        io::stdout().flush().unwrap();
-    }
-}
-"#;
-            for name in ["delayed-load", "delayed-setup"] {
-                crate::intelligence::test_worker::compile(directory.path(), name, source);
-            }
-            directory
-        });
-        let executable = directory.path().join(format!(
-            "delayed-{}{}",
-            if setup { "setup" } else { "load" },
-            std::env::consts::EXE_SUFFIX
-        ));
-        let marker = executable.with_extension("entered");
-        let _ = std::fs::remove_file(&marker);
-        (super::super::Worker::launch(&executable), marker)
+    /// The fake server hangs once in load or in the setup request, writing
+    /// `entered` first; later requests proceed.
+    fn delayed_model_worker(
+        setup: bool,
+    ) -> (tempfile::TempDir, super::super::Worker, PathBuf, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let (executable, model) =
+            crate::intelligence::test_worker::fake_engine(directory.path(), "ok");
+        let control = if setup { "chat-delay" } else { "load-delay" };
+        std::fs::write(directory.path().join(control), b"").unwrap();
+        let marker = directory.path().join("entered");
+        let worker = super::super::Worker::launch(&executable);
+        (directory, worker, marker, model)
     }
 
     #[tokio::test]
     async fn command_owned_load_and_setup_cancel_reap_and_clear_status() {
         for setup in [false, true] {
             for exit in [false, true] {
-                let (child, marker) = delayed_model_worker(setup);
+                let (_directory, child, marker, model) = delayed_model_worker(setup);
                 let worker = Arc::new(Mutex::new(child));
+                let task_model = model.clone();
                 let shutdown = Arc::new(AtomicBool::new(false));
                 let operations = operations::Controller::default();
                 let task_worker = worker.clone();
@@ -789,9 +755,9 @@ fn main() {
                         &task_shutdown,
                         &operation,
                         if setup {
-                            WorkerAction::Setup(Path::new("/fake.gguf"))
+                            WorkerAction::Setup(&task_model)
                         } else {
-                            WorkerAction::Load(Path::new("/fake.gguf"))
+                            WorkerAction::Load(&task_model)
                         },
                     )
                     .await
@@ -828,22 +794,16 @@ fn main() {
                 {
                     let worker = worker.lock().await;
                     assert!(
-                        worker.child.is_none(),
+                        worker.process_id().is_none(),
                         "cancelled operation must reap the actual child"
                     );
-                    assert!(worker.input.is_none() && worker.output.is_none());
                 }
                 assert!(operations.status().is_none());
                 if !exit {
                     let next = operations.begin("setup").unwrap();
                     timeout(
                         Duration::from_secs(1),
-                        operation_worker(
-                            &worker,
-                            &shutdown,
-                            &next,
-                            WorkerAction::Setup(Path::new("/fake.gguf")),
-                        ),
+                        operation_worker(&worker, &shutdown, &next, WorkerAction::Setup(&model)),
                     )
                     .await
                     .unwrap()
@@ -851,11 +811,11 @@ fn main() {
                     drop(next);
                     assert!(operations.status().is_none());
                     assert!(
-                        worker.lock().await.child.is_some(),
+                        worker.lock().await.process_id().is_some(),
                         "next request must restart a fresh child"
                     );
                     worker.lock().await.stop().await;
-                    assert!(worker.lock().await.child.is_none());
+                    assert!(worker.lock().await.process_id().is_none());
                 }
             }
         }
@@ -949,31 +909,25 @@ fn main() {
     }
 
     #[tokio::test]
-    async fn reset_cancels_and_reaps_a_restart_during_exit() {
-        let worker = Mutex::new(unresponsive_worker());
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let signal = shutdown.clone();
-        let exit = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(30)).await;
-            signal.store(true, Ordering::Release);
-        });
-        assert_eq!(
-            timeout(Duration::from_secs(1), reset_worker(&worker, &shutdown))
-                .await
-                .expect("exit must interrupt the pending restart status request"),
-            Err(EXIT_ERROR.into())
-        );
-        exit.await.unwrap();
-        let worker = worker.lock().await;
-        assert!(worker.child.is_none(), "cancelled restart must be reaped");
-        assert!(worker.input.is_none() && worker.output.is_none());
+    async fn reset_reaps_the_running_server() {
+        let (_directory, worker) = running_worker().await;
+        let worker = Mutex::new(worker);
+        timeout(
+            Duration::from_secs(5),
+            reset_worker(&worker, &AtomicBool::new(false)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(worker.lock().await.process_id().is_none());
     }
 
     #[tokio::test]
     async fn reset_cannot_relaunch_worker_after_exit_cleanup() {
-        let worker = Mutex::new(unresponsive_worker());
+        let (_directory, worker) = running_worker().await;
+        let worker = Mutex::new(worker);
         worker.lock().await.stop().await;
-        assert!(worker.lock().await.child.is_none());
+        assert!(worker.lock().await.process_id().is_none());
         let shutdown = AtomicBool::new(true);
         assert_eq!(
             timeout(Duration::from_millis(200), reset_worker(&worker, &shutdown))
@@ -981,6 +935,6 @@ fn main() {
                 .expect("a completed exit must not launch another process"),
             Err(EXIT_ERROR.into())
         );
-        assert!(worker.lock().await.child.is_none());
+        assert!(worker.lock().await.process_id().is_none());
     }
 }
