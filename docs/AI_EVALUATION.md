@@ -4,7 +4,7 @@ What local AI has been verified to do, the pinned artifacts, and how to run the 
 
 ## Runtime
 
-The CPU/Metal worker pins mistral.rs **v0.9.1**, release commit [`11f255058573e085afe0a149f8a19cbd39aa1200`](https://github.com/EricLBuehler/mistral.rs/tree/11f255058573e085afe0a149f8a19cbd39aa1200). Earlier 0.8.1/0.9.0 GGUF routes lacked `qwen35`; this release loads text-only Qwen3.5 GGUF without a vision projector, using the file's embedded tokenizer and chat template (no remote tokenizer or token). The Windows GPU worker is llama.cpp over Vulkan; see [Windows](WINDOWS.md#gpu-worker).
+CPU, Apple Metal and Windows Vulkan use the same llama.cpp implementation through `llama-cpp-2`/`llama-cpp-sys-2` pinned to `0.1.160`. The runtime uses local GGUF tokenizer/chat metadata without a remote tokenizer or vision projector. Windows keeps separate CPU and Vulkan executables for fallback; every worker ships with the app at its version. New analyses use runtime policy `llama-unified-v1`; previous results remain readable but cannot satisfy the new cache key.
 
 ## Pinned artifacts
 
@@ -13,8 +13,8 @@ The CPU/Metal worker pins mistral.rs **v0.9.1**, release commit [`11f255058573e0
 | Model | Repository / file | Revision | Bytes | Status |
 | --- | --- | --- | ---: | --- |
 | Qwen3.5 0.8B | [`unsloth/Qwen3.5-0.8B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF) / `Qwen3.5-0.8B-Q4_K_M.gguf` | `6ab461498e2023f6e3c1baea90a8f0fe38ab64d0` | 532,517,120 | Experimental: never downloaded or run |
-| Qwen3.5 2B | [`unsloth/Qwen3.5-2B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF) / `Qwen3.5-2B-Q4_K_M.gguf` | `f6d5376be1edb4d416d56da11e5397a961aca8ae` | 1,280,835,840 | Verified for macOS Apple Silicon / Metal |
-| Qwen3.5 4B | [`unsloth/Qwen3.5-4B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF) / `Qwen3.5-4B-Q4_K_M.gguf` | `e87f176479d0855a907a41277aca2f8ee7a09523` | 2,740,937,888 | Verified for macOS Apple Silicon / Metal |
+| Qwen3.5 2B | [`unsloth/Qwen3.5-2B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF) / `Qwen3.5-2B-Q4_K_M.gguf` | `f6d5376be1edb4d416d56da11e5397a961aca8ae` | 1,280,835,840 | Installation enabled; current-runtime evidence below |
+| Qwen3.5 4B | [`unsloth/Qwen3.5-4B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF) / `Qwen3.5-4B-Q4_K_M.gguf` | `e87f176479d0855a907a41277aca2f8ee7a09523` | 2,740,937,888 | Installation enabled; current-runtime evidence below |
 
 ```text
 0.8B bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517
@@ -22,21 +22,39 @@ The CPU/Metal worker pins mistral.rs **v0.9.1**, release commit [`11f255058573e0
 4B   00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4
 ```
 
-Catalog memory values (2/4/7 GiB) are estimates, not measured peaks. `verified` means the qualified artifact/backend evidence below, not factual correctness. 9B (`qwen35-9b`) was removed from the catalog after v1.0.0 without ever being run; existing installs keep working.
+Catalog memory values (2/4/7 GiB) are estimates, not measured peaks. The 2B/4B `verified` catalog flags permit installation; the actual runtime and hardware qualification is recorded below, and the flags do not certify factual correctness. 9B (`qwen35-9b`) is no longer offered; existing inventory remains usable without automatic deletion.
 
-## Current evidence (macOS 27.2, M1 Pro, 16 GiB)
+## Current runtime verification
 
-- **2B and 4B on Metal** produced useful, validated Korean analysis of synthetic notices through the real worker → controller → validation → Store path, including cache reuse, revision isolation and cached reads with the worker stopped.
-- **Release worker, 2B** (copied from the v0.9.2 release bundle, scholarship case, 1,024 output tokens): Metal ≈44 completion tok/s, ≈12.8 s warm and ≈14.6 s cold-model analysis, worker RSS ≈3.0 GB. A CPU release worker: ≈28–30 tok/s, ≈21–24 s, RSS 3.6–4.6 GB. Both outputs were schema-valid and grounded with the right dates, but both labeled the category `학사` instead of `장학`.
-- **v1.0.0 installed app**, live notice, 2B/Metal: analysis completed in 19.8 s and was cached; Settings showed the loaded backend as Metal.
-- **Native flows (2B/Metal, isolated profiles):** download cancel/resume, setup, reader analysis, OS-network-denied regeneration, cancellation and worker-crash recovery, Eco idle unload, load progress surviving a Settings remount.
-- **Windows:** CPU and GTX 1650 GPU observations are in [Windows validation](WINDOWS_VALIDATION.md#ai-on-windows).
+On 2026-11-03, freshly built debug workers (`build_id: development`) passed the eight `validate-worker.mjs` stages on one Windows 11 x64 PC: status, load, ordinary generation, structured generation, terminating/reaping a pending request after 500 ms, reload, recovered generation and shutdown. The 2B/4B model SHA-256 values matched the pinned artifacts above. These are direct worker checks, not installed-app or release-build verification.
 
-Not verified: 0.8B, 4B on CPU (an early CPU load failed under memory pressure), CUDA, NVIDIA GPUs other than one GTX 1650, Intel Macs, and any broad accuracy rate.
+No Mac is available for the current implementation work. Metal compilation, actual inference, cancellation, crash recovery and a real CPU fallback remain unverified here; Windows test results cannot establish them.
+
+| Backend | Qwen3.5 2B | Qwen3.5 4B | Observed placement |
+| --- | --- | --- | --- |
+| Windows CPU | 8 stages passed; 73.784 s total | 8 stages passed; 158.207 s total | `loaded_backend: cpu`, zero GPU layers |
+| Windows NVIDIA Vulkan | 8 stages passed; 64.327 s total | 8 stages passed; 92.407 s total | GTX 1650, `loaded_backend: vulkan`; 25 layers for 2B, 31 for 4B |
+| macOS Apple Silicon CPU | Not verified | Not verified | No Mac available |
+| macOS Apple Silicon Metal | Not verified | Not verified | No Mac available; actual Metal-to-CPU fallback also unverified |
+
+Times are complete validation durations, including file hashing, loading, multiple generations, cancellation, reload and shutdown. They are not single-notice latency or a CPU/GPU performance comparison. Peak RAM was not measured. Cancellation establishes that the parent request was pending when its owned process was terminated, not that a particular native kernel was running. Memory exhaustion and app-managed device fallback were not exercised by these runs.
+
+All four reports record `structure_pass: true`, **`category_pass: false` and `deadline_pass: false`** for the same synthetic scholarship notice. Semantic correctness was explicitly excluded from this integration pass; the results do not establish useful or accurate Korean summaries. The full analysis-controller/Store grounding path was not part of this helper run.
+
+Local reports are `llama-unified-20261103/cpu-2b.json`, `cpu-4b.json`, `vulkan-2b.json` and `vulkan-4b.json`. Both reports for each backend record the same worker SHA-256, also checked against the preserved executable:
+
+```text
+CPU     445bac4f5e1d410291a61cdd5aeee51618a53f0b7c2119c7fb936bf6f8f717d5
+Vulkan  43813c029b8869ea98af61dc33a7fa404f7c7649f90369f41eb6ffb2f9a61155
+```
+
+Earlier macOS CPU/Metal measurements used mistral.rs, and the earlier Windows Vulkan worker used its previous dedicated implementation. Those measurements do not establish speed, memory use or analysis correctness for this unified runtime. The existing [Windows observations](WINDOWS_VALIDATION.md#ai-on-windows) remain limited to the binaries and one GTX 1650 recorded there. Prior Mac measurements and full evaluation history are retained in Git.
+
+0.8B has no real-model evidence. Other NVIDIA GPUs, broad model accuracy and untested operating-system versions remain unverified. CUDA is not a supported build, and Intel Macs are outside product support.
 
 ## Known quality limits
 
-Literal grounding catches invented quotes and dates, not wrong meaning. Observed on schema-valid, grounded output:
+Literal grounding catches invented quotes and dates, not wrong meaning. Earlier runtime evaluations found these errors even in schema-valid, grounded output; the runtime change has not established that they are fixed:
 
 - Wrong categories (scholarship notices labeled `학사`; GPU runs returning `공모전·대회`).
 - An obsolete or cancelled date kept as a current deadline; the first deadline of a table omitted.
@@ -48,11 +66,21 @@ The UI labels every result as AI-generated and tells the user to check condition
 
 ## Constrained decoding decision
 
-Analysis uses the capability-negotiated `analysis_json_v1` mode (a static closed JSON schema in the worker). In a same-input A/B test (8 synthetic + 3 archived notices per model, 2B and 4B, Metal release worker), completed jobs rose from 17/22 to 20/22 with no material timing difference. Category and deadline errors remained in both modes. The worker stops at `<|endoftext|>` in this mode; without it, a 2B trial repeated grammar-EOS tokens until the output limit. The full 18-case campaign has not been rerun under the final default, so no final acceptance rate exists.
+Analysis keeps the capability-negotiated `analysis_json_v1` contract: a static closed JSON schema is compiled to llama.cpp grammar, while setup checks use ordinary text. The app still validates schema and exact source evidence and allows one bounded repair. Greedy sampling, disabled thinking and model end-of-generation handling do not guarantee correct categories or dates. Previous mistral.rs A/B results are not a success rate for this grammar implementation; the full 18-case campaign has not been recorded for the unified runtime.
 
 ## Running evaluations
 
 Normal tests are network-free and never download weights. These ignored tests need explicit approval for the download and disk budget, and isolated directories, never production app data.
+
+For worker lifecycle checks with an existing model, `scripts/validate-worker.mjs` requires an explicit `--backend cpu|vulkan|metal` and absolute paths:
+
+```sh
+node scripts/validate-worker.mjs --backend cpu --worker /absolute/rhythm-ai-worker --model /absolute/model.gguf --report /absolute/new-cpu-report.json
+```
+
+It hashes the executable and model, checks status/load, plain and structured generation, terminates only its own child after 500 ms of a pending request, then verifies reloading, generation and shutdown. Reports include actual backends, timings and bounded stderr. CPU must report zero GPU layers; Vulkan needs NVIDIA and positive offload; Metal needs actual Metal offload. An explicit `--allow-cpu-fallback` permits a Metal build's CPU recovery check and labels it `passed_with_cpu_fallback`, never a Metal-only success. `validate-gpu.mjs` remains an alias with `--backend vulkan` fixed.
+
+The integration pass requires valid output structure, not correct summaries, categories or deadlines. Its category/date observations are recorded separately and do not decide the exit status. Mock-only checks of this helper run with `node --test tests/worker-validation.test.mjs`; they are not real inference evidence.
 
 ```sh
 # Install a pinned artifact through the production downloader into a test directory.

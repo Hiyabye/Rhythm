@@ -10,7 +10,7 @@ const { join, resolve } = win32;
 
 const realFiles = { readdir: readdirSync, read: readFileSync, write: writeFileSync, remove: rmSync };
 
-// Windows 11 x64 build: CPU (mistral.rs) and NVIDIA Vulkan (llama.cpp) workers,
+// Windows 11 x64 build: CPU and NVIDIA Vulkan workers using the same llama.cpp engine,
 // Microsoft VC runtime staging and the per-user NSIS installer. Every external
 // effect is injectable so the orchestration is testable on any host.
 export function desktop({ platform = process.platform, arch = process.arch, env = process.env,
@@ -41,7 +41,10 @@ export function desktop({ platform = process.platform, arch = process.arch, env 
   if (target !== 'x86_64-pc-windows-msvc') throw new Error('Install the x86_64-pc-windows-msvc Rust toolchain.');
   const release = mode !== 'dev' && !extra.includes('--debug');
   const distribute = mode === 'build' && release && !extra.some((arg) => arg === '--no-bundle' || arg.startsWith('--bundles') || arg === '-b');
-  const buildEnv = release ? releaseEnv(env, cwd, home) : env;
+  // Both workers now compile the same native library. Use the same generator
+  // and explicit linkage options so app/worker commands share one CPU cache.
+  const buildEnv = { ...(release ? releaseEnv(env, cwd, home) : env),
+    CMAKE_GENERATOR: 'Ninja', LLAMA_BUILD_SHARED_LIBS: '0', LLAMA_STATIC_CRT: release ? '1' : '0' };
   const targetDir = resolve(cwd, env.CARGO_TARGET_DIR || 'target');
   const gpuTargetDir = resolve(cwd, env.RHYTHM_GPU_TARGET_DIR || targetDir + '-gpu');
   if (backend !== 'cpu') {
@@ -64,7 +67,7 @@ export function desktop({ platform = process.platform, arch = process.arch, env 
   const profile = release ? 'release' : 'debug';
   const binary = join(targetDir, release ? 'release' : 'debug', 'rhythm-ai-worker.exe');
   const staged = join(cwd, 'src-tauri', 'binaries', 'rhythm-ai-worker-' + target + '.exe');
-  ensureWorker({ cwd, env: buildEnv, target, profile, rustIdentity, engine: 'mistral.rs', backend: 'cpu',
+  ensureWorker({ cwd, env: buildEnv, target, profile, rustIdentity, engine: 'llama.cpp', backend: 'cpu',
     cargoArgs: ['build', '--locked', '-p', 'rhythm-ai-worker', ...(release ? ['--release'] : [])],
     binary, staged, run, spawn, copy, mkdir });
   if (backend !== 'cpu') {
@@ -80,6 +83,9 @@ export function desktop({ platform = process.platform, arch = process.arch, env 
       run, spawn, copy, mkdir });
   }
   if (mode === 'worker') return;
+  // The app discovers its GPU sidecar beside the executable. A previous
+  // no-bundle/dev build may have left one there even when Tauri excludes it.
+  if (backend === 'cpu') files.remove(join(targetDir, profile, 'rhythm-ai-worker-gpu.exe'), { force: true });
   // A CPU-only build must not package an old GPU executable left by another build.
   const config = backend === 'cpu'
     ? ['--config', JSON.stringify({ bundle: { externalBin: ['binaries/rhythm-ai-worker'] } })]

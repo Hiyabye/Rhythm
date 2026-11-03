@@ -14,12 +14,15 @@ v1.1.0 adds:
 - Native-macOS redesign of the app shell and Today.
 - CI split by concern and gated by changed paths; a tag-triggered workflow (`release.yml`) that builds both platforms and creates a draft release. v1.1.0 is its first run.
 
+The working source uses one llama.cpp implementation for CPU, Apple Metal and Windows Vulkan. Windows still ships separate CPU and Vulkan executables; every worker shares the app version and installer. Existing AI results remain readable, while `llama-unified-v1` separates new analysis from older runtime caches. This is an implementation change, not evidence of native inference on every supported backend; see [AI evaluation](AI_EVALUATION.md#current-runtime-verification).
+
 ## Verification status
 
 Native observations are from one Mac (macOS 27.2, M1 Pro, 16 GiB) unless noted, mostly in isolated profiles or validation bundle identifiers. Windows observations are in [Windows validation](WINDOWS_VALIDATION.md); AI in [AI evaluation](AI_EVALUATION.md). Automated tests, mocked-IPC UI tests and native observations are separate claims.
 
 | Area | Verified | Not verified |
 | --- | --- | --- |
+| Unified AI runtime | Debug Windows CPU and GTX 1650 Vulkan workers: 2B/4B generation structure, owned-process cancellation/recovery and shutdown; [exact scope](AI_EVALUATION.md#current-runtime-verification) | Category/deadline screening failed and was excluded from the integration pass; Mac, release/installed-app inference and peak RAM remain unverified |
 | Release build | v1.0.0 Metal DMG built locally: `hdiutil verify` valid, `codesign --verify --deep --strict` passes, `spctl` rejects (expected), arm64 only, no builder paths in binaries. Copied app ran on an isolated profile | A quarantined download and the "그래도 열기" flow; Finder/LaunchServices launch of the production identity (v0.9.2 tested LaunchServices with a validation identity); `release.yml` |
 | Manual update | Replacing the app with a newer build kept the same profile, rows and resource hashes; one instance only | — |
 | Archive | One article per supported source through the production path, then offline reopen with text, search, state and hash checks (repeated across releases). One small board (공과대학 학사공지, 5 notices) imported to its public end. Iframe-only notice `551681` kept metadata only | A full historical import across all supported sources; audits of old edits |
@@ -40,7 +43,6 @@ Each is a GitHub issue:
 
 - **Cloud summaries for public notices** (#39 and follow-ups): precompute notice summaries on a backend and keep the local model for personal data. Not decided; the current rules forbid cloud inference.
 - **In-app updates on unsigned builds** (#30 and follow-ups): Tauri updater signatures without OS code signing.
-- **One inference runtime** (#8): mistral.rs or llama.cpp on both platforms.
 - **Build and CI speed** (#9–#14, #17, #20, #23).
 
 ## Possible extensions

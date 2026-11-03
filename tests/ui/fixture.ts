@@ -134,7 +134,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       prompt_version: options.analysisContract === 'prompt-v2' ? 2 : contract.prompt_version,
       schema_version: contract.schema_version,
       configuration_hash: 'b'.repeat(64),
-      model_identity: { name: 'Qwen3.5 4B' },
+      model_identity: { name: 'Qwen3.5 4B', runtime_policy: contract.runtime_policy },
       result: {
         short_summary: options.aiText ?? '장학금 신청 일정과 제출 서류를 확인하세요.',
         summary: '대상 학생은 안내된 기간에 신청서를 제출해야 합니다.',

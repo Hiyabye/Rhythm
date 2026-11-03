@@ -5,15 +5,9 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 const HAS_INFERENCE: bool = cfg!(any(feature = "inference", feature = "gpu-inference"));
-const EXPECTED_ENGINE: &str = if cfg!(feature = "gpu-inference") {
-    "llama.cpp"
-} else {
-    "mistral.rs"
-};
+const EXPECTED_ENGINE: &str = "llama.cpp";
 const EXPECTED_BACKEND: &str = if cfg!(feature = "gpu-inference") {
     "vulkan"
-} else if cfg!(feature = "cuda") {
-    "cuda"
 } else if cfg!(feature = "metal") {
     "metal"
 } else {
@@ -245,10 +239,10 @@ fn actual_local_inference() {
         assert!(result["usage"]["avg_compl_tok_per_sec"].as_f64().unwrap() >= 0.0);
     }
     let backend = responses[0]["result"]["loaded_backend"].as_str().unwrap();
-    // mistral.rs retries once on CPU after a failed Metal/CUDA load, and the
+    // Metal retries once on CPU after a failed accelerated load, and the
     // loaded backend reports that honestly; GPU and CPU builds never fall back.
-    if cfg!(any(feature = "metal", feature = "cuda")) {
-        assert!(matches!(backend, "cpu" | "metal" | "cuda" | "unknown"));
+    if cfg!(feature = "metal") {
+        assert!(matches!(backend, "cpu" | "metal"));
     } else {
         assert_eq!(backend, EXPECTED_BACKEND);
     }

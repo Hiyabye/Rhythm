@@ -9,6 +9,25 @@ async function openSettings(page: import('@playwright/test').Page) {
   await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name: '설정', exact: true }).click();
 }
 
+test('Windows keeps previous Vulkan analysis readable and identifies it as outdated', async ({ page }) => {
+  await mockDesktop(page, { windows: true, aiInstalled: true, aiResult: true });
+  await page.goto('/');
+  await page.evaluate(() => {
+    const fixture = (window as any).__fixture;
+    fixture.analyses[0].model_identity.runtime_policy = 'llama-vulkan-v1';
+    fixture.analyses[0].model_identity.loaded_backend = 'vulkan';
+    fixture.ai.preferences.active_model_id = null;
+    fixture.ai.analysis_contract.configuration_hash = null;
+  });
+  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
+  await page.locator('#notice-1').click();
+  const panel = page.getByRole('region', { name: '공지 AI 분석' });
+  await expect(panel.getByText('이 결과는 현재 모델 또는 분석 방식·설정과 다릅니다.', { exact: false })).toBeVisible();
+  await expect(panel.getByText('장학금 신청 일정과 제출 서류를 확인하세요.', { exact: true })).toBeVisible();
+  await expect(panel.getByText('분석 당시 장치 · NVIDIA GPU (Vulkan)', { exact: true })).toBeVisible();
+  expect(await callCount(page, 'ai_analyze')).toBe(0);
+});
+
 test('Windows build offers manual installer updates without invoking updater commands', async ({ page }) => {
   await mockDesktop(page, { windows: true });
   await page.goto('/');

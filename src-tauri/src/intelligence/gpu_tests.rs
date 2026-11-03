@@ -16,7 +16,7 @@ fn main() {
   let line=line.unwrap();
   let id=line.split("\"id\":").nth(1).unwrap().split(|c:char| !c.is_ascii_digit()).next().unwrap();
   if line.contains("\"shutdown\"") { break; }
-  if gpu && mode=="fail" && !line.contains("\"status\"") {
+  if gpu && (mode=="fail" || mode=="legacy-cpu") && !line.contains("\"status\"") {
    println!("{{\"version\":1,\"id\":{id},\"ok\":false,\"error\":\"GPU memory exhausted\"}}");
   } else if gpu && mode=="oversize" && line.contains("\"infer\"") && line.contains("긴 공지") {
    println!("{{\"version\":1,\"id\":{id},\"ok\":false,\"error\":\"GPU 분석 입력과 출력이 8192 토큰 한도를 넘습니다. 본문 길이를 줄이거나 CPU를 사용해 주세요.\"}}");
@@ -25,7 +25,7 @@ fn main() {
    println!("{{\"version\":1,\"id\":{id},\"ok\":true,\"result\":{{\"text\":\"한국어 결과\",\"loaded_backend\":\"{backend}\"}}}}");
   } else {
    if line.contains("\"load\"") { loaded=true; }
-   let engine=if gpu && mode!="misreport" {"llama.cpp"} else {"mistral.rs"};
+   let engine=if (gpu && mode=="misreport") || (!gpu && mode=="legacy-cpu") {"mistral.rs"} else {"llama.cpp"};
    let backend=if gpu && mode!="misreport" {"vulkan"} else {"cpu"};
    let model=if loaded {"\"test.gguf\""} else {"null"};
    println!("{{\"version\":1,\"id\":{id},\"ok\":true,\"result\":{{\"engine\":\"{engine}\",\"runtime_available\":true,\"analysis_json_v1\":true,\"model\":{model},\"build_backend\":\"{backend}\",\"loaded_backend\":\"{backend}\"}}}}");
@@ -94,6 +94,7 @@ async fn gpu_failure_reaps_and_falls_back_once_only_in_auto_mode() {
         }
         assert_ne!(worker.process_id(), gpu_pid);
         assert!(!worker.active_gpu);
+        assert!(worker.status().runtime_available);
         assert!(worker.status().detail.unwrap().contains("CPU 전환"));
         worker.restart().await.unwrap();
         assert!(!worker.active_gpu);
@@ -135,6 +136,19 @@ async fn gpu_wrong_engine_cannot_satisfy_forced_gpu_and_auto_recovers() {
         }
         worker.shutdown().await;
     }
+}
+
+#[tokio::test]
+async fn auto_does_not_retry_inference_on_a_previous_cpu_engine() {
+    let dir = fixture("legacy-cpu");
+    let mut worker = Worker::launch_configured(&dir.path().join("rhythm-ai-worker.exe"), "auto");
+    assert_eq!(worker.refresh().await.state, "ready");
+    let error = worker
+        .infer_analysis(Path::new("test.gguf"), "공지", 32)
+        .await
+        .unwrap_err();
+    assert!(error.contains("llama.cpp"));
+    assert!(worker.process_id().is_none());
 }
 
 #[tokio::test]

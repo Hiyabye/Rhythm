@@ -1,4 +1,5 @@
 {
   "prompt_version": 3,
-  "schema_version": 1
+  "schema_version": 1,
+  "runtime_policy": "llama-unified-v1"
 }

@@ -21,8 +21,8 @@ Rust application (src-tauri)
         ├─ stored document revision → validated result → SQLite cache
         │ versioned JSON lines over stdin/stdout
 one isolated worker process at a time
-  ├─ rhythm-ai-worker (crates/ai-worker) → pinned mistral.rs (Metal or CPU) → local GGUF
-  └─ Windows only: rhythm-ai-worker-gpu → pinned llama.cpp / Vulkan → local GGUF
+  ├─ rhythm-ai-worker (crates/ai-worker) → pinned llama.cpp (CPU or Metal) → local GGUF
+  └─ Windows only: rhythm-ai-worker-gpu → same llama.cpp runtime / Vulkan → local GGUF
 ```
 
 There are only two Cargo workspace members: the Tauri app and the worker. Collection never waits for inference or writes AI results. Release builds are ad-hoc signed (macOS) or unsigned (Windows) by policy; the updater stays disabled without a configured public key.
@@ -230,15 +230,15 @@ Protocol v1 is serial, ID- and version-matched UTF-8 JSON Lines with 1 MiB frame
 
 One model and one sequence at most. Switching drops the old model first; app-level unload reaps and restarts an empty worker to reclaim memory. Cancellation persists job state, drops the pending request and reaps the process; a late response is never reused. Deadlines: 8 s lifecycle, 180 s load, 600 s inference.
 
-mistral.rs lives only in the worker, pinned to v0.9.1 commit `11f255058573e085afe0a149f8a19cbd39aa1200`. Stdout carries only protocol; diagnostics go to stderr. Direct Cargo builds default to CPU. Accelerated builds retry once with a CPU-forced load after an accelerated-load error, and report compiled and loaded backend separately.
+llama.cpp lives only in the worker, through `llama-cpp-2`/`llama-cpp-sys-2` pinned to `0.1.160`. CPU, Metal and Vulkan share the model loading, prompt, grammar and generation implementation. Direct Cargo builds default to CPU; the Metal feature can retry a failed accelerated load once on CPU. Status separates the compiled and loaded backend; an accelerated build alone does not prove device use. Stdout carries only protocol and diagnostics go to stderr. Workers keep the app version and ship in the same installer; this separation does not create an independently updated AI service.
 
-On Windows the separate GPU worker (llama.cpp/Vulkan) uses the same pipe. Only on Windows does the cache configuration hash include the `llama-vulkan-v1` runtime policy and execution mode; elsewhere the hash input is byte-identical to v1.0 so cached results survive upgrades. `auto` falls back to CPU for the session after a device, load or protocol failure, and retries only the affected request on CPU after a context-overflow rejection.
+On Windows the separate Vulkan worker uses the same pipe, while the CPU executable starts without Vulkan tooling or a graphics driver. CPU/Metal context is 32,768 tokens; Vulkan context is 8192. Windows `auto` falls back to CPU for the session after a device, load or protocol failure, and retries only the affected request on CPU after a context-overflow rejection. Explicit `gpu` reports failures. Other platforms ignore the Windows execution-mode preference.
 
 ## Analysis, validation and cache
 
 `intelligence/analysis.rs` reads a stored revision through `Store::document`; it never refetches the page or opens attachments. One persistent queue serializes inference. The default is explicit requests; opening an article only reads existing results. Cache lookup happens before any model inspection or worker launch, and pending duplicates share one attempt.
 
-**Cache identity:** document/revision + task + artifact SHA-256 + prompt version + output-schema version + a hash of output-affecting configuration (token limit, source bound, selector and evidence encoding, prompt rules, clock rules, decoding mode, thinking, sampling, repair policy; plus the Windows runtime policy and execution mode). Current prompt version is **3**, selector **head-tail-keywords-v4**, stored schema **1**. Older results stay readable with provenance but never satisfy a newer key; the reader warns when a stored result's contract differs from the current one. Recovered pending attempts with an obsolete identity fail with retry guidance.
+**Cache identity:** document/revision + task + artifact SHA-256 + prompt version + output-schema version + a hash of output-affecting configuration (token limit, source bound, selector and evidence encoding, prompt rules, clock rules, decoding mode, thinking, sampling, repair policy; runtime policy `llama-unified-v1` on every platform, plus execution mode on Windows). Current prompt version is **3**, selector **head-tail-keywords-v4**, stored schema **1**. The runtime policy separates fresh llama.cpp analysis from previous-runtime results without changing stored schema or deleting results. Older results stay readable with provenance but never satisfy a newer key; the reader warns when a stored result's contract differs from the current one. Recovered pending attempts with an obsolete identity fail with retry guidance.
 
 **Output (stored schema 1):** strict JSON with `short_summary`, `summary`, one of eight `category` values, qualitative `uncertainty` and `facts`. Fact kinds are deadline, event date, eligibility, documents, application method, link and action. Prompt 3 sends selected source passages as `{id,text}` objects, and generation must return exactly `kind`, `label`, `value` and integer `evidence_id` per fact. The backend resolves each ID to the exact archived text and derives date and uncertainty before validating the stored schema. Invalid references, unknown or missing fields, invalid categories, malformed, empty, oversized or repetitive output, control tokens, unsupported evidence and ungrounded links are rejected.
 
@@ -278,7 +278,9 @@ The updater verifies Tauri-signed artifacts against a build-time public key and 
 
 ## Packaging and CI
 
-`src-tauri/tauri.conf.json` bundles the host worker as `externalBin`. `scripts/desktop.mjs` builds and stages it, then runs Tauri; it is not a cross-compilation helper. On Apple Silicon it picks Metal when `xcrun metal --version` works, otherwise CPU; `RHYTHM_AI_BACKEND=cpu|metal` overrides, and an explicit `metal` fails if the toolchain is missing. On Windows it delegates to `scripts/desktop-windows.mjs` (VC runtime staging, both workers, NSIS); see [Windows](WINDOWS.md). Scripts never install toolchains or weights. A Tauri build can copy a previously staged sidecar over `target/*/rhythm-ai-worker`, so exact-backend evaluations keep a separately named executable.
+`src-tauri/tauri.conf.json` bundles the host worker as `externalBin`. `npm run worker:build` prepares workers separately; desktop scripts verify and reuse exact artifacts or rebuild them before running Tauri. Each staged binary has a `.artifact.json` manifest with build-input fingerprint and executable SHA-256; actual protocol status must match its build identity, engine, backend and capabilities. Direct Cargo workers labeled `development` cannot satisfy this reuse check. See `AGENTS.md` for commands and validation details. This is build separation, not independent distribution or updating.
+
+The scripts target the host only. On Apple Silicon they pick Metal when `xcrun metal --version` works, otherwise CPU; `RHYTHM_AI_BACKEND=cpu|metal` overrides, and explicit `metal` fails if the toolchain is missing. Windows delegates to `scripts/desktop-windows.mjs` (VC runtime staging, both workers, NSIS); see [Windows](WINDOWS.md). Scripts never install toolchains or weights. A Tauri build can copy a staged sidecar over `target/*/rhythm-ai-worker`, so exact-backend evaluations keep a separately named executable.
 
 A default release build deletes `target/release/bundle/` and writes exactly two files to `target/release/distribution/`: the DMG or setup executable and its `.sha256`. Release builds remap `$HOME`, `CARGO_HOME` and the checkout with `--remap-path-prefix`. `scripts/macos-release.mjs` (Developer ID signing and notarization) is kept for a possible future decision and refuses to run without credentials; `scripts/verify-update.mjs` independently verifies updater signatures, manifests and archives.
 

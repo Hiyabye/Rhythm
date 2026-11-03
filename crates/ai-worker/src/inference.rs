@@ -1,7 +1,7 @@
-//! NVIDIA Vulkan inference, isolated from the CPU executable and its dependencies.
+//! Shared local llama.cpp inference for CPU, Apple Metal and NVIDIA Vulkan.
 use super::{
-    analysis_json_schema, request_load_ms, Engine, FileIdentity, InferParams, OutputMode,
-    SYSTEM_INSTRUCTION,
+    analysis_json_schema, load_with_cpu_fallback, request_load_ms, Engine, FileIdentity,
+    InferParams, OutputMode, SYSTEM_INSTRUCTION,
 };
 use llama_cpp_2::{
     context::params::LlamaContextParams,
@@ -27,7 +27,11 @@ use std::{
     time::Instant,
 };
 
-const CONTEXT: u32 = 8192;
+const CONTEXT: u32 = if cfg!(feature = "gpu-inference") {
+    8192
+} else {
+    32768
+};
 const BATCH: usize = 256;
 const VRAM_MARGIN: usize = 512 * 1024 * 1024;
 
@@ -89,102 +93,121 @@ unsafe extern "C" fn capture_log(
 }
 
 fn supported_device(device: &LlamaBackendDevice) -> bool {
-    device.backend.eq_ignore_ascii_case("vulkan")
-        && matches!(device.device_type, LlamaBackendDeviceType::Gpu)
-        && device.description.to_ascii_uppercase().contains("NVIDIA")
+    matches!(device.device_type, LlamaBackendDeviceType::Gpu)
+        && if cfg!(feature = "gpu-inference") {
+            device.backend.eq_ignore_ascii_case("vulkan")
+                && device.description.to_ascii_uppercase().contains("NVIDIA")
+        } else {
+            cfg!(feature = "metal") && device.backend.eq_ignore_ascii_case("mtl")
+        }
 }
 
-pub(super) struct GpuModel {
-    // Drop the model before its backend. Contexts are request-local, never self-referential.
+pub(super) struct RuntimeModel {
+    // The model must be dropped before its backend; contexts are request-local.
     model: LlamaModel,
     backend: LlamaBackend,
     context: LlamaContextParams,
-    device: String,
+    device: Option<String>,
     layers: u32,
+    loaded_backend: &'static str,
 }
 
-impl GpuModel {
-    fn load(path: &std::path::Path) -> Result<Self, String> {
+impl RuntimeModel {
+    fn load(path: &std::path::Path, force_cpu: bool) -> Result<Self, String> {
         NATIVE_LOG_BYTES.store(0, Ordering::Relaxed);
-        // SAFETY: static callback with no user pointer; protocol never shares stdout with native logs.
+        *LOAD_EVIDENCE.lock().map_err(|_| "AI 상태 잠금 오류")? = None;
+        // SAFETY: static callback; all native diagnostics go to stderr, never IPC stdout.
         unsafe {
             llama_cpp_sys_2::llama_log_set(Some(capture_log), std::ptr::null_mut());
         }
-        let backend = LlamaBackend::init().map_err(|e| format!("GPU 엔진 초기화 실패: {e}"))?;
-        let device = llama_cpp_2::list_llama_ggml_backend_devices()
-            .into_iter()
-            .filter(supported_device)
-            .max_by_key(|d| d.memory_free)
-            .ok_or(
-                "사용 가능한 NVIDIA Vulkan GPU를 찾지 못했습니다. 그래픽 드라이버를 확인해 주세요.",
-            )?;
-        if device.memory_free <= VRAM_MARGIN {
-            return Err("사용 가능한 GPU 메모리가 부족합니다.".into());
-        }
+        let backend = LlamaBackend::init().map_err(|e| format!("AI 엔진 초기화 실패: {e}"))?;
+        let accelerated = !force_cpu && cfg!(any(feature = "gpu-inference", feature = "metal"));
         let mut context = LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(CONTEXT))
             .with_n_batch(BATCH as u32)
             .with_n_ubatch(128)
             .with_n_seq_max(1)
+            .with_offload_kqv(accelerated)
+            .with_op_offload(accelerated)
             .with_flash_attention_policy(llama_cpp_sys_2::LLAMA_FLASH_ATTN_TYPE_DISABLED);
-        let params = LlamaModelParams::default()
-            .with_devices(&[device.index])
-            .map_err(|e| format!("GPU 선택 실패: {e}"))?
-            .with_split_mode(LlamaSplitMode::None)
-            .with_main_gpu(0);
+        let params = LlamaModelParams::default().with_n_gpu_layers(0);
         let mut params = Box::pin(params);
-        let cpath = CString::new(path.to_str().ok_or("모델 경로를 읽을 수 없습니다.")?)
-            .map_err(|_| "모델 경로에 잘못된 문자가 있습니다.")?;
-        let mut margins = vec![VRAM_MARGIN; llama_cpp_2::max_devices()];
-        params
-            .as_mut()
-            .fit_params(
-                &cpath,
-                &mut context,
-                &mut margins,
-                CONTEXT,
-                llama_cpp_sys_2::GGML_LOG_LEVEL_ERROR,
-            )
-            .map_err(|e| format!("GPU 메모리에 모델을 배치할 수 없습니다: {e}"))?;
-        if params.no_alloc() {
-            return Err("GPU 메모리 배치가 실제 할당 모드가 아닙니다.".into());
-        }
-        if params.n_gpu_layers() == 0 {
-            return Err("GPU에 배치할 모델 계층이 없습니다.".into());
-        }
-        *LOAD_EVIDENCE.lock().map_err(|_| "GPU 상태 잠금 오류")? = Some(Evidence {
-            device: device.name.clone(),
-            ..Default::default()
-        });
-        let model = LlamaModel::load_from_file(&backend, path, &params)
-            .map_err(|e| format!("GPU 모델을 불러오지 못했습니다: {e}"))?;
-        let evidence = LOAD_EVIDENCE
-            .lock()
-            .map_err(|_| "GPU 상태 잠금 오류")?
-            .take()
-            .ok_or("실제 GPU 배치를 확인하지 못했습니다.")?;
-        if evidence.layers == 0 || !evidence.allocated {
-            return Err(
-                "실제 GPU 메모리 배치를 확인하지 못했습니다. CPU 분석을 사용해 주세요.".into(),
+        let mut selected = None;
+        if accelerated {
+            let device = llama_cpp_2::list_llama_ggml_backend_devices()
+                .into_iter()
+                .filter(supported_device)
+                .max_by_key(|d| d.memory_free)
+                .ok_or("사용 가능한 GPU를 찾지 못했습니다. 그래픽 드라이버를 확인해 주세요.")?;
+            if device.memory_free <= VRAM_MARGIN {
+                return Err("사용 가능한 GPU 메모리가 부족합니다.".into());
+            }
+            params = Box::pin(
+                LlamaModelParams::default()
+                    .with_devices(&[device.index])
+                    .map_err(|e| format!("GPU 선택 실패: {e}"))?
+                    .with_split_mode(LlamaSplitMode::None)
+                    .with_main_gpu(0),
             );
+            let cpath = CString::new(path.to_str().ok_or("모델 경로를 읽을 수 없습니다.")?)
+                .map_err(|_| "모델 경로에 잘못된 문자가 있습니다.")?;
+            let mut margins = vec![VRAM_MARGIN; llama_cpp_2::max_devices()];
+            params
+                .as_mut()
+                .fit_params(
+                    &cpath,
+                    &mut context,
+                    &mut margins,
+                    CONTEXT,
+                    llama_cpp_sys_2::GGML_LOG_LEVEL_ERROR,
+                )
+                .map_err(|e| format!("GPU 메모리에 모델을 배치할 수 없습니다: {e}"))?;
+            if params.no_alloc() || params.n_gpu_layers() == 0 {
+                return Err("GPU에 배치할 모델 계층이 없습니다.".into());
+            }
+            *LOAD_EVIDENCE.lock().map_err(|_| "GPU 상태 잠금 오류")? = Some(Evidence {
+                device: device.name.clone(),
+                ..Default::default()
+            });
+            selected = Some(device);
         }
+        let model = LlamaModel::load_from_file(&backend, path, &params)
+            .map_err(|e| format!("모델을 불러오지 못했습니다: {e}"))?;
         let arch = model
             .meta_val_str("general.architecture")
             .map_err(|_| "모델 종류를 확인하지 못했습니다.")?;
         if !matches!(arch.as_str(), "qwen3" | "qwen35") {
-            return Err("GPU 분석은 현재 Qwen3/Qwen3.5 GGUF 텍스트 모델을 지원합니다.".into());
+            return Err("현재 Qwen3/Qwen3.5 GGUF 텍스트 모델을 지원합니다.".into());
         }
-        // Verify context allocation before reporting a successfully loaded GPU model.
+        let layers = if accelerated {
+            let evidence = LOAD_EVIDENCE
+                .lock()
+                .map_err(|_| "GPU 상태 잠금 오류")?
+                .take()
+                .ok_or("실제 GPU 배치를 확인하지 못했습니다.")?;
+            if evidence.layers == 0 || !evidence.allocated {
+                return Err("실제 GPU 메모리 배치를 확인하지 못했습니다.".into());
+            }
+            evidence.layers
+        } else {
+            0
+        };
+        // Do not report a load until allocation of the actual inference context succeeds.
         let probe = model
             .new_context(&backend, context.clone())
-            .map_err(|e| format!("GPU 분석 공간을 준비하지 못했습니다: {e}"))?;
+            .map_err(|e| format!("분석 공간을 준비하지 못했습니다: {e}"))?;
         drop(probe);
         Ok(Self {
             model,
             backend,
             context,
-            device: device.description,
-            layers: evidence.layers,
+            device: selected.map(|d| d.description),
+            layers,
+            loaded_backend: if accelerated {
+                super::BUILD_BACKEND
+            } else {
+                "cpu"
+            },
         })
     }
 
@@ -198,7 +221,7 @@ impl GpuModel {
             .to_str()
             .map_err(|_| "모델의 대화 형식이 잘못되었습니다.")?;
         if !template_text.contains("<|im_start|>") || !template_text.contains("<|im_end|>") {
-            return Err("GPU 분석에 지원되지 않는 대화 형식입니다.".into());
+            return Err("지원되지 않는 대화 형식입니다.".into());
         }
         let messages = [
             LlamaChatMessage::new("system".into(), SYSTEM_INSTRUCTION.into()),
@@ -216,7 +239,9 @@ impl GpuModel {
         let tokens = vocab.tokenize(prompt.as_bytes(), true, true);
         if !token_budget_fits(tokens.len(), params.max_tokens) {
             // The app matches "토큰 한도를 넘습니다" to retry only this request on CPU.
-            return Err("GPU 분석 입력과 출력이 8192 토큰 한도를 넘습니다. 본문 길이를 줄이거나 CPU를 사용해 주세요.".into());
+            return Err(format!(
+                "분석 입력과 출력이 {CONTEXT} 토큰 한도를 넘습니다. 본문 길이를 줄여 주세요."
+            ));
         }
         let mut samplers = Vec::new();
         if params.output_mode == Some(OutputMode::AnalysisJsonV1) {
@@ -232,7 +257,7 @@ impl GpuModel {
         let mut context = self
             .model
             .new_context(&self.backend, self.context.clone())
-            .map_err(|e| format!("GPU 분석 공간 준비 실패: {e}"))?;
+            .map_err(|e| format!("분석 공간 준비 실패: {e}"))?;
         let mut batch = LlamaBatch::new(BATCH, 1);
         let preparation_ms = preparation.elapsed().as_millis() as u64;
         let generation = Instant::now();
@@ -242,11 +267,11 @@ impl GpuModel {
                 let position = chunk_index * BATCH + offset;
                 batch
                     .add(*token, position as i32, &[0], position + 1 == tokens.len())
-                    .map_err(|e| format!("GPU 입력 준비 실패: {e}"))?;
+                    .map_err(|e| format!("분석 입력 준비 실패: {e}"))?;
             }
             context
                 .decode(&mut batch)
-                .map_err(|e| format!("GPU 입력 처리 실패: {e}"))?;
+                .map_err(|e| format!("분석 입력 처리 실패: {e}"))?;
         }
         // decode may enqueue asynchronous GPU work; synchronize before splitting timings.
         context.synchronize();
@@ -274,10 +299,10 @@ impl GpuModel {
                 batch.clear();
                 batch
                     .add(token, (tokens.len() + index) as i32, &[0], true)
-                    .map_err(|e| format!("GPU 출력 준비 실패: {e}"))?;
+                    .map_err(|e| format!("분석 출력 준비 실패: {e}"))?;
                 context
                     .decode(&mut batch)
-                    .map_err(|e| format!("GPU 추론 실패: {e}"))?;
+                    .map_err(|e| format!("로컬 추론 실패: {e}"))?;
             }
         }
         let text =
@@ -329,18 +354,22 @@ impl Engine {
         let canonical = path.to_str().ok_or("모델 경로를 읽을 수 없습니다.")?;
         if self.model_path.as_deref() == Some(canonical)
             && self.file_identity.as_ref() == Some(&identity)
-            && self.gpu.is_some()
+            && self.model.is_some()
         {
             return Ok(true);
         }
         self.unload();
         let started = Instant::now();
-        let model = GpuModel::load(&path)?;
+        let model = load_with_cpu_fallback(cfg!(feature = "metal"), |force_cpu| {
+            let path = path.clone();
+            async move { RuntimeModel::load(&path, force_cpu && !cfg!(feature = "gpu-inference")) }
+        })
+        .await?;
         self.load_ms = started.elapsed().as_millis() as u64;
-        self.gpu = Some(model);
+        self.loaded_backend = Some(model.loaded_backend.into());
+        self.model = Some(model);
         self.model_path = Some(canonical.into());
         self.file_identity = Some(identity);
-        self.loaded_backend = Some("vulkan".into());
         Ok(false)
     }
 
@@ -354,9 +383,9 @@ impl Engine {
         let reused = self.load_local(path).await?;
         let load_time = request_load_ms(reused, started.elapsed());
         let mut result = self
-            .gpu
+            .model
             .as_ref()
-            .ok_or("GPU 모델이 준비되지 않았습니다.")?
+            .ok_or("모델이 준비되지 않았습니다.")?
             .infer(&params)?;
         result["model"] = json!(self.model_path);
         result["load_ms"] = json!(self.load_ms);
@@ -382,14 +411,18 @@ mod tests {
             memory_free: 3 << 30,
             device_type: LlamaBackendDeviceType::Gpu,
         };
-        assert!(supported_device(&device));
+        assert_eq!(supported_device(&device), cfg!(feature = "gpu-inference"));
+        device.backend = "MTL".into();
+        assert_eq!(supported_device(&device), cfg!(feature = "metal"));
+        device.backend = "Vulkan".into();
         device.description = "Intel UHD".into();
         assert!(!supported_device(&device));
         device.description = "NVIDIA GeForce RTX 5090".into();
         device.backend = "CPU".into();
         assert!(!supported_device(&device));
         assert!(token_budget_fits(4096, 4096));
-        assert!(!token_budget_fits(4097, 4096));
+        assert_eq!(token_budget_fits(4097, 4096), CONTEXT > 8192);
+        assert!(!token_budget_fits(CONTEXT as usize, 1));
         assert!(!token_budget_fits(usize::MAX, 1));
         assert!(!token_budget_fits(0, 1));
     }

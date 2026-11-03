@@ -31,7 +31,7 @@ if ((command === 'cargo' && process.argv.includes('build')) || command === 'npm'
 if (command === 'rustc') console.log('host: ' + process.env.TEST_RUST_HOST);
 if (command === 'cargo' && process.argv.includes('--version')) console.log('cargo 1.90.0 test');
 if (command === 'cargo' && process.argv.includes('build')) {
-  const status = { build_id: process.env.RHYTHM_WORKER_BUILD_ID, engine: 'mistral.rs',
+  const status = { build_id: process.env.RHYTHM_WORKER_BUILD_ID, engine: 'llama.cpp',
     build_backend: process.argv.includes('metal') ? 'metal' : 'cpu', runtime_available: true, analysis_json_v1: true };
   const worker = '#!${process.execPath}\\n' +
     'process.stdin.resume(); process.stdin.on("end", () => { console.log(' +

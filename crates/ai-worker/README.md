@@ -1,229 +1,142 @@
 # Rhythm AI worker
 
-Rhythm bundles a separate Rust executable, `rhythm-ai-worker`, for local inference.
-It starts without weights, retains at most one model, and uses no inference server or
-network port. Diagnostic output (including upstream stdout prints) is redirected to
-stderr; stdout carries only versioned JSON Lines IPC.
+Rhythm bundles an isolated Rust executable for local inference. It starts without
+weights, retains at most one model and opens no server or network port. Stdout is
+exclusively protocol v1 JSON Lines; diagnostics, including upstream output, go to
+stderr. The worker shares the application version and installer. It is not an
+independently updated service.
 
-## Runtime and compatibility
+## Runtime and builds
 
-The worker shares the application version. Rhythm supports macOS Apple Silicon and
-Windows 11 x64; other build targets are implementation capabilities, not product support.
-The worker protocol is v1; application prompt versioning and stored-result schemas are
-separate contracts.
+All inference builds use the same llama.cpp implementation through
+`llama-cpp-2`/`llama-cpp-sys-2`, pinned to `0.1.160` by the workspace lockfile.
+The supported products are macOS Apple Silicon and Windows 11 x64.
 
-The worker pins **mistral.rs v0.9.1**, upstream release commit
-[`11f255058573e085afe0a149f8a19cbd39aa1200`](https://github.com/EricLBuehler/mistral.rs/tree/11f255058573e085afe0a149f8a19cbd39aa1200).
-crates.io had only 0.8.1 when inspected, so this is a commit-pinned Git dependency; its
-Candle dependency is pinned by the root lockfile.
+| Cargo features | Compiled backend | Shipped executable |
+| --- | --- | --- |
+| Default (`inference`) | CPU | `rhythm-ai-worker` |
+| `metal` | Apple Metal, with CPU fallback | macOS `rhythm-ai-worker` |
+| `--no-default-features --features gpu-inference` | NVIDIA Vulkan | Windows `rhythm-ai-worker-gpu.exe` |
+| `--no-default-features` | No inference, lifecycle tests only | Not a production worker |
 
-Inspected 0.8.1 and v0.9.0 GGUF loaders do not route `qwen35`.
-The v0.9.1 native GGUF loader explicitly supports `qwen35`; its
-`scopes_main_only_multimodal_architectures` test confirms a text-only Qwen3.5 GGUF does
-not require a multimodal projector. This is source-level compatibility evidence, not
-proof that every quantization/artifact/backend runs correctly. A projector is not
-loaded or downloaded by Rhythm's text-only path.
+Metal and Vulkan cannot be enabled together. Windows installers include separate CPU
+and Vulkan executables, so CPU startup does not depend on a Vulkan driver. CUDA is not a feature.
+The common engine in `src/inference.rs` owns GGUF loading, chat formatting, constrained decoding and generation;
+backend selection does not duplicate those contracts.
 
-An existing canonical local directory is passed to the GGUF loader. No remote tokenizer
-ID is set and `TokenSource::None` is used. Models must contain usable tokenizer/chat
-metadata; unsupported or incomplete artifacts return an error rather than fetching
-replacement metadata. Neither the builder nor requests enable tools, search, MCP,
-shell execution, code execution, or file attachments.
-
-## Windows NVIDIA GPU worker
-
-`--no-default-features --features gpu-inference` builds a separate worker on
-`llama-cpp-2`/`llama-cpp-sys-2` pinned to `0.1.160` with Vulkan (`src/gpu.rs`). It
-speaks the same protocol, reports `engine: "llama.cpp"` and `build_backend:
-"vulkan"`, and is shipped on Windows as the `rhythm-ai-worker-gpu` sidecar beside
-the CPU worker. CPU and GPU features are mutually exclusive (compile error). The
-worker accepts only an NVIDIA Vulkan device and reports a GPU load only after it
-observes offloaded layers and an allocated GPU buffer. Its context is 8192 tokens;
-an input that does not fit is rejected with an error containing `토큰 한도를
-넘습니다`, which the app treats as a per-request CPU retry rather than a device
-failure. Archived `<|`/`|>` delimiters are neutralized so source text cannot open
-a chat role.
-
-NVIDIA GTX 10/16 and RTX 20/30/40/50 are targets, not tested hardware. Build
-requirements (Vulkan SDK, libclang, CMake, Ninja, a target directory of at most 32
-characters distinct from the CPU one) are in the
-[Windows guide](../../docs/WINDOWS.md):
-
-```powershell
-$env:LLAMA_BUILD_SHARED_LIBS = '0'
-$env:LLAMA_STATIC_CRT = '1'
-cargo test --locked -p rhythm-ai-worker --release --no-default-features --features gpu-inference --target-dir D:\rhythm-gpu
-```
-
-On Windows release builds, `build.rs` links the VC runtime statically
-(`static_vcruntime`) while keeping the Windows Universal CRT dynamic.
-
-## Build and tests
-
-From the repository root, with Cargo/Rust on PATH:
+`npm run worker:build` prepares release workers independently of the app; add `-- --debug`
+for debug workers. Desktop builds reuse only matching manifest, SHA-256 and actual status
+identities, rebuilding when those checks fail. See `AGENTS.md` for that build contract.
+Direct Cargo commands remain useful for focused runtime work:
 
 ```sh
 cargo build --locked -p rhythm-ai-worker
 cargo test --locked -p rhythm-ai-worker
-cargo build --locked -p rhythm-ai-worker --release
+cargo build --locked --release -p rhythm-ai-worker --features metal
 ```
 
-CPU is the default. Optional build features are `metal` and `cuda`; they require
-compatible platform developer tooling. A lifecycle-only test build is available with
-`--no-default-features`, and explicitly reports `runtime_available: false`. It cannot
-perform inference and is not a production substitute. `build_backend` describes the
-compiled feature, **not measured GPU utilization or backend verification**. Status and
-inference responses separately expose `loaded_backend` (`cpu`, `metal`, `cuda`, or
-`unknown`), read from the loaded runtime device; it is null while unloaded. If an
-accelerated build fails to initialize/load, it drops that failed attempt and retries
-once with a fresh CPU-forced builder. Both attempts are bounded by the parent request
-deadline; failure of the CPU attempt is returned, not retried indefinitely. Diagnostics
-include the accelerated failure. A successful CPU fallback is never labeled as Metal
-or CUDA. Runtime device selection is not itself a GPU-utilization measurement.
+Windows Vulkan builds need a short, separate target directory and the toolchain described
+in the [Windows guide](../../docs/WINDOWS.md):
 
-```sh
-cargo build --locked -p rhythm-ai-worker --release --features metal
-cargo build --locked -p rhythm-ai-worker --release --features cuda
+```powershell
+$env:LLAMA_BUILD_SHARED_LIBS = '0'
+$env:LLAMA_STATIC_CRT = '1'
+cargo build --locked --release -p rhythm-ai-worker --no-default-features --features gpu-inference --target-dir D:\rhythm-gpu
 ```
 
-On macOS the root desktop helper accepts an explicit `cpu` or `metal` selection
-(Windows uses `auto`, `cpu` or `gpu`; see the [Windows guide](../../docs/WINDOWS.md)):
+Desktop scripts select Metal on Apple Silicon when the existing Metal compiler probe
+succeeds, otherwise CPU. Explicit `RHYTHM_AI_BACKEND=metal` fails if that tooling is
+missing. Build scripts do not install model weights or inference services.
 
-```sh
-RHYTHM_AI_BACKEND=cpu npm run desktop
-RHYTHM_AI_BACKEND=metal npm run desktop:build
-```
+`build_backend` describes the compiled backend, while `loaded_backend` reports the
+actual model placement and is null when unloaded. A failed Metal load retries once on
+CPU within the parent request deadline. Vulkan accepts only NVIDIA devices and reports
+GPU loading only after observing offloaded layers and an allocated GPU buffer. It
+reserves an estimated 512 MiB of VRAM; this cannot prevent contention with other apps.
+Windows fallback is owned by the app: `auto` switches to its CPU executable after a
+device/load/protocol failure, while explicit `gpu` returns the error.
 
-Desktop scripts prefer Metal on Apple Silicon if the existing `xcrun metal --version`
-probe succeeds; otherwise they select CPU. An explicit `metal` fails when that probe
-fails. Intel Macs use CPU. CUDA remains an optional
-direct Cargo worker build feature, not a supported desktop-script or product path.
-Backend selection chooses a build feature, not a guarantee that the accelerated device
-will load a model. Compatible tooling must already exist; the helper installs no
-toolchain or weights. The current useful Qwen3.5 output evidence is for Metal, not CPU.
-
-Do not enable upstream tool/search/execution capabilities or implicit remote resolution
-for notice analysis. GPU toolchains and model weights are not installed by these scripts.
+NVIDIA GTX 10/16 and RTX 20/30/40/50 are targets, not a list of verified hardware.
+Current artifact/backend evidence belongs in [AI evaluation](../../docs/AI_EVALUATION.md);
+previous mistral.rs results do not verify this runtime.
 
 ## Protocol v1
 
-One UTF-8 JSON request/response per line; framing is bounded to 1 MiB. Requests remain
-serial and preserve their numeric ID and version. Unknown versions/methods fail without
-terminating the process. Malformed JSON returns ID 0. Oversized frames terminate the
-worker. Closing stdin or sending `shutdown` ends it.
+Requests are serial, version- and ID-matched UTF-8 JSON Lines, bounded to 1 MiB per frame.
+Unknown versions/methods return errors; malformed JSON returns ID 0; oversized frames
+terminate the worker. Closing stdin or sending `shutdown` ends it.
 
 ```json
 {"version":1,"id":1,"method":"ping"}
 {"version":1,"id":2,"method":"status"}
-{"version":1,"id":3,"method":"load","params":{"model_path":"/absolute/path/model.gguf"}}
-{"version":1,"id":4,"method":"infer","params":{"model_path":"/absolute/path/model.gguf","prompt":"분석할 문서와 출력 형식","max_tokens":1024}}
+{"version":1,"id":3,"method":"load","params":{"model_path":"/absolute/model.gguf"}}
+{"version":1,"id":4,"method":"infer","params":{"model_path":"/absolute/model.gguf","prompt":"분석할 문서","max_tokens":1024,"output_mode":"analysis_json_v1"}}
 {"version":1,"id":5,"method":"unload"}
 {"version":1,"id":6,"method":"shutdown"}
 ```
 
-Existing `ping`, `status`, `infer`, and `shutdown` envelopes remain compatible; `load`
-and `unload` are additive. `infer` still loads/switches on demand when necessary.
+Status reports `engine: "llama.cpp"`, `build_id`, `runtime_available`, compiled/loaded backend,
+model and load timing. `infer` loads or switches on demand. Responses retain the existing
+`text`, `model`, load/reuse/timing, `finish_reason` and optional `usage` fields.
+`load_ms` is the last successful model load; `request_load_ms` and `model_reused`
+describe the current request. Missing optional legacy metrics remain unknown.
+Model metadata, compiled acceleration and inference timings are not quality guarantees.
 
-Analysis additionally negotiates the optional `analysis_json_v1` status capability and
-sends `"output_mode":"analysis_json_v1"` only to a supporting worker. Absent/null mode
-keeps ordinary text generation, including setup health checks. Unknown modes fail;
-callers cannot supply arbitrary grammars. Legacy workers remain usable for ordinary
-inference, but constrained analysis returns rebuild guidance without sending an unknown
-parameter or poisoning the existing pipe. Malformed supplied capability values fail
-validation and reap the child.
+The optional `analysis_json_v1` capability enables a fixed JSON schema compiled to
+llama.cpp grammar. Callers cannot supply arbitrary grammars. Absent/null output mode
+keeps ordinary text for setup checks; unknown modes fail. The schema allows five required
+fields, eight categories and at most six facts with exactly `kind`, `label`, `value`
+and nonnegative `evidence_id`. It must match the app's analysis ingress. Grammar does
+not establish source grounding or correct meaning; validators and one bounded repair
+remain app responsibilities.
 
-The analysis mode uses the pinned runtime's existing `Constraint::JsonSchema` API with
-a static closed schema: five required output fields, the eight categories, qualitative
-uncertainty, and at most six facts containing exactly `kind`, `label`, `value` and
-nonnegative `evidence_id`. Keep this schema aligned with application generation ingress.
-The mode explicitly stops at `<|endoftext|>`: a real 2B trial otherwise produced complete
-JSON followed by repeated grammar-EOS tokens until the token limit. This is termination
-handling, not post-hoc trimming of invalid output. Output-limit/runtime failures can
-still prevent a complete JSON result. Source/date/time/link and duplicate validators,
-one bounded repair and cancellation remain application responsibilities. Grammar does
-not prove correct categories, current deadlines or preserved exclusions. See the
-[decoding decision](../../docs/AI_EVALUATION.md#constrained-decoding-decision).
+## Model and generation boundaries
 
-Model paths are canonical local `.gguf` files, with GGUF v2/v3 magic/version validation
-before passing them to mistral.rs. Full architecture/tensor validation occurs in the
-runtime. The previous model is dropped before another is loaded. Reuse requires the
-same canonical path, file size and modification timestamp. Changes force a reload;
-this metadata check is not an integrity guarantee. The application independently
-checks the artifact SHA-256 and unloads on external-file re-registration.
+Only canonical local `.gguf` files pass to the engine after GGUF v2/v3 header checks.
+The app separately verifies the full artifact SHA-256. The runtime reads embedded
+tokenizer/chat metadata; incomplete artifacts fail rather than fetching replacements.
+No vision projector, attachments, remote tokenizer, tools, search or command execution
+are enabled. Chat control delimiters in source text are neutralized, thinking is disabled
+and a fixed system instruction treats source text as untrusted data.
 
-```json
-{"version":1,"id":2,"ok":true,"result":{"engine":"mistral.rs","runtime_available":true,"model":null,"load_ms":0,"build_backend":"cpu","loaded_backend":null,"analysis_json_v1":true}}
-{"version":1,"id":4,"ok":true,"result":{"text":"실제 생성된 응답","model":"/absolute/path/model.gguf","load_ms":123,"request_load_ms":0,"model_reused":true,"loaded_backend":"cpu","input_validation_ms":0,"request_preparation_ms":1,"generation_ms":456,"finish_reason":"stop","usage":{"completion_tokens":10}}}
-{"version":1,"id":4,"ok":false,"error":"한국어 오류 메시지"}
-```
+The old model is dropped before switching. Reuse requires the same canonical path,
+size and modification time; this is a reload check, not an integrity substitute.
+The app unloads changed external artifacts before re-registration can claim a new hash.
 
-The `usage` example is abbreviated: the runtime returns prompt/completion counts and
-its timing/throughput fields. The parent preserves these as typed optional diagnostics
-through `infer_detailed` and capability-negotiated `infer_analysis`; `infer` remains a text-returning compatibility wrapper.
-`load_ms` is the historical last successful load duration, not this request's load cost.
-`request_load_ms` and `model_reused` distinguish loading from reuse (zero request load
-when reused). Input validation, request preparation, generation wall time, finish reason
-and upstream engine usage are separate fields; engine timings are not end-to-end app
-latency. Missing legacy metrics remain unknown, while malformed supplied metrics fail
-and reap the worker. These are request observations, not performance guarantees.
-`load`/`unload` return status; `ping` returns `healthy`, and `shutdown` returns `shutdown`.
+Inputs are nonempty and at most 24 KiB UTF-8; outputs are 1–4096 tokens (default 128).
+CPU/Metal context is 32,768 tokens and Vulkan context is 8192, including input and output.
+Oversized inputs fail without silent truncation. Vulkan overflow includes
+`토큰 한도를 넘습니다`, allowing Windows `auto` to retry only that request on CPU.
+Generation uses greedy sampling, one sequence and a fresh inference context per request.
 
-Inputs are nonempty and at most **24 KiB UTF-8**, outputs 1–4096 tokens (default 128),
-with one sequence and a 32,768-token maximum context. Prefix caching is disabled to
-bound retained state. Upstream silent truncation is disabled. Oversized inputs fail;
-the caller must mark any bounded partial-document processing honestly. No binary
-attachment content is accepted. Generation uses the deterministic sampler, disables
-thinking, and sends a separate fixed system instruction treating document text as
-untrusted data. Output still requires application schema and evidence validation;
-a system prompt alone is not a factual-grounding guarantee.
+## Lifecycle and verification
 
-## Application lifecycle
+The app owns the executable, pipes and child process. Deadlines are 8 seconds for lifecycle
+requests, 180 seconds for loading and 600 seconds for inference. Invalid framing or
+responses and failed load/inference reap the worker; the next request can start a new one.
+Cancellation is process cancellation: stop and reap before reusing a pipe. App-level
+unload restarts an empty worker to reclaim OS memory; direct protocol unload only drops
+the model. Shutdown requests a clean exit before forced termination.
 
-`src-tauri/src/intelligence/mod.rs::Worker` owns Tokio pipes, child process and executable
-path. `infer` has a ten-minute deadline, `load` three minutes, and ordinary lifecycle
-requests eight seconds. Protocol versions/IDs/shape are validated. A failed inference
-or load kills and reaps the worker, leaving the archive/application independent.
-A later inference/load restarts it automatically. Explicit restart also performs a
-validated health check.
-
-Inference cancellation is **process cancellation**, not an in-band request queued behind
-inference: drop the pending future and call `Worker::stop().await` before any further
-pipe use. This cancels the current operation and releases its model memory. A subsequent
-request reloads once; normal completed requests reuse the worker/model. The application's
-in-memory operation owner exposes load/setup/register phases and cancellation across
-Settings remounts. A cancelled blocking verifier is joined before releasing admission;
-cancellation during serial IPC stops/reaps the child. Setup completion is persisted only
-after its real inference succeeds. Application
-`unload` restarts the empty worker to guarantee the OS reclaims upstream allocations.
-The direct protocol `unload` drops the model; OS-level memory release is guaranteed only
-by reaping its process. Shutdown requests clean exit before forced termination; child
-processes are kill-on-drop as a final safeguard. stderr drains bounded chunks even if
-upstream emits invalid UTF-8 or no newline.
-
-## Actual-model verification
-
-Routine tests do not download weights. Opt in with an existing artifact:
+Routine tests do not download weights. With an existing artifact and explicit test scope:
 
 ```sh
-RHYTHM_TEST_MODEL=/absolute/path/model.gguf cargo test --locked -p rhythm-ai-worker --test process actual_local_inference -- --ignored --nocapture
-RHYTHM_WORKER_TEST_BIN="$PWD/target/debug/rhythm-ai-worker" cargo test --locked -p rhythm intelligence::tests
+node scripts/validate-worker.mjs --backend cpu --worker /absolute/rhythm-ai-worker --model /absolute/model.gguf --report /absolute/new-report.json
+RHYTHM_TEST_MODEL=/absolute/model.gguf cargo test --locked -p rhythm-ai-worker --test process actual_local_inference -- --ignored --nocapture
+RHYTHM_WORKER_TEST_BIN=/absolute/rhythm-ai-worker cargo test --locked -p rhythm intelligence::tests
 ```
 
-The actual-model process test loads, queries status, performs real generation, unloads,
-checks empty status, and shuts down. It checks protocol-only stdout and a nonempty model
-response, not summary quality. The application-side test additionally exercises crash,
-restart, failed-load/inference recovery, serialized concurrent health requests and cleanup.
-Deterministic tests exercise protocol/version failures, bounded frames, invalid paths,
-GGUF headers, input limits, request deadlines and cancellation cleanup.
+The Node helper accepts `cpu`, `vulkan` or `metal` and verifies actual backend placement,
+structured output and owned-process cancellation/recovery. Metal CPU fallback is rejected
+unless `--allow-cpu-fallback` is explicit; that result is labeled separately. The legacy
+`validate-gpu.mjs` entry point fixes the backend to Vulkan. Semantic observations do not
+decide the integration pass. See [evaluation commands](../../docs/AI_EVALUATION.md#running-evaluations).
 
-Tauri app builds can overwrite `target/debug/rhythm-ai-worker` with the staged sidecar.
-For exact-backend evaluations, copy a freshly built worker to a separate dedicated
-path before building the app; explicitly stage the intended binary for native builds.
-A Fresh Cargo message alone is not evidence of which binary remains at the shared path.
+The real-model process test covers load, status, generation, unload and shutdown; a
+nonempty response proves generation, not summary accuracy. App tests cover process
+failure/restart and cleanup. Build the exact backend before testing and preserve a
+separate named executable if later app builds could overwrite the shared Cargo output.
+Never report an ignored or skipped real-worker test as inference verification.
 
-The tiny `Qwen3-0.6B-Q8_0` baseline passed the actual-model process test on CPU and with
-the Metal feature (`loaded_backend: "metal"`); its refusal-like output shows real generation
-and lifecycle, not summary quality. CPU fallback is tested with deterministic loader
-failures; a real unavailable-GPU-to-CPU transition has not been forced. Qwen3.5 artifact
-evidence, measurements and remaining gaps are in
-[`docs/AI_EVALUATION.md`](../../docs/AI_EVALUATION.md).
+Current runtime measurements, historical evidence boundaries and evaluation commands
+are recorded once in [AI evaluation](../../docs/AI_EVALUATION.md).

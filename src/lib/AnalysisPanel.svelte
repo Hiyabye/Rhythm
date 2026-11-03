@@ -24,6 +24,7 @@
     || (data && current.model_identity.max_tokens !== undefined && current.model_identity.max_tokens !== data.preferences.max_tokens)
     || current.prompt_version !== contract.prompt_version
     || current.schema_version !== contract.schema_version
+    || current.model_identity.runtime_policy !== contract.runtime_policy
     || (data?.analysis_contract && (current.prompt_version !== data.analysis_contract.prompt_version
       || current.schema_version !== data.analysis_contract.schema_version
       || (data.analysis_contract.configuration_hash && current.configuration_hash !== data.analysis_contract.configuration_hash))))));

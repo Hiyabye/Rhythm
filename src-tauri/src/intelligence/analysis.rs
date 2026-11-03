@@ -21,6 +21,7 @@ use tokio::sync::{Mutex as AsyncMutex, Notify};
 
 pub const PROMPT_VERSION: u32 = 3;
 pub const SCHEMA_VERSION: u32 = 1;
+pub const RUNTIME_POLICY: &str = "llama-unified-v1";
 const CONSTRAINED_OUTPUT_DEFAULT: bool = true;
 pub(super) fn decoding_mode() -> &'static str {
     #[cfg(test)]
@@ -291,7 +292,7 @@ impl Controller {
             let identity = json!({"id":model.id,"name":model.name,"sha256":model.sha256,
                 "catalog_id":model.catalog_id,"source_revision":model.source_revision,
                 "source_filename":model.source_filename,"max_tokens":preferences.max_tokens,
-                "execution_mode":preferences.execution_mode,"runtime_policy":"llama-vulkan-v1"});
+                "execution_mode":preferences.execution_mode,"runtime_policy":RUNTIME_POLICY});
             let job = store.ai_enqueue(&key, &identity, 100)?;
             Ok(StartResponse {
                 cached: None,
@@ -598,16 +599,16 @@ pub fn key_for_mode(
         configuration_hash: configuration_hash(max_tokens, decoding_mode(), execution_mode),
     })
 }
-/// Windows keys each execution mode separately: CPU (mistral.rs) and GPU
-/// (llama.cpp, smaller context, control-token neutralization) differ
-/// semantically. `auto` admits a result from either engine, and each result
-/// records and displays the device that produced it. Other platforms ship one
-/// worker, so the mode is not part of the identity and the hash input stays
-/// byte-identical to v1.0, keeping existing cached results valid.
+/// All platforms invalidate pre-unification generation caches while retaining
+/// their stored results for reading. Windows still keys each execution mode
+/// separately because CPU and Vulkan have different context limits; `auto`
+/// admits either device and each result records the backend that produced it.
+/// Other platforms ship one worker, so the preference is not part of its key.
 fn configuration_hash(max_tokens: u32, decoding: &str, execution_mode: &str) -> String {
     let base = format!("analysis-v3;selector=head-tail-keywords-v4;prompt_rules=primary-purpose-positive-v1;evidence_encoding=explicit-id-v1;clock_rules=meridiem-v2;decoding={decoding};max_tokens={max_tokens};source_bytes={SOURCE_BYTES};thinking=false;sampler=deterministic;repair_attempts=1");
+    let base = format!("{base};runtime_policy={RUNTIME_POLICY}");
     let configuration = if cfg!(windows) {
-        format!("{base};runtime_policy=llama-vulkan-v1;execution_mode={execution_mode}")
+        format!("{base};execution_mode={execution_mode}")
     } else {
         let _ = execution_mode;
         base
@@ -769,14 +770,29 @@ async fn execute(
     })
 }
 
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 #[test]
-fn configuration_hash_keeps_released_v1_cache_identity() {
-    // Literal v1.0.0 input. A change here invalidates every cached result.
+fn unified_runtime_cache_identity_excludes_both_released_engines() {
+    // Released inputs remain literal: old analyses are readable history, never
+    // cached output of the new runtime, even when the artifact/prompt match.
     let released = format!("analysis-v3;selector=head-tail-keywords-v4;prompt_rules=primary-purpose-positive-v1;evidence_encoding=explicit-id-v1;clock_rules=meridiem-v2;decoding=analysis_json_v1;max_tokens=1024;source_bytes={SOURCE_BYTES};thinking=false;sampler=deterministic;repair_attempts=1");
-    let expected = format!("{:x}", Sha256::digest(released.as_bytes()));
     for mode in ["auto", "cpu", "gpu"] {
-        assert_eq!(configuration_hash(1024, "analysis_json_v1", mode), expected);
+        let current = configuration_hash(1024, "analysis_json_v1", mode);
+        for old in [
+            released.clone(),
+            format!("{released};runtime_policy=llama-vulkan-v1;execution_mode={mode}"),
+        ] {
+            assert_ne!(current, format!("{:x}", Sha256::digest(old.as_bytes())));
+        }
+        let expected = if cfg!(windows) {
+            format!("{released};runtime_policy=llama-unified-v1;execution_mode={mode}")
+        } else {
+            format!("{released};runtime_policy=llama-unified-v1")
+        };
+        assert_eq!(
+            current,
+            format!("{:x}", Sha256::digest(expected.as_bytes()))
+        );
     }
 }
 
@@ -2205,6 +2221,35 @@ mod tests {
         store.ai_save_preferences(&preferences).unwrap();
         (directory, Arc::new(Mutex::new(store)), id, revision)
     }
+    #[test]
+    fn released_runtime_results_remain_readable_but_do_not_satisfy_current_cache() {
+        let (_directory, store, id, revision) = fixture();
+        with_store(&store, |store| {
+            let model = store.ai_model("test")?.unwrap();
+            let current = key_for(id, revision, &model, 1024)?;
+            let released = format!("analysis-v3;selector=head-tail-keywords-v4;prompt_rules=primary-purpose-positive-v1;evidence_encoding=explicit-id-v1;clock_rules=meridiem-v2;decoding=analysis_json_v1;max_tokens=1024;source_bytes={SOURCE_BYTES};thinking=false;sampler=deterministic;repair_attempts=1");
+            let histories = [
+                (released.clone(), json!({"name":"released macOS model"})),
+                (format!("{released};runtime_policy=llama-vulkan-v1;execution_mode=auto"),
+                    json!({"name":"released Windows model", "runtime_policy":"llama-vulkan-v1"})),
+            ];
+            let mut ids = Vec::new();
+            for (configuration, identity) in histories {
+                let mut old = current.clone();
+                old.configuration_hash = format!("{:x}", Sha256::digest(configuration.as_bytes()));
+                let job = store.ai_enqueue(&old, &identity, 100)?;
+                assert_eq!(store.ai_claim_next()?.unwrap().id, job.id);
+                let result = store.ai_complete_job(job.id, &valid(), false, 1, 1, 10)?;
+                ids.push(result.id);
+                assert!(store.ai_cached_result(&old)?.is_some());
+            }
+            assert!(store.ai_cached_result(&current)?.is_none());
+            let preserved = store.ai_document_results(id, Some(revision), 10)?;
+            assert_eq!(preserved.len(), ids.len());
+            assert!(preserved.iter().all(|result| ids.contains(&result.id) && result.result == valid()));
+            Ok(())
+        }).unwrap();
+    }
     /// Hard-links one shared compiled engine into `directory`: the same file is
     /// launched without another first-launch check, and the process reads its
     /// per-test control files beside the invoked path, so restarts keep them.
@@ -2237,7 +2282,7 @@ fn main() {{
             writeln!(requests, "infer").unwrap();
             println!("{{{{\"version\":1,\"id\":{{}},\"ok\":true,\"result\":{{{{\"text\":{{}},\"generation_ms\":17,\"loaded_backend\":\"cpu\"}}}}}}}}", id, text);
         }} else {{
-            println!("{{{{\"version\":1,\"id\":{{}},\"ok\":true,\"result\":{{{{\"engine\":\"mistral.rs\",\"runtime_available\":true,\"analysis_json_v1\":true,\"model\":null}}}}}}}}", id);
+            println!("{{{{\"version\":1,\"id\":{{}},\"ok\":true,\"result\":{{{{\"engine\":\"llama.cpp\",\"runtime_available\":true,\"analysis_json_v1\":true,\"model\":null}}}}}}}}", id);
         }}
         io::stdout().flush().unwrap();
     }}
@@ -2742,5 +2787,6 @@ fn main() {{
             serde_json::from_str(include_str!("../../../src/lib/analysis-contract.json")).unwrap();
         assert_eq!(contract["prompt_version"], PROMPT_VERSION);
         assert_eq!(contract["schema_version"], SCHEMA_VERSION);
+        assert_eq!(contract["runtime_policy"], RUNTIME_POLICY);
     }
 }

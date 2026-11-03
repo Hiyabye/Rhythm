@@ -36,7 +36,9 @@
       "binaries/rhythm-ai-worker"
     ],
     "resources": {
-      "../assets/licenses/Pretendard-OFL.txt": "licenses/Pretendard-OFL.txt"
+      "../assets/licenses/Pretendard-OFL.txt": "licenses/Pretendard-OFL.txt",
+      "../assets/licenses/llama.cpp-MIT.txt": "licenses/llama.cpp-MIT.txt",
+      "../assets/licenses/llama-cpp-rs-MIT.txt": "licenses/llama-cpp-rs-MIT.txt"
     },
     "icon": [
       "icons/32x32.png",

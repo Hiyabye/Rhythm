@@ -73,7 +73,7 @@ const distribute = mode === 'build' && release && !args.some((arg) => arg === '-
 
 const targetDir = resolve(env.CARGO_TARGET_DIR || 'target');
 ensureWorkerArtifact({ cwd: process.cwd(), env, target, profile: release ? 'release' : 'debug',
-  rustIdentity: rust.stdout, engine: 'mistral.rs', backend,
+  rustIdentity: rust.stdout, engine: 'llama.cpp', backend,
   cargoArgs: ['build', '--locked', '-p', 'rhythm-ai-worker',
     ...(release ? ['--release'] : []), ...(backend === 'metal' ? ['--features', 'metal'] : [])],
   binary: join(targetDir, release ? 'release' : 'debug', 'rhythm-ai-worker'),

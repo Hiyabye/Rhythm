@@ -5,7 +5,7 @@ Rhythm supports Windows 11 x64 alongside macOS Apple Silicon. The port came from
 ## What ships
 
 - A per-user NSIS installer (`installMode: currentUser`, custom `scripts/installer-template.nsi` and `installer-hooks.nsh`), unsigned. SmartScreen warnings are expected. Updates are manual reinstallation; uninstall always keeps user data and models.
-- Two AI workers: the CPU worker (`rhythm-ai-worker.exe`, mistral.rs) and the NVIDIA GPU worker (`rhythm-ai-worker-gpu.exe`, llama.cpp over Vulkan). Installers always contain both.
+- Two AI workers built from the same llama.cpp runtime code: CPU (`rhythm-ai-worker.exe`) and NVIDIA Vulkan (`rhythm-ai-worker-gpu.exe`). Installers always contain both, at the same version as the app. They are not updated independently; CPU fallback does not require a Vulkan driver.
 - App-local Microsoft VC runtime DLLs (`msvcp140.dll`, `vcruntime140.dll`, `vcruntime140_1.dll`), copied from the official Visual Studio redistributable with signature and hash checks by `scripts/stage-vc-runtime.ps1`. A release-binary import scan found an `MSVCP140.dll` dependency, so static CRT linking alone is not relied on. `vulkan-1.dll` and the Vulkan driver come from the user's graphics driver and are never bundled.
 - Windows-only config overrides in `src-tauri/tauri.windows.conf.json` (merge-patched over `tauri.conf.json`; arrays replace).
 
@@ -13,8 +13,8 @@ Rhythm supports Windows 11 x64 alongside macOS Apple Silicon. The port came from
 
 - Windows 11 x64, Node.js 22.12+ and npm, Microsoft Edge WebView2 Runtime, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 - Visual Studio Build Tools with x64 MSVC and the Windows 11 SDK (observed: Build Tools 17.14.44, MSVC 14.44.35207, SDK 10.0.26100.0).
-- Stable Rust `x86_64-pc-windows-msvc`. The locked mistral.rs needs Rust 1.94+.
-- For the GPU worker: Vulkan SDK 1.4.363.0, LLVM 20.1.8 (for libclang), CMake and Ninja (the Ninja bundled with the Visual Studio C++ CMake tools works from the MSVC developer environment).
+- Stable Rust `x86_64-pc-windows-msvc`, respecting the workspace's Rust version requirement.
+- Both llama.cpp builds need LLVM 20.1.8 (for libclang), CMake and Ninja (the Ninja bundled with the Visual Studio C++ CMake tools works from the MSVC developer environment). The GPU build additionally needs Vulkan SDK 1.4.363.0. These are build tools, not requirements to run the CPU worker.
 - Roughly 10 GiB free on C: and 30 GiB on D:. Dependencies, model weights and build outputs add more.
 
 Pinned GPU tool installers (CI downloads and checks the same files in `.github/actions/windows-build-tools`):
@@ -50,26 +50,30 @@ npm run desktop:build
 
 ## Build behavior
 
-- `npm run desktop` and `npm run desktop:build` delegate to `scripts/desktop-windows.mjs`. It stages the VC runtime first (so missing tools fail before long compiles), then builds both workers and runs Tauri.
+- `npm run worker:build` prepares release workers only; `npm run worker:build -- --debug` prepares debug workers. `npm run desktop` and `npm run desktop:build` delegate to `scripts/desktop-windows.mjs`, stage the VC runtime, then reuse matching workers or rebuild before running Tauri.
+- Reuse checks each staged executable's adjacent `.artifact.json`, build inputs, SHA-256 and actual protocol status, including `build_id`, engine, compiled backend and inference capability. Missing/stale manifests or mismatches require rebuilding; failed validation stops packaging. Direct Cargo workers with `build_id: development` are not accepted for reuse. Full build-input details are in `AGENTS.md`.
 - VC runtime staging runs under `RHYTHM_POWERSHELL` (default `powershell.exe`). The script never changes execution policy and never retries under another host.
 - The GPU worker builds with `--no-default-features --features gpu-inference` into `RHYTHM_GPU_TARGET_DIR` (default: `CARGO_TARGET_DIR` plus `-gpu`). That path must be at most 32 characters, because Vulkan shader generation hits nested-path limits, and must differ from the CPU target directory.
 - A release build writes only `Rhythm_<version>_x64-setup.exe` and its `.sha256` to `target/release/distribution/`.
-- `RHYTHM_AI_BACKEND=cpu` skips the GPU worker and excludes its sidecar. It is allowed only for `dev` or `build --no-bundle`; installers need both workers. It is a build option, not the in-app execution mode.
+- `RHYTHM_AI_BACKEND=cpu` skips the GPU worker and excludes its sidecar. It is allowed for worker-only preparation, `dev` or `build --no-bundle`; installers need both workers. CPU-only app builds remove a stale GPU executable from the selected target/profile output before running Tauri, so auto mode cannot discover that old executable. It is a build option, not the in-app execution mode.
 - `target-cpu=native` is rejected because installers must run on other PCs.
 
 ## GPU worker
 
-- `llama-cpp-2`/`llama-cpp-sys-2` pinned to `0.1.160` with Vulkan; llama.cpp is linked statically. It speaks the same JSON-lines protocol as the CPU worker and opens no port.
-- Targets NVIDIA GTX 10/16 and RTX 20/30/40/50. Only a GTX 1650 has been tested. The pinned mistral.rs CUDA kernels need newer GPUs than Pascal, which is why the GPU path is Vulkan.
+- `llama-cpp-2`/`llama-cpp-sys-2` pinned to `0.1.160` with Vulkan; llama.cpp is linked statically. The CPU executable uses the same implementation without Vulkan. Both speak protocol v1 over JSON Lines and open no port. CUDA is not a build feature.
+- Targets NVIDIA GTX 10/16 and RTX 20/30/40/50. The unified runtime's debug CPU and GTX 1650 Vulkan workers passed 2B/4B generation-structure, process-cancellation and recovery checks on one Windows 11 x64 PC. Category/deadline screening failed in all four runs and was excluded from the integration pass. Release builds, peak RAM and other cards were not verified by those runs; see [AI evaluation](AI_EVALUATION.md#current-runtime-verification). Targeting a series does not verify every card or driver.
 - Accepts only an NVIDIA Vulkan device and reports a GPU load only after it observes offloaded layers and an allocated GPU buffer. Some layers may stay on the CPU; it tries to leave 512 MiB of VRAM free, which does not prevent contention with other programs.
-- Context is 8192 tokens (input plus output). An input that does not fit is rejected with `토큰 한도를 넘습니다`.
-- **AI 실행 장치** (`auto`/`cpu`/`gpu`, schema 8) picks the sidecar. `gpu` reports errors. `auto` switches to CPU for the session after a device, load or protocol failure; a context-overflow rejection retries only that request on CPU. Explicit CPU and GPU results have separate cache identities; `auto` accepts either, and every result records its `loaded_backend`.
+- Vulkan context is 8192 tokens (input plus output), while CPU context is 32,768. An input that does not fit is rejected with `토큰 한도를 넘습니다`.
+- **AI 실행 장치** (`auto`/`cpu`/`gpu`, schema 8) picks the sidecar. `gpu` reports errors. `auto` switches to CPU for the session after a device, load or protocol failure; a context-overflow rejection retries only that request on CPU. The shared runtime policy is `llama-unified-v1`; explicit CPU and GPU results have separate cache identities, `auto` accepts either, and every result records its `loaded_backend`. Earlier results stay readable but are not reused for a new runtime's analysis.
 
-Run the GPU worker against a real model without touching app data (writes a new report file only):
+Run either worker against an existing real model without touching app data (writes a new report file only):
 
 ```powershell
-node .\scripts\validate-gpu.mjs --worker 'D:\rhythm-gpu\release\rhythm-ai-worker.exe' --model 'D:\models\Qwen3.5-2B-Q4_K_M.gguf' --report 'D:\validation\gpu-2b.json'
+node .\scripts\validate-worker.mjs --backend cpu --worker 'D:\rhythm-cpu\release\rhythm-ai-worker.exe' --model 'D:\models\Qwen3.5-2B-Q4_K_M.gguf' --report 'D:\validation\cpu-2b.json'
+node .\scripts\validate-worker.mjs --backend vulkan --worker 'D:\rhythm-gpu\release\rhythm-ai-worker.exe' --model 'D:\models\Qwen3.5-2B-Q4_K_M.gguf' --report 'D:\validation\gpu-2b.json'
 ```
+
+The existing `validate-gpu.mjs` command remains a Vulkan-only alias. The helper checks actual backend, generation structure, 500 ms process cancellation, reloading and shutdown; category/date correctness is recorded separately and is not an integration pass criterion. See [AI evaluation](AI_EVALUATION.md#running-evaluations).
 
 ## Restore checks
 

@@ -236,14 +236,22 @@ test('polling recovers from a transient read error without hiding previous outpu
   await expect(panel.getByRole('alert')).toHaveCount(0);
 });
 
-for (const change of ['prompt', 'schema', 'configuration']) {
+for (const change of ['prompt', 'schema', 'configuration', 'legacy-runtime', 'vulkan-runtime']) {
   test(`backend ${change} contract marks preserved analysis outdated without reanalysis`, async ({ page }) => {
     await mockDesktop(page, { aiInstalled: true, aiResult: true }); await page.goto('/');
     await page.evaluate((change) => {
-      const contract = (window as any).__fixture.ai.analysis_contract;
+      const fixture = (window as any).__fixture;
+      const contract = fixture.ai.analysis_contract;
       if (change === 'configuration') contract.configuration_hash = 'c'.repeat(64);
       else if (change === 'schema') contract.schema_version += 1;
-      else contract.prompt_version += 1;
+      else if (change === 'legacy-runtime' || change === 'vulkan-runtime') {
+        // No active model: old results still warn even when the backend cannot
+        // compute a model-specific current configuration hash.
+        fixture.ai.preferences.active_model_id = null;
+        contract.configuration_hash = null;
+        if (change === 'legacy-runtime') delete fixture.analyses[0].model_identity.runtime_policy;
+        else fixture.analyses[0].model_identity.runtime_policy = 'llama-vulkan-v1';
+      } else contract.prompt_version += 1;
     }, change);
     await reader(page);
     const panel = page.getByRole('region', { name: '공지 AI 분석' });

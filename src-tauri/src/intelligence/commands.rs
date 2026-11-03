@@ -751,7 +751,7 @@ fn main() {
             std::fs::write(executable.with_extension("entered"), b"entered").unwrap();
             std::thread::sleep(std::time::Duration::from_secs(60));
         }
-        println!("{{\"version\":1,\"id\":{},\"ok\":true,\"result\":{{\"engine\":\"mistral.rs\",\"runtime_available\":true,\"model\":\"/fake.gguf\",\"text\":\"로컬 점검을 완료했습니다.\"}}}}", id);
+        println!("{{\"version\":1,\"id\":{},\"ok\":true,\"result\":{{\"engine\":\"llama.cpp\",\"runtime_available\":true,\"model\":\"/fake.gguf\",\"text\":\"로컬 점검을 완료했습니다.\"}}}}", id);
         io::stdout().flush().unwrap();
     }
 }

@@ -80,10 +80,11 @@ test('failed worker build never stages or invokes Tauri', () => {
 });
 
 test('CPU-only builds exclude any stale GPU sidecar from the Tauri configuration', () => {
-  const { calls, copies } = build({ env: { RHYTHM_AI_BACKEND: 'cpu' }, args: ['build', '--no-bundle'] });
+  const { calls, copies, files } = build({ env: { RHYTHM_AI_BACKEND: 'cpu' }, args: ['build', '--no-bundle'] });
   assert.equal(copies.length, 1);
   assert.equal(calls.length, 4);
   assert.deepEqual(JSON.parse(calls[3].at(-1)), { bundle: { externalBin: ['binaries/rhythm-ai-worker'] } });
+  assert.deepEqual(files.removed, [join('D:\\test folder 한글', 'target', 'release', 'rhythm-ai-worker-gpu.exe')]);
   assert.throws(() => build({ env: { RHYTHM_AI_BACKEND: 'cpu' } }), /installers include both/);
 });
 
@@ -167,7 +168,7 @@ test('verified worker reuse skips Cargo builds and still packages both expected 
   assert.equal(calls.length, 3); // rustc, runtime staging, Tauri
   assert.ok(!calls.some(([command]) => command === 'cargo'));
   assert.deepEqual(workers.map(({ backend, engine, profile, target }) => ({ backend, engine, profile, target })), [
-    { backend: 'cpu', engine: 'mistral.rs', profile: 'debug', target: 'x86_64-pc-windows-msvc' },
+    { backend: 'cpu', engine: 'llama.cpp', profile: 'debug', target: 'x86_64-pc-windows-msvc' },
     { backend: 'vulkan', engine: 'llama.cpp', profile: 'debug', target: 'x86_64-pc-windows-msvc' },
   ]);
   assert.equal(workers[0].rustIdentity, 'host: x86_64-pc-windows-msvc\n');

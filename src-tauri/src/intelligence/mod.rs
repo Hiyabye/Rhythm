@@ -57,6 +57,20 @@ struct StatusPayload {
     analysis_json_v1: bool,
 }
 
+fn status_payload(value: Value) -> Result<StatusPayload, String> {
+    let payload: StatusPayload = serde_json::from_value(value)
+        .map_err(|_| "AI 엔진 상태 응답 형식이 올바르지 않습니다.".to_string())?;
+    // Protocol-v1 optional fields remain compatible, but a previous engine
+    // must never generate results under the new runtime's cache identity.
+    if payload.engine != "llama.cpp" {
+        return Err(
+            "AI 엔진이 현재 앱과 호환되지 않습니다. llama.cpp 작업 프로세스로 다시 빌드해 주세요."
+                .into(),
+        );
+    }
+    Ok(payload)
+}
+
 /// Upstream engine-step counters/timings, not end-to-end wall time or TTFT.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TokenUsage {
@@ -343,7 +357,47 @@ impl Worker {
             self.add_fallback_detail();
             return Err(self.status.detail.clone().unwrap_or_default());
         }
+        // A fallback is a fresh process. Authenticate its engine before an
+        // infer retry can populate a cache with the current runtime policy.
+        let result = self
+            .request_params("status", json!({}), Duration::from_secs(8))
+            .await
+            .and_then(status_payload);
+        match result {
+            Ok(payload) => {
+                self.analysis_json_v1 = Some(payload.analysis_json_v1);
+                self.status.runtime_available = payload.runtime_available;
+            }
+            Err(error) => {
+                self.terminate().await;
+                self.status = WorkerStatus::unavailable(&error);
+                self.status.state = "failed".into();
+                self.add_fallback_detail();
+                return Err(error);
+            }
+        }
         Ok(())
+    }
+
+    fn validated_response(&self, method: &str, value: Value) -> Result<Value, String> {
+        if matches!(method, "status" | "load") {
+            status_payload(value.clone())?;
+        }
+        if self.active_gpu {
+            let valid = match method {
+                "status" | "load" => {
+                    value["build_backend"] == "vulkan"
+                        && value["runtime_available"] == true
+                        && (value["model"].is_null() || value["loaded_backend"] == "vulkan")
+                }
+                "infer" => value["loaded_backend"] == "vulkan",
+                _ => true,
+            };
+            if !valid {
+                return Err("GPU 작업 프로세스의 실제 실행 장치를 확인하지 못했습니다.".into());
+            }
+        }
+        Ok(value)
     }
 
     async fn request_with_fallback(
@@ -360,36 +414,42 @@ impl Worker {
                 .ok_or("AI 엔진 실행 파일 경로가 없습니다.")?;
             *self = Self::launch_configured(&path, "auto");
         }
-        let result = self
-            .request_params(method, params.clone(), deadline)
-            .await
-            .and_then(|value| {
-                if self.active_gpu {
-                    let valid = match method {
-                        "status" | "load" => {
-                            value["engine"] == "llama.cpp"
-                                && value["build_backend"] == "vulkan"
-                                && value["runtime_available"] == true
-                                && (value["model"].is_null() || value["loaded_backend"] == "vulkan")
-                        }
-                        "infer" => value["loaded_backend"] == "vulkan",
-                        _ => true,
-                    };
-                    if !valid {
-                        return Err(
-                            "GPU 작업 프로세스의 실제 실행 장치를 확인하지 못했습니다.".into()
-                        );
-                    }
-                }
-                Ok(value)
-            });
+        let result = async {
+            // Includes a GPU process relaunched after a request-only CPU retry.
+            if method == "infer" && self.analysis_json_v1.is_none() {
+                let value = self
+                    .request_params("status", json!({}), Duration::from_secs(8))
+                    .await?;
+                let payload = status_payload(self.validated_response("status", value)?)?;
+                self.analysis_json_v1 = Some(payload.analysis_json_v1);
+                self.status.runtime_available = payload.runtime_available;
+            }
+            if method == "infer"
+                && params["output_mode"] == "analysis_json_v1"
+                && self.analysis_json_v1 != Some(true)
+            {
+                return Err("AI 엔진이 구조화 분석을 지원하지 않습니다.".into());
+            }
+            let value = self
+                .request_params(method, params.clone(), deadline)
+                .await?;
+            self.validated_response(method, value)
+        }
+        .await;
         if self.active_gpu && self.execution_mode == "auto" {
             if let Err(error) = result {
                 let input_only = error.contains(GPU_INPUT_LIMIT);
                 self.fallback_to_cpu(error).await?;
                 self.return_to_gpu = input_only;
                 // A new process has no outstanding request; never reuse a failed pipe.
-                return self.request_params(method, params, deadline).await;
+                if method == "infer"
+                    && params["output_mode"] == "analysis_json_v1"
+                    && self.analysis_json_v1 != Some(true)
+                {
+                    return Err("CPU 작업 프로세스가 구조화 분석을 지원하지 않습니다.".into());
+                }
+                let value = self.request_params(method, params, deadline).await?;
+                return self.validated_response(method, value);
             }
         }
         result
@@ -572,6 +632,14 @@ impl Worker {
         if self.child.is_none() || self.input.is_none() {
             self.restart().await?;
         }
+        if self.analysis_json_v1.is_none() {
+            let status = self.refresh().await;
+            if status.state != "ready" {
+                return Err(status
+                    .detail
+                    .unwrap_or_else(|| "AI 엔진을 확인하지 못했습니다.".into()));
+            }
+        }
         Ok(())
     }
     /// Inference is serial under the owning Tokio mutex. On cancellation, the
@@ -595,8 +663,9 @@ impl Worker {
     ) -> Result<InferenceResponse, String> {
         self.infer_mode(path, prompt, max_tokens, false).await
     }
-    /// Opt-in closed analysis JSON generation. Older workers remain usable for
-    /// ordinary text, but must not receive an unknown strict infer parameter.
+    /// Opt-in closed analysis JSON generation. Protocol-v1 llama.cpp workers
+    /// without this capability can still serve ordinary text. Previous engines
+    /// cannot run under the unified runtime's semantic cache identity.
     pub async fn infer_analysis(
         &mut self,
         path: &Path,
@@ -620,18 +689,8 @@ impl Worker {
             .to_str()
             .ok_or("모델 경로를 UTF-8로 읽을 수 없습니다.")?;
         self.ensure_running().await?;
-        if analysis_json {
-            if self.analysis_json_v1.is_none() {
-                let status = self.refresh().await;
-                if status.state != "ready" {
-                    return Err(status.detail.unwrap_or_else(|| {
-                        "AI 엔진의 분석 지원 여부를 확인하지 못했습니다.".into()
-                    }));
-                }
-            }
-            if self.analysis_json_v1 != Some(true) {
-                return Err("AI 엔진이 구조화 분석을 지원하지 않습니다. 최신 작업 프로세스로 앱을 다시 빌드해 주세요.".into());
-            }
+        if analysis_json && self.analysis_json_v1 != Some(true) {
+            return Err("AI 엔진이 구조화 분석을 지원하지 않습니다. 최신 작업 프로세스로 앱을 다시 빌드해 주세요.".into());
         }
         let mut params = json!({"model_path":path_text,"prompt":prompt,"max_tokens":max_tokens});
         if analysis_json {
@@ -647,7 +706,7 @@ impl Worker {
                 self.status.state = "ready".into();
                 self.status.model = Some(path.to_string_lossy().into_owned());
                 self.status.detail = Some(format!(
-                    "실제 불러온 백엔드: {} · GPU 사용률 측정값은 아닙니다.",
+                    "엔진: llama.cpp · 실제 불러온 백엔드: {} · GPU 사용률 측정값은 아닙니다.",
                     backend_name(response.metrics.loaded_backend.as_deref())
                 ));
                 self.add_fallback_detail();
@@ -751,14 +810,7 @@ impl Worker {
         let result = self
             .request_with_fallback("status", json!({}), Duration::from_secs(8))
             .await
-            .and_then(|value| {
-                let payload: StatusPayload = serde_json::from_value(value)
-                    .map_err(|_| "AI 엔진 상태 응답 형식이 올바르지 않습니다.".to_string())?;
-                if !matches!(payload.engine.as_str(), "mistral.rs" | "llama.cpp") {
-                    return Err("AI 엔진 상태 응답의 엔진 정보가 올바르지 않습니다.".into());
-                }
-                Ok(payload)
-            });
+            .and_then(status_payload);
         match result {
             Ok(result) => {
                 self.analysis_json_v1 = Some(result.analysis_json_v1);
@@ -766,7 +818,7 @@ impl Worker {
                     state: "ready".into(),
                     runtime_available: result.runtime_available,
                     detail: Some(format!(
-                        "빌드 백엔드: {} · 실제 불러온 백엔드: {} · GPU 사용률 측정값은 아닙니다.",
+                        "엔진: llama.cpp · 빌드 백엔드: {} · 실제 불러온 백엔드: {} · GPU 사용률 측정값은 아닙니다.",
                         backend_name(result.build_backend.as_deref()),
                         if result.model.is_some() {
                             backend_name(result.loaded_backend.as_deref())
@@ -1073,7 +1125,7 @@ fn main() {
                 match id {
                     1 => {
                         assert!(line.contains("\"method\":\"status\""));
-                        r#"{"engine":"mistral.rs","runtime_available":true,"model":"/local/model.gguf"}"#
+                        r#"{"engine":"llama.cpp","runtime_available":true,"model":"/local/model.gguf"}"#
                     }
                     2 => {
                         assert!(line.contains("\"method\":\"infer\""));
@@ -1082,7 +1134,7 @@ fn main() {
                     _ => panic!("unexpected legacy request"),
                 }
             } else if line.contains("\"method\":\"status\"") {
-                r#"{"engine":"mistral.rs","runtime_available":true,"model":null,"analysis_json_v1":true}"#
+                r#"{"engine":"llama.cpp","runtime_available":true,"model":null,"analysis_json_v1":true}"#
             } else {
                 assert!(line.contains("\"method\":\"infer\""));
                 inference += 1;
@@ -1096,22 +1148,34 @@ fn main() {
     }
     let mut request = String::new();
     io::stdin().lock().read_line(&mut request).unwrap();
+    // Metrics fixtures model optional protocol-v1 fields, not an old engine.
+    // Production authenticates llama.cpp before even ordinary-text inference.
+    let id = if mode.starts_with("infer-") {
+        assert!(request.contains("\"method\":\"status\""));
+        println!("{{\"version\":1,\"id\":1,\"ok\":true,\"result\":{{\"engine\":\"llama.cpp\",\"runtime_available\":true,\"model\":null}}}}");
+        io::stdout().flush().unwrap();
+        request.clear();
+        io::stdin().lock().read_line(&mut request).unwrap();
+        assert!(request.contains("\"method\":\"infer\""));
+        2
+    } else { 1 };
     let result = match mode.as_str() {
         "empty" => "{}",
         "null" => "null",
-        "missing-runtime" => r#"{"engine":"mistral.rs","model":null}"#,
-        "loaded" => r#"{"engine":"mistral.rs","runtime_available":true,"model":"/local/model.gguf"}"#,
-        "fallback" => r#"{"engine":"mistral.rs","runtime_available":true,"model":"/local/model.gguf","build_backend":"metal","loaded_backend":"cpu"}"#,
+        "missing-runtime" => r#"{"engine":"llama.cpp","model":null}"#,
+        "loaded" => r#"{"engine":"llama.cpp","runtime_available":true,"model":"/local/model.gguf"}"#,
+        "fallback" => r#"{"engine":"llama.cpp","runtime_available":true,"model":"/local/model.gguf","build_backend":"metal","loaded_backend":"cpu"}"#,
         "infer-legacy" => r#"{"text":"legacy output"}"#,
         "infer-metrics" => r#"{"text":"measured output","model":"/local/model.gguf","load_ms":123,"request_load_ms":0,"model_reused":true,"loaded_backend":"metal","input_validation_ms":1,"request_preparation_ms":2,"generation_ms":456,"finish_reason":"stop","usage":{"completion_tokens":10,"prompt_tokens":20,"total_tokens":30,"avg_tok_per_sec":15.0,"avg_prompt_tok_per_sec":20.0,"avg_compl_tok_per_sec":10.0,"total_time_sec":2.0,"total_prompt_time_sec":1.0,"total_completion_time_sec":1.0}}"#,
         "infer-bad-metrics" => r#"{"text":"output","usage":{"completion_tokens":"ten"}}"#,
-        "missing-model" => r#"{"engine":"mistral.rs","runtime_available":true}"#,
+        "missing-model" => r#"{"engine":"llama.cpp","runtime_available":true}"#,
         "wrong-engine" => r#"{"engine":"other","runtime_available":true,"model":null}"#,
-        "wrong-runtime" => r#"{"engine":"mistral.rs","runtime_available":"yes","model":null}"#,
-        "wrong-model" => r#"{"engine":"mistral.rs","runtime_available":true,"model":42}"#,
-        "bad-capability" => r#"{"engine":"mistral.rs","runtime_available":true,"model":null,"analysis_json_v1":"yes"}"#,
-        "null-capability" => r#"{"engine":"mistral.rs","runtime_available":true,"model":null,"analysis_json_v1":null}"#,
-        _ => r#"{"engine":"mistral.rs","runtime_available":false,"model":null}"#,
+        "previous-engine" => r#"{"engine":"mistral.rs","runtime_available":true,"analysis_json_v1":true,"model":null}"#,
+        "wrong-runtime" => r#"{"engine":"llama.cpp","runtime_available":"yes","model":null}"#,
+        "wrong-model" => r#"{"engine":"llama.cpp","runtime_available":true,"model":42}"#,
+        "bad-capability" => r#"{"engine":"llama.cpp","runtime_available":true,"model":null,"analysis_json_v1":"yes"}"#,
+        "null-capability" => r#"{"engine":"llama.cpp","runtime_available":true,"model":null,"analysis_json_v1":null}"#,
+        _ => r#"{"engine":"llama.cpp","runtime_available":false,"model":null}"#,
     };
     let mut output = io::stdout().lock();
     match mode.as_str() {
@@ -1121,7 +1185,7 @@ fn main() {
         "malformed" => writeln!(output, "not-json"),
         "wrong-version" => writeln!(output, "{{\"version\":2,\"id\":1,\"ok\":true,\"result\":{result}}}"),
         "wrong-id" => writeln!(output, "{{\"version\":1,\"id\":2,\"ok\":true,\"result\":{result}}}"),
-        _ => writeln!(output, "{{\"version\":1,\"id\":1,\"ok\":true,\"result\":{result}}}"),
+        _ => writeln!(output, "{{\"version\":1,\"id\":{id},\"ok\":true,\"result\":{result}}}"),
     }.unwrap();
     output.flush().unwrap();
     // EOF/incomplete framing needs the pipe closed; other failures must make
@@ -1147,6 +1211,7 @@ fn main() {
             "missing-runtime",
             "missing-model",
             "wrong-engine",
+            "previous-engine",
             "wrong-runtime",
             "wrong-model",
             "bad-capability",
@@ -1208,9 +1273,24 @@ fn main() {
         let status = worker.refresh().await;
         assert_eq!(status.state, "ready");
         let detail = status.detail.unwrap();
+        assert!(detail.contains("엔진: llama.cpp"));
         assert!(detail.contains("빌드 백엔드: Metal"));
         assert!(detail.contains("실제 불러온 백엔드: CPU"));
         worker.terminate().await;
+    }
+    #[tokio::test]
+    async fn previous_engine_is_rejected_before_load_or_inference() {
+        for operation in ["load", "text", "analysis"] {
+            let mut worker = fake_worker("previous-engine");
+            let path = Path::new("/local/model.gguf");
+            let result = match operation {
+                "load" => worker.load(path).await.map(|_| ()),
+                "text" => worker.infer(path, "분석", 32).await.map(|_| ()),
+                _ => worker.infer_analysis(path, "분석", 32).await.map(|_| ()),
+            };
+            assert!(result.unwrap_err().contains("llama.cpp"), "{operation}");
+            assert!(worker.child.is_none(), "{operation}");
+        }
     }
     #[tokio::test]
     async fn inference_preserves_optional_metrics_and_legacy_text_api() {

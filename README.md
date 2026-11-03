@@ -9,7 +9,7 @@ Rhythm은 학교 공지를 내 Mac에 모아 보관하고, 로컬 AI로 핵심�
 ## 원칙
 
 - **로컬 우선:** 공지, 첨부 자료, 설정, 관심사, 학습한 선호와 AI 분석 결과는 모두 이 Mac에만 저장됩니다. 클라우드 데이터베이스, 원격 AI, 사용자 계정, 텔레메트리가 없습니다.
-- **로컬 AI:** 앱에 포함된 별도 프로세스(`rhythm-ai-worker`)가 이 Mac에서 추론합니다. Ollama, Python, 별도 추론 서버가 필요하지 않습니다.
+- **로컬 AI:** 앱에 포함된 별도 프로세스(`rhythm-ai-worker`)가 이 컴퓨터에서 추론합니다. Ollama, Python, 별도 추론 서버가 필요하지 않습니다.
 - **사용자가 결정:** 구독, 수집, 모델 설치, 자동 동기화, 알림은 모두 직접 켭니다. 학습한 선호는 확인·수정·삭제할 수 있습니다.
 - **신뢰성:** 네트워크, AI 모델, 백그라운드 기능을 쓸 수 없어도 이미 보관한 자료는 그대로 열립니다.
 
@@ -51,14 +51,16 @@ Rhythm은 학교 공지를 내 Mac에 모아 보관하고, 로컬 AI로 핵심�
 | 모델 | 상태 | 출처·라이선스 |
 | --- | --- | --- |
 | Qwen3.5 0.8B Q4_K_M (533 MB) | 실험적·미검증, 설치 비활성화 | [unsloth/Qwen3.5-0.8B-GGUF](https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF), Apache-2.0 |
-| Qwen3.5 2B Q4_K_M (1.28 GB) | Apple Silicon에서 Metal과 CPU 모두 실제 한국어 분석 확인 | [unsloth/Qwen3.5-2B-GGUF](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF), Apache-2.0 |
-| Qwen3.5 4B Q4_K_M (2.74 GB) | Apple Silicon Metal에서 분석 확인. CPU는 미검증 | [unsloth/Qwen3.5-4B-GGUF](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF), Apache-2.0 |
+| Qwen3.5 2B Q4_K_M (1.28 GB) | 설치 가능. Windows CPU·GTX 1650 디버그 워커의 생성·취소·복구 확인. 정확도·Mac 미검증 | [unsloth/Qwen3.5-2B-GGUF](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF), Apache-2.0 |
+| Qwen3.5 4B Q4_K_M (2.74 GB) | 설치 가능. Windows CPU·GTX 1650 디버그 워커의 생성·취소·복구 확인. 정확도·Mac 미검증 | [unsloth/Qwen3.5-4B-GGUF](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF), Apache-2.0 |
 
-각 파일은 고정된 리비전, 크기, SHA-256으로 검사합니다. 이미 가진 `qwen3`·`qwen35` GGUF 파일을 참조로 등록할 수도 있지만, 등록 검사를 통과해도 추론 성공이 보장되지는 않습니다. 설정에는 실제로 불러온 백엔드(Metal 또는 CPU)가 표시됩니다.
+각 파일은 고정된 리비전, 크기, SHA-256으로 검사합니다. 이미 가진 `qwen3`·`qwen35` GGUF 파일을 참조로 등록할 수도 있지만, 등록 검사를 통과해도 추론 성공이 보장되지는 않습니다. 설정에는 실제로 불러온 실행 장치(CPU, macOS Metal 또는 Windows Vulkan)가 표시됩니다.
 
 이전 버전에 있던 Qwen3.5 9B는 목록에서 뺐습니다. 이미 설치했다면 **내 모델**에 남아 계속 쓰거나 직접 삭제할 수 있으며, 앱이 파일을 자동으로 지우지 않습니다.
 
-M1 Pro·16 GiB에서 2B로 짧은 공지 하나를 분석하는 데 Metal은 약 13–15초(생성 약 44 토큰/초), CPU는 약 21–24초(약 28–30 토큰/초)가 걸렸습니다. 한 기기·한 입력의 측정값이며 성능을 보장하지 않습니다.
+CPU·Metal·Vulkan은 같은 llama.cpp 엔진을 사용합니다. 이전 엔진에서 측정한 속도와 분석 결과는 새 엔진의 성능이나 품질을 보장하지 않습니다. 기존에 저장한 분석은 계속 읽을 수 있으며, 새 분석을 요청하면 현재 엔진으로 다시 생성합니다. 워커는 앱과 같은 설치 파일에 포함되어 함께 갱신됩니다.
+
+현재 Windows 시험은 PC 한 대에서 디버그 워커의 동작을 확인한 범위입니다. 네 조합 모두 JSON 구조 검사를 통과했지만 분류·마감일 판정은 통과하지 못했습니다. 분석 내용의 정오는 동작 시험의 합격 기준에서 제외했습니다. 자세한 결과와 한계는 [AI 평가](docs/AI_EVALUATION.md#current-runtime-verification)를 참고하세요.
 
 AI 요약과 추출은 구조와 원문 근거를 검사하지만, 의미를 잘못 해석할 수 있습니다. 분류나 마감을 틀린 사례도 있었습니다. **신청 조건과 일정은 반드시 원문에서 확인하세요.** AI가 추출한 날짜는 추천 순위나 알림에 쓰지 않습니다. 긴 공지는 일부 구간만 분석하며, 첨부 파일과 이미지의 내용은 분석하지 않습니다.
 
@@ -106,7 +108,7 @@ Windows 설치 파일은 공식 저장소의 Releases에 `Rhythm_<버전>_x64-se
 
 설치 파일에 코드 서명이 없어 Windows SmartScreen이 경고를 표시할 수 있습니다. 공식 저장소에서 받았고 체크섬이 일치할 때만 실행 여부를 직접 판단하세요. Windows 보안 기능을 끄지 마세요.
 
-AI는 CPU와 NVIDIA GPU(Vulkan, GTX 10·16·RTX 20–50 시리즈 대상)를 지원하며 **설정 → AI 모델 → AI 실행 장치**에서 자동·CPU·GPU를 고릅니다. GPU 실행은 GTX 1650 한 대에서만 확인했습니다. 자동 모드는 GPU를 쓸 수 없으면 CPU로 전환하고 그 이유를 표시합니다.
+AI는 CPU와 NVIDIA GPU(Vulkan, GTX 10·16·RTX 20–50 시리즈 대상)를 지원하며 **설정 → AI 모델 → AI 실행 장치**에서 자동·CPU·GPU를 고릅니다. 현재 엔진의 GPU 시험은 GTX 1650 한 대에서 수행했으며, 검증 범위는 [AI 평가](docs/AI_EVALUATION.md#current-runtime-verification)에 구분해 표시합니다. 자동 모드는 GPU를 쓸 수 없으면 CPU로 전환하고 그 이유를 표시합니다.
 
 ## 시작하기
 
@@ -173,7 +175,7 @@ Windows에서는 트레이 메뉴에서 Rhythm을 완전히 종료하고, 필요
 - Apple 공증이 없어 처음 실행 시 macOS가 막을 수 있고, Windows 설치 파일은 서명이 없어 SmartScreen 경고가 나타날 수 있습니다. 자동 업데이트도 없습니다.
 - Windows의 실제 로그인 자동 시작, 절전 복귀, 알림 클릭과 다른 PC에서의 설치는 아직 시험하지 않았습니다.
 - 지원 게시판은 10개입니다. 모든 게시판의 전체 과거 이력을 끝까지 가져오는 동작은 시험하지 않았습니다. 오래된 공지의 수정 사항을 매번 전수 재검사하지 않습니다.
-- AI 결과는 틀릴 수 있습니다. 0.8B는 검증하지 않았고, Windows CPU·GPU 추론은 기기 한 대에서 제한적으로만 확인했습니다.
+- AI 결과는 틀릴 수 있습니다. 0.8B는 검증하지 않았으며, 이전 엔진의 시험 결과를 현재 엔진의 검증으로 간주하지 않습니다. [모델·실행 장치별 확인 범위](docs/AI_EVALUATION.md#current-runtime-verification)를 참고하세요.
 - 실제 학교 새 공지로 알림이 표시되는 장면과 실제 로그인 시 자동 시작은 시험하지 않았습니다. 알림 표시와 클릭은 시험용 공지로 확인했습니다.
 - VoiceOver 음성 출력, 시스템 글자 크기, 대비 증가, 동작 줄이기는 충분히 시험하지 않았습니다.
 - 백업 파일은 암호화되지 않습니다.
