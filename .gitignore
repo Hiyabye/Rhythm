@@ -2,6 +2,7 @@
 /node_modules/
 /dist/
 /target/
+/target-gpu/
 /src-tauri/target/
 /src-tauri/binaries/
 /src-tauri/gen/
