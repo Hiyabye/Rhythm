@@ -1,11 +1,19 @@
 name: Checks
 
 on:
+  # Branches get one run through their pull request; a push trigger on every
+  # branch duplicated the full Windows job. main runs after each merge.
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   ui:
@@ -41,7 +49,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # Only main saves: branch caches are invisible to other branches and
+      # pushed the repository past GitHub's 10 GB limit, evicting main's.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: npm ci
       - run: npm run check
       - run: npm run build
@@ -66,6 +78,9 @@ jobs:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
       LLAMA_BUILD_SHARED_LIBS: 0
       CMAKE_GENERATOR: Ninja
+      # Inside the workspace so rust-cache can save it; D:\a\Rhythm\Rhythm\target-gpu
+      # stays within the 32-character limit for Vulkan shader compilation.
+      RHYTHM_GPU_TARGET_DIR: ${{ github.workspace }}\target-gpu
     defaults:
       run:
         shell: pwsh
@@ -81,6 +96,11 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: |
+            . -> target
+            . -> target-gpu
       - name: Prepare MSVC and Ninja environment
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
@@ -130,7 +150,6 @@ jobs:
           "VULKAN_SDK=$sdkPath" >> $env:GITHUB_ENV
           "LIBCLANG_PATH=$llvmPath/bin" >> $env:GITHUB_ENV
           "$sdkPath/Bin" >> $env:GITHUB_PATH
-          "RHYTHM_GPU_TARGET_DIR=$((Join-Path $env:RUNNER_TEMP 'g'))" >> $env:GITHUB_ENV
       - run: npm ci
       - run: npm run check
       - run: npm run build
