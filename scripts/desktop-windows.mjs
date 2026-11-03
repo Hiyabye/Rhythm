@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, copyFileSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { win32 } from 'node:path';
+import { updaterSigningArgs } from './updater-signing.mjs';
 
 // Windows-only paths, so the orchestration tests behave the same on any host.
 const { join, resolve } = win32;
@@ -32,6 +33,8 @@ export function desktop({ platform = process.platform, arch = process.arch, env 
   if (target !== 'x86_64-pc-windows-msvc') throw new Error('Install the x86_64-pc-windows-msvc Rust toolchain.');
   const release = mode === 'build' && !extra.includes('--debug');
   const distribute = release && !extra.some((arg) => arg === '--no-bundle' || arg.startsWith('--bundles') || arg === '-b');
+  // Checked before staging so a half-configured key fails fast.
+  const signing = distribute ? updaterSigningArgs(env) : null;
   const buildEnv = release ? releaseEnv(env, cwd, home) : env;
   const targetDir = resolve(cwd, env.CARGO_TARGET_DIR || 'target');
   // Use the explicitly selected host (windows-env.ps1 exports its own host),
@@ -48,8 +51,8 @@ export function desktop({ platform = process.platform, arch = process.arch, env 
   // Earlier installers (other versions, validation builds) must not sit next to the new one.
   if (distribute) files.remove(join(targetDir, 'release', 'bundle'), { recursive: true, force: true });
   // Direct JS invocation preserves argument boundaries without npm.cmd/shell quoting.
-  run(process.execPath, [join(cwd, 'node_modules', '@tauri-apps', 'cli', 'tauri.js'), mode, ...extra], false, buildEnv);
-  if (distribute) publishInstaller({ cwd, targetDir, files, copy, mkdir });
+  run(process.execPath, [join(cwd, 'node_modules', '@tauri-apps', 'cli', 'tauri.js'), mode, ...extra, ...(signing ?? [])], false, buildEnv);
+  if (distribute) publishInstaller({ cwd, targetDir, files, copy, mkdir, signed: Boolean(signing) });
 }
 
 // Release binaries embed source paths in panic locations; map the builder's
@@ -65,8 +68,9 @@ function releaseEnv(env, cwd, home) {
   return { ...env, CARGO_ENCODED_RUSTFLAGS: [existing, ...remaps].filter(Boolean).join('\x1f') };
 }
 
-// The distribution folder holds exactly the installer and its checksum.
-function publishInstaller({ cwd, targetDir, files, copy, mkdir }) {
+// The distribution folder holds exactly the installer and its checksum, plus
+// the installer's updater signature when the build was signed.
+function publishInstaller({ cwd, targetDir, files, copy, mkdir, signed }) {
   const { version } = JSON.parse(files.read(join(cwd, 'src-tauri', 'tauri.conf.json'), 'utf8'));
   const name = `Rhythm_${version}_x64-setup.exe`;
   const bundle = join(targetDir, 'release', 'bundle', 'nsis');
@@ -80,5 +84,6 @@ function publishInstaller({ cwd, targetDir, files, copy, mkdir }) {
   copy(join(bundle, name), join(output, name));
   const digest = createHash('sha256').update(files.read(join(output, name))).digest('hex');
   files.write(join(output, `${name}.sha256`), `${digest}  ${name}\n`);
-  console.log(`Distribution files in ${output}:\n  ${name}\n  ${name}.sha256 (${digest})`);
+  if (signed) copy(join(bundle, `${name}.sig`), join(output, `${name}.sig`));
+  console.log(`Distribution files in ${output}:\n  ${name}\n  ${name}.sha256 (${digest})${signed ? `\n  ${name}.sig` : ''}`);
 }
