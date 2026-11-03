@@ -745,6 +745,50 @@ fn restore_revokes_custom_model_directory_ownership_without_touching_weights_or_
 }
 
 #[test]
+fn restore_keeps_a_model_the_catalog_no_longer_offers() {
+    // qwen35-9b shipped in v1.0.0 and was later removed from the catalog.
+    let workspace = tempfile::tempdir().unwrap();
+    let source = workspace.path().join("source");
+    let store = populated_profile(&source);
+    let weights = b"GGUF\x03\x00\x00\x00retired 9B weights";
+    let path = format!("models/{}.gguf", digest(weights));
+    let mut retired = model("qwen35-9b", "managed", &path, weights);
+    retired.catalog_id = Some("qwen35-9b".into());
+    retired.name = "Qwen3.5 9B".into();
+    retired.expected_sha256 = Some(digest(weights));
+    retired.expected_bytes = Some(weights.len() as u64);
+    store.ai_upsert_model(&retired).unwrap();
+    let snapshot = workspace.path().join("snapshot.sqlite3");
+    store.backup_to(&snapshot).unwrap();
+    let (schema, documents) = store.backup_summary().unwrap();
+    let archive = workspace.path().join("retired-model.rhythm-backup");
+    create(
+        &archive,
+        &snapshot,
+        &source.join("resources"),
+        "1793500000".into(),
+        schema,
+        documents,
+    )
+    .unwrap();
+    drop(store);
+
+    let target = workspace.path().join("target");
+    drop(Store::open(&target.join("rhythm.sqlite3")).unwrap());
+    fs::create_dir_all(target.join("models")).unwrap();
+    fs::write(target.join("models/managed.gguf"), MANAGED_WEIGHTS).unwrap();
+    fs::write(target.join(&path), weights).unwrap();
+    let cancellation = BackupCancellation(AtomicU8::new(CANCELLABLE));
+    stage_restore(&target, &archive, &cancellation).unwrap();
+    recover_pending_restore(&target).unwrap().unwrap();
+    let restored = Store::open(&target.join("rhythm.sqlite3")).unwrap();
+    let inventory = restored.ai_model("qwen35-9b").unwrap().unwrap();
+    assert_eq!(inventory.catalog_id.as_deref(), Some("qwen35-9b"));
+    assert_eq!(inventory.status, "installed");
+    assert_eq!(fs::read(target.join(&path)).unwrap(), weights);
+}
+
+#[test]
 fn restore_reconciles_duplicate_custom_and_external_models_without_losing_files_or_history() {
     let workspace = tempfile::tempdir().unwrap();
     let staging = workspace.path().join("staging");

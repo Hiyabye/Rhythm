@@ -1,5 +1,22 @@
 [
   {
+    "id": "qwen35-0-8b",
+    "name": "Qwen3.5 0.8B",
+    "parameters": "0.8B",
+    "quantization": "Q4_K_M",
+    "bytes": 532517120,
+    "memory_bytes": 2147483648,
+    "description": "한국어 공지 요약과 정보 추출을 위한 로컬 모델",
+    "use_case": "가장 적은 메모리 · 짧은 요약",
+    "repository": "unsloth/Qwen3.5-0.8B-GGUF",
+    "revision": "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0",
+    "filename": "Qwen3.5-0.8B-Q4_K_M.gguf",
+    "sha256": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
+    "license": "Apache-2.0",
+    "compatibility": "experimental",
+    "reason": "Rhythm 실제 추론 검증 전입니다."
+  },
+  {
     "id": "qwen35-2b",
     "name": "Qwen3.5 2B",
     "parameters": "2B",
@@ -7,7 +24,7 @@
     "bytes": 1280835840,
     "memory_bytes": 4294967296,
     "description": "한국어 공지 요약과 정보 추출을 위한 로컬 모델",
-    "use_case": "적은 메모리 · 간단한 요약",
+    "use_case": "가벼운 공지 분석",
     "repository": "unsloth/Qwen3.5-2B-GGUF",
     "revision": "f6d5376be1edb4d416d56da11e5397a961aca8ae",
     "filename": "Qwen3.5-2B-Q4_K_M.gguf",
@@ -32,22 +49,5 @@
     "license": "Apache-2.0",
     "compatibility": "verified",
     "reason": "macOS Apple Silicon · Metal에서 실제 한국어 분석을 확인했습니다. Windows는 CPU(RAM 16GB)와 NVIDIA GTX 1650 한 대에서 제한된 공지로만 시험했으므로 결과를 원문과 대조해 주세요. 그 밖의 환경은 미검증이며 메모리 부족 시 불러오지 못할 수 있습니다."
-  },
-  {
-    "id": "qwen35-9b",
-    "name": "Qwen3.5 9B",
-    "parameters": "9B",
-    "quantization": "Q4_K_M",
-    "bytes": 5680522464,
-    "memory_bytes": 12884901888,
-    "description": "한국어 공지 요약과 정보 추출을 위한 로컬 모델",
-    "use_case": "충분한 메모리 · 복잡한 공지",
-    "repository": "unsloth/Qwen3.5-9B-GGUF",
-    "revision": "3885219b6810b007914f3a7950a8d1b469d598a5",
-    "filename": "Qwen3.5-9B-Q4_K_M.gguf",
-    "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
-    "license": "Apache-2.0",
-    "compatibility": "experimental",
-    "reason": "Rhythm 실제 추론 검증 전입니다."
   }
 ]
