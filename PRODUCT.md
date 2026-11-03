@@ -6,7 +6,7 @@
 
 web
 
-(A Tauri 2 desktop app: the UI is Svelte 5 in the macOS WebKit webview. The only supported target is macOS on Apple Silicon. It is not a website and not a native iOS/Android app.)
+(A Tauri 2 desktop app: the UI is Svelte 5 in the system webview, WebKit on macOS and WebView2 on Windows. Supported targets are macOS on Apple Silicon and Windows 11 x64. It is not a website and not a native iOS/Android app.)
 
 ## Users
 
@@ -24,7 +24,7 @@ Success: the user trusts Rhythm to bring forward what matters, at the right time
 
 ## Positioning
 
-- **Local-first by construction.** No account, cloud database, remote AI, telemetry or separate inference server. Inference runs in a bundled worker process on the Mac.
+- **Local-first by construction.** No account, cloud database, remote AI, telemetry or separate inference server. Inference runs in a bundled worker process on the device.
 - **Explainable, not oracular.** Every recommendation shows the actual score signals that ranked it. AI output is optional, labeled, and never drives ranking, urgency or notifications.
 - **User decides.** Subscriptions, collection, model installs, background sync and notifications are all off until the user turns them on. Learned preferences can be inspected, edited and deleted.
 - **Archive, not a feed.** Notices are preserved with meaningful revision history, local attachments and offline reading. Fetch/parse failures never erase good content.
@@ -33,12 +33,12 @@ Success: the user trusts Rhythm to bring forward what matters, at the right time
 
 The usage moments that matter most:
 
-1. **Background + alerts.** Rhythm runs from the menu bar with the window closed. Scheduled incremental sync and macOS notifications pull the user in only when something matters (sensitivity modes, quiet hours, deduplication, rate limits).
+1. **Background + alerts.** Rhythm runs from the menu bar (the notification area on Windows) with the window closed. Scheduled incremental sync and native notifications pull the user in only when something matters (sensitivity modes, quiet hours, deduplication, rate limits).
 2. **Planning hub.** Rhythm becomes the center of the day, especially as planning-oriented extensions arrive.
 
 Also supported but secondary: a quick check of Today, deep reading of long notices with tables and attachments, and archive search.
 
-Environment: a desktop macOS window with native window controls and a 640 px minimum width, a menu-bar tray item, native notifications and native confirmation sheets. The window may be hidden for long periods.
+Environment: a desktop window with native window controls and a 640 px minimum width, a tray item (menu bar on macOS, notification area on Windows), native notifications and native confirmation dialogs. The window may be hidden for long periods.
 
 Current information architecture (open to change in a redesign): 오늘 (ranked Today), 받은 소식 (chronological inbox), 탐색 (search), 보관함 (saved), 설정 (settings: general, extensions/sources, AI models and processing, personalization, background, notifications, backup, updates).
 
@@ -46,18 +46,18 @@ Current information architecture (open to change in a redesign): 오늘 (ranked 
 
 - 32 cataloged sources, 10 supported (main academic, five computing, four engineering boards). Unsupported sources are shown as such and are never presented as working.
 - Historical import (resumable, cancellable) is separate from incremental "new and changed" checks. Progress shows real counts and phases, never fabricated percentages.
-- Reader: sanitized local content only, with no scripts, iframes, remote images or live school pages. Original links open in the OS browser on explicit action. Attachments are revealed in Finder, never executed. Iframe-only notices keep metadata only and explain why.
-- Local AI: Qwen3.5 2B/4B GGUF via mistral.rs, user-installed. Summaries, AI category, and dates/facts grounded to source evidence. AI can be wrong, and the UI must say to verify in the original. Analysis shows real phase and elapsed time.
+- Reader: sanitized local content only, with no scripts, iframes, remote images or live school pages. Original links open in the OS browser on explicit action. Attachments are revealed in Finder or File Explorer, never executed. Iframe-only notices keep metadata only and explain why.
+- Local AI: Qwen3.5 2B/4B GGUF, user-installed, via mistral.rs (Metal or CPU), plus llama.cpp/Vulkan for NVIDIA GPUs on Windows. Summaries, AI category, and dates/facts grounded to source evidence. AI can be wrong, and the UI must say to verify in the original. Analysis shows real phase and elapsed time.
 - Personalization: explicit interests, per-notice interested/not interested feedback, learned topics from saves and positive feedback only, 180-day expiry, full reset.
 - Lifecycle: close-to-background, login start, hidden login start, scheduler and notifications all default off.
 - Single-file `.rhythm-backup` backup/restore (unencrypted, excludes model weights). Restore quits the app and finalizes on the next manual launch.
 - Destructive actions require a confirmation that names what changes and what is kept.
-- Distribution: ad-hoc-signed DMG, not notarized, manual updates. These are deliberate choices, not gaps.
+- Distribution: ad-hoc-signed macOS DMG (not notarized) and unsigned per-user Windows installer, both updated manually. These are deliberate choices, not gaps.
 - Frontend: Svelte 5 runes, TypeScript, Tailwind plus semantic CSS (`src/app.css`, `src/lib/ai.css`), Pretendard bundled locally (no font CDN). The Tauri webview cannot rely on remote assets.
 
 ## Brand Commitments
 
-- **Native macOS look for the whole app (standing user decision, 2026-11-02).** In the redesign direction round, the user chose the category standard on purpose: a macOS-native app (source-list sidebar, system list rows, one system accent, light and dark themes) built without irony. Things 3 and Fantastical set the craft bar. This covers every screen, including Settings and the reader, not only the shell and Today.
+- **Native macOS look for the whole app (standing user decision, 2026-11-02).** In the redesign direction round, the user chose the category standard on purpose: a macOS-native app (source-list sidebar, system list rows, one system accent, light and dark themes) built without irony. Things 3 and Fantastical set the craft bar. This covers every screen, including Settings and the reader, not only the shell and Today. The same UI currently renders on Windows; whether Windows should get its own look has not been decided.
 - Otherwise nothing is binding. The name "Rhythm", the Beat four-bar mark (`assets/branding/beat.svg`), the five-view navigation and the "command center" tagline are current but replaceable.
 
 Voice that stays: all user-facing UI, feedback and errors are in natural Korean. Internal identifiers and model names stay recognizable. Copy is honest about limits: it never claims delivery, verification, completeness or accuracy that wasn't established.

@@ -7,20 +7,17 @@ stderr; stdout carries only versioned JSON Lines IPC.
 
 ## Runtime and compatibility
 
-Current application/worker version is **0.9.2**. Rhythm currently supports and targets
-macOS only; the worker's cross-platform build options are implementation capabilities,
-not a claim of product support. Earlier Windows/Linux build evidence is historical.
-The worker protocol remains v1; application prompt versioning and stored-result schemas
-are separate contracts.
+The worker shares the application version. Rhythm supports macOS Apple Silicon and
+Windows 11 x64; other build targets are implementation capabilities, not product support.
+The worker protocol is v1; application prompt versioning and stored-result schemas are
+separate contracts.
 
 The worker pins **mistral.rs v0.9.1**, upstream release commit
 [`11f255058573e085afe0a149f8a19cbd39aa1200`](https://github.com/EricLBuehler/mistral.rs/tree/11f255058573e085afe0a149f8a19cbd39aa1200).
-The published crates.io version remained 0.8.1 when inspected, so this is a commit-pinned
-Git dependency, not an assumed registry 0.9.1 package. Its Candle dependency is also
-upstream-pinned and captured by the root lockfile. Only the mistral.rs dependency family
-and its necessary transitive resolution were changed.
+crates.io had only 0.8.1 when inspected, so this is a commit-pinned Git dependency; its
+Candle dependency is pinned by the root lockfile.
 
-Why upgrade: inspected 0.8.1 and v0.9.0 GGUF loaders do not route `qwen35`.
+Inspected 0.8.1 and v0.9.0 GGUF loaders do not route `qwen35`.
 The v0.9.1 native GGUF loader explicitly supports `qwen35`; its
 `scopes_main_only_multimodal_architectures` test confirms a text-only Qwen3.5 GGUF does
 not require a multimodal projector. This is source-level compatibility evidence, not
@@ -50,7 +47,7 @@ a chat role.
 NVIDIA GTX 10/16 and RTX 20/30/40/50 are targets, not tested hardware. Build
 requirements (Vulkan SDK, libclang, CMake, Ninja, a target directory of at most 32
 characters distinct from the CPU one) are in the
-[Windows GPU guide](../../docs/WINDOWS_GPU.md):
+[Windows guide](../../docs/WINDOWS.md):
 
 ```powershell
 $env:LLAMA_BUILD_SHARED_LIBS = '0'
@@ -89,8 +86,8 @@ cargo build --locked -p rhythm-ai-worker --release --features metal
 cargo build --locked -p rhythm-ai-worker --release --features cuda
 ```
 
-The root desktop helper is macOS-only and accepts an explicit `cpu` or `metal`
-selection:
+On macOS the root desktop helper accepts an explicit `cpu` or `metal` selection
+(Windows uses `auto`, `cpu` or `gpu`; see the [Windows guide](../../docs/WINDOWS.md)):
 
 ```sh
 RHYTHM_AI_BACKEND=cpu npm run desktop
@@ -98,7 +95,8 @@ RHYTHM_AI_BACKEND=metal npm run desktop:build
 ```
 
 Desktop scripts prefer Metal on Apple Silicon if the existing `xcrun metal --version`
-probe succeeds; otherwise they select CPU. Intel Macs use CPU. CUDA remains an optional
+probe succeeds; otherwise they select CPU. An explicit `metal` fails when that probe
+fails. Intel Macs use CPU. CUDA remains an optional
 direct Cargo worker build feature, not a supported desktop-script or product path.
 Backend selection chooses a build feature, not a guarantee that the accelerated device
 will load a model. Compatible tooling must already exist; the helper installs no
@@ -144,7 +142,7 @@ handling, not post-hoc trimming of invalid output. Output-limit/runtime failures
 still prevent a complete JSON result. Source/date/time/link and duplicate validators,
 one bounded repair and cancellation remain application responsibilities. Grammar does
 not prove correct categories, current deadlines or preserved exclusions. See the
-[bounded A/B results](../../docs/AI_EVALUATION.md#bounded-schema-decoding-experiment).
+[decoding decision](../../docs/AI_EVALUATION.md#constrained-decoding-decision).
 
 Model paths are canonical local `.gguf` files, with GGUF v2/v3 magic/version validation
 before passing them to mistral.rs. Full architecture/tensor validation occurs in the
@@ -223,56 +221,9 @@ For exact-backend evaluations, copy a freshly built worker to a separate dedicat
 path before building the app; explicitly stage the intended binary for native builds.
 A Fresh Cargo message alone is not evidence of which binary remains at the shared path.
 
-Verified after the upgrade on this macOS Apple Silicon host: existing
-**Qwen3-0.6B-Q8_0.gguf, CPU**, with real generated output and successful lifecycle tests.
-The same artifact also passed the explicit Metal-feature process test, reporting
-`loaded_backend: "metal"` (3,629 ms loading and 872 ms generation in one debug sample).
-The tiny baseline model's response was refusal-like, so this establishes real generation
-and lifecycle behavior, **not useful summary quality**. The fallback policy is tested
-with deterministic loader failures; an actual unavailable-GPU-to-CPU transition was
-not forced. This baseline alone does not establish Qwen3.5 compatibility or quality.
-
-In the historical v0.3.0 baseline, the pinned **Qwen3.5 2B and 4B Q4_K_M** artifacts each
-completed one useful synthetic Korean scholarship analysis through the actual worker/controller/
-validation/Store path on this macOS arm64 Metal setup. Both produced correct classification
-and grounded deadline, persisted results, reused cache, isolated a new revision and read
-cached output after database reopen with the worker stopped. Debug load/complete-analysis
-observations were **8.121/83.528 s** for 2B and **12.820/171.156 s** for 4B; analysis includes
-model integrity verification, not isolated generation. Post-load worker RSS samples were
-**2,982,784 KiB** and **5,341,680 KiB**, not peak memory. Neither run establishes release
-performance, broad Korean quality, native UI operation or OS-enforced offline inference.
-
-Those baseline samples used **prompt version 2 / stored schema 1** and succeeded on their
-first attempt. Current v0.3.1 uses **prompt 3 / stored schema 1** with explicit `{id,text}`
-source objects. Generation ingress requires only `kind`, `label`, `value`, `evidence_id`
-per fact; the backend supplies exact evidence and conservatively derived dates/uncertainty.
-Literal date/time validation and one bounded repair remain. Long input selects exact
-head/tail/important ranges within 18 KiB of encoded source and a 24 KiB prompt. Selector
-v4 deduplicates exact repeated passages only over budget and separates structural table
-rows; it is not full-document understanding. Full model-file hashing remains mandatory;
-the parent enables approved `sha2` assembly only on macOS aarch64.
-
-The current local checkpoint passed **175 workspace Rust tests** (eight opt-in tests
-ignored), strict workspace Clippy, 86 mocked-IPC browser checks and five POSIX desktop
-checks, and built a debug macOS bundle. Separate isolated native 2B/Metal checks covered
-load/remount/cancel, setup cancellation during verification, successful real setup and
-OS-network-denied prompt-v3 regeneration. These are functional checks, not broad quality
-or release-performance guarantees. An initial 18-synthetic/six-public-archive case campaign
-per model completed, followed by an eight-synthetic/three-archive-per-model decoding A/B
-experiment. It improved completed jobs from 17/22 to 20/22 with similar single-case timings,
-so analysis now uses the negotiated constrained mode. Semantic mistakes remain, and the
-full 18-case campaign has not been repeated under the final default; neither grammar nor
-prompt changes prove those mistakes eliminated.
-
-These application contracts are distinct from the worker's generic text protocol; see
-[`docs/AI_EVALUATION.md`](../../docs/AI_EVALUATION.md) for exact artifact identities,
-measurements, final campaign outcomes and remaining gates. Transient diagnostics retain
-bounded timing/count reports without document or generated text; they are not persisted.
-
-Initial 4B CPU loading failed under then-current memory pressure before generation.
-Qwen3.5 CPU/CUDA and the experimental 0.8B entry remain unverified; the observed useful 2B/4B
-inference path is macOS Apple Silicon/Metal only. Historical Windows/Linux build evidence
-does not establish current support or runtime behavior. Complete native-flow coverage,
-release signing/notarization, Finder/DMG installation, and updater installation remain
-unverified. Do not infer those claims from Metal compilation, baseline generation or the
-single-case application evidence.
+The tiny `Qwen3-0.6B-Q8_0` baseline passed the actual-model process test on CPU and with
+the Metal feature (`loaded_backend: "metal"`); its refusal-like output shows real generation
+and lifecycle, not summary quality. CPU fallback is tested with deterministic loader
+failures; a real unavailable-GPU-to-CPU transition has not been forced. Qwen3.5 artifact
+evidence, measurements and remaining gaps are in
+[`docs/AI_EVALUATION.md`](../../docs/AI_EVALUATION.md).
