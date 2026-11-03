@@ -1,0 +1,207 @@
+name: Release (tag, unsigned draft)
+
+# A pushed version tag builds the existing distribution files on both
+# platforms and attaches them to a draft release. The maintainer reviews and
+# publishes the draft; nothing here publishes, signs or creates updater files.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rhythm-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release tag and reject existing release
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.tag.outputs.commit }}
+      version: ${{ steps.version.outputs.version }}
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+      - name: Validate tag provenance on trusted main
+        id: tag
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          git fetch --no-tags origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          main_commit="$(git rev-parse refs/remotes/origin/main^{commit})"
+          if ! git merge-base --is-ancestor "$tag_commit" "$main_commit"; then
+            echo "Release tag does not point to a commit reachable from trusted main."
+            exit 1
+          fi
+          echo "commit=$tag_commit" >> "$GITHUB_OUTPUT"
+          git checkout --detach "$tag_commit"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Verify tag and version metadata
+        id: version
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const tag = process.env.RELEASE_TAG;
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+          const packageLock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8')).version;
+          const tauri = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8')).version;
+          const cargo = fs.readFileSync('src-tauri/Cargo.toml', 'utf8').match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+          const worker = fs.readFileSync('crates/ai-worker/Cargo.toml', 'utf8').match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+          if (packageLock !== pkg || tauri !== pkg || cargo !== pkg || worker !== pkg || tag !== `v${pkg}`) {
+            throw new Error(`Tag/version mismatch: tag=${tag}, package=${pkg}, lock=${packageLock}, tauri=${tauri}, rhythm=${cargo}, worker=${worker}`);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${pkg}\n`);
+          console.log(`Validated ${tag}`);
+          NODE
+      - name: Refuse to overwrite an existing GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "A release for $RELEASE_TAG already exists; refusing to overwrite it."
+            exit 1
+          fi
+
+  # Job IDs and Cargo/CMake environment match ci.yml so rust-cache can restore
+  # the release build that main's CI run saved. Tag runs never save a cache.
+  desktop:
+    name: macOS Apple Silicon DMG
+    needs: validate
+    runs-on: macos-14
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+      - run: npm ci
+      - run: npm run desktop:build
+      # Only the distribution folder is published, never the Tauri bundle folder.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rhythm-macos-arm64
+          path: target/release/distribution/*
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: Windows 11 x64 installer
+    needs: validate
+    runs-on: windows-latest
+    env:
+      CARGO_BUILD_JOBS: 4
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      LLAMA_BUILD_SHARED_LIBS: 0
+      CMAKE_GENERATOR: Ninja
+      RHYTHM_GPU_TARGET_DIR: ${{ github.workspace }}\target-gpu
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+          workspaces: |
+            . -> target
+            . -> target-gpu
+      - uses: ./.github/actions/windows-build-tools
+      - run: npm ci
+      - name: Build unsigned NSIS installer
+        run: |
+          # Keep child scripts on the CI host with its matching PowerShell modules.
+          $env:RHYTHM_POWERSHELL = Join-Path $PSHOME 'pwsh.exe'
+          npm run desktop:build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rhythm-windows-x64
+          path: target/release/distribution/*
+          if-no-files-found: error
+          retention-days: 7
+
+  draft-release:
+    name: Create GitHub draft release (never publish)
+    needs: [validate, desktop, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rhythm-*
+          path: release-assets
+          merge-multiple: true
+      - name: Check the exact file set and checksums
+        working-directory: release-assets
+        run: |
+          set -euo pipefail
+          expected="$(printf '%s\n' \
+            "Rhythm_${RELEASE_VERSION}_aarch64.dmg" \
+            "Rhythm_${RELEASE_VERSION}_aarch64.dmg.sha256" \
+            "Rhythm_${RELEASE_VERSION}_x64-setup.exe" \
+            "Rhythm_${RELEASE_VERSION}_x64-setup.exe.sha256" | sort)"
+          actual="$(ls -A | sort)"
+          if [[ "$actual" != "$expected" ]]; then
+            printf 'Unexpected release files.\nExpected:\n%s\nActual:\n%s\n' "$expected" "$actual"
+            exit 1
+          fi
+          sha256sum --check --strict -- *.sha256
+      - name: Refuse overwrite and create draft only
+        run: |
+          set -euo pipefail
+          tag_commit="$(gh api "repos/${GH_REPO}/commits/${RELEASE_TAG}" --jq .sha)"
+          if [[ "$tag_commit" != "$RELEASE_COMMIT" ]]; then
+            echo "The tag moved after validation; refusing to release."
+            exit 1
+          fi
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "A release for $RELEASE_TAG already exists; refusing to overwrite it."
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" release-assets/* --draft --verify-tag --title "Rhythm ${RELEASE_VERSION}" --notes-file - <<'NOTES'
+          - macOS(Apple Silicon): Ad-hoc 서명이며 Apple Developer ID 서명과 Apple 공증은 없습니다.
+          - Windows 11 x64: 설치 파일에 코드 서명이 없어 SmartScreen 경고가 나타날 수 있습니다.
+          - 설치 전에 같은 이름의 `.sha256` 파일로 체크섬을 확인하세요. 설치와 업데이트 방법은 README를 참고하세요.
+          NOTES
