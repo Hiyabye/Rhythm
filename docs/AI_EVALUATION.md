@@ -13,8 +13,8 @@ Inference runs in upstream `llama-server` from llama.cpp build **b12068** (`0.8.
 | Model | Repository / file | Revision | Bytes | Status |
 | --- | --- | --- | ---: | --- |
 | Qwen3.5 0.8B | [`unsloth/Qwen3.5-0.8B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF) / `Qwen3.5-0.8B-Q4_K_M.gguf` | `6ab461498e2023f6e3c1baea90a8f0fe38ab64d0` | 532,517,120 | Experimental: never downloaded or run |
-| Qwen3.5 2B | [`unsloth/Qwen3.5-2B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF) / `Qwen3.5-2B-Q4_K_M.gguf` | `f6d5376be1edb4d416d56da11e5397a961aca8ae` | 1,280,835,840 | Verified for macOS Apple Silicon / Metal |
-| Qwen3.5 4B | [`unsloth/Qwen3.5-4B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF) / `Qwen3.5-4B-Q4_K_M.gguf` | `e87f176479d0855a907a41277aca2f8ee7a09523` | 2,740,937,888 | Verified for macOS Apple Silicon / Metal |
+| Qwen3.5 2B | [`unsloth/Qwen3.5-2B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF) / `Qwen3.5-2B-Q4_K_M.gguf` | `f6d5376be1edb4d416d56da11e5397a961aca8ae` | 1,280,835,840 | Verified for macOS Apple Silicon / Metal; Windows GTX 1650 / Vulkan and Windows CPU |
+| Qwen3.5 4B | [`unsloth/Qwen3.5-4B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF) / `Qwen3.5-4B-Q4_K_M.gguf` | `e87f176479d0855a907a41277aca2f8ee7a09523` | 2,740,937,888 | Verified for macOS Apple Silicon / Metal; Windows GTX 1650 / Vulkan and Windows CPU (4 of 18 fixtures) |
 
 ```text
 0.8B bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517
@@ -24,9 +24,9 @@ Inference runs in upstream `llama-server` from llama.cpp build **b12068** (`0.8.
 
 Catalog memory values (2/4/7 GiB) are estimates, not measured peaks. `verified` means the qualified artifact/backend evidence below, not factual correctness. 9B (`qwen35-9b`) was removed from the catalog after v1.0.0 without ever being run; existing installs keep working.
 
-## Current evidence (macOS 27.2, M1 Pro, 16 GiB)
+## Current evidence
 
-**llama-server b12068, Metal, 2B** (all 18 synthetic fixtures, production controller → validation → Store path, `llama-server` from a bundled debug `Rhythm.app`): 18/18 jobs completed with schema-valid, grounded output, 1 needing its one repair; 7/18 also passed every screening check (category, deadline set, summary terms). 8 had the wrong category and 2 the wrong deadline set. Total inference 92 s (≈65 completion tok/s, 2–10 s per notice); `offloaded 25/25 layers to GPU`. In the same harness and fixtures, the former mistral.rs Metal release worker completed 18/18 and passed 7/18 in 236 s.
+**llama-server b12068, Metal, 2B** (macOS 27.2, M1 Pro, 16 GiB; all 18 synthetic fixtures, production controller → validation → Store path, `llama-server` from a bundled debug `Rhythm.app`): 18/18 jobs completed with schema-valid, grounded output, 1 needing its one repair; 7/18 also passed every screening check (category, deadline set, summary terms). 8 had the wrong category and 2 the wrong deadline set. Total inference 92 s (≈65 completion tok/s, 2–10 s per notice); `offloaded 25/25 layers to GPU`. In the same harness and fixtures, the former mistral.rs Metal release worker completed 18/18 and passed 7/18 in 236 s.
 
 Evidence from the former mistral.rs worker (same artifacts, different engine), not re-run with llama-server:
 
