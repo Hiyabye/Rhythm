@@ -993,6 +993,9 @@ mod tests {
         assert!(worker.process_id().is_none());
     }
 
+    // macOS ships one Metal-capable build, reported as the build even when it
+    // runs on CPU. Windows reports the build in use (`gpu_tests`).
+    #[cfg(not(windows))]
     #[tokio::test]
     async fn failed_metal_load_retries_on_cpu_and_reports_both_backends() {
         let directory = tempfile::tempdir().unwrap();
