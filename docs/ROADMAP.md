@@ -1,18 +1,18 @@
 # Roadmap
 
-Rhythm stays local-first and Korean-first. The current release is **v1.0.0**. Support targets macOS Apple Silicon and Windows 11 x64; Linux and Intel Macs are not supported. Planned work is tracked in [GitHub issues](https://github.com/Hiyabye/Rhythm/issues); this page records the current state and what has actually been verified.
+Rhythm stays local-first and Korean-first. The current release is **v1.1.0**. Support targets macOS Apple Silicon and Windows 11 x64; Linux and Intel Macs are not supported. Planned work is tracked in [GitHub issues](https://github.com/Hiyabye/Rhythm/issues); this page records the current state and what has actually been verified.
 
 ## Current state
 
-v1.0.0 (macOS, published as an ad-hoc-signed DMG) includes the local notice archive, optional local AI analysis, deterministic personalization, opt-in background sync and notifications, and single-file backup/restore.
+v1.0.0 (macOS, an ad-hoc-signed DMG) introduced the local notice archive, optional local AI analysis, deterministic personalization, opt-in background sync and notifications, and single-file backup/restore.
 
-On `main` since v1.0.0, not yet released:
+v1.1.0 adds:
 
 - Windows 11 x64 support from contributor PR #1: per-user NSIS installer, CPU and NVIDIA Vulkan AI workers, WinRT notifications (schema 7), AI execution mode (schema 8). See [Windows](WINDOWS.md).
 - A chosen folder for new model downloads on both platforms (schema 9).
 - Model catalog: Qwen3.5 0.8B added as experimental; 9B removed (existing installs keep working).
 - Native-macOS redesign of the app shell and Today.
-- CI split by concern and gated by changed paths; a tag-triggered workflow (`release.yml`) that builds both platforms and creates a draft release. It has not run yet.
+- CI split by concern and gated by changed paths; a tag-triggered workflow (`release.yml`) that builds both platforms and creates a draft release. v1.1.0 is its first run.
 
 ## Verification status
 
