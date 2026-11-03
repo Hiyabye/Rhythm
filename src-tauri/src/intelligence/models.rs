@@ -334,9 +334,9 @@ fn validate_manifest(e: &CatalogEntry) -> Result<(), String> {
         || e.bytes == 0
         || e.bytes > 12 * 1024 * 1024 * 1024
         || ![
+            "unsloth/Qwen3.5-0.8B-GGUF",
             "unsloth/Qwen3.5-2B-GGUF",
             "unsloth/Qwen3.5-4B-GGUF",
-            "unsloth/Qwen3.5-9B-GGUF",
         ]
         .contains(&e.repository.as_str())
         || !e.filename.ends_with(".gguf")
@@ -1073,7 +1073,8 @@ mod tests {
         );
         assert!(entries
             .iter()
-            .any(|entry| entry.id == "qwen35-9b" && entry.compatibility == "experimental"));
+            .any(|entry| entry.id == "qwen35-0-8b" && entry.compatibility == "experimental"));
+        assert!(entries.iter().all(|entry| entry.id != "qwen35-9b"));
     }
     #[test]
     fn sha256_target_features_preserve_standard_known_answers() {
@@ -1922,6 +1923,38 @@ mod tests {
             .unwrap();
             assert!(managed_path(dir.path(), "models/evil.gguf").is_err());
         }
+    }
+    #[tokio::test]
+    async fn retired_catalog_model_reopens_and_can_be_removed() {
+        // A v1.0.0 profile may hold qwen35-9b, which the catalog no longer offers.
+        let (dir, store, mut entry, bytes) = fixture();
+        entry.id = "qwen35-9b".into();
+        entry.name = "Qwen3.5 9B".into();
+        assert!(catalog().iter().all(|current| current.id != entry.id));
+        let mut model = inventory(&entry);
+        model.status = "installed".into();
+        model.sha256 = Some(entry.sha256.clone());
+        model.bytes = entry.bytes;
+        model.downloaded_bytes = entry.bytes;
+        let weights = dir.path().join(&model.path);
+        std::fs::create_dir_all(weights.parent().unwrap()).unwrap();
+        std::fs::write(&weights, &bytes).unwrap();
+        store.lock().unwrap().ai_upsert_model(&model).unwrap();
+        drop(store);
+
+        let store = Arc::new(Mutex::new(
+            Store::open(&dir.path().join("rhythm.sqlite3")).unwrap(),
+        ));
+        let reopened = store.lock().unwrap().ai_model(&model.id).unwrap().unwrap();
+        assert_eq!(reopened.catalog_id.as_deref(), Some("qwen35-9b"));
+        assert_eq!(reopened.status, "installed");
+        assert_eq!(std::fs::read(&weights).unwrap(), bytes);
+
+        remove(store.clone(), dir.path().into(), model.id.clone(), true)
+            .await
+            .unwrap();
+        assert!(!weights.exists());
+        assert!(store.lock().unwrap().ai_model(&model.id).unwrap().is_none());
     }
     #[tokio::test]
     async fn invalid_partial_path_preserves_installed_weights_and_inventory() {

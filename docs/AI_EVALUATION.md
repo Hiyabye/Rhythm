@@ -1,6 +1,6 @@
 # Local AI compatibility and evaluation
 
-**v0.3.1 hardening does not establish distribution readiness or reliable semantic extraction.** The pinned Qwen3.5 **2B and 4B Q4_K_M artifacts have produced useful Korean analysis on macOS Apple Silicon with Metal**. Catalog `verified` means that qualified artifact/runtime evidence, not universal factual correctness. Broader v0.3.1 testing below exposes errors that strict literal grounding cannot catch. **9B remains experimental and has not been downloaded or run.** CPU, CUDA and Windows/Linux Qwen3.5 inference remain unverified. Installation integrity, runtime generation, source grounding, semantic usefulness and native behavior are separate gates.
+**v0.3.1 hardening does not establish distribution readiness or reliable semantic extraction.** The pinned Qwen3.5 **2B and 4B Q4_K_M artifacts have produced useful Korean analysis on macOS Apple Silicon with Metal**. Catalog `verified` means that qualified artifact/runtime evidence, not universal factual correctness. Broader v0.3.1 testing below exposes errors that strict literal grounding cannot catch. **0.8B is experimental and has not been downloaded or run; 9B was removed from the catalog after v1.0.0 without having been run.** CPU, CUDA and Windows/Linux Qwen3.5 inference remain unverified. Installation integrity, runtime generation, source grounding, semantic usefulness and native behavior are separate gates.
 
 ## Runtime and text-only loading
 
@@ -10,23 +10,23 @@ Desktop scripts prefer Metal on Apple Silicon only when the existing `xcrun meta
 
 ## Pinned artifacts
 
-`src-tauri/src/intelligence/catalog.json` is the executable manifest. All candidates are Unsloth GGUF conversions of the corresponding official Qwen3.5 model, with Apache-2.0 license metadata. Manifest checksums come from pinned repository LFS metadata, not the transfer response. These identities must change explicitly if a different artifact is tested. Ordinary one-click installation rejects entries not marked `verified`; 2B/4B are available with their stated qualification, while 9B remains blocked.
+`src-tauri/src/intelligence/catalog.json` is the executable manifest. All candidates are Unsloth GGUF conversions of the corresponding official Qwen3.5 model, with Apache-2.0 license metadata. Manifest checksums come from pinned repository LFS metadata, not the transfer response. These identities must change explicitly if a different artifact is tested. Ordinary one-click installation rejects entries not marked `verified`; 2B/4B are available with their stated qualification, while 0.8B remains blocked until real inference evidence exists.
 
 | Model | Repository / exact file | Repository revision | Bytes | Quantization | Current evidence |
 | --- | --- | --- | ---: | --- | --- |
+| Qwen3.5 0.8B | [`unsloth/Qwen3.5-0.8B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF) / `Qwen3.5-0.8B-Q4_K_M.gguf` | `6ab461498e2023f6e3c1baea90a8f0fe38ab64d0` | 532,517,120 | Q4_K_M | Experimental; not downloaded or tested |
 | Qwen3.5 2B | [`unsloth/Qwen3.5-2B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF) / `Qwen3.5-2B-Q4_K_M.gguf` | `f6d5376be1edb4d416d56da11e5397a961aca8ae` | 1,280,835,840 | Q4_K_M | Verified: one useful synthetic scholarship analysis, macOS arm64 / Metal only |
 | Qwen3.5 4B | [`unsloth/Qwen3.5-4B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF) / `Qwen3.5-4B-Q4_K_M.gguf` | `e87f176479d0855a907a41277aca2f8ee7a09523` | 2,740,937,888 | Q4_K_M | Verified: one useful synthetic scholarship analysis, macOS arm64 / Metal only; initial CPU load failed under memory pressure |
-| Qwen3.5 9B | [`unsloth/Qwen3.5-9B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) / `Qwen3.5-9B-Q4_K_M.gguf` | `3885219b6810b007914f3a7950a8d1b469d598a5` | 5,680,522,464 | Q4_K_M | Experimental; not downloaded or tested |
 
 SHA-256, in table order:
 
 ```text
+0.8B bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517
 2B aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223
 4B 00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4
-9B 03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8
 ```
 
-Catalog memory values are conservative **estimates** of 4/7/12 GiB, not measured peaks or promises of available capacity. Physical RAM alone does not establish current loader capacity. The 4B option has useful output evidence on the tested Metal setup, but a recommendation remains conditional on backend, current resources and the user's latency tolerance; one sample does not establish superior general quality.
+Catalog memory values are conservative **estimates** of 2/4/7 GiB, not measured peaks or promises of available capacity. Physical RAM alone does not establish current loader capacity. The 4B option has useful output evidence on the tested Metal setup, but a recommendation remains conditional on backend, current resources and the user's latency tolerance; one sample does not establish superior general quality.
 
 ## Historical v0.3.0 observations
 
@@ -114,7 +114,7 @@ v0.9.2 release-bundle run (macOS 27.2, M1 Pro, 16 GiB; Qwen3.5 2B Q4_K_M `aaf42c
 
 Completed release-mode prompt-v3/selector-v4 screening covered all **18 synthetic cases and six already-archived public notices per artifact**, followed by the bounded same-input decoding experiment below. The initial unconstrained campaign completed 17/18 synthetic jobs on each model, 3/6 archived jobs on 2B and 6/6 on 4B. Expected-category matches were 10/17 and 17/17 completed synthetic outputs respectively. These are **intermediate prompt settings**, not the final mode's pass rates. Literal-valid results still included omitted table deadlines, an obsolete date retained as a deadline and an excluded population presented as eligible. Later wording/decoding changes must not inherit those scores.
 
-Broader factual-quality, CPU/CUDA/9B/platform and distribution gates remain open. The following comparison isolates full-file hashing rather than attributing later prompt changes to that optimization.
+Broader factual-quality, CPU/CUDA/0.8B/platform and distribution gates remain open. The following comparison isolates full-file hashing rather than attributing later prompt changes to that optimization.
 
 ### Isolated full-file hashing comparison
 

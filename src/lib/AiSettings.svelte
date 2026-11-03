@@ -132,6 +132,7 @@
         <p>{model.ownership === 'external' ? '외부 파일 참조 · Rhythm에서 원본 파일을 삭제하지 않습니다.' : 'Rhythm이 관리하는 파일'} · {archiveSize(model.bytes || model.downloaded_bytes)}</p>
         {#if model.ownership === 'managed' && model.storage_directory}<p class="footnote">저장 폴더 · <code>{model.storage_directory}</code></p>{/if}
         <p class="footnote">{model.ownership === 'external' ? '참조 파일' : '저장 파일'} · <code>{model.path}</code></p>
+        {#if model.catalog_id && !data.catalog.some((entry) => entry.id === model.catalog_id)}<p class="footnote">더 이상 모델 목록에서 제공하지 않는 모델입니다. 파일과 기존 분석은 그대로 두며, 다시 설치하거나 다운로드를 이어받을 수 없습니다. 필요하지 않으면 삭제해 주세요.</p>{/if}
         {#if model.status === 'downloading' || model.status === 'verifying' || model.status === 'pending'}
           {#if model.status === 'verifying'}<p role="status">다운로드를 마쳤습니다. 모델 파일 무결성을 확인하고 있습니다.</p>{:else}<label class="ai-progress">모델 다운로드<progress max={model.expected_bytes || 1} value={model.downloaded_bytes}></progress><span>{archiveSize(model.downloaded_bytes)} / {archiveSize(model.expected_bytes ?? 0)}</span></label>{/if}
           <button class="text-button" disabled={cancelling} onclick={() => interrupt('ai_cancel_download', {}, '다운로드 중단을 요청했습니다. 받은 부분은 이어받기를 위해 유지합니다.')}>다운로드 중단</button>

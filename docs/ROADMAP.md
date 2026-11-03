@@ -397,6 +397,14 @@ Ported from contributor PR #1 and merged as an addition: every macOS path is kep
 - After the merge: macOS Rust (except the pre-existing `settings_show_the_built_application_version` failure from the shell redesign), desktop-script and Playwright suites (including a Windows user-agent spec) pass; Windows Rust code was type-checked and Clippy-checked from macOS with stub C tools, which is not a Windows build or test.
 - Open: a Windows CI run of the merged branch, an installed-app run of the merged build, native login/sleep/notification-click checks, and a second Windows machine.
 
+## Model catalog: 0.8B added, 9B removed
+
+The catalog now lists Qwen3.5 0.8B/2B/4B Q4_K_M. Release sections above describe the 2B/4B/9B catalog that shipped at the time.
+
+- [x] Qwen3.5 0.8B (`qwen35-0-8b`, `unsloth/Qwen3.5-0.8B-GGUF`) is pinned by revision, file, size and SHA-256 and listed as `experimental`; one-click installation stays blocked. The pinned URL's reported size and ETag matched the manifest; the weights were not downloaded.
+- [x] Qwen3.5 9B (`qwen35-9b`) is no longer offered. An existing 9B inventory row still opens, can be selected or removed, survives backup/restore and is labelled as no longer offered; its bytes and analysis results are never removed implicitly. Covered by Rust reopen/remove and restore tests and a mocked-IPC UI test.
+- [ ] 0.8B real inference and useful Korean analysis (see [AI evaluation](AI_EVALUATION.md)) before any promotion to `verified`.
+
 ## After v1.0.0
 
 Possible platform and distribution work, each a future product decision:

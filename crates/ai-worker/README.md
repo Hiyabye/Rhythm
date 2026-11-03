@@ -270,7 +270,7 @@ measurements, final campaign outcomes and remaining gates. Transient diagnostics
 bounded timing/count reports without document or generated text; they are not persisted.
 
 Initial 4B CPU loading failed under then-current memory pressure before generation.
-Qwen3.5 CPU/CUDA and 9B (not downloaded) remain unverified; the observed useful 2B/4B
+Qwen3.5 CPU/CUDA and the experimental 0.8B entry remain unverified; the observed useful 2B/4B
 inference path is macOS Apple Silicon/Metal only. Historical Windows/Linux build evidence
 does not establish current support or runtime behavior. Complete native-flow coverage,
 release signing/notarization, Finder/DMG installation, and updater installation remain

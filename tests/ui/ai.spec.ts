@@ -337,6 +337,23 @@ test('managed model removal can keep files after an inaccessible folder error an
   await expect(page.getByRole('region', { name: '공지 AI 분석' }).getByText('장학금 신청 일정과 제출 서류를 확인하세요.', { exact: true })).toBeVisible();
 });
 
+test('experimental 0.8B is listed without one-click install and a retired 9B stays removable', async ({ page }) => {
+  await mockDesktop(page, { aiRetiredModel: true });
+  await page.goto('/');
+  await page.getByRole('button', { name: '설정', exact: true }).click();
+  const small = page.locator('.ai-model-option').filter({ has: page.getByRole('heading', { name: 'Qwen3.5 0.8B' }) });
+  await expect(small.getByText('실험적 · 추론 미검증', { exact: true })).toBeVisible();
+  await expect(small.getByRole('button', { name: 'Qwen3.5 0.8B 다운로드 및 설치', exact: true })).toBeDisabled();
+  await expect(page.locator('.ai-model-option').filter({ hasText: 'Qwen3.5 9B' })).toHaveCount(0);
+  const retired = page.locator('.ai-installed').filter({ has: page.getByRole('heading', { name: 'Qwen3.5 9B', exact: true }) });
+  await expect(retired.getByText('더 이상 모델 목록에서 제공하지 않는 모델입니다.', { exact: false })).toBeVisible();
+  await retired.getByRole('button', { name: '모델 삭제', exact: true }).click();
+  await page.getByRole('group', { name: 'Qwen3.5 9B 삭제 확인', exact: true }).getByRole('button', { name: '확인하고 삭제', exact: true }).click();
+  await expect(page.locator('.ai-installed')).toHaveCount(0);
+  const calls = await page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'ai_remove'));
+  expect(calls.map((call: any) => call.args)).toEqual([{ id: 'qwen35-9b', confirmed: true }]);
+});
+
 test('AI setup stays visible after a delayed long source list and settings links reach their sections', async ({ page }) => {
   await mockDesktop(page, { aiSetupNeeded: true, sourceCount: 32, sourceDelay: 1200 });
   await page.goto('/');
