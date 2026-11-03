@@ -598,14 +598,14 @@ fn main() {
                 operation_gate.clone(),
             )
             .map_err(std::io::Error::other)?;
-            let executable = std::env::current_exe()?
-                .parent()
-                .ok_or("실행 파일 경로를 찾을 수 없습니다.")?
-                .join(format!("rhythm-ai-worker{}", std::env::consts::EXE_SUFFIX));
+            // Bundled llama.cpp builds; the private runtime directory holds the
+            // server's socket or per-launch access key.
+            let llama = app.path().resource_dir().map_err(std::io::Error::other)?.join("llama");
+            let runtime = data_root.join("run");
             let worker = tauri::async_runtime::block_on(async {
                 let mode = store.lock().map_err(|_| std::io::Error::other("설정 잠금 오류"))?
                     .ai_preferences().map_err(std::io::Error::other)?.execution_mode;
-                let mut worker = Worker::launch_configured(&executable, &mode);
+                let mut worker = Worker::launch_configured(&llama, &runtime, &mode);
                 worker.refresh().await;
                 Ok::<_, std::io::Error>(worker)
             })?;

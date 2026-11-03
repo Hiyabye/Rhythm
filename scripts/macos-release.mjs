@@ -70,7 +70,7 @@ export function checkAssessment(output, what) {
 function verifyApp(app, signer) {
   run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', app], { capture: true });
   checkSignature(run('codesign', ['-dvv', app], { capture: true }), signer, 'Rhythm.app');
-  checkSignature(run('codesign', ['-dvv', join(app, 'Contents/MacOS/rhythm-ai-worker')], { capture: true }), signer, 'The bundled AI worker');
+  checkSignature(run('codesign', ['-dvv', join(app, 'Contents/Resources/llama/metal/llama-server')], { capture: true }), signer, 'The bundled llama-server');
   const entitlements = run('codesign', ['-d', '--entitlements', '-', '--xml', app], { capture: true });
   if (entitlements.includes('com.apple.security.get-task-allow')) throw new Error('Rhythm.app carries the debugging entitlement get-task-allow.');
   run('xcrun', ['stapler', 'validate', app], { capture: true });
@@ -115,7 +115,7 @@ export function verifyDmg(dmg, signer) {
 function release({ updater }) {
   const signer = preflight();
   const version = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8')).version;
-  // Tauri signs the app and its nested worker inside-out with the hardened runtime.
+  // Tauri signs the app inside-out with the hardened runtime.
   // Notarization is done once below, so Tauri's own notarization credentials are withheld.
   const env = { ...process.env };
   for (const name of ['APPLE_ID', 'APPLE_PASSWORD', 'APPLE_TEAM_ID', 'APPLE_API_KEY', 'APPLE_API_ISSUER', 'APPLE_API_KEY_PATH', 'APPLE_CERTIFICATE', 'APPLE_CERTIFICATE_PASSWORD']) delete env[name];

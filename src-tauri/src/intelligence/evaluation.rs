@@ -498,16 +498,12 @@ async fn exercise_recovery(
 #[tokio::test]
 #[ignore = "real installed model and worker required; local bounded latency benchmark"]
 async fn actual_analysis_latency_benchmark() {
-    let executable = PathBuf::from(std::env::var_os("RHYTHM_WORKER_TEST_BIN").expect("worker"));
+    let executable = crate::intelligence::staged_llama()
+        .expect("stage llama.cpp with `node scripts/stage-llama.mjs` or set RHYTHM_LLAMA_TEST_DIR");
     let root = PathBuf::from(std::env::var_os("RHYTHM_MODEL_EVAL_ROOT").expect("model root"));
     let id = std::env::var("RHYTHM_MODEL_EVAL_ID").unwrap_or_else(|_| "qwen35-2b".into());
     let model = installed_model(&root, &id);
     let directory = tempfile::tempdir().unwrap();
-    let local_worker = directory.path().join(format!(
-        "rhythm-benchmark-worker{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    std::fs::copy(&executable, &local_worker).unwrap();
     let store = Store::open(&directory.path().join("benchmark.sqlite3")).unwrap();
     seed(&store);
     configure(&store, &model);
@@ -518,7 +514,11 @@ async fn actual_analysis_latency_benchmark() {
     let revision_id = store.document(document_id, None).unwrap().revision_id;
     let store = Arc::new(Mutex::new(store));
     let startup = Instant::now();
-    let worker = Arc::new(AsyncMutex::new(Worker::launch(&local_worker)));
+    let worker = Arc::new(AsyncMutex::new(Worker::launch_configured(
+        &executable,
+        &directory.path().join("run"),
+        "auto",
+    )));
     let health = worker.lock().await.refresh().await;
     let mut report = json!({"label":std::env::var("RHYTHM_AI_BENCH_LABEL").ok(),
         "parent_debug_assertions":cfg!(debug_assertions),"worker":executable,"model":model,
@@ -643,9 +643,8 @@ fn reproducible_evaluation_fixtures_cover_required_shapes() {
 #[tokio::test]
 #[ignore = "real multi-gigabyte Qwen3.5 model and local worker required; CPU can take minutes per sample"]
 async fn actual_qwen35_analysis_evaluation() {
-    let executable = PathBuf::from(
-        std::env::var_os("RHYTHM_WORKER_TEST_BIN").expect("set RHYTHM_WORKER_TEST_BIN"),
-    );
+    let executable = crate::intelligence::staged_llama()
+        .expect("stage llama.cpp with `node scripts/stage-llama.mjs` or set RHYTHM_LLAMA_TEST_DIR");
     let root = PathBuf::from(
         std::env::var_os("RHYTHM_MODEL_EVAL_ROOT")
             .expect("set RHYTHM_MODEL_EVAL_ROOT to completed model install"),
@@ -654,16 +653,15 @@ async fn actual_qwen35_analysis_evaluation() {
     let model = installed_model(&root, &id);
     let directory = tempfile::tempdir().unwrap();
     let db = directory.path().join("evaluation.sqlite3");
-    let local_worker = directory.path().join(format!(
-        "rhythm-evaluation-worker{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    std::fs::copy(&executable, &local_worker).unwrap();
     let store = Store::open(&db).unwrap();
     seed(&store);
     configure(&store, &model);
     let store = Arc::new(Mutex::new(store));
-    let worker = Arc::new(AsyncMutex::new(Worker::launch(&local_worker)));
+    let worker = Arc::new(AsyncMutex::new(Worker::launch_configured(
+        &executable,
+        &directory.path().join("run"),
+        "auto",
+    )));
     let controller = analysis::Controller::default();
     let mut report = json!({
         "model":model,"worker":executable,"os":std::env::consts::OS,"arch":std::env::consts::ARCH,

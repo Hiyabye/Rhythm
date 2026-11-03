@@ -24,7 +24,7 @@ Success: the user trusts Rhythm to bring forward what matters, at the right time
 
 ## Positioning
 
-- **Local-first by construction.** No account, cloud database, remote AI, telemetry or separate inference server. Inference runs in a bundled worker process on the device.
+- **Local-first by construction.** No account, cloud database, remote AI or telemetry. Inference runs on the device in a bundled llama.cpp server that only Rhythm starts and can reach.
 - **Explainable, not oracular.** Every recommendation shows the actual score signals that ranked it. AI output is optional, labeled, and never drives ranking, urgency or notifications.
 - **User decides.** Subscriptions, collection, model installs, background sync and notifications are all off until the user turns them on. Learned preferences can be inspected, edited and deleted.
 - **Archive, not a feed.** Notices are preserved with meaningful revision history, local attachments and offline reading. Fetch/parse failures never erase good content.
@@ -47,7 +47,7 @@ Current information architecture (open to change in a redesign): 오늘 (ranked 
 - 32 cataloged sources, 10 supported (main academic, five computing, four engineering boards). Unsupported sources are shown as such and are never presented as working.
 - Historical import (resumable, cancellable) is separate from incremental "new and changed" checks. Progress shows real counts and phases, never fabricated percentages.
 - Reader: sanitized local content only, with no scripts, iframes, remote images or live school pages. Original links open in the OS browser on explicit action. Attachments are revealed in Finder or File Explorer, never executed. Iframe-only notices keep metadata only and explain why.
-- Local AI: Qwen3.5 2B/4B GGUF, user-installed, via mistral.rs (Metal or CPU), plus llama.cpp/Vulkan for NVIDIA GPUs on Windows. Summaries, AI category, and dates/facts grounded to source evidence. AI can be wrong, and the UI must say to verify in the original. Analysis shows real phase and elapsed time.
+- Local AI: Qwen3.5 2B/4B GGUF, user-installed, run by a bundled llama.cpp server (Metal or CPU on macOS; Vulkan for NVIDIA GPUs or CPU on Windows). Summaries, AI category, and dates/facts grounded to source evidence. AI can be wrong, and the UI must say to verify in the original. Analysis shows real phase and elapsed time.
 - Personalization: explicit interests, per-notice interested/not interested feedback, learned topics from saves and positive feedback only, 180-day expiry, full reset.
 - Lifecycle: close-to-background, login start, hidden login start, scheduler and notifications all default off.
 - Single-file `.rhythm-backup` backup/restore (unencrypted, excludes model weights). Restore quits the app and finalizes on the next manual launch.
@@ -66,7 +66,7 @@ Voice that stays: all user-facing UI, feedback and errors are in natural Korean.
 
 - Real archived Sogang notices exist only in the user's local profile. Fixtures in `src-tauri/src/archive/fixtures/` hold official notice content that keeps its original rights.
 - No testimonials, user counts, benchmarks or press exist. Do not invent any.
-- Measured on one machine (M1 Pro, 16 GiB): about 13–15 s Metal, 21–24 s CPU for a short notice with the 2B model. This is not a performance promise.
+- Measured on one machine (M1 Pro, 16 GiB): about 2–10 s of Metal inference per synthetic notice with the 2B model, plus the model integrity check. This is not a performance promise.
 - Mocked-IPC Playwright UI tests (`npm run test:ui`) build and serve the real frontend for visual checks. They do not verify native behavior.
 
 ## Product Principles

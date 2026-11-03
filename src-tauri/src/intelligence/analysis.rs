@@ -46,6 +46,15 @@ pub const CATEGORIES: [&str; 8] = [
     "행사·활동",
     "기타",
 ];
+/// Closed generation contract for constrained decoding. It must match the
+/// compact generation ingress below; parent-side validation and human
+/// semantic review are not replaced by it.
+///
+/// Kept as literal JSON because property order is part of the contract:
+/// llama.cpp's grammar emits properties in schema order, and this order lets
+/// the model summarize before it extracts facts, as the prompt describes.
+/// A `serde_json::Value` would sort the keys.
+pub(super) const GENERATION_SCHEMA: &str = r#"{"type":"object","properties":{"short_summary":{"type":"string","minLength":4,"maxLength":180},"summary":{"type":"string","minLength":4,"maxLength":1600},"category":{"type":"string","enum":["학사","장학","수업·교육","연구","공모전·대회","인턴·채용","행사·활동","기타"]},"uncertainty":{"type":"string","enum":["clear","ambiguous","unknown"]},"facts":{"type":"array","maxItems":6,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["deadline","event_date","eligibility","documents","application_method","link","action"]},"label":{"type":"string","minLength":1,"maxLength":40},"value":{"type":"string","minLength":1,"maxLength":500},"evidence_id":{"type":"integer","minimum":0}},"required":["kind","label","value","evidence_id"],"additionalProperties":false}}},"required":["short_summary","summary","category","uncertainty","facts"],"additionalProperties":false}"#;
 const INPUT_BYTES: usize = 24 * 1024;
 const SOURCE_BYTES: usize = 18 * 1024;
 const CANCELLED: &str = "AI 분석을 취소했습니다.";
@@ -291,7 +300,7 @@ impl Controller {
             let identity = json!({"id":model.id,"name":model.name,"sha256":model.sha256,
                 "catalog_id":model.catalog_id,"source_revision":model.source_revision,
                 "source_filename":model.source_filename,"max_tokens":preferences.max_tokens,
-                "execution_mode":preferences.execution_mode,"runtime_policy":"llama-vulkan-v1"});
+                "execution_mode":preferences.execution_mode,"runtime_policy":"llama-server-v1"});
             let job = store.ai_enqueue(&key, &identity, 100)?;
             Ok(StartResponse {
                 cached: None,
@@ -598,16 +607,16 @@ pub fn key_for_mode(
         configuration_hash: configuration_hash(max_tokens, decoding_mode(), execution_mode),
     })
 }
-/// Windows keys each execution mode separately: CPU (mistral.rs) and GPU
-/// (llama.cpp, smaller context, control-token neutralization) differ
-/// semantically. `auto` admits a result from either engine, and each result
-/// records and displays the device that produced it. Other platforms ship one
-/// worker, so the mode is not part of the identity and the hash input stays
-/// byte-identical to v1.0, keeping existing cached results valid.
+/// `engine=llama-server-v1` separates results of the supervised llama-server
+/// from earlier mistral.rs/worker results, which stay readable as outdated.
+/// Windows also keys each execution mode: its Vulkan and CPU builds use
+/// different context sizes. `auto` admits a result from either build, and each
+/// result records and displays the device that produced it. Elsewhere one
+/// build serves every mode, so the mode is not part of the identity.
 fn configuration_hash(max_tokens: u32, decoding: &str, execution_mode: &str) -> String {
-    let base = format!("analysis-v3;selector=head-tail-keywords-v4;prompt_rules=primary-purpose-positive-v1;evidence_encoding=explicit-id-v1;clock_rules=meridiem-v2;decoding={decoding};max_tokens={max_tokens};source_bytes={SOURCE_BYTES};thinking=false;sampler=deterministic;repair_attempts=1");
+    let base = format!("analysis-v3;selector=head-tail-keywords-v4;prompt_rules=primary-purpose-positive-v1;evidence_encoding=explicit-id-v1;clock_rules=meridiem-v2;decoding={decoding};max_tokens={max_tokens};source_bytes={SOURCE_BYTES};thinking=false;sampler=deterministic;repair_attempts=1;engine=llama-server-v1");
     let configuration = if cfg!(windows) {
-        format!("{base};runtime_policy=llama-vulkan-v1;execution_mode={execution_mode}")
+        format!("{base};execution_mode={execution_mode}")
     } else {
         let _ = execution_mode;
         base
@@ -769,15 +778,70 @@ async fn execute(
     })
 }
 
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 #[test]
-fn configuration_hash_keeps_released_v1_cache_identity() {
-    // Literal v1.0.0 input. A change here invalidates every cached result.
+fn configuration_hash_pins_llama_server_identity_and_retires_worker_results() {
+    // Literal inputs. A change here invalidates every cached result.
     let released = format!("analysis-v3;selector=head-tail-keywords-v4;prompt_rules=primary-purpose-positive-v1;evidence_encoding=explicit-id-v1;clock_rules=meridiem-v2;decoding=analysis_json_v1;max_tokens=1024;source_bytes={SOURCE_BYTES};thinking=false;sampler=deterministic;repair_attempts=1");
-    let expected = format!("{:x}", Sha256::digest(released.as_bytes()));
+    let current = format!("{released};engine=llama-server-v1");
+    let hash = |input: &str| format!("{:x}", Sha256::digest(input.as_bytes()));
     for mode in ["auto", "cpu", "gpu"] {
-        assert_eq!(configuration_hash(1024, "analysis_json_v1", mode), expected);
+        let actual = configuration_hash(1024, "analysis_json_v1", mode);
+        let expected = if cfg!(windows) {
+            hash(&format!("{current};execution_mode={mode}"))
+        } else {
+            hash(&current)
+        };
+        assert_eq!(actual, expected);
+        // v1.0 (macOS) and v1.1 (Windows) worker results must read as outdated.
+        assert_ne!(actual, hash(&released));
+        assert_ne!(
+            actual,
+            hash(&format!(
+                "{released};runtime_policy=llama-vulkan-v1;execution_mode={mode}"
+            ))
+        );
     }
+}
+
+#[cfg(test)]
+#[test]
+fn generation_schema_is_closed_bounded_and_ordered_like_the_prompt() {
+    let schema: serde_json::Value = serde_json::from_str(GENERATION_SCHEMA).unwrap();
+    assert_eq!(schema["additionalProperties"], false);
+    assert_eq!(schema["required"].as_array().unwrap().len(), 5);
+    assert_eq!(schema["properties"]["category"]["enum"], json!(CATEGORIES));
+    let facts = &schema["properties"]["facts"];
+    assert_eq!(facts["maxItems"], 6);
+    assert!(facts.get("uniqueItems").is_none());
+    assert_eq!(facts["items"]["additionalProperties"], false);
+    assert_eq!(
+        facts["items"]["required"],
+        json!(["kind", "label", "value", "evidence_id"])
+    );
+    assert_eq!(facts["items"]["properties"]["evidence_id"]["minimum"], 0);
+    assert_eq!(facts["items"]["properties"]["label"]["maxLength"], 40);
+    assert_eq!(facts["items"]["properties"]["value"]["maxLength"], 500);
+    assert_eq!(facts["items"]["properties"].as_object().unwrap().len(), 4);
+    // Properties appear in the order the grammar must emit them.
+    let order = |keys: &[&str]| {
+        let positions = keys
+            .iter()
+            .map(|key| GENERATION_SCHEMA.find(&format!("\"{key}\":{{")).unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "{keys:?}"
+        );
+    };
+    order(&[
+        "short_summary",
+        "summary",
+        "category",
+        "uncertainty",
+        "facts",
+    ]);
+    order(&["kind", "label", "value", "evidence_id"]);
 }
 
 #[cfg(test)]
@@ -2205,50 +2269,12 @@ mod tests {
         store.ai_save_preferences(&preferences).unwrap();
         (directory, Arc::new(Mutex::new(store)), id, revision)
     }
-    /// Hard-links one shared compiled engine into `directory`: the same file is
-    /// launched without another first-launch check, and the process reads its
-    /// per-test control files beside the invoked path, so restarts keep them.
+    /// Links the shared fake llama-server into `directory`, beside the
+    /// fixture's model. It reads its per-test control files there, so restarts
+    /// keep them, and returns the valid generation unless told otherwise.
     fn fake_engine(directory: &Path) -> SharedWorker {
-        static FIXTURE: std::sync::OnceLock<(tempfile::TempDir, std::path::PathBuf)> =
-            std::sync::OnceLock::new();
-        let (_, shared) = FIXTURE.get_or_init(|| {
-            let fixture = tempfile::tempdir().unwrap();
-            let text = serde_json::to_string(&generated().to_string()).unwrap();
-            let executable = crate::intelligence::test_worker::compile(
-                fixture.path(),
-                "analysis-fake-engine",
-                &format!(
-                    r#####"
-use std::io::{{self, BufRead, Write}};
-fn main() {{
-    let invoked = std::path::PathBuf::from(std::env::args_os().next().unwrap());
-    let control = invoked.parent().unwrap();
-    for line in io::stdin().lock().lines() {{
-        let line = line.unwrap();
-        let id = line.split("\"id\":").nth(1).unwrap().split(|c: char| !c.is_ascii_digit()).next().unwrap();
-        if line.contains("\"infer\"") {{
-            std::fs::write(control.join("entered"), b"entered").unwrap();
-            if control.join("delay").exists() {{ std::thread::sleep(std::time::Duration::from_secs(60)); }}
-            let text = if control.join("malformed").exists() {{
-                if control.join("repair-once").exists() {{ std::fs::remove_file(control.join("malformed")).unwrap(); }}
-                "\"not structured JSON\""
-            }} else {{ r####"{text}"#### }};
-            let mut requests = std::fs::OpenOptions::new().create(true).append(true).open(control.join("requests")).unwrap();
-            writeln!(requests, "infer").unwrap();
-            println!("{{{{\"version\":1,\"id\":{{}},\"ok\":true,\"result\":{{{{\"text\":{{}},\"generation_ms\":17,\"loaded_backend\":\"cpu\"}}}}}}}}", id, text);
-        }} else {{
-            println!("{{{{\"version\":1,\"id\":{{}},\"ok\":true,\"result\":{{{{\"engine\":\"mistral.rs\",\"runtime_available\":true,\"analysis_json_v1\":true,\"model\":null}}}}}}}}", id);
-        }}
-        io::stdout().flush().unwrap();
-    }}
-}}
-"#####
-                ),
-            );
-            (fixture, executable)
-        });
-        let executable = directory.join(format!("engine{}", std::env::consts::EXE_SUFFIX));
-        std::fs::hard_link(shared, &executable).unwrap();
+        let executable = crate::intelligence::test_worker::link_engine(directory, "ok");
+        std::fs::write(directory.join("response"), generated().to_string()).unwrap();
         Arc::new(AsyncMutex::new(Worker::launch(&executable)))
     }
     async fn settle(controller: &Controller) {
@@ -2339,7 +2365,7 @@ fn main() {{
             assert!(diagnostics
                 .attempts
                 .iter()
-                .all(|attempt| attempt.usage.is_none()));
+                .all(|attempt| attempt.usage.is_some()));
             assert!(diagnostics.stages_ms.contains_key("validation"));
             assert!(controller.progress().is_none());
             let results =
@@ -2380,9 +2406,17 @@ fn main() {{
         let completed = controller.diagnostics(first_id).unwrap();
         assert_eq!(completed.phase, "completed");
         assert_eq!(completed.attempts.len(), 1);
-        assert_eq!(completed.attempts[0].generation_ms, Some(17));
+        // Wall time is measured by the supervisor; token counts come from the
+        // server's timings.
+        assert!(completed.attempts[0].generation_ms.is_some());
         assert_eq!(completed.attempts[0].loaded_backend.as_deref(), Some("cpu"));
-        assert!(completed.attempts[0].usage.is_none());
+        assert_eq!(
+            completed.attempts[0]
+                .usage
+                .as_ref()
+                .map(|usage| usage.prompt_tokens),
+            Some(20)
+        );
         for name in [
             "document_model_read",
             "integrity",

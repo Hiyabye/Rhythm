@@ -37,6 +37,9 @@ test('frontend files read by Rust tests also run the Rust jobs', () => {
   }
   // Windows CI runs its PowerShell scripts before the Rust tests.
   assert.equal(classify(['scripts/stage-vc-runtime.ps1']).rust, true);
+  for (const file of ['scripts/stage-llama.mjs', 'scripts/llama-cpp.json']) {
+    assert.deepEqual(classify([file]), { ...none, frontend: true, rust: true, packaging: true }, file);
+  }
 });
 
 test('workflow changes and unknown change sets run everything', () => {

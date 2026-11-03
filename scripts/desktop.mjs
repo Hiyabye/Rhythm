@@ -22,27 +22,13 @@ if (process.platform !== 'darwin') {
 const mode = process.argv[2] ?? 'dev';
 const args = process.argv.slice(3);
 const release = mode === 'build' && !args.includes('--debug');
-const requestedBackend = process.env.RHYTHM_AI_BACKEND;
-if (requestedBackend && !['cpu', 'metal'].includes(requestedBackend)) {
-  throw new Error('RHYTHM_AI_BACKEND must be cpu or metal on macOS.');
-}
-if (requestedBackend === 'metal' && process.arch !== 'arm64') {
-  throw new Error('The Metal backend requires Apple Silicon; use cpu on Intel Macs.');
-}
-const availableMetal = requestedBackend !== 'cpu' && process.arch === 'arm64'
-  && spawnSync('xcrun', ['metal', '--version'], { stdio: 'ignore' }).status === 0;
-// An explicit metal request (release CI) must never become a CPU-only worker.
-if (requestedBackend === 'metal' && !availableMetal) {
-  throw new Error('RHYTHM_AI_BACKEND=metal requires the Metal Toolchain (`xcrun metal --version` failed). Install it with `xcodebuild -downloadComponent metaltoolchain`.');
-}
-const backend = requestedBackend ?? (availableMetal ? 'metal' : 'cpu');
 const rust = spawnSync('rustc', ['-vV'], { encoding: 'utf8' });
 if (rust.status !== 0) {
   throw new Error('Rust toolchain not found. Install Rust and put cargo/rustc on PATH.');
 }
 const target = rust.stdout.match(/host: (.+)/)?.[1]?.trim();
-if (!target) {
-  throw new Error('Unable to determine the Rust host target.');
+if (target !== 'aarch64-apple-darwin') {
+  throw new Error('Rhythm macOS builds require Apple Silicon (aarch64-apple-darwin).');
 }
 
 // Release binaries embed source paths in panic locations. Map the builder's
@@ -66,12 +52,8 @@ const env = release ? releaseEnv() : process.env;
 // selections and --no-bundle builds are left alone.
 const distribute = release && !args.some((arg) => arg === '--no-bundle' || arg.startsWith('--bundles') || arg === '-b');
 
-console.log(`Building Rhythm AI worker with ${backend} backend; no toolchains or weights are installed automatically.`);
-run('cargo', ['build', '--locked', '-p', 'rhythm-ai-worker',
-  ...(release ? ['--release'] : []), ...(backend === 'metal' ? ['--features', 'metal'] : [])], env);
-const binary = join('target', release ? 'release' : 'debug', 'rhythm-ai-worker');
-mkdirSync('src-tauri/binaries', { recursive: true });
-copyFileSync(binary, join('src-tauri/binaries', `rhythm-ai-worker-${target}`));
+// The pinned, checksum-verified llama.cpp build is bundled as resources.
+run(process.execPath, [join('scripts', 'stage-llama.mjs')]);
 // Earlier bundles (other versions, validation builds, updater archives) must
 // not sit next to the new artifact.
 if (distribute) rmSync(join('target', 'release', 'bundle'), { recursive: true, force: true });

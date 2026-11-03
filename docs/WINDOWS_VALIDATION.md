@@ -5,7 +5,7 @@ What has actually been observed on Windows 11 x64. Build setup is in [Windows](W
 ## Sources of evidence
 
 - **Contributor PC (PR #1 and PR #2), 2026-11-02 to 2026-11-03.** One Windows 11 Home x64 PC (build 26300, Intel Core i5-10300H, 16 GB RAM, NVIDIA GTX 1650 4 GiB, driver 552.44). Most installed-app observations used the port's old identifier `app.rhythm.windows` and builds 0.9.2–0.9.4, before the merge into the shared `io.github.hiyabye.rhythm` codebase. They do not verify the current build.
-- **GitHub CI (`windows-latest`).** Every pull request and push to `main` that touches Rust runs Clippy and tests for the workspace and the GPU worker on a hosted Windows Server runner. `main` also builds the NSIS installer when packaging inputs change. CI has no NVIDIA GPU, so GPU tests check protocol and fallback, not inference.
+- **GitHub CI (`windows-latest`).** Every pull request and push to `main` that touches Rust runs Clippy and tests for the workspace on a hosted Windows Server runner, including GPU fallback tests against a fake `llama-server` and a lifecycle test of the staged real builds without model weights. `main` also builds the NSIS installer when packaging inputs change. CI has no NVIDIA GPU, so these tests check supervision and fallback, not inference.
 
 No installed-app run of the merged build, second PC or VM has been tested.
 
@@ -32,6 +32,8 @@ No installed-app run of the merged build, second PC or VM has been tested.
 | Accessibility | Not tested | WebView2 scaling, keyboard/focus, screen reader, contrast, reduced motion |
 
 ## AI on Windows
+
+These observations used the former AI workers (mistral.rs CPU and llama.cpp Vulkan built into Rhythm's own worker). The bundled `llama-server` that replaced them has not been run on Windows yet.
 
 Each row is one case on the contributor PC, often with other builds running, so durations are not benchmarks. Summary correctness was excluded from the GPU feature's completion criteria at the user's direction; validation still rejects ungrounded output.
 

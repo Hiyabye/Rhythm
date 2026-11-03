@@ -5,9 +5,9 @@ param(
     [ValidatePattern('^[0-9a-fA-F]{64}$')]
     [string] $ExpectedAppSha256,
     [ValidatePattern('^[0-9a-fA-F]{64}$')]
-    [string] $ExpectedWorkerSha256,
+    [string] $ExpectedCpuServerSha256,
     [ValidatePattern('^[0-9a-fA-F]{64}$')]
-    [string] $ExpectedGpuWorkerSha256,
+    [string] $ExpectedGpuServerSha256,
     [string] $ExpectedVcRuntimeDir
 )
 
@@ -20,8 +20,8 @@ $report = [ordered]@{
     install_dir = $InstallDir
     expected_version = $ExpectedVersion
     app = $null
-    worker = $null
-    gpu_worker = $null
+    cpu_server = $null
+    gpu_server = $null
     vc_runtime = $null
     runtime_hashes_verified = $false
     uninstall = $null
@@ -51,7 +51,6 @@ if (-not (Test-Path -LiteralPath $InstallDir -PathType Container)) {
 $resolvedDir = (Resolve-Path -LiteralPath $InstallDir).ProviderPath.TrimEnd('\')
 $report.install_dir = $resolvedDir
 $appPath = Join-Path $resolvedDir 'rhythm.exe'
-$workerPath = Join-Path $resolvedDir 'rhythm-ai-worker.exe'
 
 function Read-Executable([string] $Path, [string] $ExpectedHash, [string] $Label) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -80,35 +79,31 @@ function Read-Executable([string] $Path, [string] $ExpectedHash, [string] $Label
 }
 
 $report.app = Read-Executable $appPath $ExpectedAppSha256 'Rhythm'
-$report.worker = Read-Executable $workerPath $ExpectedWorkerSha256 'AI worker'
-$versionForGpu = if ($ExpectedVersion) { $ExpectedVersion } elseif ($report.app) { $report.app.product_version } else { '' }
-$parsedGpuVersion = [version]'0.0.0'
-$requiresGpu = [bool]$ExpectedGpuWorkerSha256 -or
-    ([version]::TryParse($versionForGpu, [ref]$parsedGpuVersion) -and $parsedGpuVersion -ge [version]'0.9.3')
-if ($requiresGpu) {
-    $report.gpu_worker = Read-Executable (Join-Path $resolvedDir 'rhythm-ai-worker-gpu.exe') $ExpectedGpuWorkerSha256 'GPU worker'
-    try {
-        . (Join-Path $PSScriptRoot 'vc-runtime.ps1')
-        $report.vc_runtime = @(Get-RhythmVcRuntime $resolvedDir)
-        if ($ExpectedVcRuntimeDir) {
-            $expectedRuntime = @(Get-RhythmVcRuntime $ExpectedVcRuntimeDir)
-            $matches = $true
-            foreach ($item in $report.vc_runtime) {
-                $expected = $expectedRuntime | Where-Object { $_.name -eq $item.name }
-                if ($null -eq $expected -or $expected.sha256 -ine $item.sha256) {
-                    $matches = $false
-                    $problems.Add("Installed runtime file hash does not match: $($item.name)")
-                }
+# Both bundled llama.cpp builds ship with every installer.
+$report.cpu_server = Read-Executable (Join-Path $resolvedDir 'llama\cpu\llama-server.exe') $ExpectedCpuServerSha256 'CPU llama-server'
+$report.gpu_server = Read-Executable (Join-Path $resolvedDir 'llama\vulkan\llama-server.exe') $ExpectedGpuServerSha256 'Vulkan llama-server'
+try {
+    . (Join-Path $PSScriptRoot 'vc-runtime.ps1')
+    $report.vc_runtime = @(Get-RhythmVcRuntime $resolvedDir)
+    if ($ExpectedVcRuntimeDir) {
+        $expectedRuntime = @(Get-RhythmVcRuntime $ExpectedVcRuntimeDir)
+        $matches = $true
+        foreach ($item in $report.vc_runtime) {
+            $expected = $expectedRuntime | Where-Object { $_.name -eq $item.name }
+            if ($null -eq $expected -or $expected.sha256 -ine $item.sha256) {
+                $matches = $false
+                $problems.Add("Installed runtime file hash does not match: $($item.name)")
             }
-            $report.runtime_hashes_verified = $matches
         }
-    } catch {
-        $problems.Add("Could not verify app-local Microsoft runtime: $($_.Exception.Message)")
+        $report.runtime_hashes_verified = $matches
     }
+} catch {
+    $problems.Add("Could not verify app-local Microsoft runtime: $($_.Exception.Message)")
 }
-$report.hashes_verified = $null -ne $report.app -and $null -ne $report.worker -and
-    $report.app.hash_verified -eq $true -and $report.worker.hash_verified -eq $true -and
-    (-not $requiresGpu -or ($null -ne $report.gpu_worker -and $report.gpu_worker.hash_verified -eq $true -and $report.runtime_hashes_verified))
+$report.hashes_verified = $null -ne $report.app -and $report.app.hash_verified -eq $true -and
+    $null -ne $report.cpu_server -and $report.cpu_server.hash_verified -eq $true -and
+    $null -ne $report.gpu_server -and $report.gpu_server.hash_verified -eq $true -and
+    $report.runtime_hashes_verified
 
 $registry = $null
 $uninstallKey = $null

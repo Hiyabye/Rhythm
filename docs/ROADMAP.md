@@ -10,6 +10,8 @@ v1.1.0 adds:
 
 - Windows 11 x64 support from contributor PR #1: per-user NSIS installer, CPU and NVIDIA Vulkan AI workers, WinRT notifications (schema 7), AI execution mode (schema 8). See [Windows](WINDOWS.md).
 - A chosen folder for new model downloads on both platforms (schema 9).
+
+Unreleased on `main`: local AI runs in upstream `llama-server` (llama.cpp b12068, bundled and supervised by Rhythm) instead of the AI workers, on both platforms (#8, #61). Earlier results read as outdated until they are regenerated. Windows inference with it is not yet verified.
 - Model catalog: Qwen3.5 0.8B added as experimental; 9B removed (existing installs keep working).
 - Native-macOS redesign of the app shell and Today.
 - CI split by concern and gated by changed paths; a tag-triggered workflow (`release.yml`) that builds both platforms and creates a draft release. v1.1.0 is its first run.
@@ -40,7 +42,6 @@ Each is a GitHub issue:
 
 - **Cloud summaries for public notices** (#39 and follow-ups): precompute notice summaries on a backend and keep the local model for personal data. Not decided; the current rules forbid cloud inference.
 - **In-app updates on unsigned builds** (#30 and follow-ups): Tauri updater signatures without OS code signing.
-- **One inference runtime** (#8): mistral.rs or llama.cpp on both platforms.
 - **Build and CI speed** (#9–#14, #17, #20, #23).
 
 ## Possible extensions

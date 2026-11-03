@@ -13,6 +13,8 @@ const rules = {
     /^(rustfmt|clippy)\.toml$/,
     // Windows CI runs these PowerShell scripts before its Rust tests.
     /^scripts\/[^/]+\.ps1$/,
+    // Rust CI stages the pinned llama.cpp build; the real-server test runs it.
+    /^scripts\/(stage-llama\.mjs|llama-cpp\.json)$/,
     // Rust tests read these through include_str!.
     /^src\/lib\/analysis-contract\.json$/, /^src\/lib\/UpdaterSettings\.svelte$/],
   // Release builds run on main only; a pull request never builds packages.

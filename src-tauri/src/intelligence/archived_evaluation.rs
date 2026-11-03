@@ -107,17 +107,13 @@ async fn actual_archived_notice_evaluation() {
     let ids = selection(&std::env::var("RHYTHM_AI_ARCHIVE_IDS").unwrap_or_else(|_| "1,4,9".into()))
         .expect("bounded archived selection");
     let samples = read_samples(&archive, &ids).expect("read-only archived revisions");
-    let executable = PathBuf::from(std::env::var_os("RHYTHM_WORKER_TEST_BIN").expect("worker"));
+    let executable = crate::intelligence::staged_llama()
+        .expect("stage llama.cpp with `node scripts/stage-llama.mjs` or set RHYTHM_LLAMA_TEST_DIR");
     let root = PathBuf::from(std::env::var_os("RHYTHM_MODEL_EVAL_ROOT").expect("model root"));
     let id = std::env::var("RHYTHM_MODEL_EVAL_ID").unwrap_or_else(|_| "qwen35-2b".into());
     let model = evaluation::installed_model(&root, &id);
     let directory = tempfile::tempdir().unwrap();
     let db = directory.path().join("archived-evaluation.sqlite3");
-    let local_worker = directory.path().join(format!(
-        "rhythm-archived-worker{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    std::fs::copy(&executable, &local_worker).unwrap();
     let isolated = Store::open(&db).unwrap();
     isolated.ai_upsert_model(&model).unwrap();
     let mut preferences = isolated.ai_preferences().unwrap();
@@ -137,7 +133,11 @@ async fn actual_archived_notice_evaluation() {
         imported.push((document, revision));
     }
     let store = Arc::new(Mutex::new(isolated));
-    let worker = Arc::new(AsyncMutex::new(Worker::launch(&local_worker)));
+    let worker = Arc::new(AsyncMutex::new(Worker::launch_configured(
+        &executable,
+        &directory.path().join("run"),
+        "auto",
+    )));
     let controller = analysis::Controller::default();
     let report_path = evaluation::report_path(&format!("archived-{id}"));
     let mut report = json!({

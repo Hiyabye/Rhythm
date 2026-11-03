@@ -103,18 +103,8 @@ jobs:
         with:
           save-if: false
       - run: npm ci
-      # Without the Metal Toolchain the default build silently selects CPU.
-      # Newer Xcode ships it as a separate component.
-      - name: Ensure the Metal Toolchain
-        run: |
-          set -euo pipefail
-          if ! xcrun metal --version >/dev/null 2>&1; then
-            xcodebuild -downloadComponent metaltoolchain
-          fi
-          xcrun metal --version
-      - name: Build Metal DMG
-        env:
-          RHYTHM_AI_BACKEND: metal
+      # Stages the pinned llama.cpp build (Metal) and bundles it with the app.
+      - name: Build DMG
         run: npm run desktop:build
       # Only the distribution folder is published, never the Tauri bundle folder.
       - uses: actions/upload-artifact@v4
@@ -135,7 +125,6 @@ jobs:
       CMAKE_BUILD_PARALLEL_LEVEL: 4
       LLAMA_BUILD_SHARED_LIBS: 0
       CMAKE_GENERATOR: Ninja
-      RHYTHM_GPU_TARGET_DIR: ${{ github.workspace }}\target-gpu
     defaults:
       run:
         shell: pwsh
@@ -151,9 +140,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: false
-          workspaces: |
-            . -> target
-            . -> target-gpu
       - uses: ./.github/actions/windows-build-tools
       - run: npm ci
       - name: Build unsigned NSIS installer

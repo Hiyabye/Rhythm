@@ -3,15 +3,10 @@
   "bundle": {
     "useLocalToolsDir": true,
     "targets": ["nsis"],
-    "externalBin": [
-      "binaries/rhythm-ai-worker",
-      "binaries/rhythm-ai-worker-gpu"
-    ],
     "resources": {
       "../assets/licenses/Pretendard-OFL.txt": "licenses/Pretendard-OFL.txt",
       "../assets/licenses/Tauri-template-MIT.txt": "licenses/Tauri-template-MIT.txt",
       "../assets/licenses/llama.cpp-MIT.txt": "licenses/llama.cpp-MIT.txt",
-      "../assets/licenses/llama-cpp-rs-MIT.txt": "licenses/llama-cpp-rs-MIT.txt",
       "../assets/licenses/Microsoft-VC-Runtime-NOTICE.txt": "licenses/Microsoft-VC-Runtime-NOTICE.txt",
       "binaries/vc-runtime/msvcp140.dll": "msvcp140.dll",
       "binaries/vc-runtime/vcruntime140.dll": "vcruntime140.dll",
