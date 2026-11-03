@@ -76,8 +76,12 @@ test('proactive settings save OS lifecycle, sync cadence, notifications and quie
   const quietStart = page.getByLabel('시작 시간', { exact: true });
   const quietEnd = page.getByLabel('종료 시간', { exact: true });
   await quietStart.fill('23:30');
+  // WebKit commits native time inputs on blur; finish each edit as a user would
+  // before inspecting the persisted settings or editing the next field.
+  await quietStart.press('Tab');
   await expect(quietStart).toBeEnabled();
   await quietEnd.fill('07:30');
+  await quietEnd.press('Tab');
   await expect(quietEnd).toBeEnabled();
   await expect(page.getByText('권한 허용은 알림 전달을 보장하지 않습니다.', { exact: false })).toBeVisible();
   await expect.poll(() => page.evaluate(() => {
@@ -212,4 +216,39 @@ test('cold-start notification activation is recovered from the one-shot proactiv
   await page.goto('/');
   await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 02');
   expect(await callCount(page, 'proactive_snapshot')).toBe(1);
+});
+
+test('notification event and snapshot share deduplication without blocking a later attempt', async ({ page }) => {
+  await mockDesktop(page);
+  await page.goto('/');
+  await expect.poll(() => callCount(page, 'proactive_snapshot')).toBe(1);
+  await page.evaluate(() => (window as any).__fixture.emitNotification({ event_id: 12, document_id: 1, revision_id: 1 }, true));
+  await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 01');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(1600);
+  await openSettings(page);
+  await expect(page.getByRole('heading', { name: '알림 기록', exact: true })).toBeVisible();
+  await expect.poll(() => callCount(page, 'proactive_snapshot')).toBe(2);
+  await expect(page.getByRole('button', { name: '알림 권한 상태 새로고침', exact: true })).toBeVisible();
+  await expect(page.locator('.reader-header h2')).toHaveCount(0);
+
+  // A separate attempt for the same event and document remains actionable.
+  await page.evaluate(() => (window as any).__fixture.emitNotification({ event_id: 12, document_id: 1, revision_id: 1, attempt_count: 2 }));
+  await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 01');
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => (window as any).__fixture.emitNotification({ event_id: 13, document_id: 1, revision_id: 1 }));
+  await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 01');
+});
+
+test('snapshot-first activation ignores a late event but manual history can reopen it', async ({ page }) => {
+  await mockDesktop(page, { pendingActivation: { event_id: 12, document_id: 1, revision_id: 1, attempt_count: 1, event_ids: [12] } });
+  await page.goto('/');
+  await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 01');
+  await page.keyboard.press('Escape');
+  await openSettings(page);
+  await expect(page.getByRole('button', { name: '한국어 공지 01 공지 열기', exact: true })).toBeVisible();
+  await page.evaluate(() => (window as any).__fixture.emitNotification({ event_id: 12, document_id: 1, revision_id: 1 }));
+  await expect(page.locator('.reader-header h2')).toHaveCount(0);
+  await page.getByRole('button', { name: '한국어 공지 01 공지 열기', exact: true }).click();
+  await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 01');
 });

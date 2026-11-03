@@ -78,11 +78,12 @@ test('Intel macOS builds stay on the CPU backend without a Metal probe', options
   assert.ok(!result.calls.some(([command]) => command === 'xcrun'));
   assert.ok(!result.calls.find(([command]) => command === 'cargo').includes('--features'));
 });
-test('Windows and Linux build hosts are rejected before invoking toolchains', options, () => {
-  for (const platform of ['linux', 'win32']) {
+// Windows hosts route to scripts/desktop-windows.mjs (tests/desktop-windows.test.mjs).
+test('unsupported build hosts are rejected before invoking toolchains', options, () => {
+  for (const platform of ['linux', 'freebsd']) {
     const result = build({ platform });
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /supported on macOS only/);
+    assert.match(result.stderr, /support macOS and Windows 11 x64/);
     assert.deepEqual(result.calls, []);
   }
 });

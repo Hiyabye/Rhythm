@@ -267,9 +267,8 @@ mod tests {
     #[test]
     fn settings_show_the_built_application_version() {
         let settings = include_str!("../../src/lib/UpdaterSettings.svelte");
+        // The redesigned shell shows the version only in Settings → About.
         assert!(settings.contains(&format!("<span>{}</span>", env!("CARGO_PKG_VERSION"))));
-        let sidebar = include_str!("../../src/App.svelte");
-        assert!(sidebar.contains(&format!("<small>v{}</small>", env!("CARGO_PKG_VERSION"))));
     }
 
     #[test]

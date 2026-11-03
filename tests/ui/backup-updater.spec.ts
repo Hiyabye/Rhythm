@@ -180,7 +180,7 @@ test('a finalized restore is reported once the reopened window loads', async ({ 
   const banner = page.getByRole('status').filter({ hasText: '백업 복원을 마쳤습니다' });
   await expect(banner).toContainText('공지 1,240건과 첨부 자료 37개를 복원하고 무결성을 확인했습니다.');
   await expect(banner).toContainText('내려받지 못한 첨부 자료 2개는 포함되지 않았습니다.');
-  await expect(banner).toContainText('AI 모델 1개는 다시 설치해야 합니다.');
+  await expect(banner).toContainText('사용할 수 없는 AI 모델 1개는 다시 등록하거나 설치해 주세요.');
   await banner.getByRole('button', { name: '닫기', exact: true }).click();
   await expect(banner).toHaveCount(0);
 });
@@ -223,4 +223,14 @@ test('the frontend never relies on synchronous browser dialogs', async () => {
     .filter((file) => /\.(svelte|ts)$/.test(file) && !file.endsWith('confirm.ts'))
     .filter((file) => /(^|[^.\w])(window\.)?(confirm|alert|prompt)\(/m.test(readFileSync(file, 'utf8')));
   expect(offenders).toEqual([]);
+});
+
+test('unavailable restore shows the actual reason while backup creation remains enabled', async ({ page }) => {
+  await mockDesktop(page, { restoreSupportError: '이 저장소는 복원을 지원하지 않습니다.' });
+  await page.goto('/');
+  const backup = await openBackup(page);
+  await expect(backup).toContainText('이 저장소는 복원을 지원하지 않습니다.');
+  await expect(backup.getByRole('button', { name: '백업 파일 선택', exact: true })).toBeDisabled();
+  await expect(backup.getByRole('button', { name: '백업 파일 저장', exact: true })).toBeEnabled();
+  expect(await callCount(page, 'backup_inspect')).toBe(0);
 });

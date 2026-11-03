@@ -9,6 +9,58 @@ use std::{
 };
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
+#[cfg(windows)]
+#[path = "backup_windows.rs"]
+mod windows;
+
+fn unsafe_link(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        windows::is_link(metadata)
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
+}
+
+fn restore_rename(source: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        windows::rename(source, destination)
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(source, destination)
+    }
+}
+
+/// Check the actual data directory rather than implying every Windows volume
+/// offers the recovery behavior this implementation requires.
+pub(crate) fn restore_support(root: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        windows::validate_root(root)
+    }
+    #[cfg(unix)]
+    {
+        let _ = root;
+        Ok(())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = root;
+        Err("이 플랫폼에서는 복원을 지원하지 않습니다.".into())
+    }
+}
+
+#[tauri::command]
+pub(crate) fn backup_restore_support(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<(), String> {
+    restore_support(&state.data_root)
+}
+
 const FORMAT_VERSION: u32 = 1;
 const MANIFEST: &str = "manifest.json";
 const MAX_MANIFEST: u64 = 16 * 1024 * 1024;
@@ -289,7 +341,7 @@ fn referenced_resources(
                 current.push(component);
                 let metadata = fs::symlink_metadata(&current)
                     .map_err(|_| "데이터베이스가 참조하는 첨부 자료가 없습니다.")?;
-                if metadata.file_type().is_symlink() {
+                if unsafe_link(&metadata) {
                     return Err("첨부 자료 경로에 안전하지 않은 링크가 있습니다.".into());
                 }
             }
@@ -544,7 +596,15 @@ fn verify_zip<R: Read + io::Seek>(
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).map_err(|_| "복원 임시 폴더를 만들지 못했습니다.")?;
             }
-            Some(File::create(path).map_err(|_| "복원 임시 파일을 만들지 못했습니다.")?)
+            Some(
+                fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)
+                    .map_err(|_| {
+                        "복원 임시 파일을 만들지 못했습니다. 경로 중복 여부를 확인해 주세요."
+                    })?,
+            )
         } else {
             None
         };
@@ -668,6 +728,120 @@ mod populated_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Explicit, isolated live-validation fixture export; never runs in CI.
+    #[test]
+    #[ignore = "exports an explicitly selected isolated validation fixture"]
+    fn export_existing_validation_archive() {
+        let source = PathBuf::from(
+            std::env::var_os("RHYTHM_BACKUP_SOURCE_DIR").expect("set RHYTHM_BACKUP_SOURCE_DIR"),
+        );
+        let destination = PathBuf::from(
+            std::env::var_os("RHYTHM_BACKUP_EXPORT").expect("set RHYTHM_BACKUP_EXPORT"),
+        );
+        assert!(
+            source.is_absolute() && source.is_dir(),
+            "source must be an existing absolute directory"
+        );
+        assert!(destination.is_absolute(), "destination must be absolute");
+        assert_eq!(
+            destination.extension().and_then(|s| s.to_str()),
+            Some("rhythm-backup")
+        );
+        assert!(
+            matches!(fs::symlink_metadata(&destination), Err(error) if error.kind() == io::ErrorKind::NotFound),
+            "destination must not exist and its status must be accessible"
+        );
+        let source = fs::canonicalize(source).expect("resolve source directory");
+        let output_parent = fs::canonicalize(destination.parent().expect("destination parent"))
+            .expect("resolve existing destination parent");
+        assert!(
+            !output_parent.starts_with(&source),
+            "destination must be outside the source directory"
+        );
+
+        let original = rusqlite::Connection::open_with_flags(
+            source.join("rhythm.sqlite3"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .expect("open source database read-only");
+        let temporary = tempfile::tempdir().unwrap();
+        let snapshot = temporary.path().join("snapshot.sqlite3");
+        let mut target = rusqlite::Connection::open(&snapshot).unwrap();
+        {
+            let copy = rusqlite::backup::Backup::new(&original, &mut target).unwrap();
+            copy.run_to_completion(i32::MAX, std::time::Duration::ZERO, None)
+                .unwrap();
+        }
+        drop(original);
+        target.execute_batch("PRAGMA journal_mode=DELETE;").unwrap();
+        let schema: i64 = target
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        let documents: i64 = target
+            .query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0))
+            .unwrap();
+        let (resources, resource_bytes): (i64, i64) = target
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM (SELECT local_path, MAX(bytes) AS bytes FROM resources WHERE status='downloaded' GROUP BY local_path)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let references: (i64, i64) = target
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM resources WHERE status='downloaded'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let documents = u64::try_from(documents).expect("nonnegative document count");
+        let resources = u64::try_from(resources).expect("nonnegative resource count");
+        let resource_bytes = u64::try_from(resource_bytes).expect("nonnegative resource bytes");
+        let created_at: String = target
+            .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        drop(target);
+        assert_eq!(
+            (documents, resources, resource_bytes),
+            (10, 7, 4_096_347),
+            "unexpected validation fixture"
+        );
+        assert_eq!(
+            references,
+            (11, 7_117_417),
+            "unexpected resource references"
+        );
+        let created = create(
+            &destination,
+            &snapshot,
+            &source.join("resources"),
+            created_at,
+            schema,
+            documents,
+        )
+        .unwrap();
+        let verified = inspect(&destination).unwrap();
+        assert_eq!(
+            (
+                verified.database_schema,
+                verified.documents,
+                verified.resources,
+                verified.resource_bytes
+            ),
+            (schema, documents, resources, resource_bytes)
+        );
+        assert_eq!(
+            (created.documents, created.resources, created.resource_bytes),
+            (documents, resources, resource_bytes)
+        );
+        println!(
+            "VALIDATION_BACKUP path={} schema={schema} documents={documents} resources={resources} bytes={resource_bytes}",
+            destination.display()
+        );
+    }
 
     pub(super) fn database(path: &Path, document_count: u64, resource: Option<(&str, &[u8])>) {
         let connection = rusqlite::Connection::open(path).unwrap();
@@ -846,7 +1020,7 @@ mod tests {
         assert!(require_restore_space(u64::MAX, u64::MAX).is_err());
     }
     #[test]
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn empty_profile_archive_previews_and_restores_without_resource_directory() {
         let workspace = tempfile::tempdir().unwrap();
         let data = workspace.path().join("source");
@@ -894,7 +1068,7 @@ mod tests {
             .is_file());
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn complete_restore_preserves_previous_data_models_and_reconciles_missing_weights() {
         let workspace = tempfile::tempdir().unwrap();
@@ -1041,7 +1215,7 @@ mod tests {
         .is_err());
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn restore_recovery_finishes_after_each_old_data_rename() {
         let root = tempfile::tempdir().unwrap();
@@ -1119,7 +1293,7 @@ mod tests {
     }
     #[cfg(windows)]
     #[test]
-    fn pending_restore_on_windows_is_refused_without_changing_live_data() {
+    fn windows_restore_with_missing_prepared_database_is_refused_without_changing_live_data() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("rhythm.sqlite3"), b"existing database").unwrap();
         fs::create_dir(root.path().join(STAGING)).unwrap();
@@ -1138,6 +1312,138 @@ mod tests {
         );
         assert!(root.path().join(JOURNAL).exists());
         assert!(root.path().join(STAGING).is_dir());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_unjournaled_restore_artifacts_are_preserved() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("rhythm.sqlite3"), b"original").unwrap();
+        fs::create_dir(root.path().join(STAGING)).unwrap();
+        fs::write(root.path().join(STAGING).join("unverified"), b"keep").unwrap();
+        assert!(recover_pending_restore(root.path()).is_err());
+        assert_eq!(
+            fs::read(root.path().join("rhythm.sqlite3")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            fs::read(root.path().join(STAGING).join("unverified")).unwrap(),
+            b"keep"
+        );
+    }
+
+    #[test]
+    fn restored_activation_tokens_are_cleared_in_staging_only() {
+        let root = tempfile::tempdir().unwrap();
+        let stage = root.path().join("stage");
+        fs::create_dir(&stage).unwrap();
+        let db = stage.join("rhythm.sqlite3");
+        database(&db, 0, None);
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        connection.execute_batch("CREATE TABLE notification_activation_tokens(token TEXT); INSERT INTO notification_activation_tokens VALUES('old');").unwrap();
+        drop(connection);
+        clear_restored_activation_tokens(&stage).unwrap();
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM notification_activation_tokens",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_restore_refuses_prepared_database_tampering() {
+        let root = tempfile::tempdir().unwrap();
+        database(&root.path().join("rhythm.sqlite3"), 0, None);
+        let before = fs::read(root.path().join("rhythm.sqlite3")).unwrap();
+        let stage = root.path().join(STAGING);
+        fs::create_dir(&stage).unwrap();
+        database(&stage.join("rhythm.sqlite3"), 1, None);
+        let mut preview = journal_preview(0);
+        preview.documents = 1;
+        write_journal(
+            root.path(),
+            &format!("{PREVIOUS_PREFIX}tamper"),
+            false,
+            &preview,
+        )
+        .unwrap();
+        fs::write(stage.join("rhythm.sqlite3"), b"tampered").unwrap();
+        assert!(recover_pending_restore(root.path()).is_err());
+        assert_eq!(
+            fs::read(root.path().join("rhythm.sqlite3")).unwrap(),
+            before
+        );
+        assert!(root.path().join(JOURNAL).exists());
+        assert!(stage.join("rhythm.sqlite3").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_restore_fault_child() {
+        let Some(root) = std::env::var_os("RHYTHM_RESTORE_TEST_ROOT") else {
+            return;
+        };
+        recover_pending_restore(Path::new(&root)).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_restore_recovers_after_process_abort_at_each_transition() {
+        for point in [
+            "old-db",
+            "new-db",
+            "old-resources",
+            "new-resources",
+            "verified",
+            "marked",
+            "stage-removed",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            database(&root.path().join("rhythm.sqlite3"), 0, None);
+            fs::create_dir(root.path().join("resources")).unwrap();
+            fs::write(root.path().join("resources/old.bin"), b"previous").unwrap();
+            let stage = root.path().join(STAGING);
+            fs::create_dir(&stage).unwrap();
+            fs::create_dir(stage.join("resources")).unwrap();
+            database(
+                &stage.join("rhythm.sqlite3"),
+                1,
+                Some(("resources/new.bin", b"restored")),
+            );
+            fs::write(stage.join("resources/new.bin"), b"restored").unwrap();
+            let mut preview = journal_preview(1);
+            preview.documents = 1;
+            let previous = format!("{PREVIOUS_PREFIX}fault-{point}");
+            write_journal(root.path(), &previous, true, &preview).unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg("backup::tests::windows_restore_fault_child")
+                .env("RHYTHM_RESTORE_TEST_ROOT", root.path())
+                .env("RHYTHM_RESTORE_TEST_FAULT", point)
+                .status()
+                .unwrap();
+            assert!(
+                !status.success(),
+                "fault point {point} did not abort the subprocess"
+            );
+            let outcome = recover_pending_restore(root.path()).unwrap().unwrap();
+            assert_eq!((outcome.documents, outcome.resources), (1, 1), "{point}");
+            assert_eq!(
+                fs::read(root.path().join("resources/new.bin")).unwrap(),
+                b"restored"
+            );
+            assert_eq!(
+                fs::read(root.path().join(&previous).join("resources/old.bin")).unwrap(),
+                b"previous"
+            );
+            validate_staged_database(root.path(), 6, 1, 1).unwrap();
+            assert_eq!(recover_pending_restore(root.path()).unwrap(), None);
+        }
     }
 }
 
@@ -1228,7 +1534,10 @@ fn staged_resource_names(
             .file_type()
             .map_err(|_| "복원 첨부 자료 종류를 확인하지 못했습니다.")?;
         let path = item.path();
-        if kind.is_symlink() {
+        if unsafe_link(
+            &fs::symlink_metadata(&path)
+                .map_err(|_| "복원 첨부 자료 종류를 확인하지 못했습니다.")?,
+        ) {
             return Err("백업 첨부 자료에 안전하지 않은 링크가 있습니다.".into());
         }
         if kind.is_dir() {
@@ -1343,7 +1652,7 @@ fn validate_staged_database_cancellable(
     }
     let resources_root = staging.join("resources");
     match fs::symlink_metadata(&resources_root) {
-        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+        Ok(metadata) if metadata.is_dir() && !unsafe_link(&metadata) => {
             staged_resource_names(staging, &resources_root, &mut actual_resources)?;
         }
         Ok(_) => return Err("백업 첨부 자료 폴더가 안전하지 않습니다.".into()),
@@ -1374,7 +1683,73 @@ fn reconcile_model_inventory(
     if !has_inventory {
         return Ok(());
     }
-    let mut query = connection
+    let has_custom_directories: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('ai_models') WHERE name='storage_directory')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| "백업 모델 폴더 정보를 확인하지 못했습니다.")?;
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|_| "백업 모델 상태를 갱신하지 못했습니다.")?;
+    if has_custom_directories {
+        // A backup must never grant permission to delete or resume writing to
+        // an arbitrary directory outside this installation's model folder.
+        // Keep the old path and analysis history as registration hints only.
+        transaction
+            .execute_batch(
+                "UPDATE ai_preferences SET model_directory=NULL;
+                 UPDATE ai_preferences SET active_model_id=NULL WHERE active_model_id IN (
+                     SELECT id FROM ai_models WHERE ownership='managed' AND storage_directory IS NOT NULL
+                 );",
+            )
+            .map_err(|_| "백업의 외부 모델 폴더 권한을 초기화하지 못했습니다.")?;
+        let custom_models = transaction
+            .prepare("SELECT id,path,storage_directory FROM ai_models WHERE ownership='managed' AND storage_directory IS NOT NULL")
+            .map_err(|_| "백업의 외부 모델 목록을 읽지 못했습니다.")?
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))
+            .map_err(|_| "백업의 외부 모델 목록을 읽지 못했습니다.")?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "백업의 외부 모델 목록을 읽지 못했습니다.")?;
+        for (id, path, directory) in custom_models {
+            check_cancellation(Some(cancellation))?;
+            let absolute = restored_custom_model_path(&directory, &path);
+            let already_external: bool = match absolute.as_deref() {
+                Some(path) => transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM ai_models WHERE ownership='external' AND path=?1 AND id<>?2)",
+                    rusqlite::params![path, id],
+                    |row| row.get(0),
+                ).map_err(|_| "백업의 중복 모델 등록을 확인하지 못했습니다.")?,
+                None => false,
+            };
+            if already_external {
+                // A managed file may also have been explicitly registered as
+                // external. Keep that existing reference and remove only the
+                // duplicate inventory row; analysis history has no model FK.
+                transaction
+                    .execute("DELETE FROM ai_models WHERE id=?1", [&id])
+                    .map_err(|_| "백업의 중복 모델 등록을 정리하지 못했습니다.")?;
+                continue;
+            }
+            let error = if absolute.is_some() {
+                "다른 저장 폴더의 모델은 복원 후 다시 등록하거나 설치해 주세요. 원본 파일은 변경하지 않았습니다."
+            } else {
+                "백업의 모델 경로를 확인하지 못했습니다. 원본 파일을 다시 등록하거나 설치해 주세요. 원본 파일은 변경하지 않았습니다."
+            };
+            transaction
+                .execute(
+                    "UPDATE ai_models SET ownership='external',status='missing',path=?2,
+                    downloaded_bytes=0,resume_etag=NULL,error=?3 WHERE id=?1",
+                    rusqlite::params![id, absolute.unwrap_or(path), error],
+                )
+                .map_err(|_| "백업의 외부 모델 폴더 권한을 초기화하지 못했습니다.")?;
+        }
+        transaction
+            .execute("UPDATE ai_models SET storage_directory=NULL", [])
+            .map_err(|_| "백업의 외부 모델 폴더 권한을 초기화하지 못했습니다.")?;
+    }
+    let mut query = transaction
         .prepare("SELECT id,path,sha256,bytes FROM ai_models WHERE ownership='managed' AND status='installed'")
         .map_err(|_| "백업 모델 목록을 확인하지 못했습니다.")?;
     let rows = query
@@ -1403,9 +1778,6 @@ fn reconcile_model_inventory(
         }
     }
     drop(query);
-    let transaction = connection
-        .unchecked_transaction()
-        .map_err(|_| "백업 모델 상태를 갱신하지 못했습니다.")?;
     for id in missing {
         transaction.execute("UPDATE ai_models SET status='missing',error='해당 모델 파일이 없거나 무결성 확인에 실패했습니다. 다시 설치해 주세요.' WHERE id=?1", [&id])
             .map_err(|_| "백업 모델 상태를 갱신하지 못했습니다.")?;
@@ -1420,6 +1792,41 @@ fn reconcile_model_inventory(
         .commit()
         .map_err(|_| "백업 모델 상태를 저장하지 못했습니다.")?;
     Ok(())
+}
+
+/// Reconstructs a registration hint without opening any path from the backup.
+/// Missing drives and files are deliberately allowed; deletion authority is not.
+fn restored_custom_model_path(directory: &str, relative: &str) -> Option<String> {
+    use std::path::Component;
+    let directory_path = Path::new(directory);
+    if directory.len() > 4096
+        || directory.contains('\0')
+        || !directory_path.is_absolute()
+        || directory_path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
+    {
+        return None;
+    }
+    let relative = Path::new(relative);
+    if relative.components().count() != 2
+        || relative.parent() != Some(Path::new("models"))
+        || relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return None;
+    }
+    let name = relative.file_name()?.to_str()?;
+    let hash = name.strip_suffix(".gguf")?;
+    if hash.len() != 64
+        || !hash
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return None;
+    }
+    Some(directory_path.join(name).to_string_lossy().into_owned())
 }
 
 fn managed_model_matches(
@@ -1445,7 +1852,7 @@ fn managed_model_matches(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(_) => return Err("로컬 모델 파일 목록을 확인하지 못했습니다.".into()),
     };
-    if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
+    if !root_metadata.is_dir() || unsafe_link(&root_metadata) {
         return Ok(false);
     }
     let path = model_root.join(name);
@@ -1455,7 +1862,7 @@ fn managed_model_matches(
         Err(_) => return Err("로컬 모델 파일을 확인하지 못했습니다.".into()),
     };
     if !metadata.is_file()
-        || metadata.file_type().is_symlink()
+        || unsafe_link(&metadata)
         || metadata.len() != expected_bytes.unwrap_or_default() as u64
     {
         return Ok(false);
@@ -1489,10 +1896,85 @@ struct RestoreJournal {
     schema: i64,
     documents: u64,
     resources: u64,
+    /// Hash of the prepared database after model/token reconciliation. Absent
+    /// only in historical Unix journals.
+    #[serde(default)]
+    database_sha256: Option<String>,
 }
 const STAGING: &str = ".rhythm-restore-staging";
 const JOURNAL: &str = ".rhythm-restore-journal.json";
 const PREVIOUS_PREFIX: &str = ".rhythm-restore-previous-";
+#[cfg(windows)]
+const COMPLETE_MARKER: &str = ".rhythm-restore-complete";
+
+fn entry_exists(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err("복원 파일 경로를 확인하지 못했습니다. 기존 파일을 보존했습니다.".into()),
+    }
+}
+
+#[cfg(windows)]
+fn check_unjournaled_restore(root: &Path) -> Result<(), String> {
+    let ambiguous = || {
+        "완료되지 않은 복원 흔적이 있습니다. 복구 파일을 보존했으며 데이터 폴더를 확인해야 합니다."
+            .to_string()
+    };
+    if entry_exists(&root.join(STAGING))?
+        || entry_exists(&root.join(".rhythm-restore-journal.tmp"))?
+    {
+        return Err(ambiguous());
+    }
+    for item in fs::read_dir(root).map_err(|_| ambiguous())? {
+        let item = item.map_err(|_| ambiguous())?;
+        let name = item.file_name().to_string_lossy().into_owned();
+        if name.starts_with(PREVIOUS_PREFIX) {
+            let metadata = fs::symlink_metadata(item.path()).map_err(|_| ambiguous())?;
+            if !metadata.is_dir() || unsafe_link(&metadata) {
+                return Err(ambiguous());
+            }
+            let marker = item.path().join(COMPLETE_MARKER);
+            let metadata = fs::symlink_metadata(&marker).map_err(|_| ambiguous())?;
+            if !metadata.is_file()
+                || unsafe_link(&metadata)
+                || fs::read(&marker).map_err(|_| ambiguous())? != name.as_bytes()
+            {
+                return Err(ambiguous());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn mark_restore_complete(previous: &Path, previous_name: &str) -> Result<(), String> {
+    let marker = previous.join(COMPLETE_MARKER);
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&marker)
+    {
+        Ok(mut file) => {
+            file.write_all(previous_name.as_bytes())
+                .and_then(|_| file.sync_all())
+                .map_err(|_| "복원 완료 상태를 저장하지 못했습니다.")?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            let metadata = fs::symlink_metadata(&marker)
+                .map_err(|_| "복원 완료 상태를 확인하지 못했습니다.")?;
+            if !metadata.is_file()
+                || unsafe_link(&metadata)
+                || fs::read(&marker).map_err(|_| "복원 완료 상태를 확인하지 못했습니다.")?
+                    != previous_name.as_bytes()
+            {
+                return Err("복원 완료 상태가 올바르지 않습니다.".into());
+            }
+        }
+        Err(_) => return Err("복원 완료 상태를 저장하지 못했습니다.".into()),
+    }
+    Ok(())
+}
 
 fn write_journal(
     root: &Path,
@@ -1511,6 +1993,12 @@ fn write_journal_with_sync(
 ) -> Result<(), String> {
     let temp = root.join(".rhythm-restore-journal.tmp");
     let _cleanup = RemoveOnDrop(temp.clone());
+    let stage_db = root.join(STAGING).join("rhythm.sqlite3");
+    let database_sha256 = if stage_db.is_file() {
+        Some(hash_file(&stage_db, None)?.1)
+    } else {
+        None
+    };
     let bytes = serde_json::to_vec(&RestoreJournal {
         version: 1,
         previous: previous.to_owned(),
@@ -1518,6 +2006,7 @@ fn write_journal_with_sync(
         schema: preview.database_schema,
         documents: preview.documents,
         resources: preview.resources,
+        database_sha256,
     })
     .map_err(|_| "복원 상태를 기록하지 못했습니다.")?;
     let mut file = std::fs::OpenOptions::new()
@@ -1528,10 +2017,20 @@ fn write_journal_with_sync(
     file.write_all(&bytes)
         .and_then(|_| file.sync_all())
         .map_err(|_| "복원 상태를 저장하지 못했습니다.")?;
-    fs::rename(&temp, root.join(JOURNAL)).map_err(|_| "복원 상태를 확정하지 못했습니다.")?;
+    drop(file);
+    restore_rename(&temp, &root.join(JOURNAL)).map_err(|_| "복원 상태를 확정하지 못했습니다.")?;
     sync(root)
 }
 fn publish_without_replace(temporary: &Path, destination: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    return windows::rename(temporary, destination).map_err(|error| {
+        if error.kind() == io::ErrorKind::AlreadyExists {
+            "같은 이름의 파일이 이미 있습니다. 다른 저장 위치를 선택해 주세요.".into()
+        } else {
+            "백업 파일을 안전하게 저장 위치로 옮기지 못했습니다. 저장 위치와 파일 시스템 권한을 확인해 주세요.".into()
+        }
+    });
+    #[cfg(not(windows))]
     fs::hard_link(temporary, destination).map_err(|error| {
         if error.kind() == std::io::ErrorKind::AlreadyExists {
             "같은 이름의 파일이 이미 있습니다. 다른 저장 위치를 선택해 주세요.".into()
@@ -1550,59 +2049,59 @@ fn sync_directory(path: &Path) -> Result<(), String> {
 fn sync_directory(_path: &Path) -> Result<(), String> {
     Ok(())
 }
-fn require_restore_durability_support(supported: bool) -> Result<(), String> {
-    if supported {
-        Ok(())
-    } else {
-        Err(
-            "이 플랫폼은 복원 상태의 파일 시스템 내구성을 보장하지 않아 복원을 지원하지 않습니다."
-                .into(),
-        )
-    }
-}
-
-#[cfg(test)]
-mod restore_durability_tests {
-    use super::require_restore_durability_support;
-
-    #[test]
-    fn restore_remains_blocked_when_durability_is_not_established() {
-        let error = require_restore_durability_support(false).unwrap_err();
-        assert!(error.contains("파일 시스템 내구성"));
-    }
-
-    #[test]
-    fn restore_gate_allows_only_platforms_with_established_durability() {
-        assert!(require_restore_durability_support(true).is_ok());
-    }
-    #[cfg(windows)]
-    #[test]
-    fn windows_restore_stays_disabled_without_durable_directory_sync() {
-        assert!(!super::restore_durability_supported());
-        assert!(require_restore_durability_support(super::restore_durability_supported()).is_err());
-    }
-}
-
-fn restore_durability_supported() -> bool {
-    // The current protocol relies on syncing directory entries after each
-    // rename. Only Unix targets have the required, documented directory fsync
-    // behavior implemented here; Windows remains gated pending an equivalent.
-    cfg!(unix)
-}
-
 fn sync_tree(_root: &Path, directory: &Path) -> Result<(), String> {
     for item in fs::read_dir(directory).map_err(|_| "복원 폴더를 저장하지 못했습니다.")?
     {
         let item = item.map_err(|_| "복원 폴더를 저장하지 못했습니다.")?;
-        if item
-            .file_type()
-            .map_err(|_| "복원 폴더를 저장하지 못했습니다.")?
-            .is_dir()
-        {
+        let metadata =
+            fs::symlink_metadata(item.path()).map_err(|_| "복원 폴더를 저장하지 못했습니다.")?;
+        if unsafe_link(&metadata) {
+            return Err("복원 폴더에 안전하지 않은 링크가 있습니다.".into());
+        }
+        if metadata.is_dir() {
             sync_tree(_root, &item.path())?;
         }
     }
     sync_directory(directory)
+}
+
+fn sync_file(path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    let file = fs::OpenOptions::new().read(true).write(true).open(path);
+    #[cfg(not(windows))]
+    let file = File::open(path);
+    file.and_then(|file| file.sync_all())
+        .map_err(|_| "복원 데이터베이스를 저장하지 못했습니다.".into())
+}
+
+#[cfg(all(test, windows))]
+fn restore_fault_point(name: &str) {
+    if std::env::var_os("RHYTHM_RESTORE_TEST_FAULT").as_deref() == Some(std::ffi::OsStr::new(name))
+    {
+        std::process::abort();
+    }
+}
+
+#[cfg(not(all(test, windows)))]
+fn restore_fault_point(_name: &str) {}
+
+/// Tokens refer to an earlier app installation's identities; never resurrect
+/// them from a backup. Pre-schema-7 databases get an empty table on upgrade.
+fn clear_restored_activation_tokens(stage: &Path) -> Result<(), String> {
+    let database = stage.join("rhythm.sqlite3");
+    let connection = rusqlite::Connection::open(&database)
+        .map_err(|_| "복원 데이터베이스를 열지 못했습니다.")?;
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='notification_activation_tokens')",
+        [], |row| row.get(0),
+    ).map_err(|_| "복원 알림 상태를 확인하지 못했습니다.")?;
+    if exists {
+        connection
+            .execute("DELETE FROM notification_activation_tokens", [])
+            .map_err(|_| "복원 알림 상태를 초기화하지 못했습니다.")?;
+    }
+    drop(connection);
+    sync_file(&database)
 }
 
 /// What a completed next-launch restore installed, for the reopened window.
@@ -1613,7 +2112,7 @@ pub(crate) struct RestoreOutcome {
     resources: u64,
     /// Resource rows the backup itself recorded as not downloaded.
     unavailable_resources: u64,
-    /// Managed models whose local weights did not match the restored inventory.
+    /// Models that require installation or registration after restoration.
     models_needing_reinstall: u64,
 }
 
@@ -1637,7 +2136,7 @@ fn restore_outcome(root: &Path, journal: &RestoreJournal) -> Result<RestoreOutco
         resources: journal.resources,
         unavailable_resources: count("SELECT COUNT(*) FROM resources WHERE status<>'downloaded'")?,
         models_needing_reinstall: if has_models {
-            count("SELECT COUNT(*) FROM ai_models WHERE ownership='managed' AND status='missing'")?
+            count("SELECT COUNT(*) FROM ai_models WHERE status='missing'")?
         } else {
             0
         },
@@ -1666,13 +2165,24 @@ pub(crate) fn remove_stale_backup_snapshots(root: &Path) {
 /// Returns what was installed when this launch finished a pending restore.
 pub(crate) fn recover_pending_restore(root: &Path) -> Result<Option<RestoreOutcome>, String> {
     let journal = root.join(JOURNAL);
-    if !restore_durability_supported() && journal.exists() {
-        return Err("이 플랫폼은 복원 상태의 파일 시스템 내구성을 보장하지 않아 자동 복원을 중단했습니다. 원본 파일은 변경하지 않았습니다.".into());
+    if !entry_exists(&journal)? {
+        #[cfg(windows)]
+        {
+            check_unjournaled_restore(root)?;
+            return Ok(None);
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = fs::remove_file(root.join(".rhythm-restore-journal.tmp"));
+            let _ = fs::remove_dir_all(root.join(STAGING));
+            return Ok(None);
+        }
     }
-    if !journal.exists() {
-        let _ = fs::remove_file(root.join(".rhythm-restore-journal.tmp"));
-        let _ = fs::remove_dir_all(root.join(STAGING));
-        return Ok(None);
+    restore_support(root)?;
+    let journal_metadata =
+        fs::symlink_metadata(&journal).map_err(|_| "복원 상태를 확인하지 못했습니다.")?;
+    if !journal_metadata.is_file() || unsafe_link(&journal_metadata) {
+        return Err("복원 상태 경로가 안전하지 않습니다.".into());
     }
     let data: RestoreJournal =
         serde_json::from_slice(&fs::read(&journal).map_err(|_| "복원 상태를 읽지 못했습니다.")?)
@@ -1689,14 +2199,23 @@ pub(crate) fn recover_pending_restore(root: &Path) -> Result<Option<RestoreOutco
     }
     let stage = root.join(STAGING);
     let previous = root.join(&data.previous);
-    if fs::symlink_metadata(&previous).is_ok_and(|meta| meta.file_type().is_symlink()) {
+    #[cfg(windows)]
+    for path in [
+        &stage,
+        &previous,
+        &root.join("rhythm.sqlite3"),
+        &root.join("resources"),
+    ] {
+        windows::check_path(path)?;
+    }
+    if fs::symlink_metadata(&previous).is_ok_and(|meta| unsafe_link(&meta)) {
         return Err("기존 데이터 복구 폴더가 안전하지 않습니다.".into());
     }
     fs::create_dir_all(&previous).map_err(|_| "기존 데이터 복구 폴더를 만들지 못했습니다.")?;
     sync_directory(root)?;
     let stage_metadata = fs::symlink_metadata(&stage);
     match stage_metadata {
-        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(metadata) if metadata.is_dir() && !unsafe_link(&metadata) => {}
         Ok(_) => return Err("복원 임시 폴더 경로가 안전하지 않습니다.".into()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return Err("복원 임시 폴더를 확인하지 못했습니다.".into()),
@@ -1704,12 +2223,47 @@ pub(crate) fn recover_pending_restore(root: &Path) -> Result<Option<RestoreOutco
     let live_db = root.join("rhythm.sqlite3");
     let old_db = previous.join("rhythm.sqlite3");
     let stage_db = stage.join("rhythm.sqlite3");
+    #[cfg(windows)]
+    if data.database_sha256.is_none() {
+        return Err(
+            "복원 상태에 데이터베이스 검증 정보가 없습니다. 복구 파일을 보존했습니다.".into(),
+        );
+    }
+    if let Some(expected) = &data.database_sha256 {
+        let selected = if stage_db.exists() {
+            &stage_db
+        } else {
+            &live_db
+        };
+        if hash_file(selected, None)?.1 != *expected {
+            return Err(
+                "복원 데이터베이스가 준비된 파일과 다릅니다. 복구 파일을 보존했습니다.".into(),
+            );
+        }
+    }
+    for path in [
+        &live_db,
+        &old_db,
+        &stage_db,
+        &root.join("resources"),
+        &previous.join("resources"),
+        &stage.join("resources"),
+    ] {
+        if fs::symlink_metadata(path).is_ok_and(|metadata| unsafe_link(&metadata)) {
+            return Err("복원 경로에 안전하지 않은 링크가 있습니다.".into());
+        }
+    }
     if stage_db.exists() {
         for suffix in ["-wal", "-shm", "-journal"] {
             let live = root.join(format!("rhythm.sqlite3{suffix}"));
             let old = previous.join(format!("rhythm.sqlite3{suffix}"));
+            #[cfg(windows)]
+            {
+                windows::check_path(&live)?;
+                windows::check_path(&old)?;
+            }
             if live.exists() && !old.exists() {
-                fs::rename(&live, &old)
+                restore_rename(&live, &old)
                     .map_err(|_| "기존 데이터베이스 로그를 복구 폴더로 옮기지 못했습니다.")?;
                 sync_directory(root)?;
                 sync_directory(&previous)?;
@@ -1718,12 +2272,15 @@ pub(crate) fn recover_pending_restore(root: &Path) -> Result<Option<RestoreOutco
     }
     if stage_db.exists() {
         if live_db.exists() && !old_db.exists() {
-            fs::rename(&live_db, &old_db)
+            restore_rename(&live_db, &old_db)
                 .map_err(|_| "기존 데이터베이스를 복구 폴더로 옮기지 못했습니다.")?;
+            restore_fault_point("old-db");
             sync_directory(root)?;
             sync_directory(&previous)?;
         }
-        fs::rename(&stage_db, &live_db).map_err(|_| "복원 데이터베이스를 설치하지 못했습니다.")?;
+        restore_rename(&stage_db, &live_db)
+            .map_err(|_| "복원 데이터베이스를 설치하지 못했습니다.")?;
+        restore_fault_point("new-db");
         sync_directory(root)?;
         sync_directory(&stage)?;
     } else if !live_db.exists() || !old_db.exists() {
@@ -1740,7 +2297,7 @@ pub(crate) fn recover_pending_restore(root: &Path) -> Result<Option<RestoreOutco
         &old_resources,
         &stage_resources,
     ] {
-        if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        if fs::symlink_metadata(path).is_ok_and(|metadata| unsafe_link(&metadata)) {
             return Err("복원 경로에 안전하지 않은 링크가 있습니다.".into());
         }
     }
@@ -1749,13 +2306,15 @@ pub(crate) fn recover_pending_restore(root: &Path) -> Result<Option<RestoreOutco
             if !data.had_resources || old_resources.exists() {
                 return Err("복원 첨부 자료 상태가 일치하지 않습니다.".into());
             }
-            fs::rename(&live_resources, &old_resources)
+            restore_rename(&live_resources, &old_resources)
                 .map_err(|_| "기존 첨부 자료를 복구 폴더로 옮기지 못했습니다.")?;
+            restore_fault_point("old-resources");
             sync_directory(root)?;
             sync_directory(&previous)?;
         }
-        fs::rename(&stage_resources, &live_resources)
+        restore_rename(&stage_resources, &live_resources)
             .map_err(|_| "복원 첨부 자료를 설치하지 못했습니다.")?;
+        restore_fault_point("new-resources");
         sync_directory(root)?;
         sync_directory(&stage)?;
     } else if data.had_resources {
@@ -1767,10 +2326,20 @@ pub(crate) fn recover_pending_restore(root: &Path) -> Result<Option<RestoreOutco
         sync_directory(root)?;
     }
     validate_staged_database_cancellable(root, data.schema, data.documents, data.resources, None)?;
-    File::open(&live_db)
-        .and_then(|f| f.sync_all())
-        .map_err(|_| "복원 데이터베이스를 저장하지 못했습니다.")?;
+    sync_file(&live_db)?;
     let outcome = restore_outcome(root, &data)?;
+    restore_fault_point("verified");
+    #[cfg(windows)]
+    {
+        mark_restore_complete(&previous, &data.previous)?;
+        restore_fault_point("marked");
+        if stage.exists() {
+            fs::remove_dir(&stage)
+                .map_err(|_| "복원 준비 폴더를 정리하지 못했습니다. 복구 파일을 보존했습니다.")?;
+        }
+        restore_fault_point("stage-removed");
+    }
+    #[cfg(not(windows))]
     let _ = fs::remove_dir_all(&stage);
     fs::remove_file(journal).map_err(|_| "복원 상태를 정리하지 못했습니다.")?;
     sync_directory(root)?;
@@ -1793,6 +2362,9 @@ fn stage_restore(
     source: &Path,
     cancellation: &BackupCancellation,
 ) -> Result<(), String> {
+    restore_support(root)?;
+    #[cfg(windows)]
+    check_unjournaled_restore(root)?;
     if root.join(STAGING).exists() || root.join(JOURNAL).exists() {
         return Err(
             "이전 복원 작업의 복구 파일이 남아 있습니다. 앱을 다시 시작한 뒤 확인해 주세요.".into(),
@@ -1804,12 +2376,12 @@ fn stage_restore(
     }
     let database_metadata = fs::symlink_metadata(root.join("rhythm.sqlite3"))
         .map_err(|_| "현재 데이터베이스를 찾지 못했습니다.")?;
-    if !database_metadata.is_file() || database_metadata.file_type().is_symlink() {
+    if !database_metadata.is_file() || unsafe_link(&database_metadata) {
         return Err("현재 데이터베이스 경로가 안전하지 않습니다.".into());
     }
     let resources_metadata = fs::symlink_metadata(root.join("resources"));
     let had_resources = match resources_metadata {
-        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => true,
+        Ok(metadata) if metadata.is_dir() && !unsafe_link(&metadata) => true,
         Ok(_) => return Err("현재 첨부 자료 폴더 경로가 안전하지 않습니다.".into()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
         Err(_) => return Err("현재 첨부 자료 폴더를 확인하지 못했습니다.".into()),
@@ -1819,7 +2391,17 @@ fn stage_restore(
         let preview = extract_verified_cancellable(source, &stage, cancellation)?;
         fs::create_dir_all(stage.join("resources"))
             .map_err(|_| "첨부 자료 폴더를 준비하지 못했습니다.")?;
+        // Establish the archive's integrity before opening the staged database
+        // for either model reconciliation or activation-token deletion.
+        validate_staged_database_cancellable(
+            &stage,
+            preview.database_schema,
+            preview.documents,
+            preview.resources,
+            Some(cancellation),
+        )?;
         reconcile_model_inventory(&stage, &root.join("models"), cancellation)?;
+        clear_restored_activation_tokens(&stage)?;
         validate_staged_database_cancellable(
             &stage,
             preview.database_schema,
@@ -1853,7 +2435,7 @@ pub(crate) async fn backup_restore(
     }
     let registration = register_cancellation(operation_id)?;
     let cancellation = registration.cancellation.clone();
-    require_restore_durability_support(restore_durability_supported())?;
+    restore_support(&state.data_root)?;
     let maintenance = state.exclusive_maintenance().await?;
     let root = state.data_root.clone();
     let app_for_exit = app.clone();

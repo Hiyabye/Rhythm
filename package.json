@@ -8,7 +8,7 @@
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test:ui": "playwright test",
-    "test:desktop": "node --test tests/desktop.test.mjs",
+    "test:desktop": "node --test tests/desktop.test.mjs tests/desktop-windows.test.mjs",
     "test:release": "node --test tests/update-signature.test.mjs tests/macos-release.test.mjs",
     "tauri": "tauri",
     "desktop": "node scripts/desktop.mjs dev",

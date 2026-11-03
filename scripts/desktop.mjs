@@ -10,8 +10,13 @@ function run(command, args, env = process.env) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
+if (process.platform === 'win32') {
+  const { desktop } = await import('./desktop-windows.mjs');
+  desktop();
+  process.exit(0);
+}
 if (process.platform !== 'darwin') {
-  throw new Error('Rhythm desktop builds are supported on macOS only.');
+  throw new Error('Rhythm desktop builds support macOS and Windows 11 x64.');
 }
 
 const mode = process.argv[2] ?? 'dev';

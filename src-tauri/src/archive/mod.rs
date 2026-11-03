@@ -4,6 +4,8 @@ mod network;
 mod parser;
 pub mod sync;
 mod tls;
+#[cfg(windows)]
+mod windows_reveal;
 
 use crate::AppState;
 use base64::Engine;
@@ -145,6 +147,23 @@ pub async fn archive_reveal_resource(state: State<'_, AppState>, id: i64) -> Res
     let _lease = state.operation_gate.shared().await?;
     let (resource, _) = sync::local_resource(&state.store, &state.data_root, id).await?;
     // Reveal only an integrity-checked archive file; never execute/open its contents.
+    #[cfg(windows)]
+    {
+        let path = windows_reveal::resource_path(
+            &state.data_root,
+            resource
+                .local_path
+                .as_deref()
+                .ok_or("로컬 자료 경로가 없습니다.")?,
+        )?;
+        let root = state.data_root.clone();
+        tokio::task::spawn_blocking(move || windows_reveal::reveal(&root, &path))
+            .await
+            .map_err(|_| {
+                "저장 폴더를 열지 못했습니다. 데이터 저장 위치를 확인해 주세요.".to_string()
+            })?
+    }
+    #[cfg(not(windows))]
     tauri_plugin_opener::reveal_item_in_dir(
         state
             .data_root

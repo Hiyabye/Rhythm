@@ -1,6 +1,5 @@
-use std::time::Duration;
-
-const CALLBACK_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(target_os = "macos")]
+const CALLBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 #[cfg(target_os = "macos")]
 mod macos {
@@ -116,13 +115,19 @@ mod macos {
     }
 }
 
-/// Reads the operating system's current notification authorization without prompting.
+/// Reads the operating system's notification authorization without prompting.
+/// On Windows this is notification availability plus installed protocol
+/// ownership; other non-macOS hosts report unavailable.
 pub(crate) async fn notification_authorization_status() -> String {
     #[cfg(target_os = "macos")]
     {
         macos::authorization_status().await
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        crate::proactive::windows_notification::authorization().to_owned()
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         "unavailable".to_owned()
     }
@@ -134,30 +139,47 @@ pub(crate) async fn notification_authorization() -> String {
     notification_authorization_status().await
 }
 
-/// Tauri command that asks macOS for notification authorization only when explicitly invoked.
-#[tauri::command]
-pub(crate) async fn notification_request_permission() -> String {
-    #[cfg(target_os = "macos")]
-    {
-        macos::request_permission().await
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        "unavailable".to_owned()
-    }
+#[derive(serde::Serialize)]
+pub(crate) struct NotificationConnectionResult {
+    status: String,
+    test_notification_requested: bool,
 }
 
-#[cfg(all(test, not(target_os = "macos")))]
+/// Invoked only by an explicit user action. macOS asks for authorization;
+/// Windows has no prompt, so it checks the installed connection and sends one
+/// test notification without changing Windows settings.
+#[tauri::command]
+pub(crate) async fn notification_request_permission() -> Result<NotificationConnectionResult, String>
+{
+    #[cfg(target_os = "macos")]
+    let (status, test_notification_requested) = (macos::request_permission().await, false);
+    #[cfg(windows)]
+    let (status, test_notification_requested) = {
+        let (status, requested) = tokio::task::spawn_blocking(
+            crate::proactive::windows_notification::request_connection_test,
+        )
+        .await
+        .map_err(|_| "알림 연결을 확인하지 못했습니다.".to_string())??;
+        (status.to_owned(), requested)
+    };
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let (status, test_notification_requested) = ("unavailable".to_owned(), false);
+    Ok(NotificationConnectionResult {
+        status,
+        test_notification_requested,
+    })
+}
+
+#[cfg(all(test, not(any(target_os = "macos", windows))))]
 mod tests {
     #[tokio::test]
-    async fn notification_permission_is_unavailable_off_macos() {
+    async fn notification_permission_is_unavailable_off_supported_platforms() {
         assert_eq!(
             super::notification_authorization_status().await,
             "unavailable"
         );
-        assert_eq!(
-            super::notification_request_permission().await,
-            "unavailable"
-        );
+        let result = super::notification_request_permission().await.unwrap();
+        assert_eq!(result.status, "unavailable");
+        assert!(!result.test_notification_requested);
     }
 }

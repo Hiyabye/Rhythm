@@ -48,6 +48,22 @@ async fn reset_worker(
     }
 }
 
+async fn stop_inventory_worker(
+    worker: &tokio::sync::Mutex<super::Worker>,
+    shutdown: &AtomicBool,
+) -> Result<(), String> {
+    let mut worker = tokio::select! {
+        biased;
+        _ = exiting(shutdown) => return Err(EXIT_ERROR.into()),
+        worker = worker.lock() => worker,
+    };
+    tokio::select! {
+        biased;
+        _ = exiting(shutdown) => Err(EXIT_ERROR.into()),
+        result = worker.stop_for_inventory() => result,
+    }
+}
+
 #[derive(Serialize)]
 pub struct Snapshot {
     catalog: Vec<models::CatalogEntry>,
@@ -56,6 +72,7 @@ pub struct Snapshot {
     jobs: Vec<AiJob>,
     runtime: WorkerStatus,
     hardware: models::Hardware,
+    model_storage: super::model_storage::Status,
     busy: bool,
     operation: Option<operations::Status>,
     progress: Option<analysis::Diagnostics>,
@@ -88,13 +105,6 @@ fn selected(state: &AppState) -> Result<AiModel, String> {
             .filter(|m| m.status == "installed")
             .ok_or("설치된 AI 모델을 찾을 수 없습니다.".into())
     })
-}
-fn path(state: &AppState, model: &AiModel) -> PathBuf {
-    if model.ownership == "managed" {
-        state.data_root.join(&model.path)
-    } else {
-        PathBuf::from(&model.path)
-    }
 }
 async fn verify_operation_file(
     file: PathBuf,
@@ -132,7 +142,7 @@ async fn verified(
     operation: &operations::Operation,
 ) -> Result<PathBuf, String> {
     verify_operation_file(
-        path(state, model),
+        super::model_storage::resolve_model_path(&state.data_root, model)?,
         model.sha256.clone().ok_or("모델 무결성 정보가 없습니다.")?,
         model.bytes,
         &state.maintenance_shutdown,
@@ -142,7 +152,7 @@ async fn verified(
 }
 
 enum WorkerAction<'a> {
-    Reset,
+    StopForInventory,
     Load(&'a Path),
     Setup(&'a Path),
 }
@@ -163,9 +173,9 @@ async fn operation_worker(
         error = operation.interrupted(shutdown) => Err(error),
         result = async {
             match action {
-                WorkerAction::Reset => {
-                    operation.phase("restarting");
-                    worker.unload().await.map(|_| ())
+                WorkerAction::StopForInventory => {
+                    operation.phase("stopping");
+                    worker.stop_for_inventory().await
                 }
                 WorkerAction::Load(file) | WorkerAction::Setup(file) => {
                     operation.phase("loading");
@@ -215,14 +225,28 @@ pub async fn ai_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, 
         .active_model_id
         .as_ref()
         .and_then(|id| models.iter().find(|model| &model.id == id))
-        .and_then(|model| analysis::key_for(0, 0, model, preferences.max_tokens).ok())
+        .and_then(|model| {
+            analysis::key_for_mode(
+                0,
+                0,
+                model,
+                preferences.max_tokens,
+                &preferences.execution_mode,
+            )
+            .ok()
+        })
         .map(|key| key.configuration_hash);
     let initial_hardware = state.hardware.clone();
     let root = state.data_root.clone();
-    let hardware =
-        tokio::task::spawn_blocking(move || models::refresh_disk_space(initial_hardware, &root))
-            .await
-            .map_err(|_| "저장 공간 정보를 확인하지 못했습니다.")?;
+    let directory = preferences.model_directory.clone();
+    let (hardware, model_storage) = tokio::task::spawn_blocking(move || {
+        (
+            models::refresh_disk_space(initial_hardware, &root),
+            super::model_storage::status(&root, directory.as_deref()),
+        )
+    })
+    .await
+    .map_err(|_| "저장 공간 정보를 확인하지 못했습니다.")?;
     let operation = state.ai_operation.status();
     Ok(Snapshot {
         catalog: models::catalog(),
@@ -231,6 +255,7 @@ pub async fn ai_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, 
         jobs,
         runtime,
         hardware,
+        model_storage,
         busy: state.models.busy() || state.analysis.running() || operation.is_some(),
         operation,
         progress: state.analysis.progress(),
@@ -241,6 +266,59 @@ pub async fn ai_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, 
         },
     })
 }
+fn check_storage_change(state: &AppState) -> Result<(), String> {
+    check_open(state)?;
+    if state.models.busy() || state.analysis.running() || state.ai_operation.status().is_some() {
+        return Err("진행 중인 AI 작업을 완료하거나 취소한 뒤 설치 폴더를 변경해 주세요.".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn ai_choose_model_directory(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<bool, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let _lease = state.operation_gate.shared().await?;
+    let _gate = state.ai_gate.lock().await;
+    check_storage_change(&state)?;
+    let initial = with_store(&state, |s| Ok(s.ai_preferences()?.model_directory))?
+        .map(PathBuf::from)
+        .unwrap_or_else(|| state.data_root.clone());
+    let selected = tokio::task::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("AI 모델 설치 폴더 선택")
+            .set_directory(initial)
+            .blocking_pick_folder()
+    })
+    .await
+    .map_err(|_| "폴더 선택 창을 열지 못했습니다.")?;
+    let Some(selected) = selected else {
+        return Ok(false);
+    };
+    check_storage_change(&state)?;
+    let path = selected
+        .into_path()
+        .map_err(|_| "선택한 폴더 경로를 읽지 못했습니다.")?;
+    let directory =
+        tokio::task::spawn_blocking(move || super::model_storage::prepare_selection(&path))
+            .await
+            .map_err(|_| "설치 폴더를 확인하지 못했습니다.")??;
+    check_storage_change(&state)?;
+    with_store(&state, |s| s.ai_save_model_directory(Some(&directory)))?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn ai_reset_model_directory(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
+    let _gate = state.ai_gate.lock().await;
+    check_storage_change(&state)?;
+    with_store(&state, |s| s.ai_save_model_directory(None))
+}
+
 #[tauri::command]
 pub async fn ai_install(
     state: tauri::State<'_, AppState>,
@@ -277,7 +355,7 @@ pub async fn ai_register(state: tauri::State<'_, AppState>, path: String) -> Res
         &state.worker,
         &state.maintenance_shutdown,
         &operation,
-        WorkerAction::Reset,
+        WorkerAction::StopForInventory,
     )
     .await?;
     operation.phase("verifying");
@@ -321,7 +399,7 @@ pub async fn ai_select(
             .filter(|m| m.status == "installed")
             .ok_or("설치된 모델을 선택해 주세요.")?;
     }
-    reset_worker(&state.worker, &state.maintenance_shutdown).await?;
+    stop_inventory_worker(&state.worker, &state.maintenance_shutdown).await?;
     prefs.active_model_id = id;
     with_store(&state, |s| s.ai_save_preferences(&prefs))
 }
@@ -369,6 +447,7 @@ pub async fn ai_remove(
     state: tauri::State<'_, AppState>,
     id: String,
     confirmed: bool,
+    keep_files: Option<bool>,
 ) -> Result<(), String> {
     let _lease = state.operation_gate.shared().await?;
     if !confirmed {
@@ -382,12 +461,23 @@ pub async fn ai_remove(
     let previous_preferences = with_store(&state, |s| s.ai_preferences())?;
     let mut prefs = previous_preferences.clone();
     // Unload even if an earlier selection was cleared, so no mapped model file is deleted.
-    reset_worker(&state.worker, &state.maintenance_shutdown).await?;
+    stop_inventory_worker(&state.worker, &state.maintenance_shutdown).await?;
     if prefs.active_model_id.as_deref() == Some(&id) {
         prefs.active_model_id = None;
         with_store(&state, |s| s.ai_save_preferences(&prefs))?;
     }
-    let result = models::remove(state.store.clone(), state.data_root.clone(), id, confirmed).await;
+    let result = if keep_files == Some(true) {
+        models::remove_with_policy(
+            state.store.clone(),
+            state.data_root.clone(),
+            id,
+            confirmed,
+            true,
+        )
+        .await
+    } else {
+        models::remove(state.store.clone(), state.data_root.clone(), id, confirmed).await
+    };
     if result.is_err() && prefs.active_model_id != previous_preferences.active_model_id {
         // A refused deletion retains selection, but partially completed deletion
         // can leave truthful noninstalled inventory. Never reselect missing bytes.
@@ -415,8 +505,37 @@ pub async fn ai_preferences(
     let _gate = state.ai_gate.lock().await;
     check_open(&state)?;
     let old = with_store(&state, |s| s.ai_preferences())?;
+    if old.model_directory != preferences.model_directory {
+        return Err("모델 설치 폴더는 폴더 선택 기능으로 변경해 주세요.".into());
+    }
     if old.active_model_id != preferences.active_model_id {
         return Err("모델 선택 기능으로 활성 모델을 변경해 주세요.".into());
+    }
+    if old.execution_mode != preferences.execution_mode {
+        if !["auto", "cpu", "gpu"].contains(&preferences.execution_mode.as_str()) {
+            return Err("AI 실행 장치를 확인해 주세요.".into());
+        }
+        if state.analysis.running() {
+            return Err("분석을 취소하거나 완료한 뒤 실행 장치를 변경해 주세요.".into());
+        }
+        if old.setup_completed != preferences.setup_completed {
+            return Err("실행 장치를 먼저 저장한 뒤 AI 설정을 완료해 주세요.".into());
+        }
+        let mut worker = tokio::select! {
+            biased;
+            _ = exiting(&state.maintenance_shutdown) => return Err(EXIT_ERROR.into()),
+            worker = state.worker.lock() => worker,
+        };
+        // Keep ownership through reap, configuration and persistence; a background
+        // refresh cannot restart the old backend between these steps.
+        worker.stop_for_inventory().await?;
+        check_open(&state)?;
+        worker.set_execution_mode(&preferences.execution_mode)?;
+        if let Err(error) = with_store(&state, |s| s.ai_save_preferences(&preferences)) {
+            worker.set_execution_mode(&old.execution_mode)?;
+            return Err(error);
+        }
+        return Ok(());
     }
     if preferences.setup_completed && !old.setup_completed {
         if state.analysis.running() {
@@ -508,6 +627,89 @@ mod tests {
     use super::*;
     use std::{path::Path, sync::Arc, time::Duration};
     use tokio::{sync::Mutex, time::timeout};
+
+    #[tokio::test]
+    async fn unavailable_worker_allows_external_inventory_changes_without_deleting_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("external.gguf");
+        let mut bytes = b"GGUF".to_vec();
+        bytes.extend(3u32.to_le_bytes());
+        bytes.extend(1u64.to_le_bytes());
+        bytes.extend(1u64.to_le_bytes());
+        bytes.extend(20u64.to_le_bytes());
+        bytes.extend(b"general.architecture");
+        bytes.extend(8u32.to_le_bytes());
+        bytes.extend(5u64.to_le_bytes());
+        bytes.extend(b"qwen3");
+        bytes.extend([0u8; 256]);
+        std::fs::write(&file, &bytes).unwrap();
+        let store = Arc::new(std::sync::Mutex::new(
+            crate::Store::open(&directory.path().join("rhythm.sqlite3")).unwrap(),
+        ));
+        let worker = Mutex::new(super::super::Worker::launch(
+            &directory.path().join("nonexistent-worker.exe"),
+        ));
+        let shutdown = AtomicBool::new(false);
+        let controller = operations::Controller::default();
+        let operation = controller.begin("register").unwrap();
+        operation_worker(
+            &worker,
+            &shutdown,
+            &operation,
+            WorkerAction::StopForInventory,
+        )
+        .await
+        .unwrap();
+        let model = models::register(store.clone(), file.clone(), operation.cancel.clone())
+            .await
+            .unwrap();
+        drop(operation);
+        assert_eq!(model.ownership, "external");
+        assert!(worker.lock().await.child.is_none());
+
+        // Selection and removal share the same process-release boundary.
+        stop_inventory_worker(&worker, &shutdown).await.unwrap();
+        let mut preferences = store.lock().unwrap().ai_preferences().unwrap();
+        preferences.active_model_id = Some(model.id.clone());
+        store
+            .lock()
+            .unwrap()
+            .ai_save_preferences(&preferences)
+            .unwrap();
+        stop_inventory_worker(&worker, &shutdown).await.unwrap();
+        preferences.active_model_id = None;
+        store
+            .lock()
+            .unwrap()
+            .ai_save_preferences(&preferences)
+            .unwrap();
+        models::remove(
+            store.clone(),
+            directory.path().into(),
+            model.id.clone(),
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(store.lock().unwrap().ai_model(&model.id).unwrap().is_none());
+        assert_eq!(std::fs::read(&file).unwrap(), bytes);
+        assert!(worker.lock().await.child.is_none());
+    }
+
+    #[tokio::test]
+    async fn inventory_stop_reaps_running_worker_without_relaunching() {
+        let worker = Mutex::new(unresponsive_worker());
+        assert!(worker.lock().await.child.is_some());
+        timeout(
+            Duration::from_secs(5),
+            stop_inventory_worker(&worker, &AtomicBool::new(false)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let worker = worker.lock().await;
+        assert!(worker.child.is_none() && worker.input.is_none() && worker.output.is_none());
+    }
 
     fn unresponsive_worker() -> super::super::Worker {
         static FIXTURE: std::sync::OnceLock<(tempfile::TempDir, PathBuf)> =

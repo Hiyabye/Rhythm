@@ -59,6 +59,7 @@ impl ResponseTasks {
         self.0.len() >= MAX_PENDING_RESPONSE_TASKS
     }
 
+    #[cfg(any(target_os = "macos", test))]
     pub(super) fn spawn(&mut self, task: impl Future<Output = ()> + Send + 'static) -> bool {
         if self.is_full() {
             return false;
@@ -80,6 +81,7 @@ struct NotificationState {
     #[cfg(target_os = "macos")]
     callback_gate: Arc<Mutex<()>>,
     response_tasks: ResponseTasks,
+    #[cfg(target_os = "macos")]
     operation_gate: Arc<AdmissionGate>,
 }
 
@@ -142,6 +144,7 @@ impl Scheduler {
             #[cfg(target_os = "macos")]
             callback_gate: self.callback_gate.clone(),
             response_tasks: ResponseTasks::default(),
+            #[cfg(target_os = "macos")]
             operation_gate: operation_gate.clone(),
         };
         let (done_sender, done_receiver) = oneshot::channel();
@@ -228,6 +231,55 @@ impl Scheduler {
             .lock()
             .map(|mut activation| activation.take())
             .map_err(|_| "알림 이동 정보를 확인할 수 없습니다.".into())
+    }
+
+    /// Consume a Windows protocol activation after the store is initialized.
+    /// Both startup argv and second-instance argv must call this same method.
+    #[cfg(windows)]
+    pub async fn handle_windows_activation(&self, uri: &str) -> Result<bool, String> {
+        let Some(token) = super::windows_notification::token_from_uri(uri) else {
+            return Ok(false);
+        };
+        let _lease = self.operation_gate.shared().await?;
+        let activation = {
+            // Like the macOS response task, a click racing shutdown must not
+            // consume its token or mark the batch delivered.
+            let _callback_guard = self
+                .callback_gate
+                .lock()
+                .map_err(|_| "알림 처리 상태를 확인할 수 없습니다.")?;
+            if !self.accepting_callbacks.load(Ordering::Acquire) {
+                return Ok(false);
+            }
+            let batch = with_store(&self.store, |store| store.notification_token_consume(token))?;
+            let Some(batch) = batch else {
+                return Ok(false);
+            };
+            let (event_id, attempt_count) = batch.attempts[0];
+            let activation = notification::NotificationActivation {
+                event_id,
+                document_id: batch.document_id,
+                revision_id: batch.revision_id,
+                attempt_count,
+                event_ids: batch.attempts.iter().map(|(id, _)| *id).collect(),
+                event_attempts: batch.attempts,
+            };
+            *self
+                .pending_activation
+                .lock()
+                .map_err(|_| "알림 이동 정보를 저장할 수 없습니다.")? = Some(activation.clone());
+            activation
+        };
+        let app = self.app.clone();
+        self.app
+            .run_on_main_thread(move || {
+                if let Err(error) = crate::core::lifecycle::show_main_window(&app) {
+                    eprintln!("Lifecycle: 알림 창 복원 실패: {error}");
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        notification::emit_activation(&self.app, activation);
+        Ok(true)
     }
 }
 
@@ -589,17 +641,30 @@ pub(super) fn should_discover_notifications(prefs: &ProactiveSettings) -> bool {
     prefs.notifications_enabled
 }
 
+/// Whether discovery may claim events for the current OS authorization.
+/// macOS proceeds unless the user denied or has not yet granted permission
+/// (quiet hours still defer). Windows WinRT requires a verified installed
+/// identity and protocol owner; otherwise nothing is claimed, even in quiet
+/// hours, because no sender could ever display it.
+pub(super) fn notification_authorization_permits(authorization: &str, quiet: bool) -> bool {
+    if cfg!(windows) {
+        authorization == "authorized"
+    } else {
+        quiet || !matches!(authorization, "denied" | "not_determined")
+    }
+}
+
 pub(super) fn available_notification_slots(recent_attempts: u32) -> usize {
     notification::RATE_LIMIT.saturating_sub(recent_attempts) as usize
 }
 
+/// Re-reads the complete delivery policy and current source/document state.
+/// Deferred or suppressed items are recorded and dropped; the caller holds the
+/// store lock through the following reservation.
 pub(super) fn revalidate_delivery_batch(
-    store: &sync::SharedStore,
+    store: &Store,
     items: Vec<DeliveryItem>,
 ) -> Result<Vec<DeliveryItem>, String> {
-    let store = store
-        .lock()
-        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
     let prefs = store.proactive_settings()?;
     let local_minutes = store.proactive_local_minutes()?;
     let quiet_delay = quiet_end_delay_minutes(&prefs.quiet_hours, local_minutes);
@@ -649,6 +714,20 @@ pub(super) fn revalidate_delivery_batch(
         item.title = candidate.title;
         eligible.push(item);
     }
+    Ok(eligible)
+}
+
+/// macOS hands off asynchronously, so revalidation and attempt reservation
+/// share one lock and the send happens after it is released.
+#[cfg(any(not(windows), test))]
+pub(super) fn reserve_delivery_batch(
+    shared: &sync::SharedStore,
+    items: Vec<DeliveryItem>,
+) -> Result<Vec<DeliveryItem>, String> {
+    let store = shared
+        .lock()
+        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
+    let eligible = revalidate_delivery_batch(&store, items)?;
     if eligible.is_empty() {
         return Ok(eligible);
     }
@@ -668,6 +747,73 @@ pub(super) fn revalidate_delivery_batch(
         return Ok(Vec::new());
     }
     Ok(eligible)
+}
+
+/// Windows: the final policy check, token creation, durable reservation and
+/// synchronous WinRT handoff share one store lock, so settings or
+/// subscriptions cannot change between them.
+#[cfg(any(windows, test))]
+pub(super) fn handoff_validated<P>(
+    shared: &sync::SharedStore,
+    items: Vec<DeliveryItem>,
+    token: &str,
+    prepare: impl FnOnce(&Store, &[DeliveryItem]) -> Result<P, String>,
+    send: impl FnOnce(P) -> Result<(), String>,
+) -> Result<(), String> {
+    let store = shared
+        .lock()
+        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
+    let items = revalidate_delivery_batch(&store, items)?;
+    if items.is_empty() {
+        return Ok(());
+    }
+    let attempts = items
+        .iter()
+        .map(|item| (item.event_id, item.attempt_count))
+        .collect::<Vec<_>>();
+    let defer = |reason: &str| -> Result<(), String> {
+        for (id, attempt) in &attempts {
+            store.proactive_defer_event(*id, *attempt, 1, Some(reason))?;
+        }
+        Ok(())
+    };
+    let prepared = match prepare(&store, &items) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            defer("알림을 준비할 수 없어 나중에 다시 확인합니다.")?;
+            return Err(error);
+        }
+    };
+    if let Err(error) = store.notification_token_create(token, &attempts) {
+        defer("알림을 준비할 수 없어 나중에 다시 확인합니다.")?;
+        return Err(error);
+    }
+    match store.proactive_reserve_delivery_attempts(&attempts) {
+        Ok(true) => {}
+        Ok(false) => {
+            store.notification_token_revoke(token)?;
+            defer("알림 전송 한도에 도달해 나중에 다시 확인합니다.")?;
+            return Ok(());
+        }
+        Err(error) => {
+            store.notification_token_revoke(token)?;
+            defer("알림을 준비할 수 없어 나중에 다시 확인합니다.")?;
+            return Err(error);
+        }
+    }
+    match send(prepared) {
+        Ok(()) => {
+            store.proactive_mark_attempted_batch(&attempts)?;
+            Ok(())
+        }
+        Err(error) => {
+            store.notification_token_revoke(token)?;
+            for (id, attempt) in &attempts {
+                store.proactive_fail_delivery(*id, *attempt, &error)?;
+            }
+            Err(error)
+        }
+    }
 }
 
 async fn discover_and_deliver(
@@ -692,9 +838,11 @@ async fn discover_and_deliver(
         None
     };
     let authorization = crate::notification_permission::notification_authorization_status().await;
-    if !quiet && matches!(authorization.as_str(), "denied" | "not_determined") {
+    if !notification_authorization_permits(&authorization, quiet) {
         return Ok(());
     }
+    #[cfg(windows)]
+    let windows_token = super::windows_notification::new_token()?;
     let recent = with_store(store, |store| {
         store.proactive_recent_delivery_attempts(notification::RATE_WINDOW_SECS)
     })?;
@@ -813,7 +961,24 @@ async fn discover_and_deliver(
     }
     // Re-read the complete delivery policy and current source/document state under
     // one lock immediately before handing the digest to the operating system.
-    let deliver = revalidate_delivery_batch(store, deliver)?;
+    #[cfg(windows)]
+    {
+        let _ = (app, stop);
+        handoff_validated(
+            store,
+            deliver,
+            &windows_token,
+            |_, deliver| {
+                let (title, body) =
+                    notification::digest_text(deliver).ok_or("알림 내용을 만들지 못했습니다.")?;
+                super::windows_notification::prepare(&title, &body, &windows_token)
+            },
+            super::windows_notification::show,
+        )?;
+    }
+    #[cfg(not(windows))]
+    let deliver = reserve_delivery_batch(store, deliver)?;
+    #[cfg(not(windows))]
     if deliver.is_empty() {
         return Ok(());
     }

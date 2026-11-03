@@ -2,6 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { confirmAction } from './confirm';
+  import { isWindows } from './platform';
 
   type UpdateInfo = { version: string; currentVersion: string; date: string | null; body: string | null };
   type Progress = { phase: 'downloading' | 'verifying' | 'installing' | 'staged' | 'restarting'; version?: string; downloaded?: number; total?: number | null };
@@ -86,6 +87,17 @@
     {#if error}<div class="banner error" role="alert"><div><strong>업데이트를 완료하지 못했습니다</strong><p>{error}</p></div><button class="text-button" disabled={checking || installing} onclick={check}>다시 시도</button></div>{/if}
   {:else if desktop && configured === false}
     <div class="setting-row"><div><h3>앱 업데이트</h3><p>자동 업데이트는 제공하지 않습니다. 새 버전은 아래 순서로 직접 설치합니다.</p></div></div>
+    {#if isWindows}
+    <ol class="manual-update">
+      <li>Rhythm을 트레이 메뉴에서 완전히 종료합니다.</li>
+      <li>필요하면 먼저 위의 백업 및 복원에서 백업 파일을 만듭니다.</li>
+      <li>공식 GitHub 저장소(github.com/Hiyabye/Rhythm)의 Releases에서 최신 Windows 설치 파일을 내려받습니다.</li>
+      <li>PowerShell에서 <code>Get-FileHash</code>로 설치 파일의 SHA-256을 확인하고, 릴리스에 게시된 값과 같은지 비교합니다.</li>
+      <li>설치 파일을 실행해 같은 사용자 계정에 설치합니다.</li>
+      <li>Rhythm을 다시 열고 보관한 공지와 설정이 그대로인지 확인합니다. 공지, 설정, AI 모델은 프로그램과 별도 폴더에 유지됩니다.</li>
+    </ol>
+    <p class="footnote">Windows 설치 파일에는 정식 코드 서명이 없어 처음 실행할 때 Windows 보안 경고가 표시될 수 있습니다. 확인 방법은 저장소의 README에 있습니다.</p>
+    {:else}
     <ol class="manual-update">
       <li>메뉴 막대 아이콘이나 ⌘Q로 Rhythm을 완전히 종료합니다.</li>
       <li>필요하면 먼저 위의 백업 및 복원에서 백업 파일을 만듭니다.</li>
@@ -95,5 +107,6 @@
       <li>Rhythm을 다시 열고 보관한 공지와 설정이 그대로인지 확인합니다. 공지, 설정, AI 모델은 앱과 별도로 저장되어 앱을 바꿔도 지워지지 않습니다.</li>
     </ol>
     <p class="footnote">Rhythm은 Ad-hoc 서명만 되어 있고 Apple 공증을 받지 않았습니다. 새 버전을 처음 열 때 macOS 보안 경고가 표시될 수 있습니다. 확인 방법은 저장소의 README에 있습니다.</p>
+    {/if}
   {:else if !desktop}<p class="footnote">업데이트 확인과 설치는 데스크톱 앱에서 사용할 수 있습니다.</p>{/if}
 </section>

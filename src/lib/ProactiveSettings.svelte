@@ -1,15 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { LifecycleStatus, NotificationAuthorization, ProactiveHistoryItem, ProactiveSettings as Settings, ProactiveSnapshot } from './types';
+  import type { LifecycleStatus, NotificationAuthorization, PlatformCapabilities, ProactiveActivation, ProactiveHistoryItem, ProactiveSettings as Settings, ProactiveSnapshot } from './types';
   import { archiveError } from './archive-format';
   import { confirmAction } from './confirm';
+  import { isWindows } from './platform';
 
-  let { desktop, onopen }: { desktop: boolean; onopen: (documentId: number, revisionId: number, eventId: number, attemptCount?: number, eventIds?: number[]) => void } = $props();
+  let { desktop, onopen, onactivation }: { desktop: boolean; onopen: (documentId: number, revisionId: number, eventId: number, attemptCount?: number, eventIds?: number[]) => void; onactivation: (activation: ProactiveActivation) => void } = $props();
   let data = $state<ProactiveSnapshot | null>(null);
   let lifecycle = $state<LifecycleStatus | null>(null);
   let notificationAuthorization = $state<NotificationAuthorization>('unknown');
-  let permissionBusy = $state(false);
+  let capabilities = $state<PlatformCapabilities | null>(null);
   let loading = $state(true);
   let busy = $state(false);
   let error = $state('');
@@ -37,30 +38,48 @@
       lifecycle = status;
       try { notificationAuthorization = authorizationStatus(await invoke<string>('notification_authorization')); }
       catch { notificationAuthorization = 'unavailable'; }
+      try { capabilities = await invoke<PlatformCapabilities>('platform_capabilities'); }
+      catch { capabilities = null; }
       if (snapshot.pending_activation) {
-        const activation = snapshot.pending_activation;
-        onopen(activation.document_id, activation.revision_id, activation.event_id, activation.attempt_count, activation.event_ids);
+        onactivation(snapshot.pending_activation);
       }
     } catch (reason) { error = archiveError(reason); }
     finally { loading = false; }
   }
 
+  function authorizationLabel(status: NotificationAuthorization) {
+    return ({ granted: '허용됨', denied: '거부됨', not_determined: isWindows ? '연결 확인 필요' : '아직 결정되지 않음', unknown: '확인할 수 없음', unavailable: '이 환경에서 사용할 수 없음' })[status];
+  }
+
+  // macOS shows its permission prompt only on this explicit request.
   async function requestNotificationPermission() {
-    if (permissionBusy) return;
-    permissionBusy = true;
+    if (busy) return;
+    busy = true;
     error = '';
     notice = '';
     try {
-      notificationAuthorization = authorizationStatus(await invoke<string>('notification_request_permission'));
+      const result = await invoke<{ status: string }>('notification_request_permission');
+      notificationAuthorization = authorizationStatus(result.status);
       notice = notificationAuthorization === 'granted' ? '알림 권한을 허용했습니다.' : '';
     } catch (reason) {
       notificationAuthorization = 'unavailable';
       error = archiveError(reason);
-    } finally { permissionBusy = false; }
+    } finally { busy = false; }
   }
 
-  function authorizationLabel(status: NotificationAuthorization) {
-    return ({ granted: '허용됨', denied: '거부됨', not_determined: '아직 결정되지 않음', unknown: '확인할 수 없음', unavailable: '이 환경에서 사용할 수 없음' })[status];
+  async function testNotificationConnection() {
+    if (busy || notificationAuthorization !== 'not_determined') return;
+    busy = true;
+    error = '';
+    notice = '';
+    try {
+      const result = await invoke<{ status: string; test_notification_requested: boolean }>('notification_request_permission');
+      await load();
+      notice = result.test_notification_requested
+        ? 'Windows에 시험 알림 표시를 요청했습니다. 실제 화면 표시 여부는 확인하지 못했습니다.'
+        : '시험 알림을 요청하지 못했습니다. Windows 알림 상태를 확인해 주세요.';
+    } catch (reason) { error = archiveError(reason); }
+    finally { busy = false; }
   }
 
   async function save(patch: Partial<Settings>) {
@@ -137,7 +156,7 @@
   {:else if loading}
     <p class="loading" role="status">백그라운드 설정을 불러오는 중입니다…</p>
   {:else if data && lifecycle}
-    <div class="setting-row"><div><h3>창을 닫을 때 백그라운드에서 실행</h3><p>{lifecycle.tray_available ? '창만 숨깁니다. 메뉴 막대 아이콘에서 다시 열 수 있습니다.' : '메뉴 막대 아이콘을 사용할 수 없어 설정할 수 없습니다.'}</p></div><button class="switch" class:on={lifecycle.close_to_background} role="switch" aria-label="창을 닫아도 백그라운드에서 실행" aria-checked={lifecycle.close_to_background} disabled={busy || !lifecycle.tray_available} onclick={() => setLifecycle('lifecycle_set_close_to_background', !lifecycle?.close_to_background)}><span></span></button></div>
+    <div class="setting-row"><div><h3>창을 닫을 때 백그라운드에서 실행</h3><p>{lifecycle.tray_available ? (isWindows ? '창만 숨깁니다. 작업 표시줄의 알림 영역 아이콘에서 다시 열 수 있습니다.' : '창만 숨깁니다. 메뉴 막대 아이콘에서 다시 열 수 있습니다.') : (isWindows ? '알림 영역 아이콘을 사용할 수 없어 설정할 수 없습니다.' : '메뉴 막대 아이콘을 사용할 수 없어 설정할 수 없습니다.')}</p></div><button class="switch" class:on={lifecycle.close_to_background} role="switch" aria-label="창을 닫아도 백그라운드에서 실행" aria-checked={lifecycle.close_to_background} disabled={busy || !lifecycle.tray_available} onclick={() => setLifecycle('lifecycle_set_close_to_background', !lifecycle?.close_to_background)}><span></span></button></div>
     <div class="setting-row"><div><h3>로그인 시 자동 시작</h3><p>{lifecycle.autostart_enabled === null ? '운영체제의 등록 상태를 확인할 수 없습니다.' : lifecycle.autostart_enabled ? '운영체제에서 로그인 항목으로 등록되어 있습니다.' : '운영체제 로그인 항목에 등록되어 있지 않습니다.'}</p></div><button class="switch" class:on={lifecycle.autostart_enabled === true} role="switch" aria-label="로그인 시 자동 시작" aria-checked={lifecycle.autostart_enabled === true} disabled={busy || lifecycle.autostart_enabled === null} onclick={() => setLifecycle('lifecycle_set_launch_at_login', !lifecycle?.autostart_enabled)}><span></span></button></div>
     <div class="setting-row"><div><h3>로그인 후 창 숨기기</h3><p>로그인으로 실행될 때만 적용됩니다. 직접 앱을 열면 창이 표시됩니다.</p></div><button class="switch" class:on={lifecycle.start_hidden} role="switch" aria-label="로그인 후 창 숨기기" aria-checked={lifecycle.start_hidden} disabled={busy || !lifecycle.autostart_enabled} onclick={() => setLifecycle('lifecycle_set_start_hidden', !lifecycle?.start_hidden)}><span></span></button></div>
     {#if lifecycle.launch_at_login !== (lifecycle.autostart_enabled ?? false)}<p class="footnote">저장된 로그인 설정과 운영체제 등록 상태가 다릅니다. 운영체제 상태를 자동으로 바꾸지 않았습니다.</p>{/if}
@@ -151,22 +170,25 @@
     <button class="text-button" type="button" disabled={busy} onclick={load}>백그라운드 상태 새로고침</button>
 
     <h3 id="notifications">알림</h3>
-    <div class="setting-row"><div><h3>알림 활성화</h3><p>공지 동기화와 알림 전달은 별도 설정입니다. 알림 전달은 시스템 권한, 이 설정, 방해 금지 시간 등에도 영향을 받습니다.</p></div><button class="switch" class:on={data.settings.notifications_enabled} role="switch" aria-label="알림 활성화" aria-checked={data.settings.notifications_enabled} disabled={busy} onclick={() => save({ notifications_enabled: !data?.settings.notifications_enabled })}><span></span></button></div>
+    <div class="setting-row"><div><h3>알림 활성화</h3><p>공지 동기화와 알림 전달은 별도 설정입니다. 알림 전달은 {isWindows ? 'Windows 설정' : '시스템 권한'}, 이 설정, 방해 금지 시간 등에도 영향을 받습니다.</p>{#if !capabilities?.notifications.available}<p>{capabilities?.notifications.reason ?? '알림 사용 가능 여부를 확인하지 못했습니다.'}</p>{/if}</div><button class="switch" class:on={data.settings.notifications_enabled} role="switch" aria-label="알림 활성화" aria-checked={data.settings.notifications_enabled} disabled={busy || (isWindows && (!capabilities?.notifications.available || notificationAuthorization !== 'granted') && !data.settings.notifications_enabled)} onclick={() => save({ notifications_enabled: !data?.settings.notifications_enabled })}><span></span></button></div>
     <div class="privacy-note" aria-live="polite">
       <p>운영체제 알림 권한: {authorizationLabel(notificationAuthorization)}</p>
       {#if notificationAuthorization === 'denied'}
-        <p>권한이 거부되었습니다. 운영체제의 알림 설정에서 Rhythm 알림을 허용한 뒤 상태를 새로고침하세요.</p>
+        <p>{isWindows ? 'Windows 설정 → 시스템 → 알림에서 Rhythm 알림을 허용한 뒤 상태를 새로고침하세요.' : '권한이 거부되었습니다. 운영체제의 알림 설정에서 Rhythm 알림을 허용한 뒤 상태를 새로고침하세요.'}</p>
+      {:else if notificationAuthorization === 'not_determined' && isWindows}
+        <p>연결 상태를 확인하려면 시험 알림을 Windows에 한 번 요청할 수 있습니다. 시험은 공지 알림을 활성화하지 않습니다.</p>
+        <button class="text-button" type="button" disabled={busy} onclick={testNotificationConnection}>시험 알림으로 연결 확인</button>
       {:else if notificationAuthorization === 'not_determined'}
         <p>아직 권한을 선택하지 않았습니다. 아래 버튼을 누를 때만 운영체제 권한 요청 창이 표시됩니다.</p>
       {:else if notificationAuthorization === 'unavailable'}
-        <p>이 환경에서는 운영체제 알림 권한 상태를 확인하거나 요청할 수 없습니다. 알림 전달 가능 여부는 운영체제 설정에서 확인하세요.</p>
+        <p>{isWindows ? 'Windows 알림 상태를 확인할 수 없습니다. 앱의 설치 상태와 Windows 알림 설정을 확인하세요.' : '이 환경에서는 운영체제 알림 권한 상태를 확인하거나 요청할 수 없습니다. 알림 전달 가능 여부는 운영체제 설정에서 확인하세요.'}</p>
       {:else if notificationAuthorization === 'unknown'}
         <p>운영체제가 알림 권한 상태를 알려주지 않았습니다. 알림 전달은 확인되지 않았습니다.</p>
       {/if}
       <p>권한 허용은 알림 전달을 보장하지 않습니다. 운영체제의 집중 모드와 앱의 알림 설정에 따라 전달되지 않을 수 있습니다.</p>
     </div>
-    <button class="text-button" type="button" disabled={permissionBusy || notificationAuthorization === 'unavailable'} onclick={requestNotificationPermission}>{permissionBusy ? '권한 확인 중…' : '운영체제 알림 권한 요청'}</button>
-    <button class="text-button" type="button" disabled={busy || permissionBusy} onclick={load}>알림 권한 상태 새로고침</button>
+    {#if !isWindows}<button class="text-button" type="button" disabled={busy || notificationAuthorization === 'unavailable'} onclick={requestNotificationPermission}>운영체제 알림 권한 요청</button>{/if}
+    <button class="text-button" type="button" disabled={busy} onclick={load}>알림 권한 상태 새로고침</button>
     <label class="field-label" for="notification-sensitivity">알림 민감도</label><select id="notification-sensitivity" value={data.settings.notification_sensitivity} disabled={busy || !data.settings.notifications_enabled} onchange={(event) => save({ notification_sensitivity: event.currentTarget.value as Settings['notification_sensitivity'] })}><option value="important">중요한 공지만</option><option value="interested">관심 분야와 관련된 공지</option><option value="all">모든 새 공지와 변경</option></select>
     <div class="setting-row"><div><h3>방해 금지 시간</h3><p>이 시간에는 알림 전달을 미룹니다. 시작과 끝이 자정을 지나도 설정할 수 있습니다.</p></div><button class="switch" class:on={data.settings.quiet_hours.enabled} role="switch" aria-label="방해 금지 시간" aria-checked={data.settings.quiet_hours.enabled} disabled={busy} onclick={() => save({ quiet_hours: { ...data!.settings.quiet_hours, enabled: !data!.settings.quiet_hours.enabled } })}><span></span></button></div>
     <div class="form-grid"><label class="field-label" for="quiet-start">시작 시간<input id="quiet-start" type="time" value={data.settings.quiet_hours.start} disabled={busy} onchange={(event) => save({ quiet_hours: { ...data!.settings.quiet_hours, start: event.currentTarget.value } })} /></label><label class="field-label" for="quiet-end">종료 시간<input id="quiet-end" type="time" value={data.settings.quiet_hours.end} disabled={busy} onchange={(event) => save({ quiet_hours: { ...data!.settings.quiet_hours, end: event.currentTarget.value } })} /></label></div>

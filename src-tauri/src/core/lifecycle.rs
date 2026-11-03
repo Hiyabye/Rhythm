@@ -94,7 +94,20 @@ pub struct AutostartStatus {
     pub enabled: bool,
 }
 
-/// Installs the monochrome Beat template icon and its native menu.
+#[cfg(windows)]
+pub(crate) fn autostart_snapshot() -> Result<super::windows_autostart::Snapshot, String> {
+    super::windows_autostart::snapshot().map_err(|error| autostart_error("확인하지", error))
+}
+
+#[cfg(windows)]
+pub(crate) fn restore_autostart(
+    snapshot: &super::windows_autostart::Snapshot,
+) -> Result<(), String> {
+    super::windows_autostart::restore(snapshot).map_err(|error| autostart_error("복구하지", error))
+}
+
+/// Installs the tray icon (the monochrome Beat template on macOS) and its
+/// native menu.
 ///
 /// A failure is reported to the caller; the application continues without a
 /// tray, and close-to-background is then refused by the command layer.
@@ -104,7 +117,10 @@ pub fn install_tray(app: &AppHandle) -> tauri::Result<()> {
         .separator()
         .text(TRAY_QUIT, "Rhythm 종료")
         .build()?;
+    #[cfg(target_os = "macos")]
     let icon = tauri::image::Image::from_bytes(include_bytes!("../../icons/tray-template.png"))?;
+    #[cfg(not(target_os = "macos"))]
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../../icons/32x32.png"))?;
     let builder = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .tooltip("Rhythm")
@@ -221,12 +237,32 @@ pub fn handle_second_instance(app: &AppHandle, launch: LaunchMode) {
 
 fn autostart_error(action: &str, error: impl std::fmt::Display) -> String {
     eprintln!("Autostart ({action}): {error}");
-    format!(
-        "로그인 시 자동 실행을 {action} 못했습니다. 운영체제의 로그인 항목 설정과 앱 설치 위치를 확인해 주세요."
-    )
+    #[cfg(windows)]
+    let place = "Windows 시작 앱 설정";
+    #[cfg(not(windows))]
+    let place = "운영체제의 로그인 항목 설정";
+    format!("로그인 시 자동 실행을 {action} 못했습니다. {place}과 앱 설치 위치를 확인해 주세요.")
 }
 
 /// Reads the actual OS login-registration state.
+#[cfg(windows)]
+pub fn autostart_status(_app: &AppHandle) -> Result<AutostartStatus, String> {
+    super::windows_autostart::status()
+        .map(|enabled| AutostartStatus { enabled })
+        .map_err(|error| autostart_error("확인하지", error))
+}
+
+/// Enables or disables OS login registration. The registry module re-reads
+/// the Run and StartupApproved values; a silent failure is an error.
+#[cfg(windows)]
+pub fn set_autostart(_app: &AppHandle, enabled: bool) -> Result<AutostartStatus, String> {
+    super::windows_autostart::set(enabled)
+        .map(|enabled| AutostartStatus { enabled })
+        .map_err(|error| autostart_error(if enabled { "켜지" } else { "끄지" }, error))
+}
+
+/// Reads the actual OS login-registration state.
+#[cfg(not(windows))]
 pub fn autostart_status(app: &AppHandle) -> Result<AutostartStatus, String> {
     use tauri_plugin_autostart::ManagerExt as _;
 
@@ -239,6 +275,7 @@ pub fn autostart_status(app: &AppHandle) -> Result<AutostartStatus, String> {
 /// Enables or disables OS login registration and verifies the result by
 /// reading the OS state again. A silent platform failure is an error, not a
 /// success.
+#[cfg(not(windows))]
 pub fn set_autostart(app: &AppHandle, enabled: bool) -> Result<AutostartStatus, String> {
     use tauri_plugin_autostart::ManagerExt as _;
 

@@ -7,7 +7,7 @@ use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
     net::{IpAddr, SocketAddr},
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -53,8 +53,7 @@ pub fn hardware(root: &Path) -> Hardware {
         arch: std::env::consts::ARCH,
         ram_bytes: ram_bytes(),
         disk_available_bytes: available_space(root).unwrap_or(0),
-        // Main-process features cannot prove which backend the bundled worker uses.
-        backend: "작업 프로세스 빌드에 따름 · 가속 사용 여부 미확인",
+        backend: BACKEND_LABEL,
     }
 }
 /// Refresh free disk without repeating the physical-RAM platform probe.
@@ -63,6 +62,12 @@ pub fn refresh_disk_space(mut hardware: Hardware, root: &Path) -> Hardware {
     hardware.disk_available_bytes = available_space(root).unwrap_or(0);
     hardware
 }
+// Main-process features cannot prove which backend the bundled worker uses;
+// on Windows the runtime status separately confirms the device actually used.
+#[cfg(windows)]
+const BACKEND_LABEL: &str = "CPU · NVIDIA GPU (Vulkan) · 실제 실행 장치는 엔진 상태에서 확인";
+#[cfg(not(windows))]
+const BACKEND_LABEL: &str = "작업 프로세스 빌드에 따름 · 가속 사용 여부 미확인";
 fn ram_bytes() -> u64 {
     #[cfg(target_os = "macos")]
     {
@@ -75,28 +80,53 @@ fn ram_bytes() -> u64 {
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(0);
     }
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        let mut info = MEMORYSTATUSEX {
+            dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: info has the required size and remains valid for the call.
+        return unsafe { GlobalMemoryStatusEx(&mut info) }
+            .map(|()| info.ullTotalPhys)
+            .unwrap_or(0);
+    }
     #[allow(unreachable_code)]
     0
 }
 pub(crate) fn available_space(root: &Path) -> Result<u64, String> {
-    #[cfg(unix)]
-    let result = std::process::Command::new("df")
-        .arg("-Pk")
-        .arg(root)
-        .output();
-    let output = result.map_err(|_| "사용 가능한 저장 공간을 확인하지 못했습니다.")?;
-    if !output.status.success() {
-        return Err("저장 공간을 확인하지 못했습니다.".into());
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::{core::PCWSTR, Win32::Storage::FileSystem::GetDiskFreeSpaceExW};
+        let wide: Vec<u16> = root.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut available = 0u64;
+        // SAFETY: wide is NUL-terminated and available is a valid output pointer.
+        unsafe { GetDiskFreeSpaceExW(PCWSTR(wide.as_ptr()), Some(&mut available), None, None) }
+            .map_err(|_| "사용 가능한 저장 공간을 확인하지 못했습니다.")?;
+        Ok(available)
     }
-    let text =
-        String::from_utf8(output.stdout).map_err(|_| "저장 공간 응답이 올바르지 않습니다.")?;
-    let bytes = text
-        .lines()
-        .last()
-        .and_then(|s| s.split_whitespace().nth(3))
-        .and_then(|s| s.parse::<u64>().ok())
-        .and_then(|v| v.checked_mul(1024));
-    bytes.ok_or_else(|| "사용 가능한 저장 공간을 읽지 못했습니다.".into())
+    #[cfg(not(windows))]
+    {
+        let output = std::process::Command::new("df")
+            .arg("-Pk")
+            .arg(root)
+            .output()
+            .map_err(|_| "사용 가능한 저장 공간을 확인하지 못했습니다.")?;
+        if !output.status.success() {
+            return Err("저장 공간을 확인하지 못했습니다.".into());
+        }
+        let text =
+            String::from_utf8(output.stdout).map_err(|_| "저장 공간 응답이 올바르지 않습니다.")?;
+        let bytes = text
+            .lines()
+            .last()
+            .and_then(|s| s.split_whitespace().nth(3))
+            .and_then(|s| s.parse::<u64>().ok())
+            .and_then(|v| v.checked_mul(1024));
+        bytes.ok_or_else(|| "사용 가능한 저장 공간을 읽지 못했습니다.".into())
+    }
 }
 fn require_space(free: u64, remaining: u64) -> Result<(), String> {
     // Leave room for SQLite/WAL and the OS; never consume the last free bytes.
@@ -163,7 +193,7 @@ impl Controller {
             .into_iter()
             .find(|e| e.id == catalog_id)
             .ok_or("모델 목록에서 항목을 선택해 주세요.")?;
-        if entry.compatibility != "verified" {
+        if !matches!(entry.compatibility.as_str(), "verified" | "available") {
             return Err(
                 "이 모델은 실제 추론 검증 전이므로 원클릭 설치를 제공하지 않습니다.".into(),
             );
@@ -181,7 +211,7 @@ impl Controller {
             .into_iter()
             .find(|e| e.id == catalog_id)
             .ok_or("모델 목록에서 항목을 선택해 주세요.")?;
-        if entry.compatibility != "verified" {
+        if !matches!(entry.compatibility.as_str(), "verified" | "available") {
             return Err(
                 "이 모델은 실제 추론 검증 전이므로 원클릭 설치를 제공하지 않습니다.".into(),
             );
@@ -204,6 +234,16 @@ impl Controller {
         entry: CatalogEntry,
         lease: Option<crate::operation_gate::AdmissionLease>,
     ) -> Result<(), String> {
+        self.start_entry_with_transport(store, root, entry, lease, HttpsTransport)
+    }
+    fn start_entry_with_transport<T: Transport + Send + 'static>(
+        &self,
+        store: Arc<Mutex<Store>>,
+        root: PathBuf,
+        entry: CatalogEntry,
+        lease: Option<crate::operation_gate::AdmissionLease>,
+        transport: T,
+    ) -> Result<(), String> {
         let mut active = self
             .active
             .lock()
@@ -214,6 +254,7 @@ impl Controller {
         validate_manifest(&entry)?;
         let old = with_store(&store, |s| s.ai_model(&entry.id))?;
         let mut model = inventory(&entry);
+        model.storage_directory = with_store(&store, |s| Ok(s.ai_preferences()?.model_directory))?;
         if let Some(old) = old {
             // Never overwrite an installed identity during a duplicate request.
             if old.status == "installed" {
@@ -222,9 +263,14 @@ impl Controller {
                         .into(),
                 );
             }
-            if old.expected_sha256 == model.expected_sha256
+            if old.ownership == "managed"
+                && old.path == model.path
+                && old.expected_sha256 == model.expected_sha256
                 && old.source_revision == model.source_revision
             {
+                // Destination is part of an interrupted download's identity.
+                // A new default must never abandon or relocate its partial file.
+                model.storage_directory = old.storage_directory;
                 model.resume_etag = old.resume_etag;
                 model.downloaded_bytes = old.downloaded_bytes;
             }
@@ -235,8 +281,7 @@ impl Controller {
         let this = self.clone();
         tokio::spawn(async move {
             let _lease = lease;
-            let outcome =
-                install(&store, &root, &entry, &mut model, &cancel, &HttpsTransport).await;
+            let outcome = install(&store, &root, &entry, &mut model, &cancel, &transport).await;
             if let Err(error) = outcome {
                 model.status = if cancel.load(Ordering::Acquire) {
                     "cancelled"
@@ -263,6 +308,7 @@ fn inventory(entry: &CatalogEntry) -> AiModel {
         name: entry.name.clone(),
         ownership: "managed".into(),
         path: format!("models/{}.gguf", entry.sha256),
+        storage_directory: None,
         sha256: None,
         expected_sha256: Some(entry.sha256.clone()),
         expected_bytes: Some(entry.bytes),
@@ -526,33 +572,9 @@ fn validate_response(
         )),
     }
 }
+#[cfg(test)]
 fn managed_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
-    let p = Path::new(relative);
-    if p.components().any(|c| !matches!(c, Component::Normal(_)))
-        || p.components().count() != 2
-        || p.parent() != Some(Path::new("models"))
-    {
-        return Err("Rhythm 모델 저장 경로가 올바르지 않습니다.".into());
-    }
-    let canonical_root = root
-        .canonicalize()
-        .map_err(|_| "모델 데이터 경로를 찾지 못했습니다.")?;
-    let dir = root.join("models");
-    std::fs::create_dir_all(&dir).map_err(|_| "모델 저장 폴더를 만들지 못했습니다.")?;
-    let canonical_dir = dir
-        .canonicalize()
-        .map_err(|_| "모델 저장 폴더를 확인하지 못했습니다.")?;
-    if !canonical_dir.starts_with(&canonical_root) {
-        return Err("모델 저장 폴더의 외부 경로 연결을 차단했습니다.".into());
-    }
-    let full = dir.join(p.file_name().ok_or("모델 파일 이름이 없습니다.")?);
-    for file in [&full, &full.with_extension("part")] {
-        if std::fs::symlink_metadata(file).is_ok_and(|m| m.file_type().is_symlink() || !m.is_file())
-        {
-            return Err("모델 파일의 외부 경로 연결을 차단했습니다.".into());
-        }
-    }
-    Ok(full)
+    super::model_storage::managed_path(root, relative, None, true)
 }
 async fn install(
     store: &Arc<Mutex<Store>>,
@@ -563,8 +585,20 @@ async fn install(
     transport: &impl Transport,
 ) -> Result<(), String> {
     check_cancel(cancel)?;
-    let full = managed_path(root, &model.path)?;
+    let full = super::model_storage::managed_path(
+        root,
+        &model.path,
+        model.storage_directory.as_deref(),
+        true,
+    )?;
     if full.exists() {
+        // A chosen folder may be shared with another profile or hold a file the
+        // user registered as external. Adopting it as managed would let model
+        // removal delete bytes Rhythm never wrote, so only adopt there when this
+        // inventory already received every byte (a crash after the final rename).
+        if model.storage_directory.is_some() && model.downloaded_bytes != entry.bytes {
+            return Err("선택한 폴더에 같은 모델 파일이 이미 있습니다. 삭제 권한을 넘겨받지 않도록 설치하지 않았습니다. 기존 파일은 '모델 파일 등록'으로 추가해 주세요.".into());
+        }
         let file = full.clone();
         let expected = entry.clone();
         let cancelled = cancel.clone();
@@ -590,7 +624,10 @@ async fn install(
     } else {
         0
     };
-    require_space(available_space(root)?, entry.bytes - offset)?;
+    require_space(
+        available_space(full.parent().ok_or("모델 저장 폴더가 없습니다.")?)?,
+        entry.bytes - offset,
+    )?;
     model.status = "downloading".into();
     model.downloaded_bytes = offset;
     model.error = None;
@@ -845,7 +882,12 @@ pub async fn register(
     cancel: Arc<AtomicBool>,
 ) -> Result<AiModel, String> {
     check_cancel(&cancel)?;
-    if !path.is_absolute() || path.extension().is_none_or(|e| e != "gguf") {
+    if !path.is_absolute()
+        || !path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
+    {
         return Err("기존 GGUF 파일의 전체 경로를 입력해 주세요.".into());
     }
     let path = path
@@ -869,12 +911,13 @@ pub async fn register(
         .to_str()
         .ok_or("모델 경로를 UTF-8로 읽지 못했습니다.")?
         .to_owned();
-    let model = AiModel {
+    let mut model = AiModel {
         id: format!("external-{:x}", Sha256::digest(path.as_bytes())),
         catalog_id: None,
         name,
         ownership: "external".into(),
         path,
+        storage_directory: None,
         sha256: Some(hash),
         expected_sha256: None,
         expected_bytes: None,
@@ -888,7 +931,32 @@ pub async fn register(
         created_at: String::new(),
         updated_at: String::new(),
     };
-    with_store(&store, |s| s.ai_upsert_model(&model))?;
+    with_store(&store, |s| {
+        // Restore deliberately keeps the original catalog ID while revoking
+        // managed-file ownership. Re-register that row instead of inserting a
+        // second external row with the same unique canonical path.
+        if let Some(previous) = s
+            .ai_models()?
+            .into_iter()
+            .find(|previous| previous.ownership == "external" && previous.path == model.path)
+        {
+            model.id = previous.id;
+            if previous.expected_sha256 == model.sha256
+                && previous.expected_bytes == Some(model.bytes)
+            {
+                // Only a freshly verified match may retain curated provenance.
+                model.catalog_id = previous.catalog_id;
+                model.expected_sha256 = previous.expected_sha256;
+                model.expected_bytes = previous.expected_bytes;
+                model.source_revision = previous.source_revision;
+                model.source_filename = previous.source_filename;
+                if model.catalog_id.is_some() {
+                    model.name = previous.name;
+                }
+            }
+        }
+        s.ai_upsert_model(&model)
+    })?;
     Ok(model)
 }
 /// Call after stopping inference and unloading/clearing the selected model. External bytes are never removed.
@@ -897,6 +965,16 @@ pub async fn remove(
     root: PathBuf,
     id: String,
     confirmed: bool,
+) -> Result<(), String> {
+    remove_with_policy(store, root, id, confirmed, false).await
+}
+
+pub async fn remove_with_policy(
+    store: Arc<Mutex<Store>>,
+    root: PathBuf,
+    id: String,
+    confirmed: bool,
+    keep_files: bool,
 ) -> Result<(), String> {
     if !confirmed {
         return Err("모델 삭제를 먼저 확인해 주세요.".into());
@@ -918,9 +996,14 @@ pub async fn remove(
         }
         Ok(model)
     })?;
+    if keep_files {
+        // Explicit inventory-only recovery also works when a drive is gone.
+        // Do not resolve or access any model/partial path in this branch.
+        return with_store(&store, |s| s.ai_remove_model(&id));
+    }
     if model.ownership == "managed" {
-        let full = managed_path(&root, &model.path)?;
-        // Ancillary cleanup can fail independently (for example immutable flags).
+        let full = super::model_storage::resolve_model_path(&root, &model)?;
+        // Ancillary cleanup can fail independently (for example an exclusive file lock).
         // Never remove good installed weights before that failure is known.
         if let Err(error) = tokio::fs::remove_file(full.with_extension("part")).await {
             if error.kind() != std::io::ErrorKind::NotFound {
@@ -968,6 +1051,30 @@ pub async fn remove(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn windows_hardware_reads_ram_and_space_from_unicode_path() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("한글 모델 폴더");
+        std::fs::create_dir(&path).unwrap();
+        assert!(ram_bytes() > 0);
+        assert!(available_space(&path).is_ok());
+        assert!(available_space(&path.join("없는 폴더")).is_err());
+    }
+    #[test]
+    fn catalog_distinguishes_verified_from_experimental() {
+        let entries = catalog();
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.compatibility == "verified")
+                .count(),
+            2
+        );
+        assert!(entries
+            .iter()
+            .any(|entry| entry.id == "qwen35-9b" && entry.compatibility == "experimental"));
+    }
     #[test]
     fn sha256_target_features_preserve_standard_known_answers() {
         assert_eq!(
@@ -1054,6 +1161,361 @@ mod tests {
                 body: Body::Test(chunks),
             })
         }
+    }
+    struct ObservedFake {
+        fake: Fake,
+        offsets: Arc<Mutex<Vec<u64>>>,
+    }
+    impl Transport for ObservedFake {
+        async fn response(
+            &self,
+            entry: &CatalogEntry,
+            offset: u64,
+            etag: Option<&str>,
+            cancel: &AtomicBool,
+        ) -> Result<DownloadResponse, String> {
+            self.offsets.lock().unwrap().push(offset);
+            self.fake.response(entry, offset, etag, cancel).await
+        }
+    }
+    async fn wait_for_install(controller: &Controller) {
+        tokio::time::timeout(Duration::from_secs(10), controller.wait())
+            .await
+            .expect("small fake download must finish");
+    }
+    fn choose_directory(store: &Arc<Mutex<Store>>, directory: &Path) -> String {
+        let selected = super::super::model_storage::prepare_selection(directory).unwrap();
+        with_store(store, |store| {
+            let mut preferences = store.ai_preferences()?;
+            preferences.model_directory = Some(selected.clone());
+            store.ai_save_preferences(&preferences)
+        })
+        .unwrap();
+        selected
+    }
+    #[tokio::test]
+    async fn custom_korean_directory_download_is_verified_and_persisted() {
+        let (root, store, entry, bytes) = fixture();
+        let destination = tempfile::tempdir().unwrap();
+        let directory = destination.path().join("한글 모델 저장 위치");
+        std::fs::create_dir(&directory).unwrap();
+        let selected = choose_directory(&store, &directory);
+        let controller = Controller::default();
+        controller
+            .start_entry_with_transport(
+                store.clone(),
+                root.path().into(),
+                entry.clone(),
+                None,
+                Fake::new(bytes.clone()),
+            )
+            .unwrap();
+        wait_for_install(&controller).await;
+        let model = store.lock().unwrap().ai_model(&entry.id).unwrap().unwrap();
+        assert_eq!(model.status, "installed", "{:?}", model.error);
+        assert_eq!(model.storage_directory.as_deref(), Some(selected.as_str()));
+        let full = directory.join(format!("{}.gguf", entry.sha256));
+        assert_eq!(std::fs::read(&full).unwrap(), bytes);
+        assert_eq!(
+            verify_file(
+                &full,
+                Some((&entry.sha256, entry.bytes)),
+                &AtomicBool::new(false)
+            )
+            .unwrap(),
+            (entry.sha256.clone(), entry.bytes)
+        );
+        assert!(!full.with_extension("part").exists());
+        assert!(!root.path().join("models").exists());
+        drop(controller);
+        drop(store);
+        let reopened = Store::open(&root.path().join("rhythm.sqlite3")).unwrap();
+        assert_eq!(
+            reopened
+                .ai_model(&entry.id)
+                .unwrap()
+                .unwrap()
+                .storage_directory,
+            Some(selected)
+        );
+    }
+    #[tokio::test]
+    async fn existing_file_in_chosen_folder_is_never_adopted_for_deletion() {
+        let (root, store, entry, bytes) = fixture();
+        let destination = tempfile::tempdir().unwrap();
+        let directory = destination.path().join("공유 모델 폴더");
+        std::fs::create_dir(&directory).unwrap();
+        let selected = choose_directory(&store, &directory);
+        // Another profile, or an external registration, already owns this file.
+        let foreign = directory.join(format!("{}.gguf", entry.sha256));
+        std::fs::write(&foreign, &bytes).unwrap();
+        let mut model = inventory(&entry);
+        model.storage_directory = Some(selected.clone());
+        let error = install(
+            &store,
+            root.path(),
+            &entry,
+            &mut model,
+            &Arc::new(AtomicBool::new(false)),
+            &Fake::new(bytes.clone()),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("모델 파일 등록"), "{error}");
+        assert_ne!(model.status, "installed");
+        assert_eq!(std::fs::read(&foreign).unwrap(), bytes);
+
+        // Rhythm's own download that crashed after the final rename recovers.
+        model.downloaded_bytes = entry.bytes;
+        install(
+            &store,
+            root.path(),
+            &entry,
+            &mut model,
+            &Arc::new(AtomicBool::new(false)),
+            &Fake::new(bytes.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(model.status, "installed");
+        assert_eq!(model.storage_directory.as_deref(), Some(selected.as_str()));
+    }
+    #[tokio::test]
+    async fn changing_default_keeps_custom_and_legacy_partial_downloads_in_place() {
+        for custom_origin in [false, true] {
+            let (root, store, entry, bytes) = fixture();
+            let destinations = tempfile::tempdir().unwrap();
+            let original = destinations.path().join("기존 모델 폴더");
+            let replacement = destinations.path().join("새 다운로드 폴더");
+            std::fs::create_dir(&original).unwrap();
+            std::fs::create_dir(&replacement).unwrap();
+            let previous = custom_origin.then(|| choose_directory(&store, &original));
+            let controller = Controller::default();
+            let offsets = Arc::new(Mutex::new(Vec::new()));
+            let mut interrupted = Fake::new(bytes.clone());
+            interrupted.fail = true;
+            controller
+                .start_entry_with_transport(
+                    store.clone(),
+                    root.path().into(),
+                    entry.clone(),
+                    None,
+                    ObservedFake {
+                        fake: interrupted,
+                        offsets: offsets.clone(),
+                    },
+                )
+                .unwrap();
+            wait_for_install(&controller).await;
+            let failed = store.lock().unwrap().ai_model(&entry.id).unwrap().unwrap();
+            assert_eq!(failed.status, "failed");
+            let original_full =
+                super::super::model_storage::resolve_model_path(root.path(), &failed).unwrap();
+            assert_eq!(
+                std::fs::read(original_full.with_extension("part")).unwrap(),
+                bytes[..32]
+            );
+            choose_directory(&store, &replacement);
+            drop(controller);
+            drop(store);
+            let store = Arc::new(Mutex::new(
+                Store::open(&root.path().join("rhythm.sqlite3")).unwrap(),
+            ));
+            let controller = Controller::default();
+            controller
+                .start_entry_with_transport(
+                    store.clone(),
+                    root.path().into(),
+                    entry.clone(),
+                    None,
+                    ObservedFake {
+                        fake: Fake::new(bytes.clone()),
+                        offsets: offsets.clone(),
+                    },
+                )
+                .unwrap();
+            wait_for_install(&controller).await;
+            let model = store.lock().unwrap().ai_model(&entry.id).unwrap().unwrap();
+            assert_eq!(model.status, "installed", "{:?}", model.error);
+            assert_eq!(model.storage_directory, previous);
+            assert_eq!(*offsets.lock().unwrap(), vec![0, 32]);
+            assert_eq!(std::fs::read(&original_full).unwrap(), bytes);
+            assert!(!original_full.with_extension("part").exists());
+            assert_eq!(std::fs::read_dir(&replacement).unwrap().count(), 0);
+            if custom_origin {
+                assert!(!root.path().join("models").exists());
+            }
+        }
+    }
+    #[tokio::test]
+    async fn removing_custom_model_preserves_unrelated_files_and_default_model() {
+        let (root, store, entry, bytes) = fixture();
+        let destination = tempfile::tempdir().unwrap();
+        let selected = choose_directory(&store, destination.path());
+        let mut custom = inventory(&entry);
+        custom.storage_directory = Some(selected);
+        let cancel = Arc::new(AtomicBool::new(false));
+        install(
+            &store,
+            root.path(),
+            &entry,
+            &mut custom,
+            &cancel,
+            &Fake::new(bytes.clone()),
+        )
+        .await
+        .unwrap();
+        let mut default_entry = entry.clone();
+        default_entry.id = "default-fixture".into();
+        let mut default_bytes = bytes.clone();
+        default_bytes.push(0);
+        default_entry.bytes = default_bytes.len() as u64;
+        default_entry.sha256 = format!("{:x}", Sha256::digest(&default_bytes));
+        let mut default_model = inventory(&default_entry);
+        install(
+            &store,
+            root.path(),
+            &default_entry,
+            &mut default_model,
+            &cancel,
+            &Fake::new(default_bytes.clone()),
+        )
+        .await
+        .unwrap();
+        let full = destination.path().join(format!("{}.gguf", entry.sha256));
+        std::fs::write(full.with_extension("part"), b"stale partial").unwrap();
+        let unrelated = destination.path().join("사용자 자료.txt");
+        std::fs::write(&unrelated, b"keep this file").unwrap();
+        // Even an identically named artifact in the default folder is not this model's file.
+        let default_shadow = root.path().join(&custom.path);
+        std::fs::write(&default_shadow, b"other default artifact").unwrap();
+        remove(store.clone(), root.path().into(), custom.id.clone(), true)
+            .await
+            .unwrap();
+        assert!(!full.exists());
+        assert!(!full.with_extension("part").exists());
+        assert_eq!(std::fs::read(&unrelated).unwrap(), b"keep this file");
+        assert_eq!(
+            std::fs::read(&default_shadow).unwrap(),
+            b"other default artifact"
+        );
+        assert_eq!(
+            std::fs::read(root.path().join(&default_model.path)).unwrap(),
+            default_bytes
+        );
+        let store = store.lock().unwrap();
+        assert!(store.ai_model(&custom.id).unwrap().is_none());
+        assert_eq!(
+            store.ai_model(&default_model.id).unwrap().unwrap().status,
+            "installed"
+        );
+        assert!(destination.path().is_dir());
+    }
+    #[tokio::test]
+    async fn missing_custom_directory_never_redirects_install_or_remove_to_default() {
+        let (root, store, entry, bytes) = fixture();
+        let destinations = tempfile::tempdir().unwrap();
+        let original = destinations.path().join("선택한 폴더");
+        let retained = destinations.path().join("원본 보존 폴더");
+        std::fs::create_dir(&original).unwrap();
+        let mut model = inventory(&entry);
+        model.storage_directory = Some(choose_directory(&store, &original));
+        let cancel = Arc::new(AtomicBool::new(false));
+        install(
+            &store,
+            root.path(),
+            &entry,
+            &mut model,
+            &cancel,
+            &Fake::new(bytes.clone()),
+        )
+        .await
+        .unwrap();
+        let filename = format!("{}.gguf", entry.sha256);
+        std::fs::write(
+            original.join(&filename).with_extension("part"),
+            b"keep partial",
+        )
+        .unwrap();
+        // Both directories are direct children of this test's temporary root.
+        std::fs::rename(&original, &retained).unwrap();
+        let default_file = managed_path(root.path(), &model.path).unwrap();
+        std::fs::write(&default_file, b"keep default").unwrap();
+        std::fs::write(default_file.with_extension("part"), b"keep default partial").unwrap();
+        assert!(super::super::model_storage::resolve_model_path(root.path(), &model).is_err());
+        let fake = Fake::new(bytes.clone());
+        assert!(
+            install(&store, root.path(), &entry, &mut model, &cancel, &fake)
+                .await
+                .is_err()
+        );
+        assert_eq!(fake.requests.load(Ordering::SeqCst), 0);
+        assert!(
+            remove(store.clone(), root.path().into(), model.id.clone(), true)
+                .await
+                .is_err()
+        );
+        assert!(!original.exists());
+        assert_eq!(std::fs::read(retained.join(&filename)).unwrap(), bytes);
+        assert_eq!(
+            std::fs::read(retained.join(&filename).with_extension("part")).unwrap(),
+            b"keep partial"
+        );
+        assert_eq!(std::fs::read(&default_file).unwrap(), b"keep default");
+        assert_eq!(
+            std::fs::read(default_file.with_extension("part")).unwrap(),
+            b"keep default partial"
+        );
+        let saved = store.lock().unwrap().ai_model(&model.id).unwrap().unwrap();
+        assert_eq!(saved.status, "installed");
+        assert_eq!(saved.storage_directory, model.storage_directory);
+        assert!(remove_with_policy(
+            store.clone(),
+            root.path().into(),
+            model.id.clone(),
+            false,
+            true
+        )
+        .await
+        .is_err());
+        remove_with_policy(
+            store.clone(),
+            root.path().into(),
+            model.id.clone(),
+            true,
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(store.lock().unwrap().ai_model(&model.id).unwrap().is_none());
+        assert_eq!(std::fs::read(retained.join(&filename)).unwrap(), bytes);
+        assert_eq!(std::fs::read(&default_file).unwrap(), b"keep default");
+        let replacement = destinations.path().join("새 설치 폴더");
+        std::fs::create_dir(&replacement).unwrap();
+        choose_directory(&store, &replacement);
+        let controller = Controller::default();
+        controller
+            .start_entry_with_transport(
+                store.clone(),
+                root.path().into(),
+                entry,
+                None,
+                Fake::new(bytes.clone()),
+            )
+            .unwrap();
+        controller.wait().await;
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .ai_model(&model.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "installed"
+        );
+        assert_eq!(std::fs::read(replacement.join(&filename)).unwrap(), bytes);
+        assert!(!original.exists());
     }
     #[test]
     fn catalog_provenance_and_destination_policy() {
@@ -1223,7 +1685,7 @@ mod tests {
         // ordinary tests must not start a real weight transfer.
         let unverified = catalog()
             .into_iter()
-            .find(|entry| entry.compatibility != "verified")
+            .find(|entry| !matches!(entry.compatibility.as_str(), "verified" | "available"))
             .expect("update admission test if all catalog entries become verified");
         assert!(c
             .start(store.clone(), dir.path().into(), unverified.id)
@@ -1242,6 +1704,105 @@ mod tests {
             .unwrap()
             .load(Ordering::Acquire));
     }
+    #[tokio::test]
+    async fn restored_external_model_reregisters_the_same_row_and_preserves_original_bytes() {
+        let (dir, store, entry, bytes) = fixture();
+        let custom = tempfile::tempdir().unwrap();
+        let path = custom.path().join(format!("{}.gguf", entry.sha256));
+        std::fs::write(&path, &bytes).unwrap();
+        let mut restored = inventory(&entry);
+        restored.ownership = "external".into();
+        restored.path = path.canonicalize().unwrap().to_str().unwrap().into();
+        restored.status = "missing".into();
+        restored.sha256 = Some(entry.sha256.clone());
+        restored.bytes = entry.bytes;
+        restored.error = Some("복원 후 다시 등록해 주세요.".into());
+        with_store(&store, |store| store.ai_upsert_model(&restored)).unwrap();
+
+        let registered = register(
+            store.clone(),
+            path.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(registered.id, entry.id);
+        assert_eq!(registered.ownership, "external");
+        assert_eq!(registered.status, "installed");
+        assert_eq!(registered.storage_directory, None);
+        assert_eq!(registered.catalog_id, Some(entry.id.clone()));
+        assert_eq!(registered.expected_sha256, Some(entry.sha256));
+        assert_eq!(registered.expected_bytes, Some(entry.bytes));
+        assert_eq!(registered.source_revision, Some(entry.revision));
+        assert_eq!(registered.source_filename, Some(entry.filename));
+        assert_eq!(registered.name, entry.name);
+        assert_eq!(registered.error, None);
+        assert_eq!(store.lock().unwrap().ai_models().unwrap().len(), 1);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        remove(store.clone(), dir.path().into(), registered.id, true)
+            .await
+            .unwrap();
+        assert!(store.lock().unwrap().ai_models().unwrap().is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    #[tokio::test]
+    async fn changed_restored_external_file_loses_catalog_provenance_after_verification() {
+        let (dir, store, entry, mut bytes) = fixture();
+        let path = dir.path().join("replaced.gguf");
+        std::fs::write(&path, &bytes).unwrap();
+        let mut restored = inventory(&entry);
+        restored.ownership = "external".into();
+        restored.path = path.canonicalize().unwrap().to_str().unwrap().into();
+        restored.status = "missing".into();
+        restored.sha256 = Some(entry.sha256.clone());
+        restored.bytes = entry.bytes;
+        with_store(&store, |store| store.ai_upsert_model(&restored)).unwrap();
+
+        // An unsupported replacement must leave the restored registration alone.
+        std::fs::write(&path, gguf("unsupported")).unwrap();
+        assert!(register(
+            store.clone(),
+            path.clone(),
+            Arc::new(AtomicBool::new(false))
+        )
+        .await
+        .is_err());
+        let unchanged = store.lock().unwrap().ai_model(&entry.id).unwrap().unwrap();
+        assert_eq!(unchanged.status, "missing");
+        assert_eq!(unchanged.sha256, Some(entry.sha256.clone()));
+
+        // Keep valid GGUF metadata and length, but change the verified identity.
+        bytes[100] ^= 1;
+        std::fs::write(&path, &bytes).unwrap();
+        let registered = register(
+            store.clone(),
+            path.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(registered.id, entry.id);
+        assert_eq!(
+            registered.sha256,
+            Some(format!("{:x}", Sha256::digest(&bytes)))
+        );
+        assert_ne!(registered.sha256, Some(entry.sha256));
+        assert_eq!(registered.catalog_id, None);
+        assert_eq!(registered.expected_sha256, None);
+        assert_eq!(registered.expected_bytes, None);
+        assert_eq!(registered.source_revision, None);
+        assert_eq!(registered.source_filename, None);
+        assert_eq!(registered.name, "replaced.gguf");
+        assert_eq!(registered.ownership, "external");
+        assert_eq!(registered.storage_directory, None);
+        assert_eq!(store.lock().unwrap().ai_models().unwrap().len(), 1);
+        remove(store.clone(), dir.path().into(), registered.id, true)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
     #[tokio::test]
     async fn external_registration_is_reference_only_and_never_deletes_bytes() {
         let (dir, store, _, bytes) = fixture();
@@ -1304,6 +1865,24 @@ mod tests {
         assert!(register(store, path, Arc::new(AtomicBool::new(false)))
             .await
             .is_err());
+    }
+    #[tokio::test]
+    async fn external_registration_accepts_uppercase_gguf_extension() {
+        let (dir, store, _, bytes) = fixture();
+        let path = dir.path().join("기존 모델.GGUF");
+        std::fs::write(&path, &bytes).unwrap();
+        let model = register(
+            store.clone(),
+            path.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(model.ownership, "external");
+        remove(store, dir.path().into(), model.id, true)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
     }
     #[tokio::test]
     async fn managed_delete_clears_files_but_rejects_active_and_path_escape() {
@@ -1454,6 +2033,92 @@ mod tests {
                 .status,
             "installed"
         );
+    }
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn locked_ancillary_file_does_not_delete_installed_weights() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (dir, store, entry, bytes) = fixture();
+        let mut model = inventory(&entry);
+        install(
+            &store,
+            dir.path(),
+            &entry,
+            &mut model,
+            &Arc::new(AtomicBool::new(false)),
+            &Fake::new(bytes.clone()),
+        )
+        .await
+        .unwrap();
+        let full = dir.path().join(&model.path);
+        let partial = full.with_extension("part");
+        std::fs::write(&partial, b"stale partial").unwrap();
+        // No sharing, including FILE_SHARE_DELETE: removal must fail until closed.
+        let locked = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&partial)
+            .unwrap();
+        let error = remove(store.clone(), dir.path().into(), model.id.clone(), true)
+            .await
+            .unwrap_err();
+        assert!(error.contains("권한"), "{error}");
+        assert_eq!(std::fs::read(&full).unwrap(), bytes);
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .ai_model(&model.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "installed"
+        );
+        drop(locked);
+        assert_eq!(std::fs::read(&partial).unwrap(), b"stale partial");
+        remove(store.clone(), dir.path().into(), model.id.clone(), true)
+            .await
+            .unwrap();
+        assert!(!full.exists());
+        assert!(!partial.exists());
+        assert!(store.lock().unwrap().ai_model(&model.id).unwrap().is_none());
+    }
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn locked_installed_file_restores_inventory_and_can_be_removed_after_unlock() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (dir, store, entry, bytes) = fixture();
+        let mut model = inventory(&entry);
+        install(
+            &store,
+            dir.path(),
+            &entry,
+            &mut model,
+            &Arc::new(AtomicBool::new(false)),
+            &Fake::new(bytes.clone()),
+        )
+        .await
+        .unwrap();
+        let full = dir.path().join(&model.path);
+        let locked = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&full)
+            .unwrap();
+        let error = remove(store.clone(), dir.path().into(), model.id.clone(), true)
+            .await
+            .unwrap_err();
+        assert!(error.contains("권한"), "{error}");
+        let saved = store.lock().unwrap().ai_model(&model.id).unwrap().unwrap();
+        assert_eq!(saved.status, "installed");
+        assert_eq!(saved.sha256, model.sha256);
+        drop(locked);
+        assert_eq!(std::fs::read(&full).unwrap(), bytes);
+        remove(store.clone(), dir.path().into(), model.id.clone(), true)
+            .await
+            .unwrap();
+        assert!(!full.exists());
+        assert!(store.lock().unwrap().ai_model(&model.id).unwrap().is_none());
     }
     #[tokio::test]
     async fn unavailable_inventory_cannot_be_saved_before_unlink_preserves_weights() {
@@ -1645,6 +2310,211 @@ mod tests {
             std::fs::write(&path, bytes).unwrap();
             assert!(verify_file(&path, None, &AtomicBool::new(false)).is_err());
         }
+    }
+
+    /// Uses the production HTTPS transport and controller, observing only HTTP
+    /// status/range validators; no body or secret redirect URL is logged.
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "downloads pinned 2B GGUF; set RHYTHM_MODEL_RESUME_DIR to a new isolated directory under .build-tools"]
+    async fn real_curated_model_cancel_resume() {
+        #[derive(Clone, Debug)]
+        struct Observation {
+            offset: u64,
+            request_etag: Option<String>,
+            status: u16,
+            range: Option<String>,
+            response_etag: Option<String>,
+        }
+        #[derive(Clone, Default)]
+        struct ObservedHttps(Arc<Mutex<Vec<Observation>>>);
+        impl Transport for ObservedHttps {
+            async fn response(
+                &self,
+                entry: &CatalogEntry,
+                offset: u64,
+                etag: Option<&str>,
+                cancel: &AtomicBool,
+            ) -> Result<DownloadResponse, String> {
+                let response = HttpsTransport.response(entry, offset, etag, cancel).await?;
+                self.0.lock().unwrap().push(Observation {
+                    offset,
+                    request_etag: etag.map(str::to_owned),
+                    status: response.status,
+                    range: response.range.clone(),
+                    response_etag: response.etag.clone(),
+                });
+                // A full response would redownload the already received prefix.
+                // Fail before reading its body; never call that a successful resume.
+                if offset > 0 && response.status != 206 {
+                    return Err(format!(
+                        "resume server returned HTTP {}, not 206",
+                        response.status
+                    ));
+                }
+                Ok(response)
+            }
+        }
+
+        let supplied = PathBuf::from(
+            std::env::var_os("RHYTHM_MODEL_RESUME_DIR").expect("set RHYTHM_MODEL_RESUME_DIR"),
+        );
+        assert!(supplied.is_absolute(), "resume directory must be absolute");
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
+        let safe_base = workspace
+            .join(".build-tools")
+            .canonicalize()
+            .expect("isolated .build-tools directory");
+        let parent = supplied
+            .parent()
+            .expect("resume directory parent")
+            .canonicalize()
+            .expect("create the resume directory's parent first");
+        assert!(
+            parent.starts_with(&safe_base),
+            "resume directory must be inside the isolated .build-tools directory"
+        );
+        if !supplied.exists() {
+            std::fs::create_dir(&supplied).expect("create isolated resume directory");
+        }
+        let root = supplied.canonicalize().expect("resolve resume directory");
+        assert!(
+            root.starts_with(&safe_base) && root != safe_base,
+            "invalid isolated resume directory"
+        );
+        assert!(
+            std::fs::read_dir(&root)
+                .expect("read resume directory")
+                .next()
+                .is_none(),
+            "resume directory must be new and empty; existing files are never removed"
+        );
+
+        let entry = catalog()
+            .into_iter()
+            .find(|entry| entry.id == "qwen35-2b")
+            .unwrap();
+        let store = Arc::new(Mutex::new(
+            Store::open(&root.join("rhythm.sqlite3")).unwrap(),
+        ));
+        let manager = Controller::default();
+        let observer = ObservedHttps::default();
+        let partial = root.join("models").join(format!("{}.part", entry.sha256));
+        manager
+            .start_entry_with_transport(
+                store.clone(),
+                root.clone(),
+                entry.clone(),
+                None,
+                observer.clone(),
+            )
+            .unwrap();
+        let progress = tokio::time::timeout(Duration::from_secs(180), async {
+            loop {
+                let bytes = std::fs::metadata(&partial)
+                    .map(|metadata| metadata.len())
+                    .unwrap_or(0);
+                if bytes >= 1024 * 1024 {
+                    return Ok(bytes);
+                }
+                if !manager.busy() {
+                    return Err("download ended before a partial file could be cancelled");
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        // Cancel even if progress times out or the download fails, and wait for
+        // buffered writes and status persistence before inspecting the artifact.
+        manager.cancel();
+        tokio::time::timeout(Duration::from_secs(60), manager.wait())
+            .await
+            .expect("cancelled download did not finish cleanup");
+        let observed_before_cancel = progress
+            .expect("timed out waiting for download progress")
+            .expect("first download failed or completed before cancellation");
+        let size = std::fs::metadata(&partial)
+            .expect("cancelled partial file")
+            .len();
+        assert!(
+            size >= observed_before_cancel && size > 0 && size < entry.bytes,
+            "partial download is not resumable"
+        );
+        let cancelled_model = store.lock().unwrap().ai_model(&entry.id).unwrap().unwrap();
+        assert_eq!(
+            cancelled_model.status, "cancelled",
+            "{:?}",
+            cancelled_model.error
+        );
+        let etag = cancelled_model
+            .resume_etag
+            .as_deref()
+            .filter(|etag| strong_etag(etag))
+            .expect("server did not supply a strong ETag; refusing a full restart")
+            .to_owned();
+        eprintln!(
+            "cancelled after {size} of {} bytes; strong ETag recorded",
+            entry.bytes
+        );
+
+        manager
+            .start_entry_with_transport(
+                store.clone(),
+                root.clone(),
+                entry.clone(),
+                None,
+                observer.clone(),
+            )
+            .unwrap();
+        if tokio::time::timeout(Duration::from_secs(3600), manager.wait())
+            .await
+            .is_err()
+        {
+            manager.cancel();
+            tokio::time::timeout(Duration::from_secs(60), manager.wait())
+                .await
+                .expect("resumed download did not stop");
+            panic!("resumed download exceeded one hour");
+        }
+        let completed = store.lock().unwrap().ai_model(&entry.id).unwrap().unwrap();
+        assert_eq!(completed.status, "installed", "{:?}", completed.error);
+        let observations = observer.0.lock().unwrap().clone();
+        assert_eq!(
+            observations.len(),
+            2,
+            "expected one initial and one resumed HTTP response: {observations:?}"
+        );
+        assert_eq!((observations[0].offset, observations[0].status), (0, 200));
+        let resumed = &observations[1];
+        assert_eq!(
+            resumed.offset, size,
+            "request must start at the verified partial size"
+        );
+        assert_eq!(resumed.status, 206);
+        assert_eq!(resumed.request_etag.as_deref(), Some(etag.as_str()));
+        assert_eq!(resumed.response_etag.as_deref(), Some(etag.as_str()));
+        let expected_range = format!("bytes {size}-{}/{}", entry.bytes - 1, entry.bytes);
+        assert_eq!(resumed.range.as_deref(), Some(expected_range.as_str()));
+        let file = root.join(&completed.path);
+        let (hash, bytes) = verify_file(
+            &file,
+            Some((&entry.sha256, entry.bytes)),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!((hash.as_str(), bytes), (entry.sha256.as_str(), entry.bytes));
+        assert!(
+            !partial.exists(),
+            "finalization must remove the partial file"
+        );
+        eprintln!(
+            "verified HTTP 206 resume from {size} bytes; final {} bytes SHA-256 {hash}",
+            entry.bytes
+        );
     }
     /// Downloads only a pinned catalog artifact, into isolated storage, with explicit operator opt-in.
     #[tokio::test]

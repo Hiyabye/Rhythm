@@ -103,6 +103,11 @@ export interface ProactiveSnapshot {
   pending_activation: ProactiveActivation | null;
 }
 export type NotificationAuthorization = 'granted' | 'denied' | 'not_determined' | 'unknown' | 'unavailable';
+export type PlatformCapabilities = {
+  notifications: { available: boolean; reason: string | null };
+  restore: { available: boolean; reason: string | null };
+  updater: { available: boolean; reason: string | null };
+};
 export interface LifecycleStatus {
   close_to_background: boolean;
   start_hidden: boolean;
@@ -201,10 +206,11 @@ export interface CatalogEntry {
   id: string; name: string; parameters: string; quantization: string;
   bytes: number; memory_bytes: number; description: string; use_case: string;
   repository: string; revision: string; filename: string; sha256: string; license: string;
-  compatibility: 'verified' | 'experimental' | 'unsupported'; reason: string | null;
+  compatibility: 'verified' | 'available' | 'experimental' | 'unsupported'; reason: string | null;
 }
 export interface AiModel {
   id: string; catalog_id: string | null; name: string; ownership: 'managed' | 'external'; path: string;
+  storage_directory?: string | null;
   sha256: string | null; expected_sha256: string | null; expected_bytes: number | null; bytes: number;
   source_revision: string | null; source_filename: string | null; status: string;
   downloaded_bytes: number; resume_etag: string | null; error: string | null; created_at: string; updated_at: string;
@@ -212,6 +218,8 @@ export interface AiModel {
 export interface AiPreferences {
   active_model_id: string | null; setup_completed: boolean; processing_mode: 'explicit' | 'recent';
   automatic_limit: number; max_tokens: number;
+  execution_mode: 'auto' | 'cpu' | 'gpu';
+  model_directory: string | null;
 }
 export interface AnalysisKey {
   document_id: number; revision_id: number; task: string; model_sha256: string;
@@ -230,7 +238,7 @@ export interface Analysis {
   uncertainty: 'clear' | 'ambiguous' | 'unknown'; facts: AnalysisFact[];
 }
 export interface AiResult extends AnalysisKey {
-  id: number; job_id: number; model_identity: { name?: string; sha256?: string; max_tokens?: number }; result: Analysis;
+  id: number; job_id: number; model_identity: { name?: string; sha256?: string; max_tokens?: number; execution_mode?: string; runtime_policy?: string; loaded_backend?: string }; result: Analysis;
   partial: boolean; processed_chars: number; total_chars: number; duration_ms: number; created_at: string;
 }
 export interface AiOperation {
@@ -247,6 +255,7 @@ export interface AiDiagnostics {
 export interface AiSnapshot {
   catalog: CatalogEntry[]; models: AiModel[]; preferences: AiPreferences; jobs: AiJob[]; runtime: WorkerStatus;
   hardware: { os: string; arch: string; ram_bytes: number; disk_available_bytes: number; backend: string };
+  model_storage: { directory: string; custom: boolean; available_bytes: number | null; error: string | null };
   busy: boolean;
   operation?: AiOperation | null;
   progress?: AiDiagnostics | null;

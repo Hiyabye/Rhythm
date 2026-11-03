@@ -367,7 +367,7 @@ fn v3_upgrade_preserves_archive_settings_and_ai_data_and_imports_interests() {
             .unwrap(),
         "sogang_notices"
     );
-    assert_eq!(store.info().unwrap().schema_version, 6);
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
 
     store.personalization_reset().unwrap();
     assert_eq!(store.settings().unwrap().interests, "");

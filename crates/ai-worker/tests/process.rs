@@ -4,6 +4,22 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+const HAS_INFERENCE: bool = cfg!(any(feature = "inference", feature = "gpu-inference"));
+const EXPECTED_ENGINE: &str = if cfg!(feature = "gpu-inference") {
+    "llama.cpp"
+} else {
+    "mistral.rs"
+};
+const EXPECTED_BACKEND: &str = if cfg!(feature = "gpu-inference") {
+    "vulkan"
+} else if cfg!(feature = "cuda") {
+    "cuda"
+} else if cfg!(feature = "metal") {
+    "metal"
+} else {
+    "cpu"
+};
+
 fn capture_pipe(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -96,17 +112,11 @@ fn executable_protocol_survives_bad_requests_and_exits_cleanly() {
     assert_eq!(responses[0]["ok"], false);
     assert_eq!(responses[0]["id"], 0);
     assert_eq!(responses[1]["result"]["healthy"], true);
-    assert_eq!(responses[2]["result"]["engine"], "mistral.rs");
+    assert_eq!(responses[2]["result"]["engine"], EXPECTED_ENGINE);
     assert_eq!(responses[2]["result"]["model"], Value::Null);
     assert_eq!(responses[2]["result"]["loaded_backend"], Value::Null);
-    assert_eq!(
-        responses[2]["result"]["analysis_json_v1"],
-        cfg!(feature = "inference")
-    );
-    assert!(matches!(
-        responses[2]["result"]["build_backend"].as_str(),
-        Some("cpu" | "metal" | "cuda")
-    ));
+    assert_eq!(responses[2]["result"]["analysis_json_v1"], HAS_INFERENCE);
+    assert_eq!(responses[2]["result"]["build_backend"], EXPECTED_BACKEND);
     assert_eq!(responses[3]["ok"], false);
     assert_eq!(responses[4]["ok"], false);
     assert_eq!(responses[5]["result"]["shutdown"], true);
@@ -144,10 +154,7 @@ fn analysis_mode_capability_and_invalid_mode_preserve_protocol_framing() {
         assert_eq!(response["version"], 1);
         assert_eq!(response["id"], index + 1);
     }
-    assert_eq!(
-        responses[0]["result"]["analysis_json_v1"],
-        cfg!(feature = "inference")
-    );
+    assert_eq!(responses[0]["result"]["analysis_json_v1"], HAS_INFERENCE);
     assert!(responses[1]["error"]
         .as_str()
         .unwrap()
@@ -168,10 +175,7 @@ fn analysis_mode_capability_and_invalid_mode_preserve_protocol_framing() {
             .contains("요청 형식"),
         "ordinary legacy parameters must remain accepted"
     );
-    assert_eq!(
-        responses[4]["result"]["analysis_json_v1"],
-        cfg!(feature = "inference")
-    );
+    assert_eq!(responses[4]["result"]["analysis_json_v1"], HAS_INFERENCE);
     assert_eq!(responses[4]["result"]["model"], Value::Null);
     assert_eq!(responses[5]["result"]["shutdown"], true);
 }
@@ -202,7 +206,10 @@ fn actual_local_inference() {
         writeln!(input, "{request}").unwrap();
     }
     drop(input);
-    let output = wait_with_deadline(child, Duration::from_secs(180));
+    // The real CPU test includes a cold load and two generations. Keep the
+    // lifecycle-only tests' short deadlines; allow this explicit opt-in run a
+    // bounded longer window appropriate to the production inference deadlines.
+    let output = wait_with_deadline(child, Duration::from_secs(1260));
     assert!(output.status.success());
     let output = String::from_utf8(output.stdout).unwrap();
     let responses: Vec<Value> = output
@@ -238,9 +245,21 @@ fn actual_local_inference() {
         assert!(result["usage"]["avg_compl_tok_per_sec"].as_f64().unwrap() >= 0.0);
     }
     let backend = responses[0]["result"]["loaded_backend"].as_str().unwrap();
-    assert!(matches!(backend, "cpu" | "metal" | "cuda" | "unknown"));
-    if !cfg!(any(feature = "metal", feature = "cuda")) {
-        assert_eq!(backend, "cpu");
+    // mistral.rs retries once on CPU after a failed Metal/CUDA load, and the
+    // loaded backend reports that honestly; GPU and CPU builds never fall back.
+    if cfg!(any(feature = "metal", feature = "cuda")) {
+        assert!(matches!(backend, "cpu" | "metal" | "cuda" | "unknown"));
+    } else {
+        assert_eq!(backend, EXPECTED_BACKEND);
+    }
+    #[cfg(feature = "gpu-inference")]
+    {
+        assert!(responses[0]["result"]["gpu_layers"].as_u64().unwrap() > 0);
+        assert!(responses[0]["result"]["gpu_device"]
+            .as_str()
+            .unwrap()
+            .to_ascii_uppercase()
+            .contains("NVIDIA"));
     }
     assert_eq!(
         responses[0]["result"]["loaded_backend"],

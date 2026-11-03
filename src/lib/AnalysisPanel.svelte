@@ -94,7 +94,7 @@
   {#if processing}<div class="ai-operation"><p role="status">{progress ? (phaseLabel[progress.phase] ?? '로컬 AI 작업을 처리하고 있습니다') : job?.status === 'running' ? '이 기기에서 공지를 분석하고 있습니다…' : '다른 분석이 끝나기를 기다리고 있습니다…'}{#if progress}{' · 경과 '}{(progress.elapsed_ms / 1000).toFixed(0)}초{/if}</p><button class="text-button" disabled={submitting} onclick={cancel}>이 공지 분석 취소</button></div>{/if}
   {#if current}
     <div class="ai-caution ai-limits" role="note"><strong>AI가 만든 참고용 정리입니다.</strong> 요약, 분류와 일정은 틀리거나 빠질 수 있습니다. 첨부 파일과 이미지의 내용은 분석하지 않았습니다. 신청 조건과 마감은 아래 원문에서 직접 확인하세요.</div>
-    <div class="ai-analysis-meta"><span class="ai-tag">AI 분류 · {current.result.category}</span><span>저장된 분석 · {current.model_identity.name ?? '로컬 모델'}</span>{#if current.result.uncertainty !== 'clear'}<span>해석이 불확실할 수 있음</span>{/if}</div>
+    <div class="ai-analysis-meta"><span class="ai-tag">AI 분류 · {current.result.category}</span><span>저장된 분석 · {current.model_identity.name ?? '로컬 모델'}</span>{#if current.model_identity.loaded_backend}<span>분석 당시 장치 · {current.model_identity.loaded_backend === 'vulkan' ? 'NVIDIA GPU (Vulkan)' : current.model_identity.loaded_backend.toUpperCase()}</span>{/if}{#if current.result.uncertainty !== 'clear'}<span>해석이 불확실할 수 있음</span>{/if}</div>
     {#if outdated}<p class="ai-caution">이 결과는 현재 모델 또는 분석 방식·설정과 다릅니다. 기존 결과를 그대로 읽거나 다시 생성할 수 있습니다.</p>{/if}
     {#if current.partial}<p class="ai-caution" role="note">긴 공지의 일부만 분석했습니다 ({current.processed_chars.toLocaleString('ko-KR')} / {current.total_chars.toLocaleString('ko-KR')}자). 일부 구간의 일정이나 조건이 빠졌을 수 있습니다. 원문 전체를 확인하세요.</p>{/if}
     <p class="ai-short-summary">{current.result.short_summary}</p><p class="ai-summary">{current.result.summary}</p>

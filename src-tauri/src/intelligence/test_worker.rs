@@ -1,11 +1,8 @@
 //! Controlled worker executables for process-boundary tests.
 //!
-//! macOS evaluates every newly created executable on its first launch and holds
-//! the process before its first instruction until that check finishes. When
-//! several just-compiled binaries started at once, that hold exceeded the
-//! worker's 8-second status deadline even though no protocol code had run.
-//! Each fixture is therefore compiled once per test process from fixed source
-//! and launched once here, outside any protocol deadline, before tests use it.
+//! Each fixture is compiled once per test process from fixed source and launched
+//! once before timed protocol requests. This separates executable startup from
+//! the request deadline, including on machines with slow security scanning.
 
 use std::{
     path::{Path, PathBuf},

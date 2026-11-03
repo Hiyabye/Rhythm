@@ -137,6 +137,7 @@ pub(super) fn digest_text(items: &[DeliveryItem]) -> Option<(String, String)> {
     Some((title, body))
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub(super) fn activation_for_items(items: &[DeliveryItem]) -> Option<NotificationActivation> {
     let first = items.first()?;
     Some(NotificationActivation {
