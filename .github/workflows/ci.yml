@@ -68,7 +68,7 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
-  # The desktop/windows job IDs and Cargo/CMake env must stay in step with
+  # The desktop/windows job IDs and Cargo env must stay in step with
   # release.yml, which restores the rust-cache these jobs save on main.
   # A packaging-only change also runs clippy and tests; it is rare and main-only.
   desktop:
@@ -124,9 +124,6 @@ jobs:
       CARGO_BUILD_JOBS: 4
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
-      CMAKE_BUILD_PARALLEL_LEVEL: 4
-      LLAMA_BUILD_SHARED_LIBS: 0
-      CMAKE_GENERATOR: Ninja
     defaults:
       run:
         shell: pwsh

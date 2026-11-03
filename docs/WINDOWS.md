@@ -13,16 +13,9 @@ Rhythm supports Windows 11 x64 alongside macOS Apple Silicon. The port came from
 
 - Windows 11 x64, Node.js 22.12+ and npm, Microsoft Edge WebView2 Runtime, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 - Visual Studio Build Tools with x64 MSVC and the Windows 11 SDK (observed: Build Tools 17.14.44, MSVC 14.44.35207, SDK 10.0.26100.0).
-- Stable Rust `x86_64-pc-windows-msvc`. Workspace builds still compile the former worker crate, whose locked mistral.rs needs Rust 1.94+.
+- Stable Rust `x86_64-pc-windows-msvc`, 1.90+.
 - No Vulkan SDK, LLVM or CMake: `scripts/stage-llama.mjs` downloads the pinned llama.cpp builds (network access) and checks their size and SHA-256.
 - Roughly 10 GiB free on C: and 30 GiB on D:. Dependencies, model weights and build outputs add more.
-
-CI's `.github/actions/windows-build-tools` still installs these pinned tools, which only the former GPU worker used:
-
-| File | SHA-256 |
-| --- | --- |
-| [Vulkan SDK 1.4.363.0](https://sdk.lunarg.com/sdk/download/1.4.363.0/windows/vulkansdk-windows-X64-1.4.363.0.exe) | `94a82d378f7a5e3e54c9db7d2fb7016af136e14ac0a18dbf0f2f67a36352d141` |
-| [LLVM 20.1.8](https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/LLVM-20.1.8-win64.exe) | `3197846a2b19063687dd56e93e34cd941e3548d907f23a6131571321bdf9fe7b` |
 
 ### Project-local toolchain (optional)
 

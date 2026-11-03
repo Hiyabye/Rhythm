@@ -23,10 +23,12 @@ test('the tag release workflow creates a draft from distribution files only', ()
   assert.doesNotMatch(workflow, /RHYTHM_AI_BACKEND|metaltoolchain|target-gpu/);
 });
 
-test('CI and the release share the pinned Windows build tools', () => {
+test('CI and the release share the Windows build tools, which install no GPU toolchain', () => {
   for (const path of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
     const workflow = read(path);
     assert.match(workflow, /uses: \.\/\.github\/actions\/windows-build-tools/, path);
-    assert.doesNotMatch(workflow, /vulkansdk-windows|LLVM-.*-win64/, path);
+    assert.doesNotMatch(workflow, /vulkansdk-windows|LLVM-.*-win64|CMAKE_|crates\/ai-worker/, path);
   }
+  assert.doesNotMatch(read('.github/actions/windows-build-tools/action.yml'), /vulkan|llvm|libclang|ninja/i);
+  assert.doesNotMatch(read('.github/workflows/release-draft.yml'), /crates\/ai-worker/);
 });

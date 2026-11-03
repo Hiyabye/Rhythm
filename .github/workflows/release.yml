@@ -58,9 +58,8 @@ jobs:
           const packageLock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8')).version;
           const tauri = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8')).version;
           const cargo = fs.readFileSync('src-tauri/Cargo.toml', 'utf8').match(/^version\s*=\s*"([^"]+)"/m)?.[1];
-          const worker = fs.readFileSync('crates/ai-worker/Cargo.toml', 'utf8').match(/^version\s*=\s*"([^"]+)"/m)?.[1];
-          if (packageLock !== pkg || tauri !== pkg || cargo !== pkg || worker !== pkg || tag !== `v${pkg}`) {
-            throw new Error(`Tag/version mismatch: tag=${tag}, package=${pkg}, lock=${packageLock}, tauri=${tauri}, rhythm=${cargo}, worker=${worker}`);
+          if (packageLock !== pkg || tauri !== pkg || cargo !== pkg || tag !== `v${pkg}`) {
+            throw new Error(`Tag/version mismatch: tag=${tag}, package=${pkg}, lock=${packageLock}, tauri=${tauri}, rhythm=${cargo}`);
           }
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${pkg}\n`);
           console.log(`Validated ${tag}`);
@@ -75,7 +74,7 @@ jobs:
             exit 1
           fi
 
-  # Job IDs and Cargo/CMake environment match ci.yml so rust-cache can restore
+  # Job IDs and Cargo environment match ci.yml so rust-cache can restore
   # the release build that main's CI run saved. Tag runs never save a cache.
   desktop:
     name: macOS Apple Silicon DMG
@@ -122,9 +121,6 @@ jobs:
       CARGO_BUILD_JOBS: 4
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
-      CMAKE_BUILD_PARALLEL_LEVEL: 4
-      LLAMA_BUILD_SHARED_LIBS: 0
-      CMAKE_GENERATOR: Ninja
     defaults:
       run:
         shell: pwsh
