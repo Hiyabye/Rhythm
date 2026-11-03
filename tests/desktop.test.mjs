@@ -96,6 +96,14 @@ test('explicit CPU override skips the Metal probe; unsupported backends fail', o
 test('Metal override is rejected on Intel macOS', options, () => {
   assert.match(build({ arch: 'x64', override: 'metal' }).stderr, /requires Apple Silicon/);
 });
+test('explicit Metal override fails instead of building a CPU worker without the toolchain', options, () => {
+  const missing = build({ override: 'metal', available: false, argv: ['build'] });
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /requires the Metal Toolchain/);
+  const present = build({ override: 'metal' });
+  assert.equal(present.status, 0, present.stderr);
+  assert.deepEqual(present.calls.find(([command]) => command === 'cargo'), ['cargo', 'build', '--locked', '-p', 'rhythm-ai-worker', '--features', 'metal']);
+});
 test('release builds remap local source paths for both Cargo invocations', options, () => {
   const result = build({ argv: ['build'] });
   assert.equal(result.status, 0, result.stderr);
