@@ -4,11 +4,14 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { verifyArtifact, verifyManifest } from '../scripts/verify-update.mjs';
 
 // Signatures are produced by the official Tauri signer with disposable keys that exist only in
 // a temporary directory; the verifier under test is independent of that implementation.
-const tauri = new URL('../node_modules/.bin/tauri', import.meta.url).pathname;
+// Invoke the JS entry point directly so Windows needs neither a POSIX shim nor
+// shell quoting, and URL-escaped checkout paths are decoded on every host.
+const tauri = fileURLToPath(new URL('../node_modules/@tauri-apps/cli/tauri.js', import.meta.url));
 const repo = 'Hiyabye/Rhythm';
 const version = '9.9.9';
 const tag = `v${version}`;
@@ -18,13 +21,13 @@ let publicKey;
 let otherPublicKey;
 
 function generate(name) {
-  execFileSync(tauri, ['signer', 'generate', '--ci', '-p', 'disposable', '-w', join(root, name), '-f'], { stdio: 'ignore' });
+  execFileSync(process.execPath, [tauri, 'signer', 'generate', '--ci', '-p', 'disposable', '-w', join(root, name), '-f'], { stdio: 'ignore', windowsHide: true });
   return readFileSync(join(root, `${name}.pub`), 'utf8').trim();
 }
 
 function sign(key, file, appVersion = version) {
-  const result = spawnSync(tauri, ['signer', 'sign', '-f', join(root, key), '--app-version', appVersion, file], {
-    env: { ...process.env, TAURI_SIGNING_PRIVATE_KEY_PASSWORD: 'disposable' }, encoding: 'utf8',
+  const result = spawnSync(process.execPath, [tauri, 'signer', 'sign', '-f', join(root, key), '--app-version', appVersion, file], {
+    env: { ...process.env, TAURI_SIGNING_PRIVATE_KEY_PASSWORD: 'disposable' }, encoding: 'utf8', windowsHide: true,
   });
   assert.equal(result.status, 0, result.stderr);
   return readFileSync(`${file}.sig`, 'utf8').trim();
