@@ -6,6 +6,10 @@ rust-version = "1.90"
 license = "MIT"
 description = "Local-first personal command center"
 
+# Used only by build.rs, which cargo-machete does not scan.
+[package.metadata.cargo-machete]
+ignored = ["tauri-build"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
