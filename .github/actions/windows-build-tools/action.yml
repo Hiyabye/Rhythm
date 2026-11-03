@@ -1,0 +1,57 @@
+name: Windows build tools
+description: MSVC and Ninja environment plus the pinned Vulkan SDK and libclang used by both Windows AI workers.
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare MSVC and Ninja environment
+      shell: pwsh
+      run: |
+        $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+        $vsPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        if (-not $vsPath) { throw 'Visual Studio C++ tools are missing' }
+        $before = @($env:PATH -split ';' | Where-Object { $_ })
+        Import-Module (Join-Path $vsPath 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')
+        Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+        $ninjaPath = Join-Path $vsPath 'Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja'
+        if (-not (Test-Path -LiteralPath (Join-Path $ninjaPath 'ninja.exe'))) { throw 'Ninja is missing' }
+        foreach ($name in @('INCLUDE','LIB','LIBPATH','VCINSTALLDIR','VCToolsInstallDir','VCToolsRedistDir','WindowsSdkDir','WindowsSDKVersion','WindowsLibPath')) {
+          $value = [Environment]::GetEnvironmentVariable($name)
+          if ($value) { "$name=$value" >> $env:GITHUB_ENV }
+        }
+        # Export only directories the dev shell added. Re-adding the runner's
+        # whole PATH put Git's usr/bin (a Unix `link`) ahead of MSVC link.exe.
+        # Each GITHUB_PATH line is prepended, so write them in reverse order.
+        $added = @($env:PATH -split ';' | Where-Object { $_ -and $before -notcontains $_ })
+        [array]::Reverse($added)
+        $added | ForEach-Object { $_ >> $env:GITHUB_PATH }
+        $ninjaPath >> $env:GITHUB_PATH
+    - name: Prepare pinned Vulkan and libclang build tools
+      shell: pwsh
+      run: |
+        $toolsRoot = Join-Path $env:RUNNER_TEMP 'rhythm-gpu-tools'
+        New-Item -ItemType Directory -Force $toolsRoot | Out-Null
+        $sdkInstaller = Join-Path $toolsRoot 'vulkan-sdk.exe'
+        $llvmInstaller = Join-Path $toolsRoot 'llvm.exe'
+        Invoke-WebRequest 'https://sdk.lunarg.com/sdk/download/1.4.363.0/windows/vulkansdk-windows-X64-1.4.363.0.exe' -OutFile $sdkInstaller
+        Invoke-WebRequest 'https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/LLVM-20.1.8-win64.exe' -OutFile $llvmInstaller
+        if ((Get-FileHash $sdkInstaller -Algorithm SHA256).Hash -ne '94A82D378F7A5E3E54C9DB7D2FB7016AF136E14AC0A18DBF0F2F67A36352D141') { throw 'Vulkan SDK checksum mismatch' }
+        if ((Get-FileHash $llvmInstaller -Algorithm SHA256).Hash -ne '3197846A2B19063687DD56E93E34CD941E3548D907F23A6131571321BDF9FE7B') { throw 'LLVM checksum mismatch' }
+        $sdkPath = Join-Path $toolsRoot 'vulkan'
+        $llvmPath = Join-Path $toolsRoot 'llvm'
+        # Hosted runners need the Vulkan loader for protocol tests even with no GPU.
+        # Local development can use copy_only=1 with its existing NVIDIA driver;
+        # this disposable CI machine uses the normal SDK/runtime installation.
+        $sdkProcess = Start-Process -FilePath $sdkInstaller -ArgumentList @('--root', $sdkPath, '--accept-licenses', '--default-answer', '--confirm-command', 'install') -WindowStyle Hidden -Wait -PassThru
+        if ($sdkProcess.ExitCode -ne 0) { throw "Vulkan SDK preparation failed ($($sdkProcess.ExitCode))" }
+        $llvmProcess = Start-Process -FilePath $llvmInstaller -ArgumentList @('/S', "/D=$llvmPath") -WindowStyle Hidden -Wait -PassThru
+        if ($llvmProcess.ExitCode -ne 0) { throw "LLVM preparation failed ($($llvmProcess.ExitCode))" }
+        foreach ($required in @("$sdkPath/Bin/glslc.exe", "$sdkPath/Lib/vulkan-1.lib", "$llvmPath/bin/libclang.dll")) {
+          if (-not (Test-Path -LiteralPath $required)) { throw "Missing GPU build tool: $required" }
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $env:WINDIR 'System32/vulkan-1.dll'))) {
+          throw 'Vulkan loader is missing; GPU process tests cannot run on this runner.'
+        }
+        "VULKAN_SDK=$sdkPath" >> $env:GITHUB_ENV
+        "LIBCLANG_PATH=$llvmPath/bin" >> $env:GITHUB_ENV
+        "$sdkPath/Bin" >> $env:GITHUB_PATH
