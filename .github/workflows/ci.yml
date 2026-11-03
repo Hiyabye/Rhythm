@@ -37,6 +37,8 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
     defaults:
       run:
         shell: bash
@@ -65,14 +67,18 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Test storage and worker lifecycle (no model weights)
         run: cargo test --locked --workspace
+      # Release builds take most of the job, so pull requests skip them; main
+      # and manual runs still build the release executable.
       - name: Build native desktop executable
+        if: github.event_name != 'pull_request'
         run: npm run desktop:build -- --no-bundle
 
   windows:
     name: Windows 11 x64 desktop
     runs-on: windows-latest
     env:
-      CARGO_BUILD_JOBS: 2
+      # windows-latest has 4 vCPUs and 16 GB of memory.
+      CARGO_BUILD_JOBS: 4
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
       CMAKE_BUILD_PARALLEL_LEVEL: 2
@@ -174,6 +180,7 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
       - name: Build unsigned NSIS installer (no publish)
+        if: github.event_name != 'pull_request'
         run: |
           # Keep child scripts on the CI host with its matching PowerShell modules.
           $env:RHYTHM_POWERSHELL = Join-Path $PSHOME 'pwsh.exe'
