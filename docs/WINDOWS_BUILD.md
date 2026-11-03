@@ -51,6 +51,19 @@ npm run desktop:build
 
 설치 도구 캐시는 `bundle.useLocalToolsDir` 설정으로 Cargo 산출물 폴더 아래 `.tauri`에 둡니다. 여러 PC에서 사용할 빌드이므로 `target-cpu=native`나 CPU 기능을 강제로 켜는 개발용 환경 설정을 추가하지 마세요. 첫 CPU AI 엔진 빌드는 많은 메모리와 시간이 필요하므로 실제 모델 시험과 동시에 실행하지 않는 편이 좋습니다.
 
+## 복원 검사에 필요한 Windows 기능
+
+복원 검사는 실제 Cloud Files API로 시험 폴더가 동기화 루트 밖인지 확인합니다. 일반 PowerShell에서 프로젝트 환경을 불러온 뒤 다음 명령으로 현재 임시 폴더를 점검할 수 있습니다.
+
+```powershell
+. .\scripts\windows-env.ps1
+& .\scripts\prepare-windows-restore-ci.ps1 -CheckOnly
+```
+
+`-CheckOnly`는 새로 만든 빈 시험 폴더만 조회하고 삭제합니다. 드라이버나 시스템 설정은 바꾸지 않습니다. 정상적인 비동기화 폴더의 결과는 `0x80070186`이며, 다른 오류는 안전한 폴더라는 뜻으로 처리하지 않습니다. 제한된 실행 토큰에서는 접근 거부가 발생할 수 있으므로 오류의 HRESULT와 실행 환경을 함께 확인하세요.
+
+GitHub의 Windows Server 기반 호스팅 러너에서는 같은 검사를 빌드 전에 실행합니다. 필요하면 일회용 러너의 Cloud Files 필터(`CldFlt`)를 활성화·로드하고 시험 드라이브에 연결한 뒤 다시 조회합니다. 최종 조회가 실패하면 즉시 중단하며 복원 검사를 건너뛰지 않습니다. 이 준비 모드는 GitHub 호스팅 러너에서만 허용됩니다. Windows Server CI 결과는 Windows 11 설치본 사용 시험과 구분합니다.
+
 ## 설정 스크립트의 출처와 범위
 
 설치 스크립트는 Microsoft의 `https://aka.ms/vs/17/release/vs_BuildTools.exe`와 Rust의 `https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe`를 사용합니다. Rust의 SHA-256은 같은 공식 HTTPS 배포 위치에서 받습니다. Visual Studio의 서명 검사나 Rust의 체크섬이 실패하면 설치하지 않습니다. 인증서 신뢰 설정이나 보안 정책은 변경하지 않습니다.

@@ -1,6 +1,21 @@
 # Windows 11 x64 validation
 
-> Provenance: contributor-collected evidence from PR #1 (the Windows port) on the contributor's Windows 11 machine, when the app identifier was `app.rhythm.windows` (now the shared `io.github.hiyabye.rhythm`). It was not re-run after the merge into the dual-platform codebase; treat it as historical until new Windows evidence is recorded.
+> Provenance: the 0.9.x records below were collected for PR #1 with identifier `app.rhythm.windows`. The PR #2 automated-check record uses the dual-platform codebase and its shared `io.github.hiyabye.rhythm` identifier. Historical installed-app observations do not verify the newer build.
+
+## PR #2 local Windows backend checks — 2026-11-03
+
+Source: PR #2 head `509889d6bc60625e8d3a6662bacda4fb31f18e09` plus the restore CI preparation, HRESULT diagnostics and native path regression in this change. Environment: Windows 11 Home x64 build 26300, Rust/Cargo 1.99.1, MSVC 14.44.35207, SDK 10.0.26100.0, Node 22.23.2, Vulkan SDK 1.4.363.0 and LLVM 20.1.8. Caches, outputs and isolated test profiles were on D:. The installed app and its real profile were not used.
+
+| Check | Observed result | Boundary |
+| --- | --- | --- |
+| Cloud Files preflight | `scripts/prepare-windows-restore-ci.ps1 -CheckOnly` returned `0x80070186` for the local test temporary directory. The new native Rust test passed for Korean/space and canonical verbatim paths. | No local driver or system configuration changes. Restricted execution tokens can return access denied; unknown HRESULTs still refuse restoration. |
+| Formatting and static checks | `cargo fmt --all -- --check` and `cargo clippy --locked --workspace --all-targets -- -D warnings` passed; workspace Clippy took 2m 52s with caches. | Native Windows toolchain, not cross-compilation with stub tools. |
+| Full workspace tests | `cargo test --locked --workspace --no-fail-fast`: app **348 passed / 0 failed / 13 ignored** in 154.50s; CPU worker **10 unit + 4 process tests passed**, one actual-model test ignored. | The newly built CPU worker was set in `RHYTHM_WORKER_TEST_BIN`. All seven restore tests failing in the earlier hosted run passed locally, including process abort at each transition. Ignored tests are not passes; process abort is not power-loss validation. |
+| Separate GPU worker | The real Vulkan worker built; GPU Clippy with warnings denied passed; **14 unit + 4 process tests passed**, one actual-model test ignored. | These checks establish build/protocol behavior, not model inference or support across NVIDIA generations. |
+
+The [earlier hosted Windows job](https://github.com/Hiyabye/Rhythm/actions/runs/41456913518/job/125315807642) failed seven restore tests with a generic Cloud Files error and omitted the HRESULT. This local pass does not establish why that runner failed. The workflow now probes its actual temporary directory before expensive builds, prepares the disposable runner's `CldFlt` filter when necessary, and requires the same strict outside-sync-root result as the app. A hosted preflight result is still needed to confirm that environment repair.
+
+Local evidence is under `D:\Codex_Rhythm\.build-tools\validation\pr2-local`: `cloud-files-preflight.log`, `rust-results.json`, `rust-tests.log`, `gpu-clippy.log` and `gpu-tests.log`. This record does not establish a new installed-app, notification/login, real-model or second-PC acceptance result. JavaScript/browser test portability is a separate change.
 
 ## 0.9.4 model-folder feature addendum — 2026-11-02
 
