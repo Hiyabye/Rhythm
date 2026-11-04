@@ -52,7 +52,7 @@ Current information architecture (open to change in a redesign): 오늘 (ranked 
 - Lifecycle: close-to-background, login start, hidden login start, scheduler and notifications all default off. The automatic update check (builds with the updater key) defaults on by user decision; it only announces, and installing always needs confirmation.
 - Single-file `.rhythm-backup` backup/restore (unencrypted, excludes model weights). Restore quits the app and finalizes on the next manual launch.
 - Destructive actions require a confirmation that names what changes and what is kept.
-- Distribution: ad-hoc-signed macOS DMG (not notarized) and unsigned per-user Windows installer. These are deliberate choices, not gaps. Releases carry Tauri-updater-signed packages for in-app updates, which the user confirms before installing; the in-app install path is verified on macOS only under a validation identifier (Windows pending, #36), and builds without the key show manual steps.
+- Distribution: ad-hoc-signed macOS DMG (not notarized) and unsigned per-user Windows installer. These are deliberate choices, not gaps. Releases carry Tauri-updater-signed packages for in-app updates, which the user confirms before installing; the in-app install path is verified only under validation identifiers with a loopback manifest (one Mac, one Windows PC), and builds without the key show manual steps.
 - Frontend: Svelte 5 runes, TypeScript, Tailwind plus semantic CSS (`src/app.css`, `src/lib/ai.css`), Pretendard bundled locally (no font CDN). The Tauri webview cannot rely on remote assets.
 
 ## Brand Commitments
