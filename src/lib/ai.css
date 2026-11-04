@@ -1,38 +1,21 @@
-.ai-setup, .ai-analysis, .ai-confirm {
+.ai-analysis {
   padding: 20px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--surface);
 }
-.ai-setup { margin-bottom: 20px; }
-.ai-operation { padding: 14px 16px; margin: 16px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow-wrap: anywhere; }
-.ai-operation h3 { font-size: 13px; margin: 0 0 6px; }
-.ai-operation p { margin: 6px 0; }
-.ai-operation button { margin-top: 8px; }
-.ai-operation [role="status"] { color: var(--text); font-variant-numeric: tabular-nums; }
-.ai-setup p, .ai-model-option p, .ai-installed p, .ai-register p, .ai-analysis p { line-height: 1.8; font-size: 12px; }
+.ai-analysis p { line-height: 1.8; font-size: 12px; }
 .ai-setup-banner { flex-wrap: wrap; }
-.ai-model-option, .ai-installed { padding: 22px 0; border-bottom: 1px solid var(--line); min-width: 0; }
 .ai-model-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .ai-model-heading h3 { font-size: 14px; font-weight: 600; margin: 0; }
 .ai-model-heading h3 .muted { font-size: 11px; font-weight: 400; }
 .ai-tag { color: var(--secondary); font-size: 11px; line-height: 1.7; }
-.ai-model-option details, .ai-register, .ai-provenance { margin: 16px 0; font-size: 11px; color: var(--secondary); }
-.ai-model-option summary, .ai-register summary, .ai-provenance summary, .ai-facts summary { cursor: pointer; padding: 5px 0; }
-.ai-model-option code, .ai-installed code, .ai-provenance code { display: block; overflow-wrap: anywhere; font-size: 11px; line-height: 1.8; color: var(--secondary); }
+.ai-provenance { margin: 16px 0; font-size: 11px; color: var(--secondary); }
+.ai-provenance summary,.ai-facts summary { cursor: pointer; padding: 5px 0; }
+.ai-provenance code { display: block; overflow-wrap: anywhere; font-size: 11px; line-height: 1.8; color: var(--secondary); }
 .ai-feedback { min-height: 16px; margin-block: 10px; font-size: 11px; line-height: 1.7; color: var(--secondary); }
-.ai-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 18px; }
-.ai-confirm { margin-top: 14px; }
-.ai-confirm button { margin-right: 16px; }
-.ai-progress { display: grid; gap: 6px; margin: 16px 0 8px; font-size: 11px; color: var(--secondary); }
-.ai-progress progress { width: 100%; height: 7px; accent-color: var(--accent); }
-.ai-subheading { font-size: 14px; margin: 26px 0 10px; }
-.ai-register input, #ai-processing input, #ai-processing select, .ai-provenance select { box-sizing: border-box; max-width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 12px; }
-.ai-register input { width: 100%; margin-bottom: 14px; }
-#ai-processing .field-label { display: block; margin-top: 18px; }
-.ai-queue, .ai-recent ul, .ai-facts { list-style: none; padding: 0; margin: 0; }
-.ai-queue li { display: flex; justify-content: space-between; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
-.ai-queue li strong { margin-right: 14px; }
+.ai-provenance select { box-sizing: border-box; max-width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 12px; }
+.ai-recent ul,.ai-facts { list-style: none; padding: 0; margin: 0; }
 .ai-analysis { margin: 26px 0; min-width: 0; overflow-wrap: anywhere; }
 .ai-analysis-meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--secondary); margin: 18px 0; }
 .ai-analysis .ai-short-summary { font-size: 14px; font-weight: 550; }
@@ -59,5 +42,4 @@
   .ai-setup-banner { align-items: flex-start; }
   .ai-setup-banner > div { flex-basis: 80%; }
   .ai-model-heading { align-items: flex-start; }
-  .ai-queue li { flex-wrap: wrap; }
 }

@@ -1,20 +1,16 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { mockDesktop, callCount, answerDialogs, dialogMessages } from './fixture';
+import { mockDesktop, callCount, answerDialogs, dialogMessages, openSettings } from './fixture';
 
 type FixtureWindow = Window & { __fixture: { calls: { command: string; args: Record<string, unknown> }[] } };
 
-async function openSettings(page: Page) {
-  await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name: '설정', exact: true }).click();
-}
-
 async function openBackup(page: Page) {
-  await openSettings(page);
+  await openSettings(page, '데이터 및 정보');
   return page.locator('#data-backup');
 }
 
 async function openUpdater(page: Page) {
-  await openSettings(page);
+  await openSettings(page, '데이터 및 정보');
   return page.locator('#about');
 }
 
@@ -29,9 +25,10 @@ test('backup restore inspects selected file before confirmation and only invokes
 
   await backup.getByRole('button', { name: '백업 파일 선택', exact: true }).click();
   await expect(backup.getByRole('heading', { name: '복원할 백업 확인', exact: true })).toBeVisible();
-  await expect(backup).toContainText('형식 v1 · 데이터베이스 스키마 6 · 공지 12건 · 첨부 자료 3개');
+  await expect(backup).toContainText('공지 12건 · 첨부 자료 3개');
+  await expect(backup).toContainText('형식 v1 · 스키마 6');
   await expect(backup).toContainText('모델 가중치는 포함되지 않습니다.');
-  await expect(backup).toContainText('자동으로 다시 열리지 않으니 Rhythm을 직접 다시 열어 주세요.');
+  await expect(backup).toContainText('자동으로 다시 열리지 않습니다. 직접 다시 열면 복원이 마무리됩니다.');
   expect(await callCount(page, 'backup_inspect')).toBe(1);
 
   await answerDialogs(page, 'cancel');
@@ -95,8 +92,10 @@ test('unconfigured updater shows manual update guidance instead of a failing che
   const updater = await openUpdater(page);
 
   // Static guidance, not a live announcement on every visit to Settings.
-  await expect(updater).toContainText('이 빌드는 앱 안 업데이트를 지원하지 않습니다');
+  await expect(updater).toContainText('앱 안 업데이트를 지원하지 않습니다');
   await expect(updater.getByRole('status')).toHaveCount(0);
+  await expect(updater.getByRole('listitem')).toHaveCount(0);
+  await updater.getByText('설치 방법', { exact: true }).click();
   await expect(updater.getByRole('listitem')).toHaveCount(6);
   await expect(updater).toContainText('Rhythm을 완전히 종료합니다.');
   await expect(updater).toContainText('shasum -a 256');
@@ -118,7 +117,7 @@ test('configured updater reports genuine check failures', async ({ page }) => {
   await updater.getByRole('button', { name: '업데이트 확인', exact: true }).click();
 
   await expect(updater.getByRole('alert')).toContainText('업데이트 정보를 확인하지 못했습니다');
-  await expect(updater.getByText('현재 최신 버전을 사용하고 있습니다.', { exact: true })).toHaveCount(0);
+  await expect(updater.getByText('최신 버전입니다.', { exact: true })).toHaveCount(0);
   await expect(updater.getByRole('listitem')).toHaveCount(0);
   expect(await callCount(page, 'updater_check')).toBe(1);
 });
@@ -172,6 +171,15 @@ test('restart failure is surfaced after explicit confirmation', async ({ page })
 
   await expect(updater.getByRole('alert')).toContainText('업데이트를 적용하며 다시 시작하지 못했습니다.');
   expect(await callCount(page, 'updater_restart')).toBe(1);
+
+  // The verified package stays staged in the backend: retrying installs it
+  // instead of checking and downloading again.
+  await expect(updater.getByRole('button', { name: '설치 및 다시 시작', exact: true })).toBeEnabled();
+  await answerDialogs(page, 'ok');
+  await updater.getByRole('button', { name: '다시 시도', exact: true }).click();
+  await expect.poll(() => callCount(page, 'updater_restart')).toBe(2);
+  expect(await callCount(page, 'updater_install')).toBe(1);
+  expect(await callCount(page, 'updater_check')).toBe(1);
 });
 
 test('a finalized restore is reported once the reopened window loads', async ({ page }) => {
@@ -243,7 +251,7 @@ test('an update found before the window opened is announced and opens About with
   await expect(banner).toContainText('그 전에는 아무것도 바뀌지 않습니다');
 
   await banner.getByRole('button', { name: '업데이트 보기', exact: true }).click();
-  await expect(page.locator('#about h2').first()).toBeFocused();
+  await expect(page.locator('#about-title')).toBeFocused();
   await expect(page.locator('#about')).toContainText('새 버전 1.1.1');
   await expect(page.locator('#about').getByRole('button', { name: '다운로드 및 설치', exact: true })).toBeEnabled();
   // The banner stays out of Settings, where the About section shows the update.
@@ -273,7 +281,7 @@ test('automatic update checks are on by default and can be turned off', async ({
   const updater = await openUpdater(page);
   const toggle = updater.getByRole('switch', { name: '자동으로 업데이트 확인', exact: true });
   await expect(toggle).toHaveAttribute('aria-checked', 'true');
-  await expect(updater).toContainText('내려받기와 설치는 직접 선택할 때만 진행합니다');
+  await expect(updater).toContainText('내려받기와 설치는 직접 고를 때만 진행합니다');
 
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-checked', 'false');

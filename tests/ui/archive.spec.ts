@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mockDesktop, callCount } from './fixture';
+import { mockDesktop, callCount, openSettings } from './fixture';
 import type { ResourceRecord } from '../../src/lib/types';
 
 const image: ResourceRecord = { id: 7, url: 'https://computing.sogang.ac.kr/web/file/editor/test.png', filename: '본문.png',
@@ -143,6 +143,7 @@ test('an empty archive explains first steps, local storage and optional AI on To
   await expect(start).toContainText('처음에 모두 꺼져 있습니다');
   await start.getByRole('button', { name: '설정에서 시작하기', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: '설정', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2, name: '게시판', exact: true })).toBeFocused();
 });
 
 test('a populated archive does not repeat the first-run guide', async ({ page }) => {
@@ -152,15 +153,39 @@ test('a populated archive does not repeat the first-run guide', async ({ page })
   await expect(page.getByRole('region', { name: 'Rhythm 시작하기' })).toHaveCount(0);
 });
 
-test('settings navigation links every settings section', async ({ page }) => {
+test('settings shows one pane at a time and remembers it while the app is open', async ({ page }) => {
   await mockDesktop(page);
   await page.goto('/');
   await navigate(page, '설정');
-  const links = page.getByRole('navigation', { name: '설정 항목', exact: true }).getByRole('link');
-  await expect(links).toHaveText(['일반', '확장 기능', 'AI 모델', 'AI 처리', '개인화', '백그라운드', '알림', '알림 기록', '성능 및 전원', '데이터 및 개인정보', '백업 및 복원', '정보']);
-  for (const href of await links.evaluateAll((items) => items.map((item) => item.getAttribute('href')))) {
-    await expect(page.locator(href!)).toHaveCount(1);
+  const panes = page.getByRole('navigation', { name: '설정 항목', exact: true }).getByRole('button');
+  await expect(panes).toHaveText(['일반', '게시판', 'AI', '개인화', '알림', '데이터 및 정보']);
+  await expect(panes.first()).toHaveAttribute('aria-current', 'page');
+  for (const name of ['게시판', 'AI', '개인화', '알림', '데이터 및 정보', '일반']) {
+    await panes.filter({ hasText: name }).click();
+    await expect(page.getByRole('heading', { level: 2, name, exact: true })).toBeVisible();
+    await expect(panes.filter({ hasText: name })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('heading', { level: 2 })).toHaveCount(1);
   }
+  await panes.filter({ hasText: '알림' }).click();
+  await navigate(page, '오늘');
+  await navigate(page, '설정');
+  await expect(page.getByRole('heading', { level: 2, name: '알림', exact: true })).toBeVisible();
+});
+
+test('row explanations open from the keyboard and Escape returns focus to their button', async ({ page }) => {
+  await mockDesktop(page);
+  await page.goto('/');
+  await openSettings(page, '일반');
+  const hint = page.getByRole('button', { name: '전원 모드 설명', exact: true });
+  const panel = page.getByRole('dialog', { name: '전원 모드 설명', exact: true });
+  await expect(panel).toBeHidden();
+  await hint.focus();
+  await page.keyboard.press('Enter');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText('절전은 자동 분석을 하지 않고');
+  await page.keyboard.press('Escape');
+  await expect(panel).toBeHidden();
+  await expect(hint).toBeFocused();
 });
 
 test('settings failure rolls back optimistic theme; system theme follows OS', async ({ page }) => {
@@ -181,27 +206,42 @@ test('settings failure rolls back optimistic theme; system theme follows OS', as
 test('subscriptions have no automatic collection, protect refreshing state, show errors and cancel', async ({ page }) => {
   await mockDesktop(page);
   await page.goto('/');
-  await navigate(page, '설정');
+  await openSettings(page, '게시판');
   const subscribe = page.getByRole('switch', { name: '소프트웨어융합대학 소식 구독', exact: true });
   await expect(subscribe).toBeEnabled();
-  await expect(page.getByRole('switch', { name: '다른 학과 미검증 게시판 구독', exact: true })).toBeDisabled();
-  await expect(page.getByText('일부 가져옴 · 이어받기 가능', { exact: true })).toBeVisible();
-  await page.evaluate(() => { (window as any).__fixture.sourceDelay = 400; });
-  await page.getByRole('button', { name: '상태 새로고침', exact: true }).click();
-  await expect(subscribe).toBeDisabled();
-  await expect(subscribe).toBeEnabled();
+  // Unsupported boards are listed only on request, and never subscribable.
+  const unsupported = page.getByRole('switch', { name: '다른 학과 미검증 게시판 구독', exact: true });
+  await expect(unsupported).toHaveCount(0);
+  await page.getByText('미지원 게시판 1개', { exact: true }).click();
+  await expect(unsupported).toBeDisabled();
+  await page.getByRole('button', { name: '소프트웨어융합대학 소식 상태', exact: true }).click();
+  const status = page.getByRole('dialog', { name: '소식 상태', exact: true });
+  await expect(status).toContainText('일부 가져옴 · 이어받기 가능');
+  // Per-board collection is offered only for subscribed boards.
+  await expect(status.getByRole('button')).toHaveCount(0);
+  await page.keyboard.press('Escape');
   await page.evaluate(() => { (window as any).__fixture.subscribeError = true; });
   await subscribe.click();
   await expect(page.getByRole('alert')).toContainText('구독 설정을 저장하지 못했습니다');
   await expect(subscribe).toHaveAttribute('aria-checked', 'false');
   await page.evaluate(() => { (window as any).__fixture.subscribeError = false; });
+  // Tiles stay locked while a subscription change is saved.
+  await page.evaluate(() => { (window as any).__fixture.subscribeDelay = 400; });
   await subscribe.click();
+  await expect(subscribe).toBeDisabled();
   await expect(subscribe).toHaveAttribute('aria-checked', 'true');
+  await expect(subscribe).toBeEnabled();
   expect(await callCount(page, 'archive_start')).toBe(0);
+  const starts = () => page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'archive_start').map((call: any) => call.args));
   await page.getByRole('button', { name: '과거 자료 가져오기', exact: true }).click();
+  await expect.poll(starts).toEqual([{ sourceIds: null, mode: 'historical' }]);
   await expect(page.getByRole('button', { name: '가져오기 중단', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '가져오기 중단', exact: true }).click();
   await expect(page.locator('.source-manager .archive-feedback')).toContainText('이미 저장한 공지는 유지됩니다');
+  // One board can still be collected on its own from its status popover.
+  await page.getByRole('button', { name: '소프트웨어융합대학 소식 상태', exact: true }).click();
+  await status.getByRole('button', { name: '새 소식 확인', exact: true }).click();
+  await expect.poll(starts).toEqual([{ sourceIds: null, mode: 'historical' }, { sourceIds: ['computing-updates'], mode: 'incremental' }]);
 });
 
 test('reader hydrates legacy attachment-role inline images once and rejects remote executable markup', async ({ page }) => {
@@ -343,7 +383,7 @@ test('returning before automatic read write completes refreshes unread filters a
 test('disabling extension preserves local saved items and disables resource retries', async ({ page }) => {
   await mockDesktop(page, { saved: true, resources: [image] });
   await page.goto('/');
-  await navigate(page, '설정');
+  await openSettings(page, '게시판');
   await page.getByRole('switch', { name: '서강대학교 공지 사용 설정', exact: true }).click();
   await expect(page.locator('.source-manager')).toHaveCount(0);
   await navigate(page, '보관함');

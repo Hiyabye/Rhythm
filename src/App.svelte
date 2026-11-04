@@ -10,6 +10,7 @@
   import BackupSettings from './lib/BackupSettings.svelte';
   import UpdaterSettings from './lib/UpdaterSettings.svelte';
   import ProactiveSettings from './lib/ProactiveSettings.svelte';
+  import Hint from './lib/Hint.svelte';
   import './lib/ai.css';
   import { archiveError as message, archiveDay, localDayKey } from './lib/archive-format';
   import type { ArchiveSummary, EnergyProfile, Settings, Snapshot, SourceInfo, SyncStatus, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo } from './lib/types';
@@ -21,20 +22,24 @@
     { id: 'bookmark', label: '보관함' },
     { id: 'settings', label: '설정' },
   ];
-  const categories = [
-    ['general', '일반'], ['extensions', '확장 기능'], ['ai', 'AI 모델'], ['ai-processing', 'AI 처리'], ['personalization', '개인화'],
-    ['background', '백그라운드'], ['notifications', '알림'], ['notification-history', '알림 기록'], ['energy', '성능 및 전원'],
-    ['data', '데이터 및 개인정보'], ['data-backup', '백업 및 복원'], ['about', '정보'],
+  type SettingsPane = 'general' | 'boards' | 'ai' | 'personalization' | 'notifications' | 'data';
+  const settingsPanes: { id: SettingsPane; label: string; icon: string }[] = [
+    { id: 'general', label: '일반', icon: 'settings' },
+    { id: 'boards', label: '게시판', icon: 'boards' },
+    { id: 'ai', label: 'AI', icon: 'cpu' },
+    { id: 'personalization', label: '개인화', icon: 'person' },
+    { id: 'notifications', label: '알림', icon: 'bell' },
+    { id: 'data', label: '데이터 및 정보', icon: 'database' },
   ];
   const themes: { id: Theme; label: string; icon: string }[] = [
     { id: 'light', label: '라이트', icon: 'today' },
     { id: 'dark', label: '다크', icon: 'moon' },
     { id: 'system', label: '시스템', icon: 'monitor' },
   ];
-  const energyProfiles: { id: EnergyProfile; label: string; description: string }[] = [
-    { id: 'eco', label: '절전', description: '에너지 사용을 최소한으로' },
-    { id: 'balanced', label: '균형', description: '응답성과 전력의 균형' },
-    { id: 'performance', label: '성능', description: '빠른 작업 처리를 우선으로' },
+  const energyProfiles: { id: EnergyProfile; label: string }[] = [
+    { id: 'eco', label: '절전' },
+    { id: 'balanced', label: '균형' },
+    { id: 'performance', label: '성능' },
   ];
   let page = $state('today');
   let snapshot = $state<Snapshot | null>(null);
@@ -46,7 +51,9 @@
   let proactiveActivation = $state<ProactiveActivation | null>(null);
   const handledActivations = new Set<string>();
   let setupNeeded = $state(false);
-  let pendingAiScroll = false;
+  // Kept while the app is open, so returning to Settings shows the last pane.
+  let settingsPane = $state<SettingsPane>('general');
+  let paneLabel = $derived(settingsPanes.find((item) => item.id === settingsPane)!.label);
   let restoreOutcome = $state<RestoreOutcome | null>(null);
   // Found by the automatic check; "나중에" hides it for this version until restart.
   let availableUpdate = $state<UpdateInfo | null>(null);
@@ -211,39 +218,28 @@
     } finally { busy = false; }
   }
 
-  async function aiSettings() {
-    pendingAiScroll = true;
+  // Opens a settings pane from elsewhere and moves focus to its heading (or a target inside it).
+  async function openSettings(pane: SettingsPane, target = 'settings-pane-title') {
     await navigate('settings');
+    settingsPane = pane;
     await tick();
-    document.getElementById('ai')?.scrollIntoView({ block: 'start', behavior: 'instant' });
-    document.getElementById('ai')?.querySelector('h2')?.focus({ preventScroll: true });
+    const element = document.getElementById(target);
+    element?.scrollIntoView({ block: 'start', behavior: 'instant' });
+    element?.focus({ preventScroll: true });
   }
 
-  async function updateSettings() {
-    await navigate('settings');
-    await tick();
-    document.getElementById('about')?.scrollIntoView({ block: 'start', behavior: 'instant' });
-    document.getElementById('about')?.querySelector('h2')?.focus({ preventScroll: true });
+  function aiSettings() {
+    return openSettings('ai');
   }
 
-  function sourceSettingsReady() {
-    if (!pendingAiScroll) return;
-    pendingAiScroll = false;
-    const heading = document.getElementById('ai')?.querySelector('h2');
-    // Do not move the user back after they have focused another control.
-    if (page === 'settings' && heading && document.activeElement === heading) {
-      heading.scrollIntoView({ block: 'start', behavior: 'instant' });
-    }
+  function updateSettings() {
+    return openSettings('data', 'about-title');
   }
 
   async function openProactiveDocument(documentId: number, revisionId: number, eventId: number, attemptCount = 1, eventIds: number[] = [eventId]) {
     if (eventIds.length > 1) {
       proactiveActivation = null;
-      await navigate('settings');
-      await tick();
-      const history = document.getElementById('notification-history');
-      history?.scrollIntoView({ block: 'start', behavior: 'instant' });
-      history?.querySelector('h2')?.focus({ preventScroll: true });
+      await openSettings('notifications', 'notification-history-title');
       return;
     }
     proactiveActivation = { document_id: documentId, revision_id: revisionId, event_id: eventId, attempt_count: attemptCount, event_ids: eventIds };
@@ -292,7 +288,7 @@
         <p class="source-group-heading" id={`group-${extension.id}`}>{extension.display_name}</p>
         <ul class="source-list" aria-labelledby={`group-${extension.id}`}>
           {#if !extension.enabled}
-            <li><button class="source-item quiet" onclick={() => navigate('settings')}><span class="source-label">꺼져 있음 · 설정에서 켜기</span></button></li>
+            <li><button class="source-item quiet" onclick={() => openSettings('boards')}><span class="source-label">꺼져 있음 · 설정에서 켜기</span></button></li>
           {:else if extension.id === 'sogang_notices' && boards.length}
             {#each boardGroups as [organization, members] (organization)}
               <li class="board-organization" aria-hidden="true">{organization}</li>
@@ -303,7 +299,7 @@
               {/each}
             {/each}
           {:else}
-            <li><button class="source-item quiet" onclick={() => navigate('settings')}><span class="source-label">구독한 게시판 없음 · 설정</span></button></li>
+            <li><button class="source-item quiet" onclick={() => openSettings('boards')}><span class="source-label">구독한 게시판 없음 · 설정</span></button></li>
           {/if}
         </ul>
       {/each}
@@ -323,39 +319,54 @@
     {#if !desktop && !loading}<div class="banner browser-notice" role="status"><Icon name="info" /><div><strong>데스크톱 앱에서 시작해 주세요</strong><p>브라우저에서는 화면만 둘러볼 수 있습니다. 설정 저장과 로컬 데이터 접근은 Rhythm 앱에서 사용할 수 있습니다.</p></div></div>{/if}
     {#if error}<div class="banner error" role="alert"><Icon name="info" /><div><strong>작업을 완료하지 못했습니다</strong><p>{error}</p></div>{#if !snapshot && desktop}<button class="text-button" onclick={load}>다시 시도</button>{/if}</div>{/if}
     {#if restoreOutcome}<div class="banner" role="status"><Icon name="info" /><div><strong>백업 복원을 마쳤습니다</strong><p>공지 {restoreOutcome.documents.toLocaleString('ko-KR')}건과 첨부 자료 {restoreOutcome.resources.toLocaleString('ko-KR')}개를 복원하고 무결성을 확인했습니다.{#if restoreOutcome.unavailable_resources} 백업 당시 내려받지 못한 첨부 자료 {restoreOutcome.unavailable_resources.toLocaleString('ko-KR')}개는 포함되지 않았습니다.{/if}{#if restoreOutcome.models_needing_reinstall} 사용할 수 없는 AI 모델 {restoreOutcome.models_needing_reinstall.toLocaleString('ko-KR')}개는 다시 등록하거나 설치해 주세요.{/if} 이전 데이터는 데이터 폴더에 복구용으로 보관되어 있습니다.</p></div><button class="text-button" onclick={() => restoreOutcome = null}>닫기</button></div>{/if}
-    {#if desktop && availableUpdate && dismissedUpdate !== availableUpdate.version && page !== 'settings'}<div class="banner" role="status"><Icon name="info" /><div><strong>Rhythm {availableUpdate.version} 버전을 설치할 수 있습니다</strong><p>설정 → 정보에서 내려받으면 업데이트 서명을 확인한 뒤 설치 여부를 묻습니다. 그 전에는 아무것도 바뀌지 않습니다.</p></div><button class="text-button" onclick={updateSettings}>업데이트 보기</button><button class="text-button" onclick={() => dismissedUpdate = availableUpdate?.version ?? ''}>나중에</button></div>{/if}
+    {#if desktop && availableUpdate && dismissedUpdate !== availableUpdate.version && page !== 'settings'}<div class="banner" role="status"><Icon name="info" /><div><strong>Rhythm {availableUpdate.version} 버전을 설치할 수 있습니다</strong><p>설정 → 데이터 및 정보에서 내려받으면 업데이트 서명을 확인한 뒤 설치 여부를 묻습니다. 그 전에는 아무것도 바뀌지 않습니다.</p></div><button class="text-button" onclick={updateSettings}>업데이트 보기</button><button class="text-button" onclick={() => dismissedUpdate = availableUpdate?.version ?? ''}>나중에</button></div>{/if}
     {#if desktop && setupNeeded && page !== 'settings'}<div class="banner ai-setup-banner" role="status"><Icon name="cpu" /><div><strong>나의 기기에서 공지의 핵심을 정리하세요</strong><p>로컬 AI 모델을 선택하면 한국어 요약과 일정의 근거를 확인할 수 있습니다. 준비 전이나 오프라인에서도 공지는 계속 읽을 수 있습니다.</p></div><button class="text-button" onclick={aiSettings}>로컬 AI 설정하기</button><button class="text-button" onclick={() => setupNeeded = false}>나중에</button></div>{/if}
     <div class="save-notice" class:visible={Boolean(notice)} role="status" aria-live="polite">{#if notice}<Icon name="check" size={15} />{notice}{/if}</div>
 
     {#if page === 'settings'}
       <div class="settings-layout">
-        <nav class="settings-nav" aria-label="설정 항목">{#each categories as [id, label]}<a href={`#${id}`}>{label}</a>{/each}</nav>
-        <div class="settings-content" aria-busy={busy || loading}>
-          {#if loading}<div class="loading" role="status">저장된 설정을 불러오는 중입니다…</div>{/if}
-          <section id="general" class="settings-section"><div class="section-heading"><h2>일반</h2><p>편안하게 집중할 수 있는 환경을 만드세요.</p></div>
-            <div class="setting-row"><div><h3>화면 테마</h3><p>시스템 설정에 맞추거나 직접 선택하세요.</p></div><div class="segmented" role="group" aria-label="화면 테마">{#each themes as option}<button disabled={!snapshot || busy} class:selected={theme === option.id} aria-pressed={theme === option.id} onclick={() => save({ theme: option.id })}><Icon name={option.icon} size={16} />{option.label}</button>{/each}</div></div>
-            <div class="setting-row"><div><h3>앱 언어</h3><p>Rhythm은 한국어로 함께합니다.</p></div><span class="value">한국어</span></div>
-            <div class="setting-row"><div><h3>시작과 종료</h3><p>창을 닫은 뒤 백그라운드 실행, 로그인 시 자동 시작과 자동 동기화는 모두 꺼진 상태로 시작합니다.</p></div><a class="text-button" href="#background">백그라운드 설정</a></div>
-          </section>
-          <section id="extensions" class="settings-section"><div class="section-heading"><h2>확장 기능</h2><p>필요한 정보원만 선택하세요. 꺼도 저장된 정보는 지워지지 않습니다.</p></div>
-            {#if snapshot}{#each snapshot.extensions as extension}<div class="extension-row"><div class="extension-symbol"><Icon name="inbox" size={22} /></div><div class="extension-description"><h3>{extension.display_name}</h3><p>{extension.description}</p><span class="availability">{extension.available ? '사용 가능 · 직접 가져오기와 선택적 자동 동기화' : '현재 사용할 수 없습니다'}</span></div><button class="switch" class:on={extension.enabled} role="switch" aria-checked={extension.enabled} aria-label={`${extension.display_name} 사용 설정`} disabled={busy} onclick={() => toggleExtension(extension.id, !extension.enabled)}><span></span></button></div>{/each}{:else}<p class="muted">{loading ? '확장 기능을 불러오는 중입니다.' : '데스크톱 앱에서 등록된 확장 기능을 확인할 수 있습니다.'}</p>{/if}
-            {#if noticesEnabled}<SourceSettings enabled={noticesEnabled} oninitialload={sourceSettingsReady} />{:else}<p class="footnote">서강대학교 공지를 켜면 정보원을 구독하고 자료를 가져올 수 있습니다. 꺼도 이미 보관한 공지와 구독 설정은 유지됩니다.</p>{/if}
-          </section>
-          <AiSettings {desktop} onsetup={() => setupNeeded = false} />
-          <PersonalizationSettings {desktop} />
-          <ProactiveSettings {desktop} onopen={openProactiveDocument} onactivation={handleProactiveActivation} />
-          <section id="energy" class="settings-section"><div class="section-heading"><h2>성능 및 전원</h2><p>기기에 맞는 작업 방식을 선택하세요.</p></div><div class="energy-options" role="group" aria-label="에너지 프로필">{#each energyProfiles as option}<button disabled={!snapshot || busy} class:selected={snapshot?.settings.energy_profile === option.id} aria-pressed={snapshot?.settings.energy_profile === option.id} onclick={() => save({ energy_profile: option.id })}><span class="option-title">{option.label}{#if snapshot?.settings.energy_profile === option.id}<Icon name="check" size={17} />{/if}</span><span>{option.description}</span></button>{/each}</div><p class="footnote">AI는 한 번에 한 공지만 분석합니다. 절전에서는 직접 요청을 우선하며, 모델 유지와 최근 공지의 소량 처리는 선택한 프로필과 AI 처리 설정을 따릅니다. 자동 동기화는 켜 둔 경우 앱이 실행 중일 때 동작하며, 앱을 종료하면 멈춥니다.</p></section>
-          <section id="data" class="settings-section"><div class="section-heading"><h2>데이터 및 개인정보</h2><p>내 정보는 내 기기에. 클라우드 계정이나 동기화가 필요하지 않습니다.</p></div>
-            <div class="setting-row"><div><h3>로컬 데이터베이스</h3><p>SQLite · {snapshot ? `스키마 버전 ${snapshot.storage.schema_version}` : '앱에서 확인 가능'}</p></div><span class="value">{snapshot ? storageSize(snapshot.storage.bytes) : '—'}</span></div>
-            <div class="storage-path"><span>저장 위치</span><code>{snapshot?.storage.path ?? '데스크톱 앱에서 확인할 수 있습니다.'}</code></div>
-            <div class="privacy-note"><Icon name="lock" size={18} /><p>프로필, 관심 분야, 피드백과 학습 근거는 로컬 SQLite에만 저장합니다. 클라우드 추론, 원격 저장소, 사용 정보 수집을 사용하지 않습니다.</p></div>
+        <nav class="settings-nav" aria-label="설정 항목">
+          <ul>
+            {#each settingsPanes as item (item.id)}
+              <li><button class="pane-item" class:active={settingsPane === item.id} aria-current={settingsPane === item.id ? 'page' : undefined} onclick={() => settingsPane = item.id}><Icon name={item.icon} size={17} /><span>{item.label}</span></button></li>
+            {/each}
+          </ul>
+        </nav>
+        <section class="settings-pane" aria-labelledby="settings-pane-title" aria-busy={busy || loading}>
+          <h2 id="settings-pane-title" class="pane-title" tabindex="-1">{paneLabel}</h2>
+          {#if loading}<p class="loading" role="status">저장된 설정을 불러오는 중입니다…</p>{/if}
+          {#if settingsPane === 'general'}
+            <div class="settings-group">
+              <div class="settings-row"><span class="row-label">화면 테마</span><div class="segmented" role="group" aria-label="화면 테마">{#each themes as option}<button disabled={!snapshot || busy} class:selected={theme === option.id} aria-pressed={theme === option.id} onclick={() => save({ theme: option.id })}><Icon name={option.icon} size={15} />{option.label}</button>{/each}</div></div>
+              <div class="settings-row"><span class="row-label">전원 모드<Hint label="전원 모드">AI 자동 분석과 자동 동기화 간격에 적용됩니다. 절전은 자동 분석을 하지 않고 60분마다, 균형은 30분, 성능은 15분마다 확인합니다. AI는 한 번에 한 공지만 분석합니다.</Hint></span><div class="segmented" role="group" aria-label="전원 모드">{#each energyProfiles as option}<button disabled={!snapshot || busy} class:selected={snapshot?.settings.energy_profile === option.id} aria-pressed={snapshot?.settings.energy_profile === option.id} onclick={() => save({ energy_profile: option.id })}>{option.label}</button>{/each}</div></div>
+            </div>
+            <ProactiveSettings {desktop} part="background" onopen={openProactiveDocument} onactivation={handleProactiveActivation} />
+          {:else if settingsPane === 'boards'}
+            {#if snapshot}
+              <div class="settings-group">
+                {#each snapshot.extensions as extension}
+                  <div class="settings-row"><span class="row-label">{extension.display_name}<Hint label={extension.display_name}>{extension.description} 꺼도 보관한 공지와 구독은 그대로 남습니다.{#if !extension.available} 지금은 사용할 수 없습니다.{/if}</Hint></span><button class="switch" class:on={extension.enabled} role="switch" aria-checked={extension.enabled} aria-label={`${extension.display_name} 사용 설정`} disabled={busy} onclick={() => toggleExtension(extension.id, !extension.enabled)}><span></span></button></div>
+                {/each}
+              </div>
+            {:else if !loading}<p class="muted">데스크톱 앱에서 게시판을 구독할 수 있습니다.</p>{/if}
+            {#if noticesEnabled}<SourceSettings enabled={noticesEnabled} />{/if}
+          {:else if settingsPane === 'ai'}
+            <AiSettings {desktop} onsetup={() => setupNeeded = false} />
+          {:else if settingsPane === 'personalization'}
+            <PersonalizationSettings {desktop} />
+          {:else if settingsPane === 'notifications'}
+            <ProactiveSettings {desktop} part="notifications" onopen={openProactiveDocument} onactivation={handleProactiveActivation} />
+          {:else}
+            <div class="settings-group">
+              <div class="settings-row"><span class="row-label">로컬 데이터<Hint label="로컬 데이터">프로필, 관심사, 피드백과 공지는 이 기기의 SQLite{#if snapshot} (스키마 {snapshot.storage.schema_version}){/if}에만 저장합니다. 클라우드 저장소, 원격 추론, 사용 정보 수집은 없습니다.{#if snapshot}<code class="popover-code">{snapshot.storage.path}</code>{/if}</Hint></span><span class="value">{snapshot ? storageSize(snapshot.storage.bytes) : '—'}</span></div>
+            </div>
             <BackupSettings {desktop} />
-          </section>
-          <UpdaterSettings {desktop} />
-        </div>
+            <UpdaterSettings {desktop} />
+          {/if}
+        </section>
       </div>
     {:else}
-      <ArchiveView {page} {desktop} enabled={noticesEnabled} {sourceRequest} activation={proactiveActivation} onactivationhandled={() => proactiveActivation = null} onsettings={() => navigate('settings')} onaisettings={aiSettings}
+      <ArchiveView {page} {desktop} enabled={noticesEnabled} {sourceRequest} activation={proactiveActivation} onactivationhandled={() => proactiveActivation = null} onsettings={(pane) => openSettings(pane ?? 'boards')} onaisettings={aiSettings}
         onsourcechange={(id) => activeSource = id}
         onweekpane={(visible) => weekPane = visible}
         oncontext={(context) => { if (context.summary) summary = context.summary; if (context.sources) sources = context.sources; syncStatus = context.status; }} />

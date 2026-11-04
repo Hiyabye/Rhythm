@@ -25,6 +25,8 @@ export interface FixtureOptions {
   aiModelDirectoryGate?: boolean;
   aiModelStorageAvailable?: number | null;
   sourceCount?: number;
+  // Replaces the default two-board catalog.
+  sourceList?: { id: string; name: string; organization: string; supported: boolean; subscribed?: boolean; family?: string; last_error?: string | null }[];
   sourceDelay?: number;
   initialNotificationsEnabled?: boolean;
   capabilitiesError?: boolean;
@@ -96,6 +98,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     { id: 'unsupported-board', name: '미검증 게시판', organization: '다른 학과', description: '아직 검증되지 않은 게시판',
       url: 'https://example.invalid', family: 'cms', supported: false, subscribed: false, last_attempt: null, last_success: null,
       last_error: null, next_page: 1, history_complete: false, status: 'idle', discovered: 0, archived: 0, failed: 0 }];
+    if (options.sourceList) {
+      sources = options.sourceList.map((source) => ({ ...sources[0], family: 'computing', subscribed: false, last_error: null, ...source }));
+    }
     if ((options.sourceCount ?? 0) > sources.length) {
       sources.push(...Array.from({ length: options.sourceCount! - sources.length }, (_, index) => ({
         ...sources[0], id: `extra-source-${index}`, name: `추가 정보원 ${index + 1}`,
@@ -476,6 +481,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             return null;
           }
           case 'archive_subscribe':
+            await wait(fixture.subscribeDelay);
             if (fixture.subscribeError) throw '구독 설정을 저장하지 못했습니다.';
             sources = sources.map((source) => source.id === args.id ? { ...source, subscribed: args.subscribed } : source);
             return copy(sources);
@@ -515,4 +521,11 @@ export async function answerDialogs(page: Page, ...answers: ('ok' | 'cancel')[])
 
 export async function dialogMessages(page: Page) {
   return page.evaluate(() => [...(window as DialogWindow).__fixture.dialogs]);
+}
+
+export type SettingsPane = '일반' | '게시판' | 'AI' | '개인화' | '알림' | '데이터 및 정보';
+/** Opens Settings from the sidebar and shows one pane. */
+export async function openSettings(page: Page, pane: SettingsPane) {
+  await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name: '설정', exact: true }).click();
+  await page.getByRole('navigation', { name: '설정 항목', exact: true }).getByRole('button', { name: pane, exact: true }).click();
 }
