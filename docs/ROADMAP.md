@@ -1,6 +1,6 @@
 # Roadmap
 
-Rhythm stays local-first and Korean-first. The current release is **v1.1.0**. Support targets macOS Apple Silicon and Windows 11 x64; Linux and Intel Macs are not supported. Planned work is tracked in [GitHub issues](https://github.com/Hiyabye/Rhythm/issues); this page records the current state and what has actually been verified.
+Rhythm stays local-first and Korean-first. The current release is **v1.2.0**. Support targets macOS Apple Silicon and Windows 11 x64; Linux and Intel Macs are not supported. Planned work is tracked in [GitHub issues](https://github.com/Hiyabye/Rhythm/issues); this page records the current state and what has actually been verified.
 
 ## Current state
 
@@ -11,11 +11,13 @@ v1.1.0 adds:
 - Windows 11 x64 support from contributor PR #1: per-user NSIS installer, CPU and NVIDIA Vulkan AI workers, WinRT notifications (schema 7), AI execution mode (schema 8). See [Windows](WINDOWS.md).
 - A chosen folder for new model downloads on both platforms (schema 9).
 
-Unreleased on `main`: local AI runs in upstream `llama-server` (llama.cpp b12068, bundled and supervised by Rhythm) instead of the AI workers, on both platforms (#8, #61). Earlier results read as outdated until they are regenerated. On Windows it was observed on one GTX 1650 PC (Vulkan and CPU).
+v1.2.0 adds:
+
+- Local AI runs in upstream `llama-server` (llama.cpp b12068, bundled and supervised by Rhythm) instead of the AI workers, on both platforms (#8, #61). Earlier results read as outdated until they are regenerated. On Windows it was observed on one GTX 1650 PC (Vulkan and CPU).
 - Model catalog: Qwen3.5 0.8B added as experimental; 9B removed (existing installs keep working).
-- Native-macOS redesign of the app shell and Today.
+- Native-macOS redesign of the app shell and Today, and Settings split into panes.
 - CI split by concern and gated by changed paths; a tag-triggered workflow (`release.yml`) that builds both platforms and creates a draft release. v1.1.0 is its first run.
-- Release pipeline for in-app updates on unsigned builds: signed updater packages for both platforms and a verified `latest.json` in every release (needs the production updater key). Installed v1.1.0 apps embed no key and need one manual update.
+- Release pipeline for in-app updates on unsigned builds: signed updater packages for both platforms and a verified `latest.json` in every release. v1.2.0 is the first release with the updater key; installed v1.1.0 apps embed no key and need one manual update.
 - Automatic update checks, on by default in builds with the key (schema 10): daily while the app is open, announce-only, off switch in Settings → 데이터 및 정보.
 
 ## Verification status

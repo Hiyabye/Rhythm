@@ -4,7 +4,7 @@
 
 Rhythm은 학교 공지를 내 Mac에 모아 보관하고, 로컬 AI로 핵심을 정리하고, 나에게 중요한 소식부터 보여 주는 한국어 데스크톱 앱입니다. 계정이나 클라우드 없이 동작하며, 한 번 보관한 공지는 인터넷 없이도 읽고 검색할 수 있습니다.
 
-현재 버전: **1.1.0**
+현재 버전: **1.2.0**
 
 ## 원칙
 
@@ -25,7 +25,7 @@ Rhythm은 학교 공지를 내 Mac에 모아 보관하고, 로컬 AI로 핵심�
 
 ## 지원 범위
 
-| 항목 | v1.1.0 |
+| 항목 | v1.2.0 |
 | --- | --- |
 | 플랫폼 | **macOS Apple Silicon(arm64)과 Windows 11 x64.** macOS는 27.2(M1 Pro, 16 GiB)에서 시험했습니다. 앱이 선언한 최소 버전은 macOS 11.0이지만 27.2 이외의 버전은 시험하지 않았습니다. Windows는 기여자의 Windows 11 기기 한 대에서 시험했으며, 시험 범위는 [Windows 검증 기록](docs/WINDOWS_VALIDATION.md)에 있습니다. |
 | 지원하지 않음 | Linux, Intel Mac, ARM Windows. |
@@ -51,8 +51,8 @@ Rhythm은 학교 공지를 내 Mac에 모아 보관하고, 로컬 AI로 핵심�
 | 모델 | 상태 | 출처·라이선스 |
 | --- | --- | --- |
 | Qwen3.5 0.8B Q4_K_M (533 MB) | 실험적·미검증, 설치 비활성화 | [unsloth/Qwen3.5-0.8B-GGUF](https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF), Apache-2.0 |
-| Qwen3.5 2B Q4_K_M (1.28 GB) | Apple Silicon Metal에서 실제 한국어 분석 확인. CPU는 현재 엔진에서 미검증 | [unsloth/Qwen3.5-2B-GGUF](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF), Apache-2.0 |
-| Qwen3.5 4B Q4_K_M (2.74 GB) | 이전 엔진에서 Apple Silicon Metal 분석 확인. 현재 엔진에서는 미검증 | [unsloth/Qwen3.5-4B-GGUF](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF), Apache-2.0 |
+| Qwen3.5 2B Q4_K_M (1.28 GB) | Apple Silicon Metal과 Windows PC 한 대(GTX 1650 Vulkan, CPU)에서 실제 한국어 분석 확인. macOS CPU는 미검증 | [unsloth/Qwen3.5-2B-GGUF](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF), Apache-2.0 |
+| Qwen3.5 4B Q4_K_M (2.74 GB) | Windows PC 한 대(GTX 1650 Vulkan, CPU 일부)에서 분석 확인. macOS에서는 이전 엔진으로만 확인 | [unsloth/Qwen3.5-4B-GGUF](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF), Apache-2.0 |
 
 각 파일은 고정된 리비전, 크기, SHA-256으로 검사합니다. 이미 가진 `qwen3`·`qwen35` GGUF 파일을 참조로 등록할 수도 있지만, 등록 검사를 통과해도 추론 성공이 보장되지는 않습니다. 설정에는 실제로 불러온 백엔드(Metal 또는 CPU)가 표시됩니다.
 
@@ -64,13 +64,13 @@ AI 요약과 추출은 구조와 원문 근거를 검사하지만, 의미를 잘
 
 ## 설치
 
-1. 공식 저장소 [github.com/Hiyabye/Rhythm](https://github.com/Hiyabye/Rhythm)의 **Releases**에서 `Rhythm_1.1.0_aarch64.dmg`와 `Rhythm_1.1.0_aarch64.dmg.sha256`을 내려받습니다. 다른 곳에서 받은 파일은 사용하지 마세요.
+1. 공식 저장소 [github.com/Hiyabye/Rhythm](https://github.com/Hiyabye/Rhythm)의 **Releases**에서 `Rhythm_1.2.0_aarch64.dmg`와 `Rhythm_1.2.0_aarch64.dmg.sha256`을 내려받습니다. 다른 곳에서 받은 파일은 사용하지 마세요.
 2. 터미널에서 체크섬을 확인합니다.
 
    ```sh
    cd ~/Downloads
-   shasum -a 256 Rhythm_1.1.0_aarch64.dmg
-   cat Rhythm_1.1.0_aarch64.dmg.sha256
+   shasum -a 256 Rhythm_1.2.0_aarch64.dmg
+   cat Rhythm_1.2.0_aarch64.dmg.sha256
    ```
 
    두 값이 정확히 같아야 합니다. 다르면 파일을 열지 말고 삭제하세요. 체크섬은 받은 파일이 게시된 파일과 같은지만 확인하며, 코드 서명이나 Apple 검사를 대신하지 않습니다.
@@ -186,7 +186,7 @@ Windows에서는 트레이 메뉴에서 Rhythm을 완전히 종료하고, 필요
 - Apple 공증이 없어 처음 실행 시 macOS가 막을 수 있고, Windows 설치 파일은 서명이 없어 SmartScreen 경고가 나타날 수 있습니다.
 - Windows의 실제 로그인 자동 시작, 절전 복귀, 알림 클릭과 다른 PC에서의 설치는 아직 시험하지 않았습니다.
 - 지원 게시판은 10개입니다. 모든 게시판의 전체 과거 이력을 끝까지 가져오는 동작은 시험하지 않았습니다. 오래된 공지의 수정 사항을 매번 전수 재검사하지 않습니다.
-- AI 결과는 틀릴 수 있습니다. 0.8B는 검증하지 않았고, Windows CPU·GPU 추론은 현재 엔진에서 아직 확인하지 않았습니다.
+- AI 결과는 틀릴 수 있습니다. 0.8B는 검증하지 않았고, Windows 추론은 GTX 1650이 있는 PC 한 대에서만 확인했습니다.
 - 실제 학교 새 공지로 알림이 표시되는 장면과 실제 로그인 시 자동 시작은 시험하지 않았습니다. 알림 표시와 클릭은 시험용 공지로 확인했습니다.
 - VoiceOver 음성 출력, 시스템 글자 크기, 대비 증가, 동작 줄이기는 충분히 시험하지 않았습니다.
 - 백업 파일은 암호화되지 않습니다.
