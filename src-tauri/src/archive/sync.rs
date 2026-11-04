@@ -298,7 +298,7 @@ impl Controller {
         mode: String,
         lease: Option<crate::operation_gate::AdmissionLease>,
     ) -> Result<(SyncStatus, u64), String> {
-        if !["historical", "incremental"].contains(&mode.as_str()) {
+        if !["historical", "incremental", "skipped"].contains(&mode.as_str()) {
             return Err("동기화 방식을 확인해 주세요.".into());
         }
         // The same lock serializes extension disabling and job admission.
@@ -347,7 +347,7 @@ impl Controller {
             let mut outcome = controller
                 .execute(&store, &root, &transport, sources, &mode, Budget::default())
                 .await;
-            if outcome.is_ok() {
+            if outcome.is_ok() && mode != "skipped" {
                 outcome = match with_store(&store, |store| {
                     Ok(source_ids.iter().all(|id| {
                         store
@@ -427,16 +427,21 @@ impl Controller {
     ) -> Result<(), String> {
         let mut resource_bytes = 0;
         let mut failures = Vec::new();
+        // Retrying skipped notices is not a sync of the board, so it leaves the
+        // board's status, counters and last error as they are.
+        let retry = mode == "skipped";
         for source in sources {
             active(store, &self.cancel)?;
             let mut current = source.clone();
-            current.status = "running".into();
-            // Progress counters describe this attempt, not distinct IDs accumulated
-            // across failed pages and restarts. Checkpoints remain cumulative.
-            current.failed = 0;
-            current.discovered = 0;
-            current.archived = 0;
-            persist(store, &current, "running", None, false)?;
+            if !retry {
+                current.status = "running".into();
+                // Progress counters describe this attempt, not distinct IDs accumulated
+                // across failed pages and restarts. Checkpoints remain cumulative.
+                current.failed = 0;
+                current.discovered = 0;
+                current.archived = 0;
+                persist(store, &current, "running", None, false)?;
+            }
             let outcome = self
                 .source(
                     store,
@@ -451,13 +456,15 @@ impl Controller {
             if let Err(error) = outcome {
                 let cancelled = self.cancel.load(Ordering::Acquire)
                     || !with_store(store, |s| s.enabled("sogang_notices"))?;
-                persist(
-                    store,
-                    &current,
-                    if cancelled { "cancelled" } else { "failed" },
-                    Some(&error),
-                    false,
-                )?;
+                if !retry {
+                    persist(
+                        store,
+                        &current,
+                        if cancelled { "cancelled" } else { "failed" },
+                        Some(&error),
+                        false,
+                    )?;
+                }
                 if cancelled {
                     return Err(error);
                 }
@@ -482,6 +489,12 @@ impl Controller {
         budget: &Budget,
         resource_bytes: &mut u64,
     ) -> Result<(), String> {
+        if mode == "skipped" {
+            let definition = current.definition.clone();
+            return self
+                .retry_skipped(store, root, transport, &definition, resource_bytes)
+                .await;
+        }
         let historical = mode == "historical";
         // The durable flag, not the current document count, decides whether the
         // initial bootstrap is still owed. A cancelled or failed seed leaves it
@@ -595,95 +608,48 @@ impl Controller {
                 if !exists {
                     current.discovered += 1;
                 }
-                let result = async {
-                    let validators =
-                        with_store(store, |s| s.validators(&definition.id, &entry.external_id))?;
-                    let url = parser::detail_url(definition, &entry)?;
-                    let response = fetch(
+                let result = self
+                    .article(
+                        store,
+                        root,
                         transport,
-                        &url,
-                        validators,
-                        ARTICLE_LIMIT,
-                        &self.cancel,
                         &policy,
+                        definition,
+                        &entry,
+                        existing_id,
+                        historical || seed,
+                        resource_bytes,
                     )
-                    .await?;
-                    match response {
-                        network::Fetch::NotModified => {
-                            let id = existing_id
-                                .ok_or("보관되지 않은 원문의 변경 없음 응답을 받았습니다.")?;
-                            with_store(store, |s| {
-                                ensure_active(s, &self.cancel)?;
-                                s.checked(&definition.id, &entry.external_id)
-                            })?;
-                            self.pending_resources(
-                                store,
-                                root,
-                                transport,
-                                &policy,
-                                id,
-                                resource_bytes,
-                            )
-                            .await?;
-                        }
-                        network::Fetch::Redirect(_) => {
-                            return Err("학교 서버 이동 응답을 처리하지 못했습니다.".into())
-                        }
-                        network::Fetch::Body {
-                            bytes,
-                            etag,
-                            last_modified,
-                            mime,
-                        } => {
-                            check_document_mime(definition, mime.as_deref())?;
-                            let mut article = parser::article(
-                                definition,
-                                &entry,
-                                std::str::from_utf8(&bytes)
-                                    .map_err(|_| "공지 본문 문자 인코딩을 지원하지 않습니다.")?,
-                            )?;
-                            let replaces_readable = match existing_id {
-                                Some(id) => with_store(store, |s| s.has_readable_content(id))?,
-                                None => false,
-                            };
-                            if replaces_readable && article.unsupported_body {
-                                return Err(
-                                    "기존 원문을 읽을 수 없는 iframe 본문으로 대체하지 않았습니다."
-                                        .into(),
-                                );
-                            }
-                            article.etag = etag;
-                            article.last_modified = last_modified;
-                            let (id, _) = with_store(store, |s| {
-                                ensure_active(s, &self.cancel)?;
-                                s.upsert_article(&definition.id, &article, historical || seed)
-                            })?;
-                            if !exists {
-                                current.archived += 1;
-                            }
-                            self.pending_resources(
-                                store,
-                                root,
-                                transport,
-                                &policy,
-                                id,
-                                resource_bytes,
-                            )
-                            .await?;
-                        }
-                    }
-                    Ok::<_, String>(())
-                }
-                .await;
+                    .await;
                 processed += 1;
-                if let Err(error) = result {
-                    active(store, &self.cancel)?;
-                    current.failed += 1;
-                    errors.push(error);
+                match result {
+                    Ok(inserted) => current.archived += u64::from(inserted),
+                    Err(ArticleError::Permanent {
+                        reason,
+                        response_sha256,
+                    }) => {
+                        // Retrying the same response cannot succeed, so this notice
+                        // must not hold the page checkpoint; it stays listed instead.
+                        with_store(store, |s| {
+                            ensure_active(s, &self.cancel)?;
+                            s.record_skipped(
+                                &definition.id,
+                                &entry,
+                                historical || seed,
+                                &reason,
+                                &response_sha256,
+                            )
+                        })?;
+                    }
+                    Err(ArticleError::Transient(error)) => {
+                        active(store, &self.cancel)?;
+                        current.failed += 1;
+                        errors.push(error);
+                    }
                 }
                 persist(store, current, "running", None, false)?;
             }
-            // Never checkpoint beyond a page containing failed article retrievals.
+            // Never checkpoint beyond a page containing transient article failures.
             if !errors.is_empty() {
                 return Err(format!(
                     "원문 {}건을 보관하지 못했습니다. 같은 페이지에서 이어집니다. {}",
@@ -723,6 +689,168 @@ impl Controller {
             page += 1;
         }
     }
+    /// Re-fetches only the notices recorded as skipped. The board's sync status,
+    /// checkpoint and last success are left as the last sync set them.
+    async fn retry_skipped<T: Transport>(
+        &self,
+        store: &SharedStore,
+        root: &Path,
+        transport: &T,
+        definition: &SourceDefinition,
+        resource_bytes: &mut u64,
+    ) -> Result<(), String> {
+        let entries = with_store(store, |s| s.skipped_entries(&definition.id))?;
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let policy =
+            Robots::load(transport, &parser::list_url(definition, 1)?, &self.cancel).await?;
+        let mut errors = Vec::new();
+        for (index, (entry, historical)) in entries.iter().enumerate() {
+            active(store, &self.cancel)?;
+            self.update(
+                Some(definition.id.clone()),
+                "skipped",
+                0,
+                &format!(
+                    "가져오지 못한 공지를 다시 확인하고 있습니다. {} / {}건",
+                    index + 1,
+                    entries.len()
+                ),
+            );
+            let existing_id =
+                with_store(store, |s| s.document_id(&definition.id, &entry.external_id))?;
+            match self
+                .article(
+                    store,
+                    root,
+                    transport,
+                    &policy,
+                    definition,
+                    entry,
+                    existing_id,
+                    *historical,
+                    resource_bytes,
+                )
+                .await
+            {
+                Ok(_) => {}
+                Err(ArticleError::Permanent {
+                    reason,
+                    response_sha256,
+                }) => {
+                    with_store(store, |s| {
+                        ensure_active(s, &self.cancel)?;
+                        s.record_skipped(
+                            &definition.id,
+                            entry,
+                            *historical,
+                            &reason,
+                            &response_sha256,
+                        )
+                    })?;
+                }
+                Err(ArticleError::Transient(error)) => {
+                    active(store, &self.cancel)?;
+                    errors.push(error);
+                }
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "가져오지 못한 공지 {}건을 다시 확인하지 못했습니다. {}",
+                errors.len(),
+                errors[0]
+            ))
+        }
+    }
+    /// Fetches and archives one notice. Returns whether a new document was created.
+    #[allow(clippy::too_many_arguments)]
+    async fn article<T: Transport>(
+        &self,
+        store: &SharedStore,
+        root: &Path,
+        transport: &T,
+        policy: &Robots,
+        definition: &SourceDefinition,
+        entry: &ListingEntry,
+        existing_id: Option<i64>,
+        historical: bool,
+        resource_bytes: &mut u64,
+    ) -> Result<bool, ArticleError> {
+        let validators = with_store(store, |s| s.validators(&definition.id, &entry.external_id))?;
+        let url = parser::detail_url(definition, entry)?;
+        let response = fetch(
+            transport,
+            &url,
+            validators,
+            ARTICLE_LIMIT,
+            &self.cancel,
+            policy,
+        )
+        .await?;
+        let (id, inserted) = match response {
+            network::Fetch::NotModified => {
+                let id = existing_id.ok_or("보관되지 않은 원문의 변경 없음 응답을 받았습니다.")?;
+                with_store(store, |s| {
+                    ensure_active(s, &self.cancel)?;
+                    s.checked(&definition.id, &entry.external_id)
+                })?;
+                (id, false)
+            }
+            network::Fetch::Redirect(_) => {
+                return Err("학교 서버 이동 응답을 처리하지 못했습니다.".into())
+            }
+            network::Fetch::Body {
+                bytes,
+                etag,
+                last_modified,
+                mime,
+            } => {
+                // A different content type is more likely a block or error page than
+                // the notice itself, so it stays a transient failure.
+                check_document_mime(definition, mime.as_deref())?;
+                let permanent = |reason: &str| ArticleError::Permanent {
+                    reason: reason.into(),
+                    response_sha256: format!("{:x}", Sha256::digest(&bytes)),
+                };
+                let text = std::str::from_utf8(&bytes)
+                    .map_err(|_| permanent("공지 본문 문자 인코딩을 지원하지 않습니다."))?;
+                let mut article =
+                    parser::article(definition, entry, text).map_err(|e| permanent(&e))?;
+                let replaces_readable = match existing_id {
+                    Some(id) => with_store(store, |s| s.has_readable_content(id))?,
+                    None => false,
+                };
+                if replaces_readable && article.unsupported_body {
+                    // Keep the last good content (approved Sogang exception). The
+                    // notice was checked, so this is neither a failure nor a skip.
+                    let id = existing_id.expect("readable content belongs to a document");
+                    with_store(store, |s| {
+                        ensure_active(s, &self.cancel)?;
+                        s.checked(&definition.id, &entry.external_id)
+                    })?;
+                    (id, false)
+                } else {
+                    article.etag = etag;
+                    article.last_modified = last_modified;
+                    let (id, _) = with_store(store, |s| {
+                        ensure_active(s, &self.cancel)?;
+                        s.upsert_article(&definition.id, &article, historical)
+                    })?;
+                    (id, existing_id.is_none())
+                }
+            }
+        };
+        with_store(store, |s| {
+            s.clear_skipped(&definition.id, &entry.external_id)
+        })?;
+        self.pending_resources(store, root, transport, policy, id, resource_bytes)
+            .await?;
+        Ok(inserted)
+    }
     #[allow(clippy::too_many_arguments)]
     async fn pending_resources<T: Transport>(
         &self,
@@ -748,6 +876,25 @@ impl Controller {
             .await?;
         }
         Ok(())
+    }
+}
+/// Transient failures hold the page checkpoint so the next run retries them.
+/// A permanent failure belongs to the fetched response and is recorded instead.
+enum ArticleError {
+    Transient(String),
+    Permanent {
+        reason: String,
+        response_sha256: String,
+    },
+}
+impl From<String> for ArticleError {
+    fn from(error: String) -> Self {
+        Self::Transient(error)
+    }
+}
+impl From<&str> for ArticleError {
+    fn from(error: &str) -> Self {
+        Self::Transient(error.into())
     }
 }
 fn mark_seed_complete(store: &SharedStore, source: &str) -> Result<(), String> {

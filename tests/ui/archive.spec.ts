@@ -244,6 +244,29 @@ test('subscriptions have no automatic collection, protect refreshing state, show
   await expect.poll(starts).toEqual([{ sourceIds: null, mode: 'historical' }, { sourceIds: ['computing-updates'], mode: 'incremental' }]);
 });
 
+test('skipped notices are listed per board with their originals and an explicit retry', async ({ page }) => {
+  const parser = '학교 페이지 형식이 예상과 다릅니다. 기존 보관 자료는 유지됩니다.';
+  await mockDesktop(page, { sourceList: [{ id: 'computing-career', name: '취업', organization: '소프트웨어융합대학', supported: true, subscribed: true,
+    skipped_count: 21, skipped: [
+      { external_id: '3110', url: 'https://computing.sogang.ac.kr/ko/community/career/detail/3110', reason: parser, skipped_at: '2026-11-04T00:00:00Z', archived: false },
+      { external_id: '3111', url: 'https://computing.sogang.ac.kr/ko/community/career/detail/3111', reason: parser, skipped_at: '2026-11-03T00:00:00Z', archived: true },
+    ] }] });
+  await page.goto('/');
+  await openSettings(page, '게시판');
+  // A skip is not a board failure: no warning mark on the tile.
+  await expect(page.locator('.board-state.alert')).toHaveCount(0);
+  await page.getByRole('button', { name: '소프트웨어융합대학 취업 상태', exact: true }).click();
+  const status = page.getByRole('dialog', { name: '취업 상태', exact: true });
+  await expect(status).toContainText('가져오지 못한 공지 21건');
+  await expect(status).toContainText('최근 2건만 표시합니다.');
+  await expect(status).toContainText('이전에 보관한 내용은 그대로 읽을 수 있습니다.');
+  await status.getByRole('button', { name: '공지 3110 원문 열기', exact: true }).click();
+  const calls = (command: string) => page.evaluate((name) => (window as any).__fixture.calls.filter((call: any) => call.command === name).map((call: any) => call.args), command);
+  await expect.poll(() => calls('archive_open_original')).toEqual([{ url: 'https://computing.sogang.ac.kr/ko/community/career/detail/3110' }]);
+  await status.getByRole('button', { name: '가져오지 못한 공지 다시 시도', exact: true }).click();
+  await expect.poll(() => calls('archive_start')).toEqual([{ sourceIds: ['computing-career'], mode: 'skipped' }]);
+});
+
 test('reader hydrates legacy attachment-role inline images once and rejects remote executable markup', async ({ page }) => {
   const foreign: string[] = [];
   await page.route('https://untrusted.invalid/**', (route) => { foreign.push(route.request().url()); return route.abort(); });

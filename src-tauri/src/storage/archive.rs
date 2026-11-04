@@ -4,7 +4,7 @@ use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, Row};
 use sha2::{Digest, Sha256};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
-const SOURCE_COLUMNS: &str = "id,name,organization,description,url,family,supported,subscribed,last_attempt,last_success,last_error,next_page,history_complete,status,discovered,archived,failed";
+const SOURCE_COLUMNS: &str = "id,name,organization,description,url,family,supported,subscribed,last_attempt,last_success,last_error,next_page,history_complete,status,discovered,archived,failed,(SELECT COUNT(*) FROM skipped_articles k WHERE k.source_id=sources.id)";
 const ITEM_COLUMNS: &str = "d.id,d.source_id,s.name,d.title,d.author,d.category,d.published_at,d.collected_at,COALESCE(u.is_read,0),COALESCE(u.saved,0),d.historical,d.body_text,CASE WHEN EXISTS(SELECT 1 FROM resources a WHERE a.document_id=d.id AND a.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id) AND a.status<>'downloaded') THEN 'missing_resources' ELSE 'archived' END";
 const ITEM_FROM: &str = "documents d JOIN sources s ON s.id=d.source_id LEFT JOIN document_state u ON u.document_id=d.id";
 const RESOURCE_COLUMNS: &str = "id,url,filename,kind,status,mime,bytes,local_path,sha256,error";
@@ -32,8 +32,12 @@ fn source_row(row: &Row<'_>) -> rusqlite::Result<SourceInfo> {
         discovered: row.get::<_, i64>(14)? as u64,
         archived: row.get::<_, i64>(15)? as u64,
         failed: row.get::<_, i64>(16)? as u64,
+        skipped_count: row.get::<_, i64>(17)? as u64,
+        skipped: Vec::new(),
     })
 }
+/// Bounds the notices listed per source; the count covers all of them.
+const SKIPPED_LISTED: i64 = 20;
 fn item_row(row: &Row<'_>) -> rusqlite::Result<DocumentItem> {
     Ok(DocumentItem {
         id: row.get(0)?,
@@ -178,7 +182,103 @@ impl Store {
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string());
-        result
+        let mut sources = result?;
+        for source in sources.iter_mut().filter(|s| s.skipped_count > 0) {
+            source.skipped = self.skipped_articles(&source.definition.id, SKIPPED_LISTED)?;
+        }
+        Ok(sources)
+    }
+    fn skipped_articles(&self, source: &str, limit: i64) -> Result<Vec<SkippedArticle>, String> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT k.external_id,k.url,k.reason,k.skipped_at,EXISTS(
+                    SELECT 1 FROM documents d WHERE d.source_id=k.source_id AND d.external_id=k.external_id)
+                 FROM skipped_articles k WHERE k.source_id=?1
+                 ORDER BY k.skipped_at DESC,k.external_id LIMIT ?2",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map(params![source, limit], |row| {
+                Ok(SkippedArticle {
+                    external_id: row.get(0)?,
+                    url: row.get(1)?,
+                    reason: row.get(2)?,
+                    skipped_at: row.get(3)?,
+                    archived: row.get(4)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string());
+        rows
+    }
+    /// Every skipped notice of a source, with the historical marking to retry it under.
+    pub(crate) fn skipped_entries(
+        &self,
+        source: &str,
+    ) -> Result<Vec<(ListingEntry, bool)>, String> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT external_id,url,historical FROM skipped_articles
+                 WHERE source_id=?1 ORDER BY skipped_at,external_id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map([source], |row| {
+                Ok((
+                    ListingEntry {
+                        external_id: row.get(0)?,
+                        url: row.get(1)?,
+                        pinned: false,
+                    },
+                    row.get(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string());
+        rows
+    }
+    /// Records a notice whose response was rejected for its content. A repeated
+    /// rejection keeps the first skip time and the original historical marking.
+    pub(crate) fn record_skipped(
+        &self,
+        source: &str,
+        entry: &ListingEntry,
+        historical: bool,
+        reason: &str,
+        response_sha256: &str,
+    ) -> Result<(), String> {
+        if !self.source(source)?.definition.supported
+            || !valid_id(&entry.external_id)
+            || !public_url(&entry.url)
+            || reason.trim().is_empty()
+            || reason.len() > 1024
+            || response_sha256.len() != 64
+        {
+            return Err("가져오지 못한 공지 정보를 확인해 주세요.".into());
+        }
+        self.connection
+            .execute(
+                "INSERT INTO skipped_articles(source_id,external_id,url,historical,reason,response_sha256)
+                 VALUES(?1,?2,?3,?4,?5,?6)
+                 ON CONFLICT(source_id,external_id) DO UPDATE SET
+                   url=excluded.url,reason=excluded.reason,response_sha256=excluded.response_sha256",
+                params![source, entry.external_id, entry.url, historical, reason, response_sha256],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub(crate) fn clear_skipped(&self, source: &str, external: &str) -> Result<(), String> {
+        self.connection
+            .execute(
+                "DELETE FROM skipped_articles WHERE source_id=?1 AND external_id=?2",
+                params![source, external],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
     pub(crate) fn source(&self, id: &str) -> Result<SourceInfo, String> {
         self.connection

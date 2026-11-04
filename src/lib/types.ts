@@ -160,6 +160,17 @@ export interface SourceInfo {
   discovered: number;
   archived: number;
   failed: number;
+  /** All skipped notices; `skipped` lists only the most recent of them. */
+  skipped_count: number;
+  skipped: SkippedArticle[];
+}
+export interface SkippedArticle {
+  external_id: string;
+  url: string;
+  reason: string;
+  skipped_at: string;
+  /** An earlier version is archived and stays readable. */
+  archived: boolean;
 }
 export interface DocumentItem {
   id: number;

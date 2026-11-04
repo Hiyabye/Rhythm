@@ -808,6 +808,25 @@ button svg {
   margin: 0;
   font-variant-numeric: tabular-nums;
 }
+.popover-subtitle {
+  margin-top: 10px;
+  font-weight: 650;
+  color: var(--text);
+}
+.skipped-list {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.skipped-list li {
+  display: grid;
+  gap: 1px;
+}
+.skipped-list span {
+  color: var(--secondary);
+}
 .popover-actions {
   display: flex;
   flex-wrap: wrap;

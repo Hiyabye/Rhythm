@@ -75,7 +75,7 @@
     finally { if (active) busy = false; }
   }
 
-  async function start(mode: 'historical' | 'incremental', ids: string[] | null = null) {
+  async function start(mode: 'historical' | 'incremental' | 'skipped', ids: string[] | null = null) {
     busy = true;
     error = '';
     feedback = '';
@@ -87,6 +87,12 @@
     finally { busy = false; }
   }
 
+  async function openOriginal(url: string) {
+    error = '';
+    try { await invoke('archive_open_original', { url }); }
+    catch (reason) { error = archiveError(reason); }
+  }
+
   async function cancel() {
     busy = true;
     error = '';
@@ -96,7 +102,7 @@
   }
 
   function runningLabel(value: SyncStatus) {
-    const mode = value.mode === 'historical' ? '과거 자료 가져오는 중' : value.mode === 'resource' ? '첨부 자료 내려받는 중' : '새 소식 확인 중';
+    const mode = value.mode === 'historical' ? '과거 자료 가져오는 중' : value.mode === 'resource' ? '첨부 자료 내려받는 중' : value.mode === 'skipped' ? '가져오지 못한 공지 다시 확인 중' : '새 소식 확인 중';
     const source = sources.find((item) => item.id === value.source_id)?.name;
     return [mode, source, value.page > 0 ? `${value.page}쪽` : ''].filter(Boolean).join(' · ');
   }
@@ -138,7 +144,17 @@
           <dl class="popover-facts"><div><dt>마지막 시도</dt><dd>{archiveDate(source.last_attempt, true)}</dd></div><div><dt>마지막 성공</dt><dd>{archiveDate(source.last_success, true)}</dd></div>
             {#if source.discovered || source.archived || source.failed || source.status === 'running'}<div><dt>최근 시도</dt><dd>발견 {source.discovered} · 보관 {source.archived} · 실패 {source.failed}</dd></div>{/if}</dl>
           {#if source.last_error}<p class="archive-error">{archiveError(source.last_error)}</p>{/if}
-          {#if source.subscribed}<div class="popover-actions"><button class="button secondary small" disabled={locked} onclick={() => start('historical', [source.id])}>{source.history_complete ? '과거 자료 다시 확인' : source.last_attempt ? '과거 자료 이어받기' : '과거 자료 가져오기'}</button><button class="button secondary small" disabled={locked} onclick={() => start('incremental', [source.id])}>새 소식 확인</button></div>{/if}
+          {#if source.skipped_count}
+            <p class="popover-subtitle">가져오지 못한 공지 {source.skipped_count}건</p>
+            <p>원문을 읽지 못해 건너뛰었고, 나머지 공지는 계속 가져왔습니다.</p>
+            <ul class="skipped-list">
+              {#each source.skipped as item (item.external_id)}
+                <li><button class="text-button" onclick={() => openOriginal(item.url)}>공지 {item.external_id} 원문 열기</button><span>{item.archived ? '이전에 보관한 내용은 그대로 읽을 수 있습니다.' : archiveError(item.reason)}</span></li>
+              {/each}
+            </ul>
+            {#if source.skipped_count > source.skipped.length}<p class="footnote">최근 {source.skipped.length}건만 표시합니다.</p>{/if}
+          {/if}
+          {#if source.subscribed}<div class="popover-actions"><button class="button secondary small" disabled={locked} onclick={() => start('historical', [source.id])}>{source.history_complete ? '과거 자료 다시 확인' : source.last_attempt ? '과거 자료 이어받기' : '과거 자료 가져오기'}</button><button class="button secondary small" disabled={locked} onclick={() => start('incremental', [source.id])}>새 소식 확인</button>{#if source.skipped_count}<button class="button secondary small" disabled={locked} onclick={() => start('skipped', [source.id])}>가져오지 못한 공지 다시 시도</button>{/if}</div>{/if}
           <code class="popover-code">{source.url}</code>
         </Popover>
       {/if}
