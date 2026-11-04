@@ -172,6 +172,15 @@ test('restart failure is surfaced after explicit confirmation', async ({ page })
 
   await expect(updater.getByRole('alert')).toContainText('업데이트를 적용하며 다시 시작하지 못했습니다.');
   expect(await callCount(page, 'updater_restart')).toBe(1);
+
+  // The verified package stays staged in the backend: retrying installs it
+  // instead of checking and downloading again.
+  await expect(updater.getByRole('button', { name: '설치 및 다시 시작', exact: true })).toBeEnabled();
+  await answerDialogs(page, 'ok');
+  await updater.getByRole('button', { name: '다시 시도', exact: true }).click();
+  await expect.poll(() => callCount(page, 'updater_restart')).toBe(2);
+  expect(await callCount(page, 'updater_install')).toBe(1);
+  expect(await callCount(page, 'updater_check')).toBe(1);
 });
 
 test('a finalized restore is reported once the reopened window loads', async ({ page }) => {
