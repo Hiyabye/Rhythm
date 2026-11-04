@@ -1370,3 +1370,116 @@ fn invalid_content_does_not_partially_create_documents() {
         .source_progress("one", "running", 0, false, 0, 0, 0, None, false)
         .is_err());
 }
+#[test]
+fn skipped_articles_persist_validate_and_clear_on_archive() {
+    let (directory, store) = database();
+    let entry = |id: &str| ListingEntry {
+        external_id: id.into(),
+        url: format!("https://www.sogang.ac.kr/ko/detail/{id}"),
+        pinned: false,
+    };
+    let hash = "a".repeat(64);
+    for (source, entry, reason, sha) in [
+        ("unsupported", entry("7"), "형식", hash.as_str()),
+        ("one", entry("bad/id"), "형식", hash.as_str()),
+        ("one", entry("7"), " ", hash.as_str()),
+        ("one", entry("7"), "형식", "short"),
+    ] {
+        assert!(store
+            .record_skipped(source, &entry, true, reason, sha)
+            .is_err());
+    }
+    store
+        .record_skipped("one", &entry("7"), true, "형식", &hash)
+        .unwrap();
+    // A repeated rejection updates the reason but keeps the original marking.
+    store
+        .record_skipped("one", &entry("7"), false, "다른 형식", &hash)
+        .unwrap();
+    store
+        .record_skipped("two", &entry("8"), false, "형식", &hash)
+        .unwrap();
+    drop(store);
+    let store = Store::open(&directory.path().join("db")).unwrap();
+    let one = store.source("one").unwrap();
+    assert_eq!(one.skipped_count, 1);
+    let listed = store
+        .sources()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.definition.id == "one")
+        .unwrap()
+        .skipped;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        (listed[0].reason.as_str(), listed[0].archived),
+        ("다른 형식", false)
+    );
+    let entries = store.skipped_entries("one").unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].0.external_id, "7");
+    assert!(entries[0].1, "the first historical marking is kept");
+    store
+        .upsert_article("one", &article("7", "공지", "본문", "2026-01-01"), true)
+        .unwrap();
+    assert!(store
+        .sources()
+        .unwrap()
+        .iter()
+        .any(|s| s.skipped.first().is_some_and(|k| k.archived) && s.definition.id == "one"));
+    store.clear_skipped("one", "7").unwrap();
+    assert_eq!(store.source("one").unwrap().skipped_count, 0);
+    assert_eq!(
+        store.source("two").unwrap().skipped_count,
+        1,
+        "other sources are isolated"
+    );
+}
+#[test]
+fn schema_ten_upgrade_keeps_archive_and_adds_skipped_articles() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        for migration in [
+            include_str!("../../migrations/001_foundation.sql"),
+            include_str!("../../migrations/002_archive.sql"),
+            include_str!("../../migrations/003_intelligence.sql"),
+            include_str!("../../migrations/004_personalization.sql"),
+            include_str!("../../migrations/005_proactive.sql"),
+            include_str!("../../migrations/006_notification_attempts.sql"),
+            include_str!("../../migrations/007_notification_activation.sql"),
+            include_str!("../../migrations/008_ai_execution_mode.sql"),
+            include_str!("../../migrations/009_ai_model_directory.sql"),
+            include_str!("../../migrations/010_update_check.sql"),
+        ] {
+            connection.execute_batch(migration).unwrap();
+        }
+    }
+    {
+        // Populate through the schema-10 tables only.
+        let store = Store::open(&path).unwrap();
+        store.catalog(&[definition("one", true)]).unwrap();
+        store
+            .upsert_article(
+                "one",
+                &article("5", "공지", "보관 본문", "2026-01-01"),
+                true,
+            )
+            .unwrap();
+        store
+            .connection
+            .execute_batch("DROP TABLE skipped_articles; PRAGMA user_version=10;")
+            .unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, super::SCHEMA_VERSION);
+    let source = store.source("one").unwrap();
+    assert_eq!(source.skipped_count, 0);
+    let id = store.document_id("one", "5").unwrap().unwrap();
+    assert!(store
+        .document(id, None)
+        .unwrap()
+        .body_text
+        .contains("보관 본문"));
+}

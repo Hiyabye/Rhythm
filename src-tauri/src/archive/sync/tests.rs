@@ -500,10 +500,11 @@ async fn iframe_only_article_is_archived_but_cannot_replace_existing_readable_re
         with_store(&store, |s| s.latest_original(item.id)).unwrap(),
         readable_original
     );
-    assert_eq!(
-        with_store(&store, |s| Ok(s.source(MAIN)?.status)).unwrap(),
-        "failed"
-    );
+    // Keeping the last good content is a checked notice, not a failure or a skip.
+    let source = with_store(&store, |s| s.source(MAIN)).unwrap();
+    assert_eq!(source.status, "completed");
+    assert_eq!((source.failed, source.skipped_count), (0, 0));
+    assert!(source.last_error.is_none());
     assert!(!original.is_empty());
     assert!(!fake
         .paths()
@@ -615,10 +616,16 @@ async fn source_failures_preserve_archive_and_other_sources_continue() {
         Budget::default(),
     )
     .await;
-    assert_eq!(
-        with_store(&store, |s| s.source(MAIN)).unwrap().status,
-        "failed"
-    );
+    // Unparseable markup is skipped and listed; the archived version stays.
+    let source = with_store(&store, |s| s.sources())
+        .unwrap()
+        .into_iter()
+        .find(|s| s.definition.id == MAIN)
+        .unwrap();
+    assert_eq!(source.status, "completed");
+    assert_eq!(source.skipped_count, 1);
+    assert_eq!(source.skipped[0].external_id, "5");
+    assert!(source.skipped[0].archived);
     assert!(with_store(&store, |s| s.document(id, None))
         .unwrap()
         .body_text
@@ -1961,4 +1968,203 @@ async fn historical_resume_counters_describe_only_current_attempt() {
         (1, 1, 0)
     );
     assert_eq!(items(&store).len(), 2);
+}
+
+fn skipped(store: &SharedStore, source: &str) -> SourceInfo {
+    with_store(store, |s| s.sources())
+        .unwrap()
+        .into_iter()
+        .find(|s| s.definition.id == source)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn permanent_failure_is_skipped_and_advances_history_but_transient_holds_the_page() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![2, 3], vec![4]]);
+    fake.bad.lock().unwrap().insert(3);
+    let controller = Controller::new();
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    let source = skipped(&store, MAIN);
+    assert_eq!(source.status, "completed");
+    assert!(source.history_complete, "the last public page was reached");
+    assert_eq!((source.next_page, source.failed), (3, 0));
+    assert_eq!(source.skipped_count, 1);
+    assert_eq!(source.skipped[0].external_id, "3");
+    assert!(!source.skipped[0].archived);
+    assert!(!source.skipped[0].reason.is_empty());
+    let mut archived = items(&store)
+        .into_iter()
+        .map(|item| item.title)
+        .collect::<Vec<_>>();
+    archived.sort();
+    assert_eq!(archived, ["장학금 AI 연구 공지 2", "장학금 AI 연구 공지 4"]);
+
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![2, 3], vec![4]]);
+    fake.failed.lock().unwrap().insert(3);
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    let source = skipped(&store, MAIN);
+    assert_eq!(source.status, "failed");
+    assert!(!source.history_complete);
+    assert_eq!((source.next_page, source.skipped_count), (1, 0));
+}
+
+#[tokio::test]
+async fn explicit_retry_refetches_only_skipped_notices_and_keeps_board_state() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![2, 3]]);
+    fake.bad.lock().unwrap().insert(3);
+    let controller = Controller::new();
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    let board = |store: &SharedStore| {
+        let s = skipped(store, MAIN);
+        (
+            s.status,
+            s.last_success,
+            s.last_error,
+            s.next_page,
+            s.history_complete,
+        )
+    };
+    let before = board(&store);
+    let detail_calls = |fake: &Fake| {
+        fake.paths()
+            .iter()
+            .filter(|url| url.ends_with("?pkId=3"))
+            .count()
+    };
+
+    // The same rejection keeps the row; only the skipped notice is requested.
+    let calls = fake.paths().len();
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "skipped",
+        Budget::default(),
+    )
+    .await;
+    let requested = &fake.paths()[calls..];
+    assert!(requested.iter().all(|url| !url.contains("boardList")));
+    assert_eq!(detail_calls(&fake), 2);
+    assert_eq!(skipped(&store, MAIN).skipped_count, 1);
+    assert_eq!(board(&store), before);
+
+    // A transient failure reports an error but keeps the row and the board state.
+    fake.bad.lock().unwrap().clear();
+    fake.failed.lock().unwrap().insert(3);
+    let outcome = controller
+        .execute(
+            &store,
+            dir.path(),
+            &fake,
+            sources(&store, &[MAIN]),
+            "skipped",
+            Budget::default(),
+        )
+        .await;
+    assert!(outcome.is_err());
+    assert_eq!(skipped(&store, MAIN).skipped_count, 1);
+    assert_eq!(board(&store), before);
+
+    fake.failed.lock().unwrap().clear();
+    let outcome = controller
+        .execute(
+            &store,
+            dir.path(),
+            &fake,
+            sources(&store, &[MAIN]),
+            "skipped",
+            Budget::default(),
+        )
+        .await;
+    assert!(outcome.is_ok());
+    assert_eq!(skipped(&store, MAIN).skipped_count, 0);
+    assert_eq!(board(&store), before);
+    let retried = items(&store)
+        .into_iter()
+        .find(|item| item.title.ends_with(" 3"))
+        .unwrap();
+    assert!(retried.historical, "a backfilled notice stays historical");
+}
+
+#[tokio::test]
+async fn retried_new_notice_keeps_its_original_non_historical_marking() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![2]]);
+    let controller = Controller::new();
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    *fake.pages.lock().unwrap() = vec![vec![3, 2]];
+    fake.bad.lock().unwrap().insert(3);
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "incremental",
+        Budget::default(),
+    )
+    .await;
+    let source = skipped(&store, MAIN);
+    assert_eq!(
+        (source.status.as_str(), source.skipped_count),
+        ("completed", 1)
+    );
+    fake.bad.lock().unwrap().clear();
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "skipped",
+        Budget::default(),
+    )
+    .await;
+    let retried = items(&store)
+        .into_iter()
+        .find(|item| item.title.ends_with(" 3"))
+        .unwrap();
+    assert!(!retried.historical, "a new notice must still count as new");
+    assert_eq!(skipped(&store, MAIN).skipped_count, 0);
 }

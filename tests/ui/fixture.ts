@@ -26,7 +26,7 @@ export interface FixtureOptions {
   aiModelStorageAvailable?: number | null;
   sourceCount?: number;
   // Replaces the default two-board catalog.
-  sourceList?: { id: string; name: string; organization: string; supported: boolean; subscribed?: boolean; family?: string; last_error?: string | null }[];
+  sourceList?: { id: string; name: string; organization: string; supported: boolean; subscribed?: boolean; family?: string; last_error?: string | null; skipped_count?: number; skipped?: { external_id: string; url: string; reason: string; skipped_at: string; archived: boolean }[] }[];
   sourceDelay?: number;
   initialNotificationsEnabled?: boolean;
   capabilitiesError?: boolean;
@@ -94,10 +94,10 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     let sources = [{ id: 'computing-updates', name: '소식', organization: '소프트웨어융합대학',
       description: '학교 공개 소식', url: 'https://computing.sogang.ac.kr/ko/community/news/list', family: 'computing', supported: true,
       subscribed: false, last_attempt: null, last_success: null, last_error: null, next_page: 1, history_complete: false,
-      status: 'limited', discovered: 0, archived: 0, failed: 0 },
+      status: 'limited', discovered: 0, archived: 0, failed: 0, skipped_count: 0, skipped: [] as unknown[] },
     { id: 'unsupported-board', name: '미검증 게시판', organization: '다른 학과', description: '아직 검증되지 않은 게시판',
       url: 'https://example.invalid', family: 'cms', supported: false, subscribed: false, last_attempt: null, last_success: null,
-      last_error: null, next_page: 1, history_complete: false, status: 'idle', discovered: 0, archived: 0, failed: 0 }];
+      last_error: null, next_page: 1, history_complete: false, status: 'idle', discovered: 0, archived: 0, failed: 0, skipped_count: 0, skipped: [] as unknown[] }];
     if (options.sourceList) {
       sources = options.sourceList.map((source) => ({ ...sources[0], family: 'computing', subscribed: false, last_error: null, ...source }));
     }

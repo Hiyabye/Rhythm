@@ -63,6 +63,7 @@ Rust owns persistence; browser previews never substitute localStorage or simulat
 | `008_ai_execution_mode` | `ai_preferences.execution_mode` (`auto`/`cpu`/`gpu`, used only on Windows) |
 | `009_ai_model_directory` | `ai_preferences.model_directory`, `ai_models.storage_directory` |
 | `010_update_check` | `settings.update_check` (default on), `settings.update_checked_at` (last successful automatic check, UTC) |
+| `011_skipped_articles` | `skipped_articles`: notices whose fetched response was rejected for its content, with listing URL, original historical marking, reason and response SHA-256 |
 
 ### Archive tables
 
@@ -150,16 +151,18 @@ The other 22 (Engineering newsletter, Electronic, Mechanical, System Semiconduct
 
 Two reference collectors by the owner, [SogangFriends](https://github.com/Hiyabye/SogangFriends) and [sogang-notices](https://github.com/Hiyabye/sogang-notices), informed the catalog and parser contracts. Neither has an explicit code license, so Rhythm's Rust is written independently; observed public contracts are not permission to copy their code. Official notice and fixture content keeps its original rights.
 
-A new notice whose body is only iframes is archived as metadata plus the original representation, with empty sanitized fields and an explicit unsupported-body state. The iframe is never fetched or rendered, and existing readable content is never replaced by such a result.
+A new notice whose body is only iframes is archived as metadata plus the original representation, with empty sanitized fields and an explicit unsupported-body state. The iframe is never fetched or rendered, and existing readable content is never replaced by such a result: that notice is recorded as checked and is neither a failure nor a skip.
 
 ## Synchronization, scheduler and lifecycle
 
 `archive/sync.rs::Controller` admits one archive or resource-retry job at a time. Admission checks the enabled extension and supported subscribed sources under the same store lock that disabling uses. Sources run sequentially; one source's failure is recorded and does not stop the next.
 
-- **Historical:** start at the persisted `next_page`, follow public pagination, deduplicate pins and IDs, and checkpoint only after every article retrieval on the page succeeds. Existing text is not refetched, but pending resources resume. `history_complete` becomes true only at the last public page, never at a safety or test limit.
+- **Historical:** start at the persisted `next_page`, follow public pagination, deduplicate pins and IDs, and checkpoint only after no article on the page failed transiently (see below). Existing text is not refetched, but pending resources resume. `history_complete` becomes true only at the last public page, never at a safety or test limit.
 - **Incremental:** start at page one and recheck recent pages and pins with ETag/Last-Modified validators. The minimum recheck window is three pages; discovery continues past it until a page of known regular records marks the frontier. Repeated pins never establish the frontier.
 - **First incremental seed:** with no local documents, fetch at most three pages as historical records, without counting them as new or marking history complete.
 - **Scope:** incremental sync is not an audit of every old edit.
+
+**Article failures.** A *transient* failure (network, deadline, server error, cancellation, redirect, or a response of the wrong content type, which is more likely a block page than the notice) holds the page checkpoint, fails the board and is retried on the next run. A *permanent* failure belongs to the fetched response: the body does not parse or its encoding is unsupported. It is recorded in `skipped_articles` (reason and response SHA-256), any last-good content stays, and the checkpoint advances, so one bad notice cannot stop a board. A later fetch that archives or confirms the notice (including HTTP 304) removes the row. Skipped notices are listed per board (count plus the 20 most recent) and are never dropped silently. Notices on recent pages are refetched by every incremental run; others only by the explicit `skipped` mode, which requests just those detail pages, archives them with their recorded historical marking, and leaves the board's status, counters, checkpoint and last success unchanged.
 
 Counters describe the current attempt; checkpoints are cumulative. HTTP 304 updates the check time and still resumes pending resources. A resource failure is nonfatal to article archival but surfaces as a failure on explicit retry. Completing pagination does not promise every resource was downloaded.
 

@@ -24,6 +24,21 @@ pub struct SourceInfo {
     pub discovered: u64,
     pub archived: u64,
     pub failed: u64,
+    /// All skipped notices; `skipped` lists only the most recent of them.
+    #[serde(default)]
+    pub skipped_count: u64,
+    #[serde(default)]
+    pub skipped: Vec<SkippedArticle>,
+}
+/// A notice whose fetched response could not be archived; see `skipped_articles`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SkippedArticle {
+    pub external_id: String,
+    pub url: String,
+    pub reason: String,
+    pub skipped_at: String,
+    /// An earlier version is archived and stays readable.
+    pub archived: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResourceInput {
