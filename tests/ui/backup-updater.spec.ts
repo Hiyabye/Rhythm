@@ -92,7 +92,7 @@ test('unconfigured updater shows manual update guidance instead of a failing che
   const updater = await openUpdater(page);
 
   // Static guidance, not a live announcement on every visit to Settings.
-  await expect(updater).toContainText('자동 업데이트를 제공하지 않습니다');
+  await expect(updater).toContainText('앱 안 업데이트를 지원하지 않습니다');
   await expect(updater.getByRole('status')).toHaveCount(0);
   await expect(updater.getByRole('listitem')).toHaveCount(0);
   await updater.getByText('설치 방법', { exact: true }).click();

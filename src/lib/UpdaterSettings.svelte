@@ -109,7 +109,7 @@
       {:else if progress}<p class="footnote" role="status">{progress.phase === 'staged' ? '서명된 업데이트를 준비했습니다.' : '업데이트를 처리하고 있습니다…'}</p>{/if}
     {:else if desktop && configured === false}
       <div class="settings-row stacked">
-        <span class="row-label">앱 업데이트<span class="row-detail">이 빌드는 자동 업데이트를 제공하지 않습니다. 새 버전은 직접 설치합니다.</span></span>
+        <span class="row-label">앱 업데이트<span class="row-detail">이 빌드는 앱 안 업데이트를 지원하지 않습니다. 새 버전은 직접 설치합니다.</span></span>
         <details class="manual-update-steps">
           <summary>설치 방법</summary>
           {#if isWindows}
