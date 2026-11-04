@@ -28,6 +28,15 @@ Catalog memory values (2/4/7 GiB) are estimates, not measured peaks. `verified` 
 
 **llama-server b12068, Metal, 2B** (macOS 27.2, M1 Pro, 16 GiB; all 18 synthetic fixtures, production controller → validation → Store path, `llama-server` from a bundled debug `Rhythm.app`): 18/18 jobs completed with schema-valid, grounded output, 1 needing its one repair; 7/18 also passed every screening check (category, deadline set, summary terms). 8 had the wrong category and 2 the wrong deadline set. Total inference 92 s (≈65 completion tok/s, 2–10 s per notice); `offloaded 25/25 layers to GPU`. In the same harness and fixtures, the former mistral.rs Metal release worker completed 18/18 and passed 7/18 in 236 s.
 
+**llama-server b12068, installed macOS app (#83):** a release `Rhythm.app` (`817f25d`, production identifier) launched by its executable with a temporary `HOME` on the populated synthetic fixture profile; the pinned 2B file (size and SHA-256 matched, cloned from an earlier validation profile, so the in-app download was not exercised) was registered as an external file. The app used the loopback fallback (the scratch path exceeds the socket limit) on 127.0.0.1 only, and `run/` was empty afterwards.
+
+- **Load and unload:** selected and loaded on Metal; 메모리 해제 reaped the server.
+- **Reader analysis:** with no server loaded, analysis started one and saved grounded results for two fixture notices (2.3 s and 3.8 s, Metal). A third (body "추가 모집 안내") failed validation after its one repair; the reader showed the validator's repair instruction as the error text.
+- **Outdated result:** changing 최대 출력 토큰 marked the saved result as differing from the current settings while keeping it readable; regeneration completed (1.9 s).
+- **Cancellation:** cancelling while a fresh server was starting reaped it and showed "분석을 취소했습니다"; the job was stored as cancelled and the next request started a new server and completed.
+- **Server killed mid-request:** `kill -9` during a request switched the session to CPU (`-ngl 0 --device none`) and the same job completed on CPU (9.1 s total, result `loaded_backend` cpu); Settings showed the CPU switch with a reason that describes an incomplete response rather than a crash. This is one short notice, not a CPU quality check.
+- **Quit with a model loaded:** the app's 종료 menu item exited the app and its `llama-server`; no process remained. `integrity_check` ok.
+
 Evidence from the former mistral.rs worker (same artifacts, different engine), not re-run with llama-server:
 
 - **4B on Metal** produced useful, validated Korean analysis of synthetic notices.
@@ -36,7 +45,7 @@ Evidence from the former mistral.rs worker (same artifacts, different engine), n
 
 **llama-server b12068, Windows 11, GTX 1650:** 2B and 4B on Vulkan and 2B on CPU completed 18/18 fixtures, 4B on CPU the first 4; an isolated installed app analyzed one synthetic notice on GPU and CPU. Details in [Windows validation](WINDOWS_VALIDATION.md#ai-on-windows).
 
-Not verified with llama-server: 4B and CPU inference on macOS, the macOS installed app's native AI flows, and cancellation or crash recovery in any installed app. Never verified: 0.8B, NVIDIA GPUs other than one GTX 1650, Intel Macs, and any broad accuracy rate.
+Not verified with llama-server: 4B on macOS and CPU analysis quality on macOS; in the installed macOS app, the in-app download, cancellation during generation (only during server start), a Unix-socket launch and the production profile; cancellation or crash recovery in the installed Windows app. Never verified: 0.8B, NVIDIA GPUs other than one GTX 1650, Intel Macs, and any broad accuracy rate.
 
 ## Known quality limits
 
