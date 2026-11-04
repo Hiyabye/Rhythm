@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-02T10:33:41+00:00",
+  "generatedAt": "2026-11-04T02:57:15+00:00",
   "title": "Design System: Rhythm",
   "extensions": {
     "colorMeta": {
@@ -507,6 +507,10 @@
       "label": {
         "displayName": "Label",
         "purpose": "Sidebar group headings, weekday names; 400 for event meta and footnotes."
+      },
+      "pane-title": {
+        "displayName": "Pane title",
+        "purpose": "One heading per settings pane."
       }
     },
     "shadows": [
@@ -524,6 +528,16 @@
         "name": "save-notice",
         "value": "0 4px 24px #0000000c",
         "purpose": "Transient save notice only."
+      },
+      {
+        "name": "board-lit",
+        "value": "0 3px 12px rgb(10 98 208 / .28)",
+        "purpose": "A subscribed (lit) board tile only."
+      },
+      {
+        "name": "popover",
+        "value": "0 10px 32px rgb(0 0 0 / .14), 0 1px 3px rgb(0 0 0 / .08)",
+        "purpose": "Floating popovers; .45/.3 black in dark theme."
       }
     ],
     "motion": [
@@ -550,29 +564,24 @@
     ],
     "breakpoints": [
       {
-        "name": "settings-wide",
-        "value": "1500px",
-        "note": "min-width; wider settings nav"
-      },
-      {
         "name": "compact",
         "value": "1100px",
-        "note": "max-width; 200px sidebar, week pane joins main column"
+        "note": "max-width; 200px sidebar, week pane joins main column, 150px settings pane list"
       },
       {
         "name": "icon-sidebar",
         "value": "800px",
-        "note": "max-width; 60px icon sidebar"
+        "note": "max-width; 60px icon sidebar, settings pane list wraps above the pane"
       },
       {
         "name": "narrow",
         "value": "640px",
-        "note": "max-width; chips always visible, below pick content"
+        "note": "max-width; chips always visible, below pick content; settings row controls wrap"
       },
       {
         "name": "small",
         "value": "540px",
-        "note": "max-width; settings and empty-state reflow"
+        "note": "max-width; segmented controls and empty states reflow"
       }
     ]
   },
@@ -631,6 +640,46 @@
       "description": "Nonblocking shell banner on the pane tint; error variant uses danger text and border.",
       "html": "<div class=\"ds-banner\"><div><strong>로컬 AI를 설정할 수 있습니다</strong><p>모델 없이도 읽기, 검색과 추천을 사용할 수 있습니다.</p></div><button class=\"ds-tb\">로컬 AI 설정하기</button></div>",
       "css": ".ds-banner{display:flex;align-items:flex-start;gap:10px;padding:11px 14px;background:var(--pane,#fafafb);border:1px solid var(--line,#e4e4e7);border-radius:8px;font:13px/1.6 \"Pretendard Variable\",-apple-system,sans-serif;color:var(--text,#1d1d1f)}.ds-banner strong{font-weight:600}.ds-banner p{margin:1px 0 0;color:var(--secondary,#5c5c61)}.ds-tb{margin-left:auto;white-space:nowrap;border:0;background:transparent;padding:2px 4px;color:var(--accent,#0a62d0);font:inherit;cursor:pointer}.ds-tb:hover{text-decoration:underline;text-underline-offset:3px}.ds-tb:focus-visible{outline:2px solid var(--accent,#0a62d0);outline-offset:2px}"
+    },
+    {
+      "name": "Settings Group",
+      "kind": "card",
+      "refersTo": "settings-group",
+      "description": "Grouped rows: title on the left, one control on the right, ⓘ for any explanation.",
+      "html": "<div class=\"ds-group\"><div class=\"ds-row\"><span class=\"ds-row-label\">전원 모드<button class=\"ds-hint\" aria-label=\"전원 모드 설명\"><svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" aria-hidden=\"true\"><path d=\"M12 11v6m0-10v.1M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z\"/></svg></button></span><span class=\"ds-seg\"><button class=\"on\" aria-pressed=\"true\">절전</button><button aria-pressed=\"false\">균형</button><button aria-pressed=\"false\">성능</button></span></div><div class=\"ds-row\"><span class=\"ds-row-label\">새 공지 자동 확인</span><button class=\"ds-switch\" role=\"switch\" aria-checked=\"true\" aria-label=\"자동 동기화\"><span></span></button></div><div class=\"ds-row\"><span class=\"ds-row-label\">운영체제 알림 권한<span class=\"ds-detail\">아직 결정되지 않음</span></span><button class=\"ds-btn\">권한 요청</button></div></div>",
+      "css": ".ds-group{background:var(--pane,#fafafb);border:1px solid var(--line,#e4e4e7);border-radius:10px;font:13px \"Pretendard Variable\",-apple-system,sans-serif;color:var(--text,#1d1d1f)}.ds-row{display:flex;align-items:center;gap:10px;min-height:46px;padding:8px 14px}.ds-row+.ds-row{border-top:1px solid var(--line,#e4e4e7)}.ds-row-label{flex:1;display:flex;flex-wrap:wrap;align-items:center;gap:2px;font-weight:500}.ds-detail{flex-basis:100%;font-size:12px;font-weight:400;color:var(--secondary,#5c5c61)}.ds-hint{display:inline-grid;place-items:center;width:22px;height:22px;border:0;border-radius:50%;background:transparent;color:var(--muted,#68686d);cursor:pointer}.ds-hint:hover,.ds-hint:focus-visible{color:var(--accent,#0a62d0)}.ds-seg{display:flex;gap:2px;padding:2px;border:1px solid var(--line,#e4e4e7);border-radius:7px;background:var(--sidebar,#f0f0f2)}.ds-seg button{min-height:24px;padding:2px 10px;border:0;border-radius:5px;background:transparent;font-size:12px;color:var(--secondary,#5c5c61);cursor:pointer}.ds-seg button.on{background:var(--surface,#fff);color:var(--accent,#0a62d0);box-shadow:0 1px 3px #0000000a}.ds-switch{width:35px;height:21px;padding:3px;border:0;border-radius:20px;background:var(--accent,#0a62d0);display:flex;cursor:pointer}.ds-switch span{width:15px;height:15px;border-radius:50%;background:#fff;box-shadow:0 1px 2px #0002;transform:translateX(14px)}.ds-btn{min-height:24px;padding:3px 10px;border:1px solid var(--line-strong,#cfcfd4);border-radius:6px;background:var(--surface,#fff);font-size:12px;cursor:pointer}.ds-btn:hover{background:var(--hover,rgb(0 0 0/.045))}:is(.ds-hint,.ds-seg button,.ds-switch,.ds-btn):focus-visible{outline:2px solid var(--accent,#0a62d0);outline-offset:2px}"
+    },
+    {
+      "name": "Board Tile",
+      "kind": "custom",
+      "refersTo": "board-tile",
+      "description": "One large subscription switch per board; lit with the accent fill and a check when subscribed.",
+      "html": "<ul class=\"ds-tiles\"><li class=\"ds-tile on\"><button role=\"switch\" aria-checked=\"true\" aria-label=\"소프트웨어융합대학 공지사항 구독\"><span class=\"ds-mark\"><svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m5 12 4 4L19 6\"/></svg></span><span>공지사항</span></button><button class=\"ds-info\" aria-label=\"소프트웨어융합대학 공지사항 상태\"><svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" aria-hidden=\"true\"><path d=\"M12 11v6m0-10v.1M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z\"/></svg></button></li><li class=\"ds-tile\"><button role=\"switch\" aria-checked=\"false\" aria-label=\"소프트웨어융합대학 장학 구독\"><span class=\"ds-mark\"></span><span>장학</span></button><button class=\"ds-info\" aria-label=\"소프트웨어융합대학 장학 상태\"><svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" aria-hidden=\"true\"><path d=\"M12 11v6m0-10v.1M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z\"/></svg></button></li></ul>",
+      "css": ".ds-tiles{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:8px;font:13px \"Pretendard Variable\",-apple-system,sans-serif}.ds-tile{position:relative}.ds-tile>button[role=switch]{width:100%;min-height:72px;display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between;gap:12px;padding:11px 12px;border:1px solid var(--line-strong,#cfcfd4);border-radius:10px;background:var(--surface,#fff);color:var(--text-2,#3a3a3e);font:inherit;font-weight:550;text-align:left;cursor:pointer;transition:background .15s,border-color .15s,color .15s,box-shadow .15s}.ds-tile>button[role=switch]:hover{border-color:var(--secondary,#5c5c61)}.ds-tile.on>button[role=switch]{background:var(--accent-fill,#0a62d0);border-color:var(--accent-fill,#0a62d0);color:var(--accent-text,#fff);box-shadow:0 3px 12px rgb(10 98 208/.28)}.ds-mark{display:grid;place-items:center;width:18px;height:18px;border:1.5px solid var(--line-strong,#cfcfd4);border-radius:50%}.ds-tile.on .ds-mark{background:#fff;border-color:#fff;color:var(--accent-fill,#0a62d0)}.ds-info{position:absolute;top:6px;right:6px;width:26px;height:26px;display:grid;place-items:center;border:0;border-radius:6px;background:transparent;color:var(--muted,#68686d);cursor:pointer}.ds-tile.on .ds-info{color:rgb(255 255 255/.85)}.ds-info:hover{background:var(--hover,rgb(0 0 0/.045))}.ds-tile.on .ds-info:hover{background:rgb(255 255 255/.16)}.ds-tile button:focus-visible{outline:2px solid var(--accent,#0a62d0);outline-offset:2px}"
+    },
+    {
+      "name": "Model Tile",
+      "kind": "card",
+      "refersTo": "model-tile",
+      "description": "Installed models select by clicking the whole tile; the chosen one uses the selection tint and 사용 중.",
+      "html": "<div class=\"ds-models\"><div class=\"ds-model sel\"><button class=\"ds-pick\" aria-pressed=\"true\" aria-label=\"Qwen3.5 4B 선택\"></button><div class=\"ds-mh\"><strong>Qwen3.5 4B</strong><span class=\"ds-using\"><svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m5 12 4 4L19 6\"/></svg>사용 중</span></div><span class=\"ds-meta\">균형 잡힌 공지 분석 · 2614.0 MB</span></div><div class=\"ds-model\"><div class=\"ds-mh\"><strong>Qwen3.5 2B</strong></div><span class=\"ds-meta\">가벼운 공지 분석 · 1221.5 MB</span><button class=\"ds-install\" aria-label=\"Qwen3.5 2B 다운로드 및 설치\">설치</button></div></div>",
+      "css": ".ds-models{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;font:13px \"Pretendard Variable\",-apple-system,sans-serif;color:var(--text,#1d1d1f)}.ds-model{position:relative;display:flex;flex-direction:column;gap:3px;min-height:112px;padding:12px 12px 10px 14px;border:1px solid var(--line-strong,#cfcfd4);border-radius:10px;background:var(--surface,#fff)}.ds-model.sel{border-color:var(--accent,#0a62d0);background:var(--soft,#e3edfb);box-shadow:inset 0 0 0 1px var(--accent,#0a62d0)}.ds-pick{position:absolute;inset:0;border:0;border-radius:10px;background:transparent;cursor:pointer}.ds-pick:focus-visible{outline:2px solid var(--accent,#0a62d0);outline-offset:2px}.ds-mh,.ds-meta{position:relative;pointer-events:none}.ds-mh{display:flex;justify-content:space-between;align-items:baseline;font-size:14px}.ds-using{display:inline-flex;gap:3px;align-items:center;color:var(--accent,#0a62d0);font-size:12px;font-weight:600}.ds-meta{font-size:12px;color:var(--secondary,#5c5c61)}.ds-install{margin-top:auto;align-self:flex-start;min-height:24px;padding:3px 10px;border:1px solid var(--accent-fill,#0a62d0);border-radius:6px;background:var(--accent-fill,#0a62d0);color:#fff;font-size:12px;cursor:pointer}.ds-install:hover{filter:brightness(1.1)}"
+    },
+    {
+      "name": "Interest Chip",
+      "kind": "chip",
+      "refersTo": "interest-chip",
+      "description": "Explicit interests as pills (learned ones dashed) with a dashed quick-add field; a chip opens its editor popover.",
+      "html": "<ul class=\"ds-chiplist\" aria-label=\"관심\"><li><button class=\"ds-ichip\">장학</button></li><li><button class=\"ds-ichip\">인공지능</button></li><li><button class=\"ds-ichip learned\">인턴십</button></li><li><input class=\"ds-add\" placeholder=\"+ 추가\" aria-label=\"관심 주제 추가\"></li></ul>",
+      "css": ".ds-chiplist{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px;font:12px \"Pretendard Variable\",-apple-system,sans-serif}.ds-ichip{min-height:26px;padding:2px 11px;border:1px solid var(--line-strong,#cfcfd4);border-radius:13px;background:var(--surface,#fff);color:var(--text,#1d1d1f);font:inherit;cursor:pointer}.ds-ichip:hover,.ds-ichip:focus-visible{border-color:var(--accent,#0a62d0);color:var(--accent,#0a62d0);outline:none}.ds-ichip.learned{border-style:dashed;color:var(--text-2,#3a3a3e)}.ds-add{width:96px;min-height:26px;padding:2px 11px;border:1px dashed var(--line-strong,#cfcfd4);border-radius:13px;background:transparent;font:inherit;color:var(--text,#1d1d1f);transition:width .15s,border-color .15s}.ds-add:focus{width:160px;border-style:solid;border-color:var(--accent,#0a62d0);outline:none}"
+    },
+    {
+      "name": "Popover",
+      "kind": "custom",
+      "refersTo": "popover",
+      "description": "Light-dismiss explanation or detail panel anchored under its ⓘ button.",
+      "html": "<div class=\"ds-pop\" role=\"dialog\" aria-label=\"학사 상태\"><p class=\"ds-pt\">학사</p><p>일부 가져옴 · 이어받기 가능</p><dl><div><dt>마지막 시도</dt><dd>11월 3일 14:20</dd></div><div><dt>마지막 성공</dt><dd>11월 3일 14:20</dd></div></dl><div class=\"ds-pa\"><button>과거 자료 이어받기</button><button>새 소식 확인</button></div></div>",
+      "css": ".ds-pop{width:300px;padding:12px 14px;border:1px solid var(--line-strong,#cfcfd4);border-radius:10px;background:var(--surface,#fff);color:var(--text-2,#3a3a3e);box-shadow:0 10px 32px rgb(0 0 0/.14),0 1px 3px rgb(0 0 0/.08);font:12px/1.65 \"Pretendard Variable\",-apple-system,sans-serif}.ds-pop p{margin:0}.ds-pop p+p{margin-top:6px}.ds-pt{font-size:13px;font-weight:650;color:var(--text,#1d1d1f)}.ds-pop dl{display:grid;gap:2px;margin:8px 0 0}.ds-pop dl div{display:flex;justify-content:space-between}.ds-pop dt{color:var(--secondary,#5c5c61)}.ds-pop dd{margin:0;font-variant-numeric:tabular-nums}.ds-pa{display:flex;gap:8px;margin-top:10px}.ds-pa button{min-height:24px;padding:3px 10px;border:1px solid var(--line-strong,#cfcfd4);border-radius:6px;background:var(--surface,#fff);font:inherit;font-size:12px;cursor:pointer}.ds-pa button:hover{background:var(--hover,rgb(0 0 0/.045))}.ds-pa button:focus-visible{outline:2px solid var(--accent,#0a62d0);outline-offset:2px}"
     }
   ],
   "narrative": {
@@ -644,6 +693,11 @@
       "Native-quick 140–150ms fades; no decorative motion"
     ],
     "rules": [
+      {
+        "name": "The Title-Only Rule",
+        "body": "Rows, tiles and buttons show a title, not a description. An explanation a person may need (what a switch does, a limit, a caveat) goes in the row's ⓘ button, which opens a light-dismiss popover named \"<title> 설명\". Warnings that must not be missed stay visible: errors, confirmation dialogs (unchanged wording), permission recovery steps and destructive-action consequences.",
+        "section": "components"
+      },
       {
         "name": "The Tabular Count Rule",
         "body": "Every count, date and time (sidebar badges, the Today subline, sync time, day numbers, meta lines) uses tabular numerals so columns and badges don't shift.",
@@ -674,12 +728,14 @@
       "Do use `--accent-fill` behind white text and `--accent` for accent text and icons.",
       "Do pair every family colour with its board or source name.",
       "Do use tabular numerals for counts, dates and times.",
-      "Do keep feedback chips hidden until row hover/focus, visible when pressed, and always visible at 640 px and narrower."
+      "Do keep feedback chips hidden until row hover/focus, visible when pressed, and always visible at 640 px and narrower.",
+      "Do give settings rows a title and one control, and put explanations in the row's ⓘ popover."
     ],
     "donts": [
       "Don't add eyebrows, letter-spaced kickers, header notes, taglines or stat tiles.",
       "Don't introduce a second chromatic accent beyond the family marks.",
-      "Don't separate panes with shadows; use hairlines and tonal steps."
+      "Don't separate panes with shadows; use hairlines and tonal steps.",
+      "Don't add description lines under settings rows, tiles or buttons; a second line is only for live state or a recovery step."
     ]
   }
 }

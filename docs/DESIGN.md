@@ -74,11 +74,18 @@ typography:
     fontFamily: "Pretendard Variable, Pretendard, -apple-system, BlinkMacSystemFont, sans-serif"
     fontSize: "11px"
     fontWeight: 600
+  pane-title:
+    fontFamily: "Pretendard Variable, Pretendard, -apple-system, BlinkMacSystemFont, sans-serif"
+    fontSize: "20px"
+    fontWeight: 700
+    lineHeight: 1.3
+    letterSpacing: "-0.015em"
 rounded:
   bar: "2px"
   row: "6px"
   panel: "8px"
   card: "10px"
+  pill: "13px"
   circle: "50%"
 spacing:
   sidebar: "232px"
@@ -87,6 +94,8 @@ spacing:
   week-pane: "340px"
   content-x: "32px"
   block-gap: "28px"
+  settings-nav: "176px"
+  settings-pane: "680px"
 components:
   button-primary:
     backgroundColor: "{colors.accent-fill}"
@@ -134,6 +143,50 @@ components:
     backgroundColor: "{colors.pane}"
     width: "340px"
     padding: "30px 20px 24px"
+  settings-group:
+    backgroundColor: "{colors.pane}"
+    rounded: "{rounded.card}"
+  settings-row:
+    textColor: "{colors.text}"
+    typography: "{typography.body}"
+    padding: "8px 14px"
+    height: "46px"
+  pane-item-active:
+    backgroundColor: "{colors.soft}"
+    textColor: "{colors.text}"
+    rounded: "{rounded.row}"
+    height: "30px"
+  board-tile:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.text-2}"
+    rounded: "{rounded.card}"
+    padding: "11px 12px"
+    height: "72px"
+  board-tile-on:
+    backgroundColor: "{colors.accent-fill}"
+    textColor: "{colors.accent-text}"
+    rounded: "{rounded.card}"
+  model-tile:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.text}"
+    rounded: "{rounded.card}"
+    padding: "12px 12px 10px 14px"
+  model-tile-selected:
+    backgroundColor: "{colors.soft}"
+    textColor: "{colors.text}"
+    rounded: "{rounded.card}"
+  interest-chip:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.text}"
+    rounded: "{rounded.pill}"
+    padding: "2px 11px"
+    height: "26px"
+  popover:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.text-2}"
+    rounded: "{rounded.card}"
+    padding: "12px 14px"
+    width: "300px"
 ---
 
 # Design — Quiet Intelligence
@@ -284,7 +337,7 @@ Type sits at macOS system sizes on a 13 px base (line height 1.5). Hierarchy com
 
 Layout is three panes on Today and two elsewhere. The sidebar is fixed at 232 px (200 px below 1100 px; a 60 px icon column below 800 px). Main content is padded 26 px top, 32 px sides and 40 px bottom (26 px sides below 1100 px; 22/20/32 px below 800 px). On Today a fixed 340 px week pane occupies the right edge and main content reserves that width. Today's blocks are separated by 28 px. Below 1100 px the week pane joins the main column (picks → week → recent analyses); at 640 px and narrower the feedback chips move below each pick. Settings uses a 176 px pane list (150 px below 1100 px; a wrapping row above the pane at 800 px and narrower) and a pane column up to 680 px; archive lists and reader share the same surfaces. Native window controls and a minimum window size are retained. The reader region is keyboard-focusable, has a Korean label/visible outline and scrolls wide content with horizontal arrows. Narrow native macOS reading and browser WebKit/Chromium 640 px/200% wide-table containment were checked. Browser results do not establish native WebView2 layout on Windows.
 
-Depth is flat. Panes are separated by 1 px hairlines (`--line`) and the tonal step between `--bg`, `--sidebar` and `--pane`, not by shadows. The only shadows are small control affordances: the selected segment (`0 1px 3px #0000000a`), the switch knob (`0 1px 2px #0002`), the transient save notice (`0 4px 24px #0000000c`), the lit board tile (`0 3px 12px` of the accent at 28%) and floating popovers (`0 10px 32px` black at 14%, 45% in dark). Corners are 6 px for rows, buttons, chips and events, 8 px for pick rows and banners, 10 px for AI panels, and 2 px for swatches and event bars. Motion is native-quick: hover, selection and chip-reveal fades of 140–150 ms, a spinning icon only while a sync runs, and everything disabled under `prefers-reduced-motion`.
+Depth is flat. Panes are separated by 1 px hairlines (`--line`) and the tonal step between `--bg`, `--sidebar` and `--pane`, not by shadows. The only shadows are small control affordances: the selected segment (`0 1px 3px #0000000a`), the switch knob (`0 1px 2px #0002`), the transient save notice (`0 4px 24px #0000000c`), the lit board tile (`0 3px 12px` of the accent at 28%) and floating popovers (`0 10px 32px` black at 14%, 45% in dark). Corners are 6 px for rows, buttons, chips and events, 8 px for pick rows and banners, 10 px for AI panels, settings groups, tiles and popovers, a full pill (13 px) for interest chips, and 2 px for swatches and event bars. Motion is native-quick: hover, selection and chip-reveal fades of 140–150 ms, a spinning icon only while a sync runs, and everything disabled under `prefers-reduced-motion`.
 
 The sidebar is opaque `--sidebar`, not macOS vibrancy; translucency would need a Tauri window setting and is an accepted gap.
 
@@ -321,9 +374,11 @@ Contrast, computed from the token values (WCAG relative luminance), not measured
 - **Do** pair every family colour with its board or source name.
 - **Do** use tabular numerals for counts, dates and times.
 - **Do** keep feedback chips hidden until row hover/focus, visible when pressed, and always visible at 640 px and narrower.
+- **Do** give settings rows a title and one control, and put explanations in the row's ⓘ popover.
 - **Don't** add eyebrows, letter-spaced kickers, header notes, taglines or stat tiles.
 - **Don't** introduce a second chromatic accent beyond the family marks.
 - **Don't** separate panes with shadows; use hairlines and tonal steps.
+- **Don't** add description lines under settings rows, tiles or buttons; a second line is only for live state or a recovery step.
 
 State is not communicated through color alone. Thin separators organize content without purple gradients, glowing AI ornaments or fabricated activity indicators.
 
