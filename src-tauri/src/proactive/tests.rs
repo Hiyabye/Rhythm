@@ -745,6 +745,7 @@ impl crate::archive::sync::Transport for SchedulerTransport {
         _validators: Option<(Option<String>, Option<String>)>,
         _limit: usize,
         _cancel: &std::sync::atomic::AtomicBool,
+        _access: crate::archive::sync::Access,
     ) -> Result<crate::archive::sync::Fetch, String> {
         use crate::archive::sync::Fetch;
         let body = |bytes: Vec<u8>, mime: &str| {

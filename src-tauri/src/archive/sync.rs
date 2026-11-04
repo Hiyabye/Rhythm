@@ -14,7 +14,7 @@ use tokio::sync::Notify;
 use url::Url;
 
 #[cfg(test)]
-pub use super::network::Fetch;
+pub use super::network::{Access, Fetch};
 pub type SharedStore = Arc<Mutex<Store>>;
 const ARTICLE_LIMIT: usize = 4 * 1024 * 1024;
 const FILE_LIMIT: usize = 20 * 1024 * 1024;
@@ -27,6 +27,7 @@ pub trait Transport: Send + Sync {
         validators: Option<(Option<String>, Option<String>)>,
         limit: usize,
         cancel: &'a AtomicBool,
+        access: network::Access,
     ) -> impl Future<Output = Result<network::Fetch, String>> + Send + 'a;
 }
 impl Transport for network::Client {
@@ -36,8 +37,9 @@ impl Transport for network::Client {
         validators: Option<(Option<String>, Option<String>)>,
         limit: usize,
         cancel: &AtomicBool,
+        access: network::Access,
     ) -> Result<network::Fetch, String> {
-        self.get(url, validators, limit, cancel).await
+        self.get(url, validators, limit, cancel, access).await
     }
 }
 pub fn with_store<T>(
@@ -76,7 +78,10 @@ pub struct Controller {
     admission: Mutex<()>,
     active_task_id: AtomicU64,
     task_notifications: Mutex<HashMap<u64, Arc<Notify>>>,
+    /// robots.txt of other image hosts, loaded once per job.
+    image_robots: RobotsCache,
 }
+type RobotsCache = Mutex<HashMap<String, Result<Arc<Robots>, String>>>;
 #[derive(Clone, Debug)]
 pub struct TaskOutcome {
     pub result: Result<(), String>,
@@ -99,6 +104,7 @@ impl Controller {
             admission: Mutex::new(()),
             active_task_id: AtomicU64::new(0),
             task_notifications: Mutex::new(HashMap::new()),
+            image_robots: Mutex::new(HashMap::new()),
         })
     }
     pub fn status(&self) -> Result<SyncStatus, String> {
@@ -179,6 +185,9 @@ impl Controller {
             .map_err(|_| "다른 동기화가 진행 중입니다. 완료하거나 중단한 뒤 시도해 주세요.")?;
         self.cancel.store(false, Ordering::Release);
         self.active_task_id.store(task_id, Ordering::Release);
+        if let Ok(mut robots) = self.image_robots.lock() {
+            robots.clear();
+        }
         Ok(())
     }
     fn finish(&self, message: String) {
@@ -298,7 +307,7 @@ impl Controller {
         mode: String,
         lease: Option<crate::operation_gate::AdmissionLease>,
     ) -> Result<(SyncStatus, u64), String> {
-        if !["historical", "incremental", "skipped"].contains(&mode.as_str()) {
+        if !["historical", "incremental", "skipped", "resources"].contains(&mode.as_str()) {
             return Err("동기화 방식을 확인해 주세요.".into());
         }
         // The same lock serializes extension disabling and job admission.
@@ -347,7 +356,7 @@ impl Controller {
             let mut outcome = controller
                 .execute(&store, &root, &transport, sources, &mode, Budget::default())
                 .await;
-            if outcome.is_ok() && mode != "skipped" {
+            if outcome.is_ok() && !matches!(mode.as_str(), "skipped" | "resources") {
                 outcome = match with_store(&store, |store| {
                     Ok(source_ids.iter().all(|id| {
                         store
@@ -393,7 +402,12 @@ impl Controller {
             let result = async {
                 let url =
                     Url::parse(&resource.url).map_err(|_| "첨부 자료 주소가 올바르지 않습니다.")?;
-                let policy = Robots::load(&client, &url, &controller.cancel).await?;
+                let access = if resource.kind == "image" {
+                    network::Access::EmbeddedImage
+                } else {
+                    network::Access::Source
+                };
+                let policy = Robots::load(&client, &url, &controller.cancel, access).await?;
                 let mut bytes = 0;
                 download_resource(
                     &store,
@@ -401,6 +415,7 @@ impl Controller {
                     &client,
                     &controller.cancel,
                     &policy,
+                    &controller.image_robots,
                     &resource,
                     &mut bytes,
                 )
@@ -427,11 +442,15 @@ impl Controller {
     ) -> Result<(), String> {
         let mut resource_bytes = 0;
         let mut failures = Vec::new();
-        // Retrying skipped notices is not a sync of the board, so it leaves the
-        // board's status, counters and last error as they are.
-        let retry = mode == "skipped";
+        // Retrying skipped notices and downloading missing files are not syncs of
+        // the board, so they leave its status, counters and last error as they are.
+        let retry = matches!(mode, "skipped" | "resources");
         for source in sources {
             active(store, &self.cancel)?;
+            if mode == "resources" && resource_bytes >= IMPORT_RESOURCES {
+                failures.push(BUDGET_REACHED.to_owned());
+                break;
+            }
             let mut current = source.clone();
             if !retry {
                 current.status = "running".into();
@@ -495,6 +514,12 @@ impl Controller {
                 .retry_skipped(store, root, transport, &definition, resource_bytes)
                 .await;
         }
+        if mode == "resources" {
+            let definition = current.definition.clone();
+            return self
+                .download_missing(store, root, transport, &definition, resource_bytes)
+                .await;
+        }
         let historical = mode == "historical";
         // The durable flag, not the current document count, decides whether the
         // initial bootstrap is still owed. A cancelled or failed seed leaves it
@@ -508,7 +533,8 @@ impl Controller {
         let first_page = if historical { current.next_page } else { 1 };
         let definition = &current.definition.clone();
         let initial = parser::list_url(definition, first_page)?;
-        let policy = Robots::load(transport, &initial, &self.cancel).await?;
+        let policy =
+            Robots::load(transport, &initial, &self.cancel, network::Access::Source).await?;
         let mut seen = HashSet::new();
         let mut page_hashes = HashSet::new();
         let mut page = first_page;
@@ -534,8 +560,16 @@ impl Controller {
                 "이번 동기화의 목록과 원문을 보관하고 있습니다.",
             );
             let url = parser::list_url(definition, page)?;
-            let response =
-                fetch(transport, &url, None, ARTICLE_LIMIT, &self.cancel, &policy).await?;
+            let response = fetch(
+                transport,
+                &url,
+                None,
+                ARTICLE_LIMIT,
+                &self.cancel,
+                &policy,
+                network::Access::Source,
+            )
+            .await?;
             let listing = match response {
                 network::Fetch::Body { bytes, mime, .. } => {
                     check_document_mime(definition, mime.as_deref())?;
@@ -689,6 +723,47 @@ impl Controller {
             page += 1;
         }
     }
+    /// Downloads the missing files of archived notices, newest first, until the
+    /// job budget is spent; files left over stay pending for the next run.
+    async fn download_missing<T: Transport>(
+        &self,
+        store: &SharedStore,
+        root: &Path,
+        transport: &T,
+        definition: &SourceDefinition,
+        resource_bytes: &mut u64,
+    ) -> Result<(), String> {
+        let documents = with_store(store, |s| s.documents_missing_resources(&definition.id))?;
+        if documents.is_empty() {
+            return Ok(());
+        }
+        let policy = Robots::load(
+            transport,
+            &parser::list_url(definition, 1)?,
+            &self.cancel,
+            network::Access::Source,
+        )
+        .await?;
+        for (index, id) in documents.iter().enumerate() {
+            active(store, &self.cancel)?;
+            if *resource_bytes >= IMPORT_RESOURCES {
+                break;
+            }
+            self.update(
+                Some(definition.id.clone()),
+                "resources",
+                0,
+                &format!(
+                    "첨부 자료를 내려받고 있습니다. 공지 {} / {}건",
+                    index + 1,
+                    documents.len()
+                ),
+            );
+            self.pending_resources(store, root, transport, &policy, *id, resource_bytes)
+                .await?;
+        }
+        Ok(())
+    }
     /// Re-fetches only the notices recorded as skipped. The board's sync status,
     /// checkpoint and last success are left as the last sync set them.
     async fn retry_skipped<T: Transport>(
@@ -703,8 +778,13 @@ impl Controller {
         if entries.is_empty() {
             return Ok(());
         }
-        let policy =
-            Robots::load(transport, &parser::list_url(definition, 1)?, &self.cancel).await?;
+        let policy = Robots::load(
+            transport,
+            &parser::list_url(definition, 1)?,
+            &self.cancel,
+            network::Access::Source,
+        )
+        .await?;
         let mut errors = Vec::new();
         for (index, (entry, historical)) in entries.iter().enumerate() {
             active(store, &self.cancel)?;
@@ -789,6 +869,7 @@ impl Controller {
             ARTICLE_LIMIT,
             &self.cancel,
             policy,
+            network::Access::Source,
         )
         .await?;
         let (id, inserted) = match response {
@@ -870,6 +951,7 @@ impl Controller {
                 transport,
                 &self.cancel,
                 policy,
+                &self.image_robots,
                 &resource,
                 total,
             )
@@ -938,6 +1020,7 @@ async fn fetch<T: Transport>(
     limit: usize,
     cancel: &AtomicBool,
     policy: &Robots,
+    access: network::Access,
 ) -> Result<network::Fetch, String> {
     let mut target = url.clone();
     for redirects in 0..=3 {
@@ -950,14 +1033,14 @@ async fn fetch<T: Transport>(
             tokio::select! {_=tokio::time::sleep(std::time::Duration::from_secs_f64(policy.delay))=>{},_=wait_cancel(cancel)=>return Err("동기화를 중단했습니다.".into())}
         }
         match transport
-            .fetch(&target, validators.clone(), limit, cancel)
+            .fetch(&target, validators.clone(), limit, cancel, access)
             .await?
         {
             network::Fetch::Redirect(next) => {
                 if redirects == 3 {
                     return Err("학교 서버의 이동 경로가 너무 많습니다.".into());
                 }
-                network::validate_url(&next)?;
+                network::validate(&next, access)?;
                 target = next;
             }
             response => return Ok(response),
@@ -971,6 +1054,7 @@ async fn wait_cancel(cancel: &AtomicBool) {
     }
 }
 type RobotGroup = (Vec<String>, Vec<(String, bool)>, f64);
+#[derive(Debug)]
 struct Robots {
     origin: String,
     rules: Vec<(String, bool)>,
@@ -981,11 +1065,15 @@ impl Robots {
         transport: &T,
         url: &Url,
         cancel: &AtomicBool,
+        access: network::Access,
     ) -> Result<Self, String> {
         let robots = url
             .join("/robots.txt")
             .map_err(|_| "정보원 주소를 확인해 주세요.")?;
-        match transport.fetch(&robots, None, 64 * 1024, cancel).await? {
+        match transport
+            .fetch(&robots, None, 64 * 1024, cancel, access)
+            .await?
+        {
             network::Fetch::Body { bytes, mime, .. } => {
                 if matches!(mime.as_deref(), Some("text/html" | "application/xhtml+xml")) {
                     return Err("학교의 수집 정책 대신 HTML 오류 페이지를 받았습니다.".into());
@@ -1119,6 +1207,31 @@ fn wildcard_prefix(pattern: &[u8], text: &[u8], anchored: bool) -> bool {
     p == pattern.len()
 }
 
+const BUDGET_REACHED: &str =
+    "이번 실행의 첨부 자료 한도(256 MB)에 도달했습니다. 남은 자료는 다음에 이어서 내려받습니다.";
+/// The robots.txt policy of another image host, loaded once per job. A failed
+/// load is cached too, so one unreachable host costs one request per job.
+async fn image_policy<T: Transport>(
+    transport: &T,
+    cache: &RobotsCache,
+    url: &Url,
+    cancel: &AtomicBool,
+) -> Result<Arc<Robots>, String> {
+    let origin = url.origin().ascii_serialization();
+    if let Some(cached) = cache.lock().ok().and_then(|c| c.get(&origin).cloned()) {
+        return cached;
+    }
+    let loaded = match Robots::load(transport, url, cancel, network::Access::EmbeddedImage).await {
+        Ok(policy) => Ok(Arc::new(policy)),
+        // Cancellation must not be remembered as the host's policy.
+        Err(error) if cancel.load(Ordering::Acquire) => return Err(error),
+        Err(error) => Err(error),
+    };
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(origin, loaded.clone());
+    }
+    loaded
+}
 #[derive(Debug)]
 enum DownloadOutcome {
     Downloaded,
@@ -1145,27 +1258,41 @@ fn raster(bytes: &[u8]) -> Option<&'static str> {
         None
     }
 }
+#[allow(clippy::too_many_arguments)] // One download shares the job's policies and budget.
 async fn download_resource<T: Transport>(
     store: &SharedStore,
     root: &Path,
     transport: &T,
     cancel: &AtomicBool,
     policy: &Robots,
+    image_robots: &RobotsCache,
     resource: &ResourceRecord,
     total: &mut u64,
 ) -> Result<DownloadOutcome, String> {
     active(store, cancel)?;
+    // Set when the remaining job budget, not the per-file cap, bounds this
+    // download. A size failure then says nothing about the file itself.
+    let mut budget_bound = false;
     let outcome: Result<(), String> = async {
         let url=Url::parse(&resource.url).map_err(|_|"첨부 자료 주소를 해석하지 못했습니다.")?;
-        network::validate_url(&url)?;
-        if *total>=IMPORT_RESOURCES {return Err("이번 가져오기의 첨부 자료 한도(256 MB)에 도달했습니다. 필요한 자료를 개별적으로 다시 내려받아 주세요.".into());}
-        let limit=(if resource.kind=="image" {10*1024*1024}else{FILE_LIMIT}).min((IMPORT_RESOURCES-*total) as usize);
-        match fetch(transport,&url,None,limit,cancel,policy).await? {
+        let access=if resource.kind=="image" {network::Access::EmbeddedImage} else {network::Access::Source};
+        network::validate(&url,access)?;
+        let cap=if resource.kind=="image" {10*1024*1024} else {FILE_LIMIT};
+        let remaining=IMPORT_RESOURCES.saturating_sub(*total) as usize;
+        budget_bound=remaining<cap;
+        if remaining==0 {return Err(BUDGET_REACHED.into());}
+        let limit=cap.min(remaining);
+        let other;
+        let policy=if url.origin().ascii_serialization()==policy.origin {policy} else {
+            other=image_policy(transport,image_robots,&url,cancel).await?;
+            &*other
+        };
+        match fetch(transport,&url,None,limit,cancel,policy,access).await? {
             network::Fetch::Body{bytes,mime,..}=>{
                 // Charge received bytes even when format validation or disk writes fail.
                 // The transport independently caps the next response to remaining budget.
                 *total=total.saturating_add(bytes.len() as u64);
-                if bytes.len()>limit || *total>IMPORT_RESOURCES {return Err("이번 가져오기의 첨부 자료 한도(256 MB)를 초과했습니다.".into());}
+                if bytes.len()>limit || *total>IMPORT_RESOURCES {return Err(BUDGET_REACHED.into());}
                 let media=if resource.kind=="image" {Some(raster(&bytes).ok_or("안전한 이미지 형식(PNG, JPEG, GIF, WebP)이 아니어서 보관하지 않았습니다.")?.to_string())} else {
                     let mime=mime.filter(|m|!matches!(m.as_str(),"text/html"|"application/xhtml+xml"|"application/javascript"|"text/javascript"|"image/svg+xml"));
                     if mime.is_none() || bytes.is_empty(){return Err("첨부 파일 대신 오류 페이지 또는 지원하지 않는 자료를 받았습니다.".into());}
@@ -1207,6 +1334,10 @@ async fn download_resource<T: Transport>(
     }.await;
     if let Err(error) = outcome {
         active(store, cancel)?;
+        if budget_bound && (error == BUDGET_REACHED || error.contains("크기")) {
+            // Leave the row as it was (normally pending) for a later run.
+            return Ok(DownloadOutcome::Failed(BUDGET_REACHED.into()));
+        }
         if resource.status == "downloaded" && local_resource(store, root, resource.id).await.is_ok()
         {
             return Ok(DownloadOutcome::Failed(format!(

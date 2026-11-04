@@ -231,7 +231,13 @@ mod tests {
             .unwrap();
         let response = Client::new()
             .unwrap()
-            .get(&url, None, 1024 * 1024, &AtomicBool::new(false))
+            .get(
+                &url,
+                None,
+                1024 * 1024,
+                &AtomicBool::new(false),
+                crate::archive::network::Access::Source,
+            )
             .await
             .unwrap();
         let Fetch::Body { bytes, .. } = response else {

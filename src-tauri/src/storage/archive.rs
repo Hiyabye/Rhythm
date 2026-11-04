@@ -213,6 +213,26 @@ impl Store {
             .map_err(|e| e.to_string());
         rows
     }
+    /// Documents of a source whose current revision has a file to (re)download,
+    /// newest first. Terminal states (unsupported, too large) are not retried.
+    pub(crate) fn documents_missing_resources(&self, source: &str) -> Result<Vec<i64>, String> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT d.id FROM documents d WHERE d.source_id=?1 AND EXISTS(
+                    SELECT 1 FROM resources r WHERE r.document_id=d.id
+                      AND r.revision_id=(SELECT MAX(id) FROM document_revisions WHERE document_id=d.id)
+                      AND r.status IN ('pending','failed'))
+                 ORDER BY d.published_at DESC,d.id DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let ids = statement
+            .query_map([source], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string());
+        ids
+    }
     /// Every skipped notice of a source, with the historical marking to retry it under.
     pub(crate) fn skipped_entries(
         &self,

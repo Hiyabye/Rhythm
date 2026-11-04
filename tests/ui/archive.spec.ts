@@ -242,6 +242,13 @@ test('subscriptions have no automatic collection, protect refreshing state, show
   await page.getByRole('button', { name: '소프트웨어융합대학 소식 상태', exact: true }).click();
   await status.getByRole('button', { name: '새 소식 확인', exact: true }).click();
   await expect.poll(starts).toEqual([{ sourceIds: null, mode: 'historical' }, { sourceIds: ['computing-updates'], mode: 'incremental' }]);
+  // Missing files of every subscribed board download through one explicit action.
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => (window as any).__fixture.completeSync());
+  await expect(page.getByRole('button', { name: '자료 모두 내려받기', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '자료 모두 내려받기', exact: true }).click();
+  await expect.poll(starts).toEqual([{ sourceIds: null, mode: 'historical' }, { sourceIds: ['computing-updates'], mode: 'incremental' }, { sourceIds: null, mode: 'resources' }]);
+  await expect(page.locator('.collect-status')).toContainText('첨부 자료 모두 내려받는 중');
 });
 
 test('skipped notices are listed per board with their originals and an explicit retry', async ({ page }) => {
