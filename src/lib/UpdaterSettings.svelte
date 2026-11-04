@@ -108,7 +108,7 @@
     {#if progress}<p class="footnote" role="status">{progress.phase === 'downloading' ? `다운로드 중${progress.total ? ` · ${Math.round((progress.downloaded ?? 0) / progress.total * 100)}%` : '…'}` : progress.phase === 'verifying' ? '다운로드한 서명 검증 중…' : progress.phase === 'installing' ? '검증된 업데이트를 설치 중…' : progress.phase === 'staged' ? '서명된 업데이트를 준비했습니다.' : '앱을 다시 시작합니다…'}</p>{/if}
     {#if error}<div class="banner error" role="alert"><div><strong>업데이트를 완료하지 못했습니다</strong><p>{error}</p></div><button class="text-button" disabled={checking || installing} onclick={check}>다시 시도</button></div>{/if}
   {:else if desktop && configured === false}
-    <div class="setting-row"><div><h3>앱 업데이트</h3><p>자동 업데이트는 제공하지 않습니다. 새 버전은 아래 순서로 직접 설치합니다.</p></div></div>
+    <div class="setting-row"><div><h3>앱 업데이트</h3><p>이 빌드는 앱 안 업데이트를 지원하지 않습니다. 새 버전은 아래 순서로 직접 설치합니다.</p></div></div>
     {#if isWindows}
     <ol class="manual-update">
       <li>Rhythm을 트레이 메뉴에서 완전히 종료합니다.</li>
