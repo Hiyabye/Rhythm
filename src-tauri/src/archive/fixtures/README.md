@@ -48,6 +48,17 @@ The following additional bounded captures were obtained during v0.2.1 verificati
   normalized to LF and trailing line whitespace is removed; these are structural
   compatibility fixtures, not byte-for-byte HTTP response captures.
 
+The following bounded captures were obtained during #78 (2026-11-04) through
+Rhythm's own transport and robots policy, using public GETs only:
+
+- `main-detail-551377.json`: unchanged public JSON detail for `pkId=551377`. Its
+  body is an empty paragraph plus `div.iframe-wrapper` around a PDF-viewer iframe,
+  which the iframe-only rule must recognize. The iframe was not fetched.
+- `computing-career-content-396.html`: only the original inner HTML of
+  `.sg-content.tiptap-view` from `https://computing.sogang.ac.kr/ko/community/career/detail/396`
+  (legacy tables nested about 130 levels deep). The test places it inside the
+  `career/3323` page fixture, so its page shell and Nuxt data are not duplicated.
+
 `parser_tests.rs` and `engineering_tests.rs` check these structures and separately
 construct invalid/empty and hostile-content cases. Counts are observations for these fixtures, not parser
 constants. Live university content may change; production mismatches must produce

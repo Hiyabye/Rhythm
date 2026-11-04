@@ -407,3 +407,67 @@ fn nuxt_alias_reader_is_data_only_and_rejects_expressions() {
     assert!(date("2026-가나다").is_err());
     assert_eq!(date("2024-02-29").unwrap(), "2024-02-29");
 }
+#[test]
+fn wrapped_iframe_body_is_iframe_only_but_wrapped_text_is_not() {
+    let source = source("sogang-academic");
+    let entry = ListingEntry {
+        external_id: "551377".into(),
+        url: main_canonical("551377").to_string(),
+        pinned: false,
+    };
+    // Captured body: an empty paragraph and `div.iframe-wrapper` around the viewer.
+    let captured = include_str!("main-detail-551377.json");
+    let archived = article(&source, &entry, captured).unwrap();
+    assert!(archived.unsupported_body);
+    assert!(archived.body_html.is_empty() && archived.body_text.is_empty());
+    assert_eq!(archived.resources.len(), 2, "attachments stay referenced");
+    let mut value: Value = serde_json::from_str(captured).unwrap();
+    for content in [
+        "<div class=\"iframe-wrapper\"><iframe src=\"/a\"></iframe><p>안내</p></div>",
+        "<div><table><tr><td><iframe src=\"/a\"></iframe></td></tr></table></div>",
+        &format!("{}<iframe src=\"/a\"></iframe>", "<div>".repeat(100)),
+    ] {
+        value["data"]["content"] = content.into();
+        let parsed = article(&source, &entry, &value.to_string());
+        assert!(
+            parsed.is_err() || !parsed.unwrap().unsupported_body,
+            "{content}"
+        );
+    }
+}
+#[test]
+fn deeply_nested_legacy_tables_keep_their_text() {
+    let source = source("computing-career");
+    let deep = include_str!("computing-career-content-396.html");
+    let detail = include_str!("computing-career-detail.html");
+    // Captured body of career/396 (about 130 levels deep) inside the captured page.
+    let open = detail
+        .find(r#"<div class="sg-content tiptap-view" data-v-21a8b56e>"#)
+        .unwrap();
+    let start = detail[open..].find('>').unwrap() + open + 1;
+    let end = detail[start..].find("</div></div></div>").unwrap() + start;
+    let page = format!("{}{deep}{}", &detail[..start], &detail[end..]);
+    let entry = ListingEntry {
+        external_id: "3323".into(),
+        url: "https://computing.sogang.ac.kr/ko/community/career/detail/3323".into(),
+        pinned: false,
+    };
+    let archived = article(&source, &entry, &page).unwrap();
+    for text in ["신입사원 모집", "질문하기", "ymjeon@shinhan.com"] {
+        assert!(archived.body_text.contains(text), "{text}");
+    }
+    assert!(!archived.body_html.contains("<script"));
+
+    // Any depth stays bounded: no recursion past the limit, text kept, node cap kept.
+    let base = "https://computing.sogang.ac.kr/ko/community/career/detail/1";
+    let nested = format!(
+        "{}<b>깊은 본문</b><img src=\"/deep.png\" alt=\"그림\"><script>evil()</script>{}",
+        "<div><table><tr><td>".repeat(5000),
+        "</td></tr></table></div>".repeat(5000)
+    );
+    let (html, plain, resources) = sanitize(&nested, base).unwrap();
+    assert!(plain.contains("깊은 본문"));
+    assert!(!html.contains("evil") && !plain.contains("evil"));
+    assert_eq!(resources.len(), 1);
+    assert!(sanitize(&"<p>가</p>".repeat(60_000), base).is_err());
+}

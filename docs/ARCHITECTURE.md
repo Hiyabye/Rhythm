@@ -151,7 +151,7 @@ The other 22 (Engineering newsletter, Electronic, Mechanical, System Semiconduct
 
 Two reference collectors by the owner, [SogangFriends](https://github.com/Hiyabye/SogangFriends) and [sogang-notices](https://github.com/Hiyabye/sogang-notices), informed the catalog and parser contracts. Neither has an explicit code license, so Rhythm's Rust is written independently; observed public contracts are not permission to copy their code. Official notice and fixture content keeps its original rights.
 
-A new notice whose body is only iframes is archived as metadata plus the original representation, with empty sanitized fields and an explicit unsupported-body state. The iframe is never fetched or rendered, and existing readable content is never replaced by such a result: that notice is recorded as checked and is neither a failure nor a skip.
+A new notice whose body is only iframes (blank text and textless `p`/`div`/`span`/`br` wrappers allowed, as in the school's `div.iframe-wrapper` PDF viewers) is archived as metadata plus the original representation, with empty sanitized fields and an explicit unsupported-body state. The iframe is never fetched or rendered, and existing readable content is never replaced by such a result: that notice is recorded as checked and is neither a failure nor a skip. Readable content means non-empty sanitized HTML or text, or an image reference of the current revision whatever its download state; a stored image reference is kept because a later retry or route change can still fetch it.
 
 ## Synchronization, scheduler and lifecycle
 
@@ -208,7 +208,7 @@ Resource URL, original filename, kind, MIME, bytes, state and SHA-256 are kept. 
 
 Local reads check containment, bound size and verify the stored SHA-256. Retry repairs corrupt bytes; a failed refresh keeps the last verified copy. There is no remote-image fallback. Cleanup of unreferenced files and storage quotas are not implemented.
 
-The Rust sanitizer keeps a limited structural HTML subset, strips scripts, iframes, forms, styles and event attributes, and emits image references without `src`. `DocumentReader.svelte` builds a second restricted DOM, requests only integrity-checked local raster data URIs, and sends HTTP(S) links to the OS browser on explicit action. Missing or corrupt images become placeholders with repair actions. A failed automatic read-state write never hides content. CSP is an extra layer, not a replacement for the sanitizer.
+The Rust sanitizer keeps a limited structural HTML subset, strips scripts, iframes, forms, styles and event attributes, and emits image references without `src`. Recursion stops at depth 64: a deeper subtree (legacy editors nest tables about 130 levels) is rendered iteratively as one block of its text and images without structure. More than 50,000 nodes is a parse error. `DocumentReader.svelte` builds a second restricted DOM, requests only integrity-checked local raster data URIs, and sends HTTP(S) links to the OS browser on explicit action. Missing or corrupt images become placeholders with repair actions. A failed automatic read-state write never hides content. CSP is an extra layer, not a replacement for the sanitizer.
 
 ## Managed models and downloads
 

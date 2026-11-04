@@ -576,22 +576,31 @@ fn escape(value: &str) -> String {
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
 }
+/// True when the body holds one or more iframes and nothing else: only blank
+/// text and textless layout wrappers (as in `<div class="iframe-wrapper">`).
 fn iframe_only(content: &str) -> bool {
+    fn only_iframes(element: ElementRef<'_>, depth: usize, found: &mut bool) -> bool {
+        depth <= MAX_DEPTH
+            && element.children().all(|child| {
+                if let Some(text) = child.value().as_text() {
+                    text.trim().is_empty()
+                } else if let Some(element) = ElementRef::wrap(child) {
+                    match element.value().name() {
+                        "iframe" => {
+                            *found = true;
+                            true
+                        }
+                        "p" | "div" | "span" | "br" => only_iframes(element, depth + 1, found),
+                        _ => false,
+                    }
+                } else {
+                    true
+                }
+            })
+    }
     let fragment = Html::parse_fragment(content);
     let mut found = false;
-    for child in fragment.root_element().children() {
-        if let Some(text) = child.value().as_text() {
-            if !text.trim().is_empty() {
-                return false;
-            }
-        } else if let Some(element) = ElementRef::wrap(child) {
-            if element.value().name() != "iframe" {
-                return false;
-            }
-            found = true;
-        }
-    }
-    found
+    only_iframes(fragment.root_element(), 0, &mut found) && found
 }
 
 fn sanitize(content: &str, base: &str) -> Result<(String, String, Vec<ResourceInput>), String> {
@@ -611,6 +620,101 @@ fn sanitize(content: &str, base: &str) -> Result<(String, String, Vec<ResourceIn
     )?;
     Ok((html, normalize(&plain), resources))
 }
+const MAX_NODES: usize = 50000;
+/// Legacy editors nest tables far deeper than a reader needs (130 levels in one
+/// computing-career notice). Below this depth a subtree keeps its text and
+/// images but not its structure, so recursion stays bounded for any markup.
+const MAX_DEPTH: usize = 64;
+const BLOCKED: [&str; 17] = [
+    "script", "style", "iframe", "object", "embed", "svg", "math", "form", "input", "button",
+    "textarea", "select", "nav", "footer", "header", "template", "noscript",
+];
+const INLINE: [&str; 11] = [
+    "span", "strong", "b", "em", "i", "u", "s", "sub", "sup", "code", "a",
+];
+fn image(
+    element: ElementRef<'_>,
+    html: &mut String,
+    plain: &mut String,
+    resources: &mut Vec<ResourceInput>,
+    base: &str,
+) {
+    if let Some(url) = element.value().attr("src").and_then(|v| safe_url(base, v)) {
+        let alt = element.value().attr("alt").unwrap_or("");
+        html.push_str(&format!(
+            "<img data-resource-url=\"{}\" alt=\"{}\">",
+            escape(url.as_str()),
+            escape(alt)
+        ));
+        plain.push(' ');
+        plain.push_str(alt);
+        plain.push(' ');
+        resources.push(ResourceInput {
+            filename: filename(&url),
+            url: url.into(),
+            kind: "image".into(),
+        });
+    }
+}
+/// Renders a too-deep subtree iteratively as one block of text and images.
+fn flatten(
+    element: ElementRef<'_>,
+    html: &mut String,
+    plain: &mut String,
+    resources: &mut Vec<ResourceInput>,
+    base: &str,
+    nodes: &mut usize,
+) -> Result<(), String> {
+    enum Item<'a> {
+        Element(ElementRef<'a>),
+        Text(&'a str),
+        Break,
+    }
+    html.push_str("<div>");
+    let mut stack = vec![Item::Element(element)];
+    while let Some(item) = stack.pop() {
+        match item {
+            Item::Text(value) => {
+                html.push_str(&escape(value));
+                plain.push_str(value);
+            }
+            // Keep words from adjacent cells and paragraphs apart.
+            Item::Break => {
+                html.push(' ');
+                plain.push(' ');
+            }
+            Item::Element(current) => {
+                *nodes += 1;
+                if *nodes > MAX_NODES {
+                    return invalid();
+                }
+                let tag = current.value().name();
+                if BLOCKED.contains(&tag) {
+                    continue;
+                }
+                if tag == "img" {
+                    image(current, html, plain, resources, base);
+                    continue;
+                }
+                if !INLINE.contains(&tag) {
+                    stack.push(Item::Break);
+                }
+                // Reverse so children are rendered in document order.
+                let children = current.children().collect::<Vec<_>>();
+                for child in children.into_iter().rev() {
+                    if let Some(value) = child.value().as_text() {
+                        stack.push(Item::Text(value));
+                    } else if let Some(child) = ElementRef::wrap(child) {
+                        stack.push(Item::Element(child));
+                    }
+                }
+            }
+        }
+    }
+    html.push_str("</div>");
+    plain.push(' ');
+    Ok(())
+}
 fn render(
     element: ElementRef<'_>,
     html: &mut String,
@@ -621,35 +725,18 @@ fn render(
     nodes: &mut usize,
 ) -> Result<(), String> {
     *nodes += 1;
-    if depth > 64 || *nodes > 50000 {
+    if *nodes > MAX_NODES {
         return invalid();
     }
+    if depth > MAX_DEPTH {
+        return flatten(element, html, plain, resources, base, nodes);
+    }
     let tag = element.value().name();
-    if [
-        "script", "style", "iframe", "object", "embed", "svg", "math", "form", "input", "button",
-        "textarea", "select", "nav", "footer", "header", "template", "noscript",
-    ]
-    .contains(&tag)
-    {
+    if BLOCKED.contains(&tag) {
         return Ok(());
     }
     if tag == "img" {
-        if let Some(url) = element.value().attr("src").and_then(|v| safe_url(base, v)) {
-            let alt = element.value().attr("alt").unwrap_or("");
-            html.push_str(&format!(
-                "<img data-resource-url=\"{}\" alt=\"{}\">",
-                escape(url.as_str()),
-                escape(alt)
-            ));
-            plain.push(' ');
-            plain.push_str(alt);
-            plain.push(' ');
-            resources.push(ResourceInput {
-                filename: filename(&url),
-                url: url.into(),
-                kind: "image".into(),
-            });
-        }
+        image(element, html, plain, resources, base);
         return Ok(());
     }
     let allowed = [
@@ -733,11 +820,7 @@ fn render(
         html.push_str(tag);
         html.push('>');
     }
-    if ![
-        "span", "strong", "b", "em", "i", "u", "s", "sub", "sup", "code", "a",
-    ]
-    .contains(&tag)
-    {
+    if !INLINE.contains(&tag) {
         plain.push(' ');
     }
     Ok(())
