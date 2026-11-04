@@ -1483,3 +1483,56 @@ fn schema_ten_upgrade_keeps_archive_and_adds_skipped_articles() {
         .body_text
         .contains("보관 본문"));
 }
+#[test]
+fn schema_eleven_upgrade_retries_mislabeled_and_newly_allowed_resources() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    let blocked = "검증된 학교 공개 자료 주소가 아니어서 자동 다운로드하지 않았습니다.";
+    let id = {
+        let store = Store::open(&path).unwrap();
+        store.catalog(&[definition("one", true)]).unwrap();
+        let mut input = article("5", "공지", "본문", "2026-01-01");
+        input.resources = ["a.png", "b.png", "c.png", "d.pdf"]
+            .iter()
+            .map(|name| ResourceInput {
+                url: format!("https://cdn.example.com/{name}"),
+                filename: (*name).into(),
+                kind: if name.ends_with(".pdf") {
+                    "attachment"
+                } else {
+                    "image"
+                }
+                .into(),
+            })
+            .collect();
+        let (id, _) = store.upsert_article("one", &input, true).unwrap();
+        store
+            .connection
+            .execute_batch(&format!(
+                "UPDATE resources SET status='too_large',error='파일이 다운로드 크기 제한을 초과했습니다.' WHERE filename='a.png';
+                 UPDATE resources SET status='unsupported',error='{blocked}' WHERE filename IN ('b.png','d.pdf');
+                 UPDATE resources SET status='unsupported',error='안전한 이미지 형식(PNG, JPEG, GIF, WebP)이 아니어서 보관하지 않았습니다.' WHERE filename='c.png';
+                 PRAGMA user_version=11;"
+            ))
+            .unwrap();
+        id
+    };
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, super::SCHEMA_VERSION);
+    let states = store
+        .document(id, None)
+        .unwrap()
+        .resources
+        .into_iter()
+        .map(|r| (r.filename, r.status, r.error.is_some()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        states,
+        [
+            ("a.png".into(), "pending".into(), false),
+            ("b.png".into(), "pending".into(), false),
+            ("c.png".into(), "unsupported".into(), true),
+            ("d.pdf".into(), "unsupported".into(), true),
+        ]
+    );
+}

@@ -22,6 +22,8 @@ struct Gate {
     release: Notify,
 }
 type RecordedRequest = (String, Option<(Option<String>, Option<String>)>);
+/// Body bytes and MIME type, or `None` for a failed connection.
+type ExtraReply = Option<(Vec<u8>, String)>;
 
 struct Fake {
     pages: Mutex<Vec<Vec<u64>>>,
@@ -29,6 +31,9 @@ struct Fake {
     bad: Mutex<HashSet<u64>>,
     failed: Mutex<HashSet<u64>>,
     calls: Mutex<Vec<RecordedRequest>>,
+    accesses: Mutex<Vec<(String, network::Access)>>,
+    /// Extra responses by exact URL.
+    extra: Mutex<HashMap<String, ExtraReply>>,
     views: std::sync::atomic::AtomicU64,
     conditional: AtomicBool,
     resources: AtomicBool,
@@ -47,6 +52,8 @@ impl Fake {
             bad: Mutex::new(HashSet::new()),
             failed: Mutex::new(HashSet::new()),
             calls: Mutex::new(Vec::new()),
+            accesses: Mutex::new(Vec::new()),
+            extra: Mutex::new(HashMap::new()),
             views: std::sync::atomic::AtomicU64::new(1),
             conditional: AtomicBool::new(false),
             resources: AtomicBool::new(false),
@@ -99,14 +106,30 @@ impl Transport for Fake {
         validators: Option<(Option<String>, Option<String>)>,
         limit: usize,
         _cancel: &AtomicBool,
+        access: network::Access,
     ) -> Result<network::Fetch, String> {
         self.calls
             .lock()
             .unwrap()
             .push((url.to_string(), validators.clone()));
+        self.accesses
+            .lock()
+            .unwrap()
+            .push((url.to_string(), access));
         self.limits.lock().unwrap().push((url.to_string(), limit));
         if let Some(target) = self.redirects.lock().unwrap().get(url.as_str()) {
             return Ok(network::Fetch::Redirect(Url::parse(target).unwrap()));
+        }
+        if let Some(reply) = self.extra.lock().unwrap().get(url.as_str()).cloned() {
+            return match reply {
+                Some((bytes, mime)) => Ok(network::Fetch::Body {
+                    bytes,
+                    mime: Some(mime),
+                    etag: None,
+                    last_modified: None,
+                }),
+                None => Err("모의 외부 서버 연결 실패".into()),
+            };
         }
         let body = |bytes: Vec<u8>, mime: &str, etag: Option<String>| {
             Ok(network::Fetch::Body {
@@ -824,9 +847,14 @@ async fn failed_resource_downloads_preserve_text_and_can_be_retried() {
         .all(|resource| resource.status == "failed"));
     fake.missing_resources.store(false, Ordering::Release);
     let cancel = AtomicBool::new(false);
-    let policy = Robots::load(&fake, &Url::parse(PNG_URL).unwrap(), &cancel)
-        .await
-        .unwrap();
+    let policy = Robots::load(
+        &fake,
+        &Url::parse(PNG_URL).unwrap(),
+        &cancel,
+        network::Access::Source,
+    )
+    .await
+    .unwrap();
     let mut total = 0;
     for resource in with_store(&store, |s| s.pending_resources(id)).unwrap() {
         download_resource(
@@ -835,6 +863,7 @@ async fn failed_resource_downloads_preserve_text_and_can_be_retried() {
             &fake,
             &cancel,
             &policy,
+            &RobotsCache::default(),
             &resource,
             &mut total,
         )
@@ -1336,6 +1365,7 @@ async fn resource_retry_keeps_good_offline_copy_and_repairs_corrupt_or_oversized
         &fake,
         &AtomicBool::new(false),
         &policy,
+        &RobotsCache::default(),
         &resource,
         &mut 0,
     )
@@ -1369,6 +1399,7 @@ async fn resource_retry_keeps_good_offline_copy_and_repairs_corrupt_or_oversized
         &fake,
         &AtomicBool::new(false),
         &policy,
+        &RobotsCache::default(),
         &resource,
         &mut 0,
     )
@@ -1393,6 +1424,7 @@ async fn resource_retry_keeps_good_offline_copy_and_repairs_corrupt_or_oversized
         &fake,
         &AtomicBool::new(false),
         &policy,
+        &RobotsCache::default(),
         &resource,
         &mut 0,
     )
@@ -1453,6 +1485,7 @@ async fn unicode_data_path_recovers_a_temporarily_locked_resource() {
         &fake,
         &AtomicBool::new(false),
         &policy,
+        &RobotsCache::default(),
         &resource,
         &mut 0
     )
@@ -1713,6 +1746,7 @@ async fn failed_explicit_retry_is_not_success_but_article_stays_archived() {
         &fake,
         &AtomicBool::new(false),
         &policy,
+        &RobotsCache::default(),
         &resource,
         &mut 0,
     )
@@ -1762,6 +1796,7 @@ async fn resource_budget_counts_failed_disk_writes_and_caps_remaining_request() 
         &fake,
         &AtomicBool::new(false),
         &policy,
+        &RobotsCache::default(),
         &resource,
         &mut total,
     )
@@ -1836,30 +1871,51 @@ async fn redirect_targets_are_checked_against_robots_before_requesting() {
         "User-agent: *\nDisallow: /file-fe-prd/editor/blocked.png\n",
     )
     .unwrap();
-    let result = fetch(&fake, &start, None, 1024, &AtomicBool::new(false), &policy).await;
+    let result = fetch(
+        &fake,
+        &start,
+        None,
+        1024,
+        &AtomicBool::new(false),
+        &policy,
+        network::Access::Source,
+    )
+    .await;
     assert!(result.unwrap_err().contains("robots.txt"));
     assert_eq!(fake.paths(), vec![start.to_string()]);
     fake.redirects.lock().unwrap().insert(
         start.to_string(),
         "https://computing.sogang.ac.kr/web/file/editor/next.png".into(),
     );
-    assert!(
-        fetch(&fake, &start, None, 1024, &AtomicBool::new(false), &policy)
-            .await
-            .unwrap_err()
-            .contains("robots.txt")
-    );
+    assert!(fetch(
+        &fake,
+        &start,
+        None,
+        1024,
+        &AtomicBool::new(false),
+        &policy,
+        network::Access::Source
+    )
+    .await
+    .unwrap_err()
+    .contains("robots.txt"));
     assert_eq!(fake.paths().len(), 2);
     fake.redirects
         .lock()
         .unwrap()
         .insert(start.to_string(), start.to_string());
-    assert!(
-        fetch(&fake, &start, None, 1024, &AtomicBool::new(false), &policy)
-            .await
-            .unwrap_err()
-            .contains("이동 경로")
-    );
+    assert!(fetch(
+        &fake,
+        &start,
+        None,
+        1024,
+        &AtomicBool::new(false),
+        &policy,
+        network::Access::Source
+    )
+    .await
+    .unwrap_err()
+    .contains("이동 경로"));
     assert_eq!(fake.paths().len(), 6);
 }
 
@@ -1873,6 +1929,7 @@ async fn robots_html_mime_and_redirect_are_not_an_allow_all_policy() {
             _: Option<(Option<String>, Option<String>)>,
             _: usize,
             _: &AtomicBool,
+            _: network::Access,
         ) -> Result<network::Fetch, String> {
             if self.0 {
                 Ok(network::Fetch::Body {
@@ -1892,7 +1949,8 @@ async fn robots_html_mime_and_redirect_are_not_an_allow_all_policy() {
         assert!(Robots::load(
             &reply,
             &Url::parse(PNG_URL).unwrap(),
-            &AtomicBool::new(false)
+            &AtomicBool::new(false),
+            network::Access::Source
         )
         .await
         .is_err());
@@ -1916,6 +1974,7 @@ async fn allowed_same_origin_redirect_reapplies_policy_and_preserves_validator()
         1024,
         &AtomicBool::new(false),
         &policy,
+        network::Access::Source,
     )
     .await
     .unwrap();
@@ -2167,4 +2226,192 @@ async fn retried_new_notice_keeps_its_original_non_historical_marking() {
         .unwrap();
     assert!(!retried.historical, "a new notice must still count as new");
     assert_eq!(skipped(&store, MAIN).skipped_count, 0);
+}
+
+const CDN_IMAGE: &str = "https://cdn.example.com/notice/a.png";
+const CDN_OTHER: &str = "https://cdn.example.com/notice/b";
+
+fn third_party_fixture(robots: &str) -> (TempDir, SharedStore, Fake) {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![1]]);
+    fake.changed.lock().unwrap().insert(
+        1,
+        format!("<p>본문</p><img src='{CDN_IMAGE}'><img src='{CDN_OTHER}'>"),
+    );
+    let mut extra = fake.extra.lock().unwrap();
+    extra.insert(
+        "https://cdn.example.com/robots.txt".into(),
+        Some((robots.as_bytes().to_vec(), "text/plain".into())),
+    );
+    extra.insert(CDN_IMAGE.into(), Some((png(), "image/png".into())));
+    extra.insert(CDN_OTHER.into(), Some((png(), "image/png".into())));
+    drop(extra);
+    (dir, store, fake)
+}
+
+#[tokio::test]
+async fn third_party_images_download_under_their_hosts_robots_policy() {
+    let (dir, store, fake) = third_party_fixture("User-agent: *\nAllow: /\n");
+    let controller = Controller::new();
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    let id = items(&store)[0].id;
+    let detail = with_store(&store, |s| s.document(id, None)).unwrap();
+    assert_eq!(detail.resources.len(), 2);
+    assert!(detail.resources.iter().all(|r| r.status == "downloaded"));
+    let accesses = fake.accesses.lock().unwrap().clone();
+    let access = |url: &str| {
+        accesses
+            .iter()
+            .filter(|(u, _)| u == url)
+            .map(|(_, a)| *a)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(access(CDN_IMAGE), [network::Access::EmbeddedImage]);
+    // One robots.txt request per host per job, not per image.
+    assert_eq!(
+        access("https://cdn.example.com/robots.txt"),
+        [network::Access::EmbeddedImage]
+    );
+    assert!(accesses
+        .iter()
+        .filter(|(u, _)| u.contains("BbsData"))
+        .all(|(_, a)| *a == network::Access::Source));
+
+    let (dir, store, fake) = third_party_fixture("User-agent: *\nDisallow: /notice/\n");
+    run(
+        &Controller::new(),
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    let id = items(&store)[0].id;
+    let detail = with_store(&store, |s| s.document(id, None)).unwrap();
+    assert!(detail.resources.iter().all(|r| r.status == "failed"));
+    assert!(
+        !fake.paths().iter().any(|u| u == CDN_IMAGE),
+        "robots denial sends no request"
+    );
+}
+
+#[tokio::test]
+async fn exhausted_budget_leaves_files_pending_instead_of_too_large() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![1]]);
+    fake.resources.store(true, Ordering::Release);
+    fake.missing_resources.store(true, Ordering::Release);
+    run(
+        &Controller::new(),
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    fake.missing_resources.store(false, Ordering::Release);
+    let id = items(&store)[0].id;
+    let policy = Robots::parse(&Url::parse(PNG_URL).unwrap(), "User-agent: *\nAllow: /\n").unwrap();
+    for total in [IMPORT_RESOURCES - 10, IMPORT_RESOURCES] {
+        for resource in with_store(&store, |s| s.pending_resources(id)).unwrap() {
+            let outcome = download_resource(
+                &store,
+                dir.path(),
+                &fake,
+                &AtomicBool::new(false),
+                &policy,
+                &RobotsCache::default(),
+                &resource,
+                &mut total.clone(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(outcome.into_result().unwrap_err(), BUDGET_REACHED);
+            let after = with_store(&store, |s| s.resource(resource.id)).unwrap();
+            assert_eq!(
+                (after.status.as_str(), &after.error),
+                ("failed", &resource.error)
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn resources_mode_downloads_missing_files_without_touching_board_state() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![1, 2]]);
+    fake.resources.store(true, Ordering::Release);
+    fake.missing_resources.store(true, Ordering::Release);
+    let controller = Controller::new();
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    let board = |store: &SharedStore| {
+        let s = skipped(store, MAIN);
+        (
+            s.status,
+            s.last_success,
+            s.last_error,
+            s.next_page,
+            s.archived,
+        )
+    };
+    let before = board(&store);
+    let missing = || with_store(&store, |s| s.documents_missing_resources(MAIN)).unwrap();
+    assert_eq!(missing().len(), 2);
+    fake.missing_resources.store(false, Ordering::Release);
+    let calls = fake.paths().len();
+    let outcome = controller
+        .execute(
+            &store,
+            dir.path(),
+            &fake,
+            sources(&store, &[MAIN]),
+            "resources",
+            Budget::default(),
+        )
+        .await;
+    assert!(outcome.is_ok(), "{outcome:?}");
+    assert!(missing().is_empty());
+    assert!(items(&store)
+        .iter()
+        .all(|item| item.content_status == "archived"));
+    assert!(
+        fake.paths()[calls..].iter().all(|u| !u.contains("BbsData")),
+        "no article refetch"
+    );
+    assert_eq!(board(&store), before);
+    // Nothing left: a second run makes no requests beyond none at all.
+    let calls = fake.paths().len();
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "resources",
+        Budget::default(),
+    )
+    .await;
+    assert_eq!(fake.paths().len(), calls);
 }

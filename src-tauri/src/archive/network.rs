@@ -10,6 +10,16 @@ use std::{
 use tokio::sync::{Mutex, Semaphore};
 use url::Url;
 
+/// What an automatic request may reach.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Access {
+    /// Verified board, article and attachment routes only (`validate_url`).
+    Source,
+    /// Also an image embedded in an archived notice on another public HTTPS host,
+    /// and that host's robots.txt (user decision, #78). School hosts stay limited
+    /// to their verified routes.
+    EmbeddedImage,
+}
 #[derive(Clone)]
 pub struct Client {
     gate: Arc<Mutex<Instant>>,
@@ -40,8 +50,9 @@ impl Client {
         validators: Option<(Option<String>, Option<String>)>,
         max_bytes: usize,
         cancel: &AtomicBool,
+        access: Access,
     ) -> Result<Fetch, String> {
-        validate_url(url)?;
+        validate(url, access)?;
         if max_bytes == 0 || max_bytes > 20 * 1024 * 1024 {
             return Err("허용된 다운로드 크기를 초과했습니다.".into());
         }
@@ -51,7 +62,7 @@ impl Client {
                 return Err("사용자가 동기화를 중단했습니다.".into());
             }
             let outcome = tokio::select! {
-                result=tokio::time::timeout(Duration::from_secs(25),self.attempt(url,validators.clone(),max_bytes,cancel))=>match result {Ok(value)=>value,Err(_)=>Err(Failure::Retry("학교 서버 응답 시간이 초과되었습니다.".into()))},
+                result=tokio::time::timeout(Duration::from_secs(25),self.attempt(url,validators.clone(),max_bytes,cancel,access))=>match result {Ok(value)=>value,Err(_)=>Err(Failure::Retry("학교 서버 응답 시간이 초과되었습니다.".into()))},
                 _=cancelled(cancel)=>return Err("사용자가 동기화를 중단했습니다.".into()),
             };
             match outcome {
@@ -71,9 +82,10 @@ impl Client {
         validators: Option<(Option<String>, Option<String>)>,
         max_bytes: usize,
         cancel: &AtomicBool,
+        access: Access,
     ) -> Result<Fetch, Failure> {
         let url = original;
-        validate_url(url).map_err(Failure::Fatal)?;
+        validate(url, access).map_err(Failure::Fatal)?;
         let host = url
             .host_str()
             .ok_or_else(|| Failure::Fatal("학교 서버 주소가 올바르지 않습니다.".into()))?;
@@ -150,7 +162,7 @@ impl Client {
             let target = url
                 .join(location)
                 .map_err(|_| Failure::Fatal("학교 서버 이동 주소가 올바르지 않습니다.".into()))?;
-            validate_url(&target).map_err(Failure::Fatal)?;
+            validate(&target, access).map_err(Failure::Fatal)?;
             return Ok(Fetch::Redirect(target));
         }
         if status == StatusCode::NOT_MODIFIED {
@@ -174,6 +186,20 @@ impl Client {
                 "학교 서버에 일시적인 오류가 발생했습니다. (HTTP {})",
                 status.as_u16()
             )));
+        }
+        // RFC 9309: an unavailable (4xx) robots.txt places no restrictions. Only
+        // other hosts get this reading; a school host's error stays an error.
+        if access == Access::EmbeddedImage
+            && url.path() == "/robots.txt"
+            && status.is_client_error()
+            && validate_url(url).is_err()
+        {
+            return Ok(Fetch::Body {
+                bytes: Vec::new(),
+                etag: None,
+                last_modified: None,
+                mime: Some("text/plain".into()),
+            });
         }
         if !status.is_success() {
             return Err(Failure::Fatal(format!(
@@ -239,6 +265,40 @@ async fn cancelled(cancel: &AtomicBool) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
+const BLOCKED: &str = "검증된 학교 공개 자료 주소가 아니어서 자동 다운로드하지 않았습니다.";
+pub fn validate(url: &Url, access: Access) -> Result<(), String> {
+    if validate_url(url).is_ok() || (access == Access::EmbeddedImage && third_party_image(url)) {
+        Ok(())
+    } else {
+        Err(BLOCKED.into())
+    }
+}
+/// Any public HTTPS host name except the school's, on the default port. Bytes
+/// are verified as a raster image after download; DNS answers must be public.
+fn third_party_image(url: &Url) -> bool {
+    let Some(url::Host::Domain(host)) = url.host() else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+    let path = url.path().to_ascii_lowercase();
+    url.scheme() == "https"
+        && url.port_or_known_default() == Some(443)
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.fragment().is_none()
+        && host.contains('.')
+        && host != "sogang.ac.kr"
+        && !host.ends_with(".sogang.ac.kr")
+        && !path.contains(['\\', '\0'])
+        && !path.contains("%2f")
+        && !path.contains("%5c")
+}
+fn raster_name(name: &str) -> bool {
+    name.len() <= 512
+        && [".png", ".jpg", ".jpeg", ".gif", ".webp"]
+            .iter()
+            .any(|extension| name.to_ascii_lowercase().ends_with(extension))
+}
 /// Automatic fetching is deliberately narrower than user-triggered external navigation.
 pub fn validate_url(url: &Url) -> Result<(), String> {
     let host = url.host_str().unwrap_or("");
@@ -250,6 +310,15 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
                 || path.starts_with("/file-fe-prd/board/2/")
                 || path.starts_with("/file-fe-prd/editor/")
                 || path.starts_with("/file-fe-prd/upload/")
+                // Inline notice images (user decision, #78), e.g.
+                // /dataview/board/2/<uuid>.jpg and /dataview/board/551608/<uuid>.jpg.
+                || {
+                    let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+                    parts.len() == 4
+                        && parts[..2] == ["dataview", "board"]
+                        && positive_id(parts[2])
+                        && raster_name(parts[3])
+                }
                 || path == "/robots.txt"
         }
         "computing.sogang.ac.kr" => {
@@ -308,7 +377,7 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
         || path.to_ascii_lowercase().contains("%2f")
         || path.to_ascii_lowercase().contains("%5c")
     {
-        return Err("검증된 학교 공개 자료 주소가 아니어서 자동 다운로드하지 않았습니다.".into());
+        return Err(BLOCKED.into());
     }
     Ok(())
 }
@@ -390,6 +459,46 @@ mod tests {
         .is_ok());
     }
     #[test]
+    fn embedded_images_may_use_other_public_https_hosts_but_school_hosts_stay_exact() {
+        let check = |value: &str, access| validate(&Url::parse(value).unwrap(), access).is_ok();
+        for value in [
+            "https://www.sogang.ac.kr/dataview/board/2/d843c754-711a-4de1-8b84-86371fb562de.jpg",
+            "https://www.sogang.ac.kr/dataview/board/551608/e41e62d2.PNG",
+        ] {
+            assert!(check(value, Access::Source), "{value}");
+        }
+        for value in [
+            "https://www.sogang.ac.kr/dataview/board/2/page.html",
+            "https://www.sogang.ac.kr/dataview/board/0/a.jpg",
+            "https://www.sogang.ac.kr/dataview/board/2/nested/a.jpg",
+            "https://www.sogang.ac.kr/dataview/temp/a.jpg",
+        ] {
+            assert!(!check(value, Access::EmbeddedImage), "{value}");
+        }
+        for value in [
+            "https://lh3.googleusercontent.com/abc=w400",
+            "https://cdn.example.com/a.png",
+            "https://cdn.example.com:443/robots.txt",
+        ] {
+            assert!(check(value, Access::EmbeddedImage), "{value}");
+            assert!(!check(value, Access::Source), "{value}");
+        }
+        for value in [
+            "http://cdn.example.com/a.png",
+            "https://cdn.example.com:58082/a.png",
+            "https://163.239.27.155/a.png",
+            "https://[2001:4860::1]/a.png",
+            "https://localhost/a.png",
+            "https://scc.sogang.ac.kr/dataview/temp/a.jpg",
+            "https://sogang.ac.kr/a.png",
+            "https://user@cdn.example.com/a.png",
+            "https://cdn.example.com/a.png#x",
+            "https://cdn.example.com/a%2Fb.png",
+        ] {
+            assert!(!check(value, Access::EmbeddedImage), "{value}");
+        }
+    }
+    #[test]
     fn engineering_policy_is_limited_to_verified_public_routes() {
         for path in [
             "/board/notice",
@@ -433,7 +542,7 @@ mod tests {
         let cancel = AtomicBool::new(true);
         let url = Url::parse("https://computing.sogang.ac.kr/ko/community/news/list").unwrap();
         assert!(client
-            .get(&url, None, 1024, &cancel)
+            .get(&url, None, 1024, &cancel, Access::Source)
             .await
             .unwrap_err()
             .contains("중단"));

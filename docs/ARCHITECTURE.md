@@ -63,6 +63,7 @@ Rust owns persistence; browser previews never substitute localStorage or simulat
 | `008_ai_execution_mode` | `ai_preferences.execution_mode` (`auto`/`cpu`/`gpu`, used only on Windows) |
 | `009_ai_model_directory` | `ai_preferences.model_directory`, `ai_models.storage_directory` |
 | `010_update_check` | `settings.update_check` (default on), `settings.update_checked_at` (last successful automatic check, UTC) |
+| `012_resource_retry` | Data only: `too_large` rows (mostly mislabeled by an exhausted job budget) and images blocked only by the former route list become `pending` |
 | `011_skipped_articles` | `skipped_articles`: notices whose fetched response was rejected for its content, with listing URL, original historical marking, reason and response SHA-256 |
 
 ### Archive tables
@@ -192,7 +193,7 @@ A click restores the existing window and emits `proactive://notification-clicked
 
 ## Transport, resources and safe rendering
 
-`archive/network.rs` uses native Reqwest/Rustls. Automatic requests need exact approved HTTPS hosts and routes on port 443 (main, Computing and Engineering). URLs with credentials, fragments or unsafe encoded separators are rejected. DNS answers must be public and are pinned per connection; proxies and automatic redirects are off. The sync policy layer follows at most three same-origin redirects, re-running URL/DNS/TLS checks and robots authorization before each hop; transport only returns redirect targets. HTTP(S) resource references are kept as metadata so an old HTTP image doesn't discard the article, but only approved HTTPS routes are downloaded.
+`archive/network.rs` uses native Reqwest/Rustls. Automatic requests need exact approved HTTPS hosts and routes on port 443 (main, Computing and Engineering). URLs with credentials, fragments or unsafe encoded separators are rejected. DNS answers must be public and are pinned per connection; proxies and automatic redirects are off. The sync policy layer follows at most three same-origin redirects, re-running URL/DNS/TLS checks and robots authorization before each hop; transport only returns redirect targets. HTTP(S) resource references are kept as metadata so an old HTTP image doesn't discard the article, but only approved HTTPS routes are downloaded. Main images under `/dataview/board/<id>/<file>.(png|jpg|jpeg|gif|webp)` are an approved route. Requests carry an access mode: `Source` allows only those routes; `EmbeddedImage`, used for image resources only, also allows any other public HTTPS host name on port 443 (no IP literals, no other `*.sogang.ac.kr` route). Each such origin's robots.txt is loaded once per job and cached (including a failure); a 4xx robots.txt from such a host means no rules (RFC 9309), while a school host's error stays fatal. Third-party attachments are not downloaded.
 
 Requests are paced at least 650 ms apart. `robots.txt` is checked before collection (plain-text Accept header; Computing returns 406 otherwise); allow/disallow rules with wildcard and end-anchor matching and crawl delays up to 60 seconds apply, and malformed delays or HTML error pages fail closed. Transient errors get at most three attempts with short backoff, connect/request/attempt deadlines and cancellable waits. HTTP 429 stops with a message. No login, access restriction or anti-bot bypass is used.
 
@@ -202,9 +203,11 @@ Requests are paced at least 650 ms apart. `robots.txt` is checked before collect
 
 ### Resources
 
-Limits: 4 MiB per list/article response, 10 MiB per inline image, 20 MiB per attachment, 256 MiB of completed resource bytes per job (charged before validation or disk writes), 64 KiB for robots, and a 100,000-page safety ceiling. Test budgets report `limited`, never complete history.
+Limits: 4 MiB per list/article response, 10 MiB per inline image, 20 MiB per attachment, 256 MiB of completed resource bytes per job (charged before validation or disk writes; when the remaining budget, not the per-file cap, bounds a download, a size failure leaves the file `pending` for a later run), 64 KiB for robots, and a 100,000-page safety ceiling. Test budgets report `limited`, never complete history.
 
 Resource URL, original filename, kind, MIME, bytes, state and SHA-256 are kept. Files use generated `resources/<sha256>.<validated-extension>` paths, never remote filenames, and are written through a `.part` file before SQLite references them. Images need PNG/JPEG/GIF/WebP signatures, PDFs a PDF signature; attachment extensions are restricted and active web types rejected. This is format validation, not antivirus scanning. Files are never opened or executed automatically; reveal only selects them in Finder or Explorer.
+
+The `resources` sync mode ("자료 모두 내려받기") downloads `pending`/`failed` files of each subscribed board's current revisions, newest notice first, until the job budget is spent; like `skipped`, it leaves board status, counters, checkpoint and last success unchanged.
 
 Local reads check containment, bound size and verify the stored SHA-256. Retry repairs corrupt bytes; a failed refresh keeps the last verified copy. There is no remote-image fallback. Cleanup of unreferenced files and storage quotas are not implemented.
 
