@@ -1503,6 +1503,7 @@ async fn unicode_data_path_recovers_a_temporarily_locked_resource() {
         &fake,
         &AtomicBool::new(false),
         &policy,
+        &RobotsCache::default(),
         &failed,
         &mut 0,
     )
