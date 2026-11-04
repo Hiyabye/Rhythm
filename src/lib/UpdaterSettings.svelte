@@ -84,12 +84,15 @@
     installing = true;
     error = '';
     progress = null;
+    let staged: UpdateInfo | null = null;
     try {
-      update = await invoke<UpdateInfo>('updater_install');
+      staged = update = await invoke<UpdateInfo>('updater_install');
       const restart = await confirmAction('서명 검증을 마쳤습니다. 지금 업데이트를 설치하고 앱을 다시 시작할까요? 취소하면 업데이트는 이번 실행 중에만 준비된 상태로 유지됩니다.', '설치 및 다시 시작');
       if (restart) await invoke('updater_restart', { confirmed: true });
-      else progress = { phase: 'staged', version: update.version };
-    } catch (reason) { error = String(reason); progress = null; }
+      else progress = { phase: 'staged', version: staged.version };
+    }
+    // After a successful download, only the restart failed; keep the staged package.
+    catch (reason) { error = String(reason); progress = staged ? { phase: 'staged', version: staged.version } : null; }
     finally { installing = false; }
   }
 </script>
@@ -106,7 +109,7 @@
     {#if update}<div class="setting-row"><div><h3>새 버전 {update.version}</h3><p>{update.body ?? '서명된 안정 버전을 설치할 수 있습니다.'}</p></div><button class="text-button" disabled={installing} onclick={install}>{installing ? '업데이트 중…' : progress?.phase === 'staged' ? '설치 및 다시 시작' : '다운로드 및 설치'}</button></div>{/if}
     {#if checked && !update}<p class="footnote" role="status">현재 최신 버전을 사용하고 있습니다.</p>{/if}
     {#if progress}<p class="footnote" role="status">{progress.phase === 'downloading' ? `다운로드 중${progress.total ? ` · ${Math.round((progress.downloaded ?? 0) / progress.total * 100)}%` : '…'}` : progress.phase === 'verifying' ? '다운로드한 서명 검증 중…' : progress.phase === 'installing' ? '검증된 업데이트를 설치 중…' : progress.phase === 'staged' ? '서명된 업데이트를 준비했습니다.' : '앱을 다시 시작합니다…'}</p>{/if}
-    {#if error}<div class="banner error" role="alert"><div><strong>업데이트를 완료하지 못했습니다</strong><p>{error}</p></div><button class="text-button" disabled={checking || installing} onclick={check}>다시 시도</button></div>{/if}
+    {#if error}<div class="banner error" role="alert"><div><strong>업데이트를 완료하지 못했습니다</strong><p>{error}</p></div><button class="text-button" disabled={checking || installing} onclick={progress?.phase === 'staged' ? install : check}>다시 시도</button></div>{/if}
   {:else if desktop && configured === false}
     <div class="setting-row"><div><h3>앱 업데이트</h3><p>자동 업데이트는 제공하지 않습니다. 새 버전은 아래 순서로 직접 설치합니다.</p></div></div>
     {#if isWindows}
