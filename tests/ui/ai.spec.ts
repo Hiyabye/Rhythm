@@ -1,5 +1,13 @@
 import { expect, test } from '@playwright/test';
-import { callCount, mockDesktop } from './fixture';
+import type { Page } from '@playwright/test';
+import { callCount, mockDesktop, openSettings } from './fixture';
+
+function engine(page: Page) {
+  return page.locator('.settings-row').filter({ hasText: 'AI 엔진' }).first();
+}
+async function advanced(page: Page) {
+  await page.getByText('고급', { exact: true }).click();
+}
 
 async function reader(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: '받은 소식', exact: true }).click();
@@ -30,7 +38,7 @@ test('catalog installation progress, cancellation, selection, loading and setup 
   await expect(page.getByRole('button', { name: 'Qwen3.5 4B 선택', exact: true })).toBeVisible({ timeout: 10000 });
   await page.getByRole('button', { name: 'Qwen3.5 4B 선택', exact: true }).click();
   await page.getByRole('button', { name: '선택한 모델 불러오기', exact: true }).click();
-  await expect(page.getByText('모델 준비됨', { exact: true })).toBeVisible();
+  await expect(engine(page)).toContainText('모델 준비됨');
   await page.getByRole('button', { name: '실제 추론 확인 후 AI 설정 완료' }).click();
   await expect(page.getByRole('heading', { name: '로컬 AI 시작하기' })).toHaveCount(0);
   await page.getByRole('button', { name: '모델 메모리 해제', exact: true }).click();
@@ -39,7 +47,7 @@ test('catalog installation progress, cancellation, selection, loading and setup 
 
 test('installation failure exposes retry without hiding local archives', async ({ page }) => {
   await mockDesktop(page, { aiInstallError: true }); await page.goto('/');
-  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await openSettings(page, 'AI');
   await page.getByRole('button', { name: 'Qwen3.5 4B 다운로드 및 설치', exact: true }).click();
   await expect(page.getByText('모델 다운로드에 실패했습니다. 연결을 확인하고 이어받아 주세요.', { exact: true })).toBeVisible({ timeout: 10000 });
   await expect(page.getByRole('button', { name: 'Qwen3.5 4B 설치 다시 시도 / 이어받기', exact: true })).toBeEnabled();
@@ -109,12 +117,13 @@ test('cached output is escaped, partial processing is honest, disabled connector
 
 test('model switching and confirmed external unregister preserve results', async ({ page }) => {
   await mockDesktop(page, { aiInstalled: true, aiResult: true }); await page.goto('/');
-  await page.getByRole('button', { name: '설정', exact: true }).click();
-  await page.getByText('이미 가진 로컬 GGUF 등록', { exact: true }).click();
-  await page.getByLabel('로컬 GGUF 전체 경로').fill('/existing/my-model.gguf');
+  await openSettings(page, 'AI');
+  await advanced(page);
+  await page.getByLabel('이미 가진 GGUF 파일 등록').fill('/existing/my-model.gguf');
   await page.getByRole('button', { name: '외부 파일 참조로 등록', exact: true }).click();
   await page.getByRole('button', { name: '외부 로컬 모델 선택', exact: true }).click();
-  await expect(page.getByText('선택한 모델 · 설치 완료', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '외부 로컬 모델 선택', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Qwen3.5 4B 선택', exact: true })).toHaveAttribute('aria-pressed', 'false');
   await page.getByRole('button', { name: '참조 해제', exact: true }).click();
   expect(await callCount(page, 'ai_remove')).toBe(0);
   await expect(page.getByText('등록된 참조만 해제합니다. 외부 원본 파일은 삭제하지 않습니다.', { exact: true })).toBeVisible();
@@ -149,13 +158,13 @@ test('switching document revision never presents another revision cached result 
 
 test('load phases survive settings remount and remain cancellable without blocking reading', async ({ page }) => {
   await mockDesktop(page, { aiInstalled: true, aiLoadDelay: 20000 }); await page.goto('/');
-  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await openSettings(page, 'AI');
   await page.getByRole('button', { name: '선택한 모델 불러오기', exact: true }).click();
   await expect(page.getByText('모델 파일 무결성을 확인하고 있습니다 · 경과', { exact: false })).toBeVisible();
   await reader(page);
   await expect(page.getByText('보관된 한국어 본문입니다.', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '이 공지 분석하기', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await openSettings(page, 'AI');
   await expect(page.getByText('모델 파일 무결성을 확인하고 있습니다 · 경과', { exact: false })).toBeVisible();
   await expect(page.getByRole('button', { name: '선택한 모델 불러오기', exact: true })).toBeDisabled();
   const cancel = page.getByRole('button', { name: '현재 AI 작업 취소', exact: true });
@@ -165,12 +174,12 @@ test('load phases survive settings remount and remain cancellable without blocki
   expect(await callCount(page, 'ai_analyze')).toBe(0);
   await page.evaluate(() => { (window as any).__fixture.options.aiLoadDelay = 0; });
   await page.getByRole('button', { name: '선택한 모델 불러오기', exact: true }).click();
-  await expect(page.getByText('모델 준비됨', { exact: true })).toBeVisible();
+  await expect(engine(page)).toContainText('모델 준비됨');
 });
 
 test('pending job cancellation bypasses a long command-owned model operation', async ({ page }) => {
   await mockDesktop(page, { aiInstalled: true, aiLoadDelay: 20000 }); await page.goto('/');
-  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await openSettings(page, 'AI');
   await page.getByRole('button', { name: '선택한 모델 불러오기', exact: true }).click();
   await page.evaluate(() => {
     (window as any).__fixture.ai.jobs.push({ id: 101, document_id: 1, revision_id: 1, status: 'pending', error: null });
@@ -216,7 +225,7 @@ test('successful model refresh clears a transient read error', async ({ page }) 
   await page.clock.install({ time: new Date('2026-11-02T12:00:00Z') });
   await page.clock.pauseAt(new Date('2026-11-02T13:00:00Z'));
   await mockDesktop(page, { aiInstalled: true }); await page.goto('/');
-  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await openSettings(page, 'AI');
   await expect(page.getByRole('button', { name: '선택한 모델 불러오기', exact: true })).toBeVisible();
   await page.evaluate(() => { (window as any).__fixture.snapshotFailures = 1; });
   await page.getByRole('button', { name: 'AI 엔진 상태 새로고침', exact: true }).click();
@@ -285,14 +294,20 @@ test('reader prefers active work over newer terminal history and shows actual ph
 test('resource guidance is honest at narrow widths and operation cancellation is keyboard accessible', async ({ page }) => {
   await mockDesktop(page, { aiInstalled: true, aiLowResources: true, aiLoadDelay: 20000 }); await page.goto('/');
   await page.setViewportSize({ width: 640, height: 900 });
-  await page.getByRole('button', { name: '설정', exact: true }).click();
-  await expect(page.getByText('현재 남은 저장 공간 확인하지 못함', { exact: false })).toBeVisible();
-  await expect(page.getByText('이 기기의 메모리와 저장 공간을 확인했습니다', { exact: false })).toHaveCount(0);
-  await expect(page.getByText('물리 메모리는 지금 사용할 수 있는 메모리와 다릅니다.', { exact: false })).toBeVisible();
   for (const theme of ['다크', '라이트']) {
+    await openSettings(page, '일반');
     await page.getByRole('button', { name: theme, exact: true }).click();
+    await page.getByRole('navigation', { name: '설정 항목', exact: true }).getByRole('button', { name: 'AI', exact: true }).click();
+    await expect(page.getByText('고급', { exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   }
+  await advanced(page);
+  await expect(page.getByText('현재 남은 저장 공간 확인하지 못함', { exact: false })).toBeVisible();
+  await expect(page.getByText('이 기기의 메모리와 저장 공간을 확인했습니다', { exact: false })).toHaveCount(0);
+  await page.getByRole('button', { name: '이 기기 설명', exact: true }).click();
+  await expect(page.getByText('물리 메모리는 지금 쓸 수 있는 메모리와 다릅니다.', { exact: false })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.keyboard.press('Escape');
   await page.getByRole('button', { name: '선택한 모델 불러오기', exact: true }).click();
   const cancel = page.getByRole('button', { name: '현재 AI 작업 취소', exact: true });
   await expect(cancel).toBeVisible(); await cancel.focus(); await page.keyboard.press('Enter');
@@ -309,7 +324,7 @@ test('today uses existing summaries and dates without scheduling inference', asy
 test('managed model removal can keep files after an inaccessible folder error and still requires confirmation', async ({ page }) => {
   await mockDesktop(page, { aiInstalled: true, aiResult: true, aiRemoveError: true });
   await page.goto('/');
-  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await openSettings(page, 'AI');
   await page.getByRole('button', { name: '모델 삭제', exact: true }).click();
   const confirmation = page.getByRole('group', { name: 'Qwen3.5 4B 삭제 확인', exact: true });
   await expect(confirmation).toContainText('폴더에 접근할 수 없거나 다른 위치에 다시 설치하려면 파일을 남기고 목록에서 제거하세요.');
@@ -319,7 +334,7 @@ test('managed model removal can keep files after an inaccessible folder error an
   await page.getByRole('button', { name: '모델 삭제', exact: true }).click();
   await confirmation.getByRole('button', { name: '확인하고 삭제', exact: true }).click();
   await expect(page.getByRole('alert').filter({ hasText: '모델 폴더에 접근할 수 없습니다.' })).toBeVisible();
-  await expect(page.locator('.ai-installed')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Qwen3.5 4B 선택', exact: true })).toHaveCount(1);
   await page.getByRole('button', { name: '모델 삭제', exact: true }).click();
   await page.evaluate(() => { (window as any).__fixture.ai.operation = { kind: 'load', phase: 'verifying', elapsed_ms: 0, cancelling: false }; });
   await page.getByRole('button', { name: 'AI 엔진 상태 새로고침', exact: true }).click();
@@ -327,7 +342,8 @@ test('managed model removal can keep files after an inaccessible folder error an
   await page.evaluate(() => { (window as any).__fixture.ai.operation = null; });
   await page.getByRole('button', { name: 'AI 엔진 상태 새로고침', exact: true }).click();
   await confirmation.getByRole('button', { name: '파일을 남기고 목록에서 제거', exact: true }).click();
-  await expect(page.locator('.ai-installed')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Qwen3.5 4B 선택', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Qwen3.5 4B 다운로드 및 설치', exact: true })).toBeVisible();
   await expect(page.getByText('파일을 남기고 모델을 목록에서 제거했습니다. 기존 분석은 유지됩니다.', { exact: true })).toBeVisible();
   const calls = await page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'ai_remove'));
   expect(calls).toHaveLength(2);
@@ -340,41 +356,40 @@ test('managed model removal can keep files after an inaccessible folder error an
 test('experimental 0.8B is listed without one-click install and a retired 9B stays removable', async ({ page }) => {
   await mockDesktop(page, { aiRetiredModel: true });
   await page.goto('/');
-  await page.getByRole('button', { name: '설정', exact: true }).click();
-  const small = page.locator('.ai-model-option').filter({ has: page.getByRole('heading', { name: 'Qwen3.5 0.8B' }) });
-  await expect(small.getByText('실험적 · 추론 미검증', { exact: true })).toBeVisible();
+  await openSettings(page, 'AI');
+  // Offered models are tiles; the experimental one waits under 고급 and cannot be installed in one click.
+  await expect(page.locator('.model-tile').filter({ hasText: 'Qwen3.5 0.8B' })).toHaveCount(0);
+  await advanced(page);
+  const small = page.locator('.ai-experimental').filter({ hasText: 'Qwen3.5 0.8B' });
+  await expect(small).toContainText('실험적 · 추론 미검증');
   await expect(small.getByRole('button', { name: 'Qwen3.5 0.8B 다운로드 및 설치', exact: true })).toBeDisabled();
-  await expect(page.locator('.ai-model-option').filter({ hasText: 'Qwen3.5 9B' })).toHaveCount(0);
-  const retired = page.locator('.ai-installed').filter({ has: page.getByRole('heading', { name: 'Qwen3.5 9B', exact: true }) });
-  await expect(retired.getByText('더 이상 모델 목록에서 제공하지 않는 모델입니다.', { exact: false })).toBeVisible();
+  await expect(page.locator('.ai-experimental').filter({ hasText: 'Qwen3.5 9B' })).toHaveCount(0);
+  const retired = page.locator('.model-tile').filter({ has: page.getByRole('heading', { name: 'Qwen3.5 9B', exact: true }) });
+  await expect(retired.getByText('더 이상 제공하지 않는 모델', { exact: true })).toBeVisible();
+  await expect(retired.getByRole('button', { name: /다운로드 및 설치|이어받기/ })).toHaveCount(0);
   await retired.getByRole('button', { name: '모델 삭제', exact: true }).click();
   await page.getByRole('group', { name: 'Qwen3.5 9B 삭제 확인', exact: true }).getByRole('button', { name: '확인하고 삭제', exact: true }).click();
-  await expect(page.locator('.ai-installed')).toHaveCount(0);
+  await expect(retired).toHaveCount(0);
   const calls = await page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'ai_remove'));
   expect(calls.map((call: any) => call.args)).toEqual([{ id: 'qwen35-9b', confirmed: true }]);
 });
 
-test('AI setup stays visible after a delayed long source list and settings links reach their sections', async ({ page }) => {
+test('the AI setup banner opens the AI pane with its heading focused', async ({ page }) => {
   await mockDesktop(page, { aiSetupNeeded: true, sourceCount: 32, sourceDelay: 1200 });
   await page.goto('/');
   await page.getByRole('button', { name: '로컬 AI 설정하기', exact: true }).click();
-  const heading = page.locator('#ai h2');
+  const heading = page.getByRole('heading', { level: 2, name: 'AI', exact: true });
   await expect(heading).toBeFocused();
-  await expect(page.getByLabel('서강대학교 공지 정보원 관리')).toHaveAttribute('aria-busy', 'false');
   await expect(heading).toBeInViewport();
-  const nav = page.getByRole('navigation', { name: '설정 항목' });
-  for (const [label, id] of [['일반', 'general'], ['확장 기능', 'extensions'], ['AI 모델', 'ai'], ['AI 처리', 'ai-processing'], ['개인화', 'personalization'], ['백그라운드', 'background'], ['알림', 'notifications']]) {
-    await expect(nav.getByRole('link', { name: label, exact: true })).toHaveAttribute('href', `#${id}`);
-  }
-  await nav.getByRole('link', { name: '일반', exact: true }).click();
-  await nav.getByRole('link', { name: 'AI 모델', exact: true }).click();
-  await expect(heading).toBeInViewport();
+  await expect(page.getByRole('navigation', { name: '설정 항목' }).getByRole('button', { name: 'AI', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('heading', { name: '로컬 AI 시작하기' })).toBeVisible();
 });
 
 test('macOS hides the Windows execution device and keeps a chosen model folder for new downloads', async ({ page }) => {
   await mockDesktop(page, { aiInstalled: true });
   await page.goto('/');
-  await page.getByRole('button', { name: '설정', exact: true }).click();
+  await openSettings(page, 'AI');
+  await advanced(page);
   await expect(page.getByLabel('AI 실행 장치', { exact: true })).toHaveCount(0);
   await expect(page.getByPlaceholder('/전체/경로/model.gguf')).toHaveCount(1);
   const storage = page.getByRole('group', { name: '모델 설치 폴더', exact: true });
@@ -382,7 +397,7 @@ test('macOS hides the Windows execution device and keeps a chosen model folder f
   await storage.getByRole('button', { name: '설치 폴더 선택', exact: true }).click();
   await expect(storage.getByText('/Volumes/로컬 모델/Rhythm', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Qwen3.5 2B 다운로드 및 설치', exact: true }).click();
-  const added = page.locator('.ai-installed').filter({ has: page.getByRole('heading', { name: 'Qwen3.5 2B', exact: true }) });
-  await expect(added.getByText('/Volumes/로컬 모델/Rhythm/qwen35-2b.gguf', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Qwen3.5 2B 정보', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Qwen3.5 2B 정보' }).getByText('/Volumes/로컬 모델/Rhythm/qwen35-2b.gguf', { exact: true })).toBeVisible();
   expect(await callCount(page, 'ai_preferences')).toBe(0);
 });

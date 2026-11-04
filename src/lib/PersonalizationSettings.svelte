@@ -4,7 +4,10 @@
   import type { PersonalInterest, PersonalInterestInput, PersonalizationSnapshot } from './types';
   import { archiveError } from './archive-format';
   import { confirmAction } from './confirm';
+  import Hint from './Hint.svelte';
+  import Popover from './Popover.svelte';
 
+  type Polarity = PersonalInterest['polarity'];
   let { desktop }: { desktop: boolean } = $props();
   let data = $state<PersonalizationSnapshot | null>(null);
   let busy = $state(false);
@@ -14,14 +17,19 @@
   let university = $state('');
   let department = $state('');
   let studyLevel = $state('');
+  // Quick-add fields, one per direction.
+  let drafts = $state<Record<Polarity, string>>({ positive: '', negative: '' });
+  // The chip editor, shown in the popover of the interest being edited.
+  let editingId = $state<number | null>(null);
   let name = $state('');
   let aliases = $state('');
   let priority = $state(3);
-  let polarity = $state<'positive' | 'negative'>('positive');
-  let editingId = $state<number | null>(null);
+  let polarity = $state<Polarity>('positive');
   let interestDraftRevision = $state(0);
   let parsedAliases = $derived(aliases.split(/[,，;；\n]/).map((item) => item.trim()).filter(Boolean));
   let invalidAliases = $derived(parsedAliases.length > 12 || parsedAliases.some((alias) => Array.from(alias).length > 80));
+  let explicit = $derived(data?.interests.filter((interest) => interest.origin === 'explicit') ?? []);
+  let learned = $derived(data?.interests.filter((interest) => interest.origin === 'learned') ?? []);
 
   onMount(() => {
     if (desktop) void refresh();
@@ -70,28 +78,27 @@
     }
   }
 
-  async function saveInterest() {
-    const value = name.trim();
+  async function addInterest(direction: Polarity) {
+    const value = drafts[direction].trim();
     if (!value) return;
-    if (invalidAliases) {
-      error = '별칭은 최대 12개까지 입력하고, 각 별칭은 80자 이내여야 합니다.';
-      return;
-    }
+    const saved = await action('personalization_save_interest', {
+      interest: { id: null, name: value, aliases: [], priority: 3, polarity: direction } satisfies PersonalInterestInput,
+    });
+    // Keep whatever was typed while the save was in flight.
+    if (saved && drafts[direction].trim() === value) drafts[direction] = '';
+  }
+
+  async function saveInterest(interest: PersonalInterest) {
+    const value = name.trim();
+    if (!value || invalidAliases) return;
     const draftRevision = interestDraftRevision;
     const saved = await action('personalization_save_interest', {
-      interest: {
-        id: editingId,
-        name: value,
-        aliases: parsedAliases,
-        priority,
-        polarity,
-      } satisfies PersonalInterestInput,
+      interest: { id: interest.id, name: value, aliases: parsedAliases, priority, polarity } satisfies PersonalInterestInput,
     });
-    if (saved && interestDraftRevision === draftRevision) clearEditor();
+    if (saved && interestDraftRevision === draftRevision) closeEditor(interest.id);
   }
 
   async function removeInterest(interest: PersonalInterest) {
-    const { id } = interest;
     let confirmed: boolean;
     try {
       confirmed = await confirmAction(interest.origin === 'learned'
@@ -102,14 +109,7 @@
       return;
     }
     if (!confirmed) return;
-    const draftRevision = interestDraftRevision;
-    const removed = await action('personalization_remove_interest', { id });
-    if (!removed || editingId !== id) return;
-    if (interestDraftRevision === draftRevision) clearEditor();
-    else {
-      editingId = null;
-      interestDraftRevision += 1;
-    }
+    if (await action('personalization_remove_interest', { id: interest.id }) && editingId === interest.id) editingId = null;
   }
 
   async function resetPersonalization() {
@@ -124,7 +124,8 @@
     resetPending = true;
     try {
       if (await action('personalization_reset')) {
-        clearEditor();
+        drafts = { positive: '', negative: '' };
+        if (editingId !== null) closeEditor(editingId);
         if (data) setProfile(data.profile);
       }
     } finally {
@@ -141,103 +142,84 @@
     polarity = interest.polarity;
   }
 
-  function clearEditor() {
-    interestDraftRevision += 1;
-    editingId = null;
-    name = '';
-    aliases = '';
-    priority = 3;
-    polarity = 'positive';
+  function closeEditor(id: number) {
+    document.getElementById(`interest-${id}`)?.hidePopover();
   }
 
-  function onInterestDraftInput() {
+  function draftChanged() {
     interestDraftRevision += 1;
+  }
+
+  function submitDraft(event: KeyboardEvent, direction: Polarity) {
+    if (event.key !== 'Enter' || event.isComposing) return;
+    event.preventDefault();
+    void addInterest(direction);
   }
 </script>
 
-<section id="personalization" class="settings-section" aria-busy={busy}>
-  <div class="section-heading">
-    <h2>개인화</h2>
-    <p>관심사와 학업 정보를 이 기기에 저장합니다. 추천은 설명 가능한 규칙으로 정렬됩니다.</p>
-  </div>
+{#snippet chips(list: PersonalInterest[], label: string)}
+  {#each list as interest (interest.id)}
+    <li>
+      <button class="interest-chip" class:learned={interest.origin === 'learned'} popovertarget={`interest-${interest.id}`} aria-label={`${interest.name} ${interest.origin === 'learned' ? '학습된 관심사' : label} 수정`} disabled={resetPending} onclick={() => edit(interest)}>{interest.name}</button>
+      <Popover id={`interest-${interest.id}`} label={`${interest.name} 수정`} onclose={() => { if (editingId === interest.id) editingId = null; }}>
+        {#if editingId === interest.id}
+          {#if interest.origin === 'learned'}<p class="popover-title">학습된 관심사 · 근거 {interest.evidence_count}건</p>{#if interest.evidence_summary}<p>{interest.evidence_summary}</p>{/if}{/if}
+          <label class="popover-field">이름<input data-autofocus bind:value={name} maxlength="80" oninput={draftChanged} /></label>
+          <label class="popover-field">별칭<input bind:value={aliases} maxlength="240" placeholder="한국어·영어 표현을 쉼표로 구분" oninput={draftChanged} /></label>
+          {#if invalidAliases}<p role="alert" class="archive-error">별칭은 최대 12개, 각 80자 이내로 입력해 주세요.</p>{/if}
+          <div class="popover-field">우선순위<div class="segmented" role="group" aria-label="우선순위">{#each [1, 2, 3, 4, 5] as value}<button class:selected={priority === value} aria-pressed={priority === value} onclick={() => { priority = value; draftChanged(); }}>{value}</button>{/each}</div></div>
+          <div class="popover-field">방향<div class="segmented" role="group" aria-label="관심 방향">{#each [['positive', '관심'], ['negative', '관심 없음']] as [value, text]}<button class:selected={polarity === value} aria-pressed={polarity === value} onclick={() => { polarity = value as Polarity; draftChanged(); }}>{text}</button>{/each}</div></div>
+          <div class="popover-actions">
+            <button class="button small" disabled={busy || !name.trim() || invalidAliases} onclick={() => saveInterest(interest)}>{interest.origin === 'learned' ? '직접 입력으로 저장' : '저장'}</button>
+            <button class="text-button danger" disabled={busy} aria-label={`${interest.name} 삭제`} onclick={() => void removeInterest(interest)}>삭제</button>
+          </div>
+        {/if}
+      </Popover>
+    </li>
+  {/each}
+{/snippet}
+
+<div id="personalization" class="personalization" aria-busy={busy}>
   {#if error}<p role="alert" class="archive-error">{error}</p>{/if}
   <p role="status" class="archive-feedback">{resetPending ? '개인화 데이터를 초기화하는 중입니다.' : notice}</p>
 
   {#if !desktop}
     <p class="muted">프로필과 관심사 저장은 데스크톱 앱에서 사용할 수 있습니다.</p>
   {:else if data}
-    <div class="form-grid">
-      <label class="field-label">대학교<input bind:value={university} maxlength="100" disabled={resetPending} /></label>
-      <label class="field-label">학과<input bind:value={department} maxlength="100" disabled={resetPending} /></label>
-      <label class="field-label">학업 단계<input bind:value={studyLevel} maxlength="60" placeholder="예: 학부 3학년" disabled={resetPending} /></label>
-    </div>
-    <button class="button small" type="button" disabled={busy} onclick={saveProfile}>프로필 저장</button>
-
-    <h3>관심 분야</h3>
-    {#if data.interests.length}
-      <ul aria-label="저장된 관심 분야">
-        {#each data.interests as interest (interest.id)}
-          <li class="setting-row">
-            <div>
-              <strong>{interest.name}</strong>
-              <p>
-                {interest.aliases.join(', ') || '별칭 없음'} · 우선순위 {interest.priority}
-                · {#if interest.origin === 'explicit'}직접 입력 · {interest.polarity === 'negative' ? '덜 보고 싶은 주제' : '더 보고 싶은 주제'}{:else}행동 근거 기반 학습 제안 · 근거 {interest.evidence_count}건{/if}
-              </p>
-              {#if interest.evidence_summary}<small>{interest.evidence_summary}</small>{/if}
-            </div>
-            <button class="text-button" type="button" disabled={busy} aria-label={`${interest.name} ${interest.origin === 'learned' ? '직접 입력으로 수정' : '수정'}`} onclick={() => edit(interest)}>
-              {interest.origin === 'learned' ? '직접 입력으로 수정' : '수정'}
-            </button>
-            <button class="text-button" type="button" disabled={busy} aria-label={`${interest.name} 삭제`} onclick={() => void removeInterest(interest)}>삭제</button>
-          </li>
-        {/each}
-      </ul>
-    {:else}
-      <p class="muted">아직 저장된 관심 분야가 없습니다. 자주 찾는 주제부터 추가해 보세요.</p>
-    {/if}
-    <p class="footnote">관심사를 삭제하면 과거 행동만으로 다시 나타나지 않습니다. 새로 저장하거나 관심 표시한 소식이 쌓이면 다시 제안될 수 있습니다.</p>
-
-    <div class="personalization-editor">
-      <label class="field-label">관심사 이름<input bind:value={name} maxlength="80" oninput={onInterestDraftInput} disabled={resetPending} /></label>
-      <label class="field-label">별칭<input bind:value={aliases} maxlength="240" placeholder="한국어·영어 표현을 쉼표로 구분" oninput={onInterestDraftInput} disabled={resetPending} /></label>
-      {#if invalidAliases}<small role="alert" class="archive-error">별칭은 최대 12개까지 입력하고, 각 별칭은 80자 이내여야 합니다.</small>{/if}
-      <label class="field-label">우선순위/강도 (5가 가장 높음)
-        <select bind:value={priority} onchange={onInterestDraftInput} disabled={resetPending}>
-          {#each [1, 2, 3, 4, 5] as value}<option value={value}>{value}</option>{/each}
-        </select>
-      </label>
-      <label class="field-label">관심 방향
-        <select bind:value={polarity} onchange={onInterestDraftInput} disabled={resetPending}>
-          <option value="positive">더 보고 싶은 주제</option>
-          <option value="negative">덜 보고 싶은 주제</option>
-        </select>
-      </label>
-      <div class="reader-actions">
-        <button class="button small" type="button" disabled={busy || !name.trim() || invalidAliases} onclick={saveInterest}>
-          {editingId === null ? '관심사 추가' : '관심사 변경 저장'}
-        </button>
-        {#if editingId !== null}<button class="text-button" type="button" disabled={busy} onclick={clearEditor}>수정 취소</button>{/if}
+    <h3 class="settings-group-title">프로필</h3>
+    <div class="settings-group">
+      <div class="settings-row profile-row">
+        <label class="sr-only" for="profile-university">대학교</label><input id="profile-university" bind:value={university} maxlength="100" placeholder="대학교" disabled={resetPending} />
+        <label class="sr-only" for="profile-department">학과</label><input id="profile-department" bind:value={department} maxlength="100" placeholder="학과" disabled={resetPending} />
+        <label class="sr-only" for="profile-level">학업 단계</label><input id="profile-level" bind:value={studyLevel} maxlength="60" placeholder="학업 단계 (예: 학부 3학년)" disabled={resetPending} />
+        <button class="button secondary small" type="button" disabled={busy} aria-label="프로필 저장" onclick={saveProfile}>저장</button>
       </div>
     </div>
 
-    <div class="setting-row">
-      <div>
-        <h3>행동으로 배우기</h3>
-        <p>관심 표시와 저장만 새 기억에 반영합니다. 읽기는 학습하지 않습니다. 근거는 180일 뒤 만료됩니다. 끄면 새 행동은 학습에 쓰지 않습니다.</p>
+    <div class="settings-group-title"><h3>관심 분야</h3><Hint label="관심 분야">추천 순위에만 쓰이며 이 기기에만 저장됩니다. 주제를 눌러 별칭과 우선순위를 바꿀 수 있습니다. 학습된 관심사는 저장하거나 관심 표시한 서로 다른 공지가 쌓이면 생기고, 근거는 180일 뒤 만료됩니다. 삭제한 관심사는 과거 행동만으로 다시 생기지 않습니다.</Hint></div>
+    <div class="settings-group">
+      {#each [['positive', '관심'], ['negative', '관심 없음']] as [direction, label]}
+        {@const items = explicit.filter((interest) => interest.polarity === direction)}
+        <div class="settings-row chip-row">
+          <span class="row-label">{label}</span>
+          <ul class="chip-list" aria-label={label}>
+            {@render chips(items, label)}
+            <li><input class="chip-input" bind:value={drafts[direction as Polarity]} maxlength="80" placeholder="+ 추가" aria-label={`${label} 주제 추가`} disabled={resetPending} onkeydown={(event) => submitDraft(event, direction as Polarity)} /></li>
+          </ul>
+        </div>
+      {/each}
+      <div class="settings-row chip-row">
+        <span class="row-label">학습됨</span>
+        {#if learned.length}<ul class="chip-list" aria-label="학습된 관심사">{@render chips(learned, '학습된 관심사')}</ul>
+        {:else}<span class="row-detail chip-empty">아직 없음</span>{/if}
       </div>
-      <button
-        class="switch"
-        class:on={data.learning_enabled}
-        role="switch"
-        aria-checked={data.learning_enabled}
-        aria-label="관심사 학습"
-        disabled={busy}
-        onclick={() => void action('personalization_set_learning', { enabled: !data!.learning_enabled })}
-      ><span></span></button>
     </div>
-    <button class="text-button" type="button" disabled={busy} onclick={resetPersonalization}>개인화 데이터 초기화</button>
+
+    <div class="settings-group">
+      <div class="settings-row"><span class="row-label">행동으로 배우기<Hint label="행동으로 배우기">관심 표시와 저장만 학습합니다. 읽기와 검색은 학습하지 않습니다. 끄면 새 행동을 학습에 쓰지 않습니다.</Hint></span><button class="switch" class:on={data.learning_enabled} role="switch" aria-checked={data.learning_enabled} aria-label="관심사 학습" disabled={busy} onclick={() => void action('personalization_set_learning', { enabled: !data!.learning_enabled })}><span></span></button></div>
+      <div class="settings-row"><span class="row-label">개인화 초기화</span><button class="button secondary small danger" type="button" disabled={busy} aria-label="개인화 데이터 초기화" onclick={resetPersonalization}>초기화</button></div>
+    </div>
   {:else}
-    <p>개인화 정보를 불러오는 중입니다…</p>
+    <p class="loading" role="status">개인화 정보를 불러오는 중입니다…</p>
   {/if}
-</section>
+</div>
