@@ -245,7 +245,7 @@ macOS tries Metal first and falls back to CPU for the session after a load or re
 
 The model gets a fixed system instruction and JSON-quoted untrusted source data, no tools. Generated text renders only as escaped Svelte text. There are no model-driven commands or external actions.
 
-Diagnostics are transient: at most 20 terminal reports in memory with stage timings and inference metrics, no source or generated text.
+Diagnostics are transient: at most 20 terminal reports in memory with stage timings, inference metrics and the fixed validator message of each failed validation, no source or generated text. Validator messages are written for the repair prompt; a job that still fails validation after the repair stores one fixed user-facing error instead.
 
 ## Energy policy
 

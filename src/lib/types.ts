@@ -251,6 +251,7 @@ export interface AiDiagnostics {
   job_id: number; phase: string; elapsed_ms: number;
   stages_ms: Record<string, number>;
   attempts: unknown[];
+  validation_errors: string[];
 }
 export interface AiSnapshot {
   catalog: CatalogEntry[]; models: AiModel[]; preferences: AiPreferences; jobs: AiJob[]; runtime: WorkerStatus;

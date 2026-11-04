@@ -58,6 +58,8 @@ pub(super) const GENERATION_SCHEMA: &str = r#"{"type":"object","properties":{"sh
 const INPUT_BYTES: usize = 24 * 1024;
 const SOURCE_BYTES: usize = 18 * 1024;
 const CANCELLED: &str = "AI 분석을 취소했습니다.";
+const VALIDATION_FAILED: &str =
+    "AI 결과가 공지 원문과 맞지 않아 저장하지 않았습니다. 다시 요청해 주세요.";
 type SharedStore = Arc<Mutex<Store>>;
 type SharedWorker = Arc<AsyncMutex<Worker>>;
 
@@ -101,6 +103,8 @@ pub struct Diagnostics {
     pub stages_ms: BTreeMap<String, u64>,
     /// One entry per attempted inference. Missing worker metrics remain unknown.
     pub attempts: Vec<InferenceMetrics>,
+    /// Fixed validator messages (at most one per attempt); they quote no source text.
+    pub validation_errors: Vec<String>,
 }
 struct ActiveDiagnostics {
     started: Instant,
@@ -420,6 +424,7 @@ impl Controller {
                     elapsed_ms: 0,
                     stages_ms: BTreeMap::new(),
                     attempts: Vec::new(),
+                    validation_errors: Vec::new(),
                 },
             });
         }
@@ -454,6 +459,9 @@ impl Controller {
                 *attempt = metrics;
             }
         });
+    }
+    fn record_validation_error(&self, job_id: i64, error: &str) {
+        self.update_profile(job_id, |report| report.validation_errors.push(error.into()));
     }
     fn finish_profile(&self, job_id: i64, phase: &str) {
         if let Ok(mut profiles) = self.inner.profiles.lock() {
@@ -757,14 +765,21 @@ async fn execute(
                 validated = Some(analysis);
                 break;
             }
-            Err(error) if attempt == 1 => {
+            Err(error) => {
+                // Validator messages are instructions to the model; they stay in
+                // diagnostics and never become the job error.
+                if let Some(controller) = controller {
+                    controller.record_validation_error(job.id, &error);
+                }
+                if attempt == 2 {
+                    return Err(VALIDATION_FAILED.into());
+                }
                 // One repair only; unchanged model/data bounds, no tool capabilities.
                 request = format!("{request}\n이전 출력의 검증 오류: {error}\nJSON을 처음부터 다시 작성하세요. evidence_id에는 해당 사실을 뒷받침하는 원문 객체에 적힌 id를 그대로 쓰세요. 다른 객체의 날짜·시간을 가져오지 마세요. evidence 필드는 쓰지 마세요. 뒷받침되는 사실만 포함하고 불확실한 사실은 빼세요.");
                 if request.len() > INPUT_BYTES {
-                    return Err(error);
+                    return Err(VALIDATION_FAILED.into());
                 }
             }
-            Err(error) => return Err(error),
         }
     }
     drop(engine);
@@ -2359,9 +2374,21 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(job.status, if recover { "completed" } else { "failed" });
+            // The stored error is for the user; validator text stays in diagnostics.
+            assert_eq!(
+                job.error.as_deref(),
+                (!recover).then_some(VALIDATION_FAILED)
+            );
             let diagnostics = controller.diagnostics(job.id).unwrap();
             assert_eq!(diagnostics.phase, job.status);
             assert_eq!(diagnostics.attempts.len(), 2);
+            assert_eq!(
+                diagnostics.validation_errors,
+                vec![
+                    "AI가 올바른 JSON을 반환하지 않았습니다.";
+                    if recover { 1 } else { 2 }
+                ]
+            );
             assert!(diagnostics
                 .attempts
                 .iter()
