@@ -4,6 +4,7 @@
   import { save, open } from '@tauri-apps/plugin-dialog';
   import { archiveError, archiveSize } from './archive-format';
   import { confirmAction } from './confirm';
+  import Hint from './Hint.svelte';
 
   let { desktop }: { desktop: boolean } = $props();
   type BackupPreview = {
@@ -123,21 +124,24 @@
   }
 </script>
 
-<section id="data-backup" class="settings-section" aria-busy={busy}>
-  <div class="section-heading"><h2>백업 및 복원</h2><p>설정과 보관한 공지·첨부 자료를 암호화되지 않은 단일 파일로 저장하거나 복원합니다. 파일을 안전한 위치에 직접 보관해 주세요.</p></div>
+<div id="data-backup" aria-busy={busy}>
+  <div class="settings-group-title"><h3>백업 및 복원</h3><Hint label="백업 및 복원">설정, 보관한 공지와 첨부 자료를 암호화하지 않은 파일 하나에 담습니다. 안전한 곳에 직접 보관하세요. AI 모델 파일은 포함하지 않습니다. 복원하면 현재 데이터는 지우지 않고 복구용으로 남겨 두며, Rhythm이 종료됩니다. 다시 열면 복원이 마무리되고, 파일이 없는 설치 모델은 다시 설치해야 합니다.</Hint></div>
   {#if !desktop}<p class="muted">백업과 복원은 데스크톱 앱에서 사용할 수 있습니다.</p>
   {:else}
-    <div class="setting-row"><div><h3>로컬 백업 만들기</h3><p>현재 데이터베이스의 일관된 스냅샷과 보관된 첨부 자료를 하나의 백업 파일에 담습니다. AI 모델 파일은 포함하지 않습니다.</p></div><button class="text-button" disabled={busy} onclick={createBackup}>{busy ? '처리 중…' : '백업 파일 저장'}</button></div>
-    <div class="setting-row"><div><h3>백업에서 복원</h3><p>백업을 먼저 검사해 포함된 데이터와 버전을 확인합니다. 복원을 확정하면 Rhythm이 종료되고, 다음에 Rhythm을 열 때 복원을 마무리합니다.</p>{#if restoreAvailable === null}<p>복원 가능 여부를 확인하고 있습니다.</p>{:else if !restoreAvailable}<p role="status">복원할 수 없습니다. {restoreReason}</p><button class="text-button" onclick={checkRestoreSupport}>복원 가능 여부 다시 확인</button>{/if}</div><button class="text-button" disabled={busy || restoreAvailable !== true} onclick={chooseBackup}>{busy ? '검사 중…' : '백업 파일 선택'}</button></div>
-    {#if busy}
-      <div class="inline-controls"><p class="muted" role="status">{cancelling ? '취소 요청을 처리하고 임시 파일을 정리하고 있습니다…' : '작업 중…'}</p><button class="text-button" disabled={cancelling} onclick={cancelOperation}>{cancelling ? '취소 요청됨' : '작업 취소'}</button></div>
-    {/if}
-    {#if preview}
-      <div class="privacy-note" aria-live="polite"><div><h3>복원할 백업 확인</h3><p>형식 v{preview.format_version} · 데이터베이스 스키마 {preview.database_schema} · 공지 {preview.documents.toLocaleString('ko-KR')}건 · 첨부 자료 {preview.resources.toLocaleString('ko-KR')}개 ({archiveSize(preview.resource_bytes)})</p><p>생성 시각 {createdAt(preview.created_at)} · 모델 가중치는 포함되지 않습니다.</p><p>복원하면 Rhythm이 종료됩니다. 자동으로 다시 열리지 않으니 Rhythm을 직접 다시 열어 주세요. 다시 열 때 복원이 마무리됩니다.</p></div></div>
-      <div class="inline-controls"><button class="text-button" disabled={busy} onclick={() => { selected = null; preview = null; }}>취소</button><button class="text-button" disabled={busy || restoreAvailable !== true} onclick={restoreBackup}>이 백업으로 복원</button></div>
-    {/if}
+    <div class="settings-group">
+      <div class="settings-row"><span class="row-label">백업 만들기</span><button class="button secondary small" disabled={busy} onclick={createBackup}>{busy ? '처리 중…' : '백업 파일 저장'}</button></div>
+      <div class="settings-row"><span class="row-label">백업에서 복원{#if restoreAvailable === null}<span class="row-detail">복원 가능 여부를 확인하고 있습니다.</span>{:else if !restoreAvailable}<span class="row-detail" role="status">복원할 수 없습니다. {restoreReason}</span>{/if}</span>{#if restoreAvailable === false}<button class="text-button" onclick={checkRestoreSupport}>다시 확인</button>{/if}<button class="button secondary small" disabled={busy || restoreAvailable !== true} onclick={chooseBackup}>{busy ? '검사 중…' : '백업 파일 선택'}</button></div>
+      {#if busy}
+        <div class="settings-row"><span class="row-label"><span class="row-detail" role="status">{cancelling ? '취소 요청을 처리하고 임시 파일을 정리하고 있습니다…' : '작업 중…'}</span></span><button class="text-button" disabled={cancelling} onclick={cancelOperation}>{cancelling ? '취소 요청됨' : '작업 취소'}</button></div>
+      {/if}
+      {#if preview}
+        <div class="settings-row stacked" aria-live="polite">
+          <div class="row-label"><h4>복원할 백업 확인</h4><span class="row-detail">공지 {preview.documents.toLocaleString('ko-KR')}건 · 첨부 자료 {preview.resources.toLocaleString('ko-KR')}개 ({archiveSize(preview.resource_bytes)}) · {createdAt(preview.created_at)} · 형식 v{preview.format_version} · 스키마 {preview.database_schema}</span><span class="row-detail">모델 가중치는 포함되지 않습니다. 복원하면 Rhythm이 종료되고 자동으로 다시 열리지 않습니다. 직접 다시 열면 복원이 마무리됩니다.</span></div>
+          <div class="popover-actions"><button class="button small" disabled={busy || restoreAvailable !== true} onclick={restoreBackup}>이 백업으로 복원</button><button class="text-button" disabled={busy} onclick={() => { selected = null; preview = null; }}>취소</button></div>
+        </div>
+      {/if}
+    </div>
   {/if}
   {#if error}<p class="archive-error" role="alert">{error}</p>{/if}
   {#if notice}<p class="archive-feedback" role="status">{notice}</p>{/if}
-  <p class="footnote">복원 시 현재 데이터베이스와 첨부 자료는 복구용으로 보관합니다. AI 모델 가중치와 외부 모델 파일은 백업에서 제외되며 이동하거나 삭제하지 않습니다. 복원된 목록에서 파일이 없는 설치 모델은 다시 설치가 필요합니다.</p>
-</section>
+</div>
