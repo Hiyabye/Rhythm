@@ -51,7 +51,7 @@ Rhythm은 학교 공지를 내 Mac에 모아 보관하고, 로컬 AI로 핵심�
 | 모델 | 상태 | 출처·라이선스 |
 | --- | --- | --- |
 | Qwen3.5 2B Q4_K_M (1.28 GB) | Apple Silicon Metal과 Windows PC 한 대(GTX 1650 Vulkan, CPU)에서 실제 한국어 분석 확인. macOS CPU는 미검증 | [unsloth/Qwen3.5-2B-GGUF](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF), Apache-2.0 |
-| Qwen3.5 4B Q4_K_M (2.74 GB) | Windows PC 한 대(GTX 1650 Vulkan, CPU 일부)에서 분석 확인. macOS에서는 이전 엔진으로만 확인 | [unsloth/Qwen3.5-4B-GGUF](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF), Apache-2.0 |
+| Qwen3.5 4B Q4_K_M (2.74 GB) | Apple Silicon Metal과 Windows PC 한 대(GTX 1650 Vulkan, CPU 일부)에서 실제 한국어 분석 확인. macOS CPU는 미검증 | [unsloth/Qwen3.5-4B-GGUF](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF), Apache-2.0 |
 
 각 파일은 고정된 리비전, 크기, SHA-256으로 검사합니다. 이미 가진 `qwen3`·`qwen35` GGUF 파일을 참조로 등록할 수도 있지만, 등록 검사를 통과해도 추론 성공이 보장되지는 않습니다. 설정에는 실제로 불러온 백엔드(Metal 또는 CPU)가 표시됩니다.
 
