@@ -632,7 +632,7 @@ impl Controller {
             .await?;
             let listing = match response {
                 network::Fetch::Body { bytes, mime, .. } => {
-                    check_document_mime(definition, mime.as_deref())?;
+                    check_document_mime(definition, mime.as_deref(), true)?;
                     parser::listing(
                         definition,
                         page,
@@ -683,6 +683,19 @@ impl Controller {
                 }
                 if historical {
                     if let Some(id) = existing_id {
+                        self.pending_resources(store, root, transport, &policy, id, resource_bytes)
+                            .await?;
+                        continue;
+                    }
+                }
+                // A sitemap-backed listing carries the site's own change time.
+                // Skip the request while the archived notice already matches it;
+                // pending files still resume so a failed download can recover.
+                if let (Some(id), Some(modified_at)) = (existing_id, entry.modified_at.as_deref()) {
+                    if with_store(store, |s| {
+                        s.listing_unchanged(&definition.id, &entry.external_id, modified_at)
+                    })? {
+                        active(store, &self.cancel)?;
                         self.pending_resources(store, root, transport, &policy, id, resource_bytes)
                             .await?;
                         continue;
@@ -952,7 +965,7 @@ impl Controller {
             } => {
                 // A different content type is more likely a block or error page than
                 // the notice itself, so it stays a transient failure.
-                check_document_mime(definition, mime.as_deref())?;
+                check_document_mime(definition, mime.as_deref(), false)?;
                 let permanent = |reason: &str| ArticleError::Permanent {
                     reason: reason.into(),
                     response_sha256: format!("{:x}", Sha256::digest(&bytes)),
@@ -1063,12 +1076,24 @@ fn persist(
         )
     })
 }
-fn check_document_mime(source: &SourceDefinition, mime: Option<&str>) -> Result<(), String> {
-    if if source.id == "sogang-academic" {
-        mime != Some("application/json")
+fn check_document_mime(
+    source: &SourceDefinition,
+    mime: Option<&str>,
+    listing: bool,
+) -> Result<(), String> {
+    // The mechanical sitemap is XML; article pages must still be HTML so a wrong
+    // content type stays a transient block-page reading.
+    let expected = if source.id == "sogang-academic" {
+        mime == Some("application/json")
+    } else if source.family == "mechanical" && listing {
+        matches!(
+            mime,
+            Some("text/html" | "application/xhtml+xml" | "application/xml" | "text/xml")
+        )
     } else {
-        !matches!(mime, Some("text/html" | "application/xhtml+xml"))
-    } {
+        matches!(mime, Some("text/html" | "application/xhtml+xml"))
+    };
+    if !expected {
         return Err("학교 서버가 예상한 공지 형식 대신 다른 자료를 반환했습니다.".into());
     }
     Ok(())

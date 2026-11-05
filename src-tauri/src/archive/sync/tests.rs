@@ -365,6 +365,95 @@ async fn historical_import_exceeds_thirty_and_deduplicates_repeated_pins() {
     }
 }
 
+const MECHANICAL_SITEMAP: &str = "https://me.sogang.ac.kr/sitemap.xml";
+const MECHANICAL_DETAIL: &str = "https://me.sogang.ac.kr/ko/board/notice/1";
+fn mechanical_sitemap(lastmod: &str) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+         <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\
+         <url><loc>{MECHANICAL_DETAIL}</loc><lastmod>{lastmod}</lastmod></url>\
+         </urlset>"
+    )
+}
+fn mechanical_detail() -> String {
+    format!(
+        "<!doctype html><html><head><link rel=\"canonical\" href=\"{MECHANICAL_DETAIL}\"/></head>\
+         <body><article class=\"container-site py-14 max-w-4xl\">\
+         <header class=\"border-b-2 border-sg-ink pb-7\">\
+         <span class=\"eyebrow\">일반공지</span><h1 class=\"mt-3\">기계공학과 공지</h1>\
+         <div class=\"mt-5 flex\"><span>작성자 · 기계공학과</span>\
+         <span>날짜 · 2026.09.28</span><span>조회 · 1</span></div></header>\
+         <div class=\"prose-sg mt-8 min-h-[120px]\"><p>본문입니다.</p></div>\
+         </article></body></html>"
+    )
+}
+
+#[tokio::test]
+async fn sitemap_listing_skips_an_unchanged_article_until_its_change_time_moves() {
+    let (dir, store) = setup(&["me-general"]);
+    let fake = Fake::new(vec![]);
+    fake.extra.lock().unwrap().insert(
+        MECHANICAL_SITEMAP.into(),
+        Some((
+            mechanical_sitemap("2026-09-28T15:31:48.462Z").into_bytes(),
+            "application/xml".into(),
+        )),
+    );
+    fake.extra.lock().unwrap().insert(
+        MECHANICAL_DETAIL.into(),
+        Some((mechanical_detail().into_bytes(), "text/html".into())),
+    );
+    let controller = Controller::new();
+    let run_once = |mode: &'static str| {
+        controller.execute(
+            &store,
+            dir.path(),
+            &fake,
+            sources(&store, &["me-general"]),
+            mode,
+            Budget::default(),
+        )
+    };
+    assert!(run_once("incremental").await.is_ok());
+    assert_eq!(items(&store).len(), 1);
+    let detail_calls = |fake: &Fake| {
+        fake.paths()
+            .iter()
+            .filter(|url| *url == MECHANICAL_DETAIL)
+            .count()
+    };
+    assert_eq!(detail_calls(&fake), 1);
+    assert_eq!(
+        with_store(&store, |s| s.source("me-general"))
+            .unwrap()
+            .status,
+        "completed"
+    );
+
+    // The archive already carries this change time, so no article request is made.
+    assert!(run_once("incremental").await.is_ok());
+    assert_eq!(detail_calls(&fake), 1);
+    assert_eq!(items(&store).len(), 1);
+
+    // A later recorded change fetches and re-archives the notice.
+    fake.extra.lock().unwrap().insert(
+        MECHANICAL_SITEMAP.into(),
+        Some((
+            mechanical_sitemap("2026-09-29T09:00:00.000Z").into_bytes(),
+            "application/xml".into(),
+        )),
+    );
+    assert!(run_once("incremental").await.is_ok());
+    assert_eq!(detail_calls(&fake), 2);
+    assert_eq!(items(&store).len(), 1);
+    assert!(with_store(&store, |s| s.listing_unchanged(
+        "me-general",
+        "1",
+        "2026-09-29T09:00:00.000Z"
+    ))
+    .unwrap());
+}
+
 #[tokio::test]
 async fn refresh_checks_new_notices_then_continues_the_unfinished_backlog() {
     let (dir, store) = setup(&[MAIN]);

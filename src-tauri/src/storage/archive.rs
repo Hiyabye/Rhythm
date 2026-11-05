@@ -252,6 +252,7 @@ impl Store {
                         external_id: row.get(0)?,
                         url: row.get(1)?,
                         pinned: false,
+                        modified_at: None,
                     },
                     row.get(2)?,
                 ))
@@ -406,6 +407,25 @@ impl Store {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()
+            .map_err(|e| e.to_string())
+    }
+    /// True when the archived notice already carries the listing's own change
+    /// timestamp. A sitemap-backed family uses this to skip a request instead of
+    /// revalidating every article on each incremental run.
+    pub(crate) fn listing_unchanged(
+        &self,
+        source: &str,
+        external: &str,
+        modified_at: &str,
+    ) -> Result<bool, String> {
+        self.connection
+            .query_row(
+                "SELECT modified_at FROM documents WHERE source_id=?1 AND external_id=?2",
+                params![source, external],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(|stored| stored.flatten().is_some_and(|value| value == modified_at))
             .map_err(|e| e.to_string())
     }
     pub(crate) fn checked(&self, source: &str, external: &str) -> Result<(), String> {

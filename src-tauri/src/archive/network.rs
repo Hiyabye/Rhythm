@@ -384,6 +384,26 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
             let attachment = parts.len() == 2 && parts[0] == "aseoul_bbs" && parts[1] == "down.php";
             article || attachment || path == "/robots.txt"
         }
+        "me.sogang.ac.kr" => {
+            let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+            // robots.txt forbids every query string (`Disallow: /*?`), so board
+            // paging is never requested. Discovery uses the query-free sitemap;
+            // article pages stay under the verified `ko/board/<board>/<id>` route.
+            let article = parts.len() == 4
+                && parts[..2] == ["ko", "board"]
+                && [
+                    "notice",
+                    "academic",
+                    "research",
+                    "award",
+                    "scholarship",
+                    "events",
+                    "alumni_news",
+                ]
+                .contains(&parts[2])
+                && positive_id(parts[3]);
+            path == "/sitemap.xml" || article || path == "/robots.txt"
+        }
         "sse.sogang.ac.kr" => {
             let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
             // robots.txt disallows /se2/, /data/ and /bbs/, so attachments and
@@ -635,6 +655,45 @@ mod tests {
                 .is_err(),
                 "{path}"
             );
+        }
+    }
+
+    #[test]
+    fn mechanical_policy_is_limited_to_the_sitemap_and_article_routes() {
+        for path in [
+            "/sitemap.xml",
+            "/robots.txt",
+            "/ko/board/notice/2419",
+            "/ko/board/academic/2395",
+            "/ko/board/research/2425",
+            "/ko/board/award/2427",
+            "/ko/board/scholarship/2407",
+            "/ko/board/events/1762",
+            "/ko/board/alumni_news/1835",
+        ] {
+            assert!(
+                validate_url(&Url::parse(&format!("https://me.sogang.ac.kr{path}")).unwrap())
+                    .is_ok(),
+                "{path}"
+            );
+        }
+        for path in [
+            // robots.txt forbids the only paging route (`?page=`).
+            "/ko/board/notice",
+            "/ko/board/notice?page=2",
+            "/ko/board/notice/",
+            "/ko/board/notice/0",
+            "/ko/board/notice/2419/extra",
+            "/ko/board/unknown/1",
+            "/en/board/notice/1",
+            "/bbs/board.php?bo_table=notice",
+            "/api/board/notice",
+            "/sitemap.xml/extra",
+            "/sitemap-index.xml",
+        ] {
+            let url = Url::parse(&format!("https://me.sogang.ac.kr{path}")).unwrap();
+            assert!(validate_url(&url).is_err(), "{path}");
+            assert!(validate(&url, Access::EmbeddedImage).is_err(), "{path}");
         }
     }
 

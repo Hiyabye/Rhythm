@@ -118,7 +118,7 @@ pub fn definitions() -> Vec<SourceDefinition> {
             "서강대학교 · 기계공학과",
             "mechanical",
             format!("https://me.sogang.ac.kr/ko/board/{board}"),
-            false,
+            true,
         );
     }
     for (id, path, name) in [

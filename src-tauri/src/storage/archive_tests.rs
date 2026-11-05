@@ -1377,6 +1377,7 @@ fn skipped_articles_persist_validate_and_clear_on_archive() {
         external_id: id.into(),
         url: format!("https://www.sogang.ac.kr/ko/detail/{id}"),
         pinned: false,
+        modified_at: None,
     };
     let hash = "a".repeat(64);
     for (source, entry, reason, sha) in [

@@ -151,6 +151,10 @@ pub struct ListingEntry {
     pub external_id: String,
     pub url: String,
     pub pinned: bool,
+    /// The site's own modification timestamp from a listing document whose
+    /// entries carry one (the mechanical sitemap). The sync skips an unchanged
+    /// entry without a request while the archived value matches.
+    pub modified_at: Option<String>,
 }
 #[derive(Clone, Debug)]
 pub struct ListingPage {
