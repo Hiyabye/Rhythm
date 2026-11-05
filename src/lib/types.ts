@@ -218,6 +218,8 @@ export interface CatalogEntry {
   bytes: number; memory_bytes: number; description: string; use_case: string;
   repository: string; revision: string; filename: string; sha256: string; license: string;
   compatibility: 'verified' | 'available' | 'experimental' | 'unsupported'; reason: string | null;
+  /** Optional image-recognition module; absent means the model can only read text. */
+  projector?: { filename: string; bytes: number; memory_bytes: number; sha256: string } | null;
 }
 export interface AiModel {
   id: string; catalog_id: string | null; name: string; ownership: 'managed' | 'external'; path: string;
@@ -243,13 +245,15 @@ export interface AiJob extends AnalysisKey {
 export interface AnalysisFact {
   kind: string; label: string; value: string; evidence: string; date: string | null;
   uncertainty: 'clear' | 'ambiguous' | 'unknown';
+  /** Absent on results produced before image support: those are text facts. */
+  origin?: 'text' | 'image';
 }
 export interface Analysis {
   short_summary: string; summary: string; category: string;
   uncertainty: 'clear' | 'ambiguous' | 'unknown'; facts: AnalysisFact[];
 }
 export interface AiResult extends AnalysisKey {
-  id: number; job_id: number; model_identity: { name?: string; sha256?: string; max_tokens?: number; execution_mode?: string; runtime_policy?: string; loaded_backend?: string }; result: Analysis;
+  id: number; job_id: number; model_identity: { name?: string; sha256?: string; max_tokens?: number; execution_mode?: string; runtime_policy?: string; loaded_backend?: string; images_used?: number; images_available?: number }; result: Analysis;
   partial: boolean; processed_chars: number; total_chars: number; duration_ms: number; created_at: string;
 }
 export interface AiOperation {
@@ -264,8 +268,13 @@ export interface AiDiagnostics {
   attempts: unknown[];
   validation_errors: string[];
 }
+export interface AiProjector {
+  model_id: string; path: string; sha256: string | null; expected_sha256: string; expected_bytes: number; bytes: number;
+  status: 'pending' | 'downloading' | 'verifying' | 'installed' | 'failed' | 'cancelled' | 'missing';
+  downloaded_bytes: number; resume_etag: string | null; error: string | null;
+}
 export interface AiSnapshot {
-  catalog: CatalogEntry[]; models: AiModel[]; preferences: AiPreferences; jobs: AiJob[]; runtime: WorkerStatus;
+  catalog: CatalogEntry[]; models: AiModel[]; projectors: AiProjector[]; preferences: AiPreferences; jobs: AiJob[]; runtime: WorkerStatus;
   hardware: { os: string; arch: string; ram_bytes: number; disk_available_bytes: number; backend: string };
   model_storage: { directory: string; custom: boolean; available_bytes: number | null; error: string | null };
   busy: boolean;

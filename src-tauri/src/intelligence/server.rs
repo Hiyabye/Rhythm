@@ -55,6 +55,8 @@ struct Observed {
     port: Option<u16>,
     offloaded: Option<(u32, u32)>,
     device: Option<String>,
+    /// Upstream confirms the multimodal encoder actually loaded.
+    multimodal: bool,
 }
 
 pub(super) struct Server {
@@ -62,6 +64,10 @@ pub(super) struct Server {
     endpoint: Endpoint,
     runtime: PathBuf,
     pub model: PathBuf,
+    /// Projector this process was started with; None means text-only.
+    pub projector: Option<PathBuf>,
+    /// True only when upstream logged the multimodal encoder as loaded.
+    pub vision: bool,
     pub loaded_backend: &'static str,
     pub load_ms: u64,
     #[cfg(windows)]
@@ -69,11 +75,12 @@ pub(super) struct Server {
 }
 
 impl Server {
-    /// Starts `launch` with `model` and waits until it serves requests.
-    /// Every failure path kills and reaps the child before returning.
+    /// Starts `launch` with `model` and an optional vision projector, then waits
+    /// until it serves requests. Every failure path kills and reaps the child.
     pub async fn start(
         launch: &Launch,
         model: &Path,
+        projector: Option<&Path>,
         runtime: &Path,
         deadline: Duration,
     ) -> Result<Self, String> {
@@ -85,6 +92,12 @@ impl Server {
         let _ = std::fs::remove_file(&key_file);
         let mut command = Command::new(&launch.executable);
         command.arg("-m").arg(model);
+        if let Some(projector) = projector {
+            command.arg("--mmproj").arg(projector);
+            // Bound per-image cost; the encoder still receives enough tokens to
+            // read Korean poster text instead of guessing from layout alone.
+            command.args(["--image-min-tokens", "1024", "--image-max-tokens", "2048"]);
+        }
         let key = match socket_host(&socket) {
             Some(host) => {
                 command.args(["--host", &host]);
@@ -103,6 +116,11 @@ impl Server {
             "--no-webui",
             "--no-slots",
             "--jinja",
+            // Analysis is deterministic JSON, never a reasoning task. This also
+            // stops Gemma 4's optional thought channel from consuming the whole
+            // output budget before the JSON begins.
+            "--reasoning-budget",
+            "0",
             "-np",
             "1",
             "-c",
@@ -131,6 +149,10 @@ impl Server {
                 return Err(error);
             }
         };
+        let multimodal = observed
+            .lock()
+            .map(|facts| facts.multimodal)
+            .unwrap_or(false);
         let (loaded_backend, complete) = {
             let facts = observed
                 .lock()
@@ -162,6 +184,8 @@ impl Server {
             endpoint,
             runtime: runtime.to_owned(),
             model: model.to_owned(),
+            projector: projector.map(Path::to_owned),
+            vision: multimodal && projector.is_some(),
             loaded_backend,
             load_ms: started.elapsed().as_millis() as u64,
             #[cfg(windows)]
@@ -390,6 +414,9 @@ pub(super) async fn drain_log(reader: impl AsyncRead + Unpin, mut handle: impl F
 }
 
 fn observe(facts: &mut Observed, line: &str) {
+    if line.contains("loaded multimodal model") {
+        facts.multimodal = true;
+    }
     if let Some(rest) = line.split("listening on http://127.0.0.1:").nth(1) {
         facts.port = rest.trim().parse().ok();
     }

@@ -66,7 +66,7 @@ test('real reader UI submits once, shows grounded output, then reuses stored ana
   // Limits are stated next to the result, not only in fine print.
   const limits = panel.getByRole('note').filter({ hasText: 'AI가 만든 참고용 정리입니다.' });
   await expect(limits).toContainText('틀리거나 빠질 수 있습니다');
-  await expect(limits).toContainText('첨부 파일과 이미지의 내용은 분석하지 않았습니다');
+  await expect(limits).toContainText('텍스트만 분석했습니다');
   await expect(limits).toContainText('원문에서 직접 확인하세요');
   await expect(panel).toContainText('근거가 있어도 AI의 해석은 틀릴 수 있습니다');
   await expect(panel).not.toContainText('(원문에서 추출)');
@@ -365,6 +365,49 @@ test('a retired 9B stays removable and is never offered for installation', async
   await expect(retired).toHaveCount(0);
   const calls = await page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'ai_remove'));
   expect(calls.map((call: any) => call.args)).toEqual([{ id: 'qwen35-9b', confirmed: true }]);
+});
+
+test('image-origin facts cite the image and projector actions stay with capable installed models', async ({ page }) => {
+  await mockDesktop(page, { aiInstalled: true, aiResult: true, aiImageResult: true }); await page.goto('/'); await reader(page);
+  const panel = page.getByRole('region', { name: '공지 AI 분석' });
+  await expect(panel.getByText('이미지 1장 사용', { exact: true })).toBeVisible();
+  await expect(panel.getByText('보관된 이미지 1장은 이 분석에 쓰지 않았습니다', { exact: false })).toBeVisible();
+  await panel.getByText('이미지 근거', { exact: true }).click();
+  await expect(panel.getByText('보관된 이미지에서 읽은 내용입니다.', { exact: false })).toBeVisible();
+  await expect(panel.getByText('(이미지에서 읽은 날짜 · 확정 아님)', { exact: false })).toBeVisible();
+  await expect(panel.getByText('[이미지 1]', { exact: false })).toHaveCount(0);
+  await expect(panel.getByText('(AI가 원문에서 읽은 날짜)', { exact: false })).toBeVisible();
+  await openSettings(page, 'AI');
+  const capable = page.locator('.model-tile').filter({ has: page.getByRole('heading', { name: 'Qwen3.5 4B', exact: true }) });
+  const install = capable.getByRole('button', { name: 'Qwen3.5 4B 이미지 인식 추가', exact: true });
+  await expect(install).toBeVisible();
+  await expect(install).toContainText('1.2 MB');
+  const other = page.locator('.model-tile').filter({ has: page.getByRole('heading', { name: 'Qwen3.5 2B', exact: true }) });
+  await expect(other.getByRole('button', { name: /이미지 인식/ })).toHaveCount(0);
+});
+
+test('image module install, cancel and confirmed removal stay inside the model tile', async ({ page }) => {
+  await mockDesktop(page, { aiInstalled: true, aiDelay: 1500 }); await page.goto('/'); await openSettings(page, 'AI');
+  const tile = page.locator('.model-tile').filter({ has: page.getByRole('heading', { name: 'Qwen3.5 4B', exact: true }) });
+  await tile.getByRole('button', { name: 'Qwen3.5 4B 이미지 인식 추가', exact: true }).click();
+  await expect(tile.getByRole('progressbar')).toBeVisible();
+  await tile.getByRole('button', { name: '이미지 인식 모듈 다운로드 중단', exact: true }).click();
+  await expect(tile.getByText('이미지 인식 모듈 중단됨 · 이어받기 가능', { exact: true })).toBeVisible();
+  await tile.getByRole('button', { name: 'Qwen3.5 4B 이미지 인식 다시 설치', exact: true }).click();
+  await expect(tile.getByText('이미지 인식 사용 중', { exact: false })).toBeVisible({ timeout: 10000 });
+  await tile.getByRole('button', { name: '이미지 인식 제거', exact: true }).click();
+  const confirmation = page.getByRole('group', { name: 'Qwen3.5 4B 이미지 인식 모듈 제거 확인', exact: true });
+  await confirmation.getByRole('button', { name: '취소', exact: true }).click();
+  expect(await callCount(page, 'ai_remove_projector')).toBe(0);
+  await tile.getByRole('button', { name: '이미지 인식 제거', exact: true }).click();
+  await confirmation.getByRole('button', { name: '확인하고 제거', exact: true }).click();
+  await expect(tile.getByRole('button', { name: 'Qwen3.5 4B 이미지 인식 추가', exact: true })).toBeVisible();
+  const calls = await page.evaluate(() => {
+    // fixture.ts installs this test-only shape on window.
+    const fixtureWindow = window as unknown as { __fixture: { calls: { command: string; args: unknown }[] } };
+    return fixtureWindow.__fixture.calls.filter((call) => call.command === 'ai_remove_projector').map((call) => call.args);
+  });
+  expect(calls).toEqual([{ modelId: 'qwen35-4b', confirmed: true }]);
 });
 
 test('the AI setup banner opens the AI pane with its heading focused', async ({ page }) => {

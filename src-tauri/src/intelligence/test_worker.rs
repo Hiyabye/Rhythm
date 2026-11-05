@@ -90,6 +90,7 @@ pub fn fake_engine(directory: &Path, mode: &str) -> (PathBuf, PathBuf) {
 /// Modes: `ok`, `exit` (fails to load), `gpu-fails` (fails only with GPU
 /// layers), `silent-cpu` (never offloads), `no-nvidia` (no Vulkan device),
 /// `overflow` (context error for "긴 공지" on GPU), `bad-json`, `bad-metrics`,
+/// `mmproj-fails` (never logs the multimodal encoder as loaded),
 /// `crash-on-chat`. Control files: `load-delay`/`chat-delay` hang only the
 /// first load/request; `delay` hangs every request while it exists; each
 /// request writes `entered` and appends a line to `requests`; `response`
@@ -115,6 +116,11 @@ fn main() {
     let device = if value("--device").is_some_and(|d| d.starts_with("Vulkan")) { "Vulkan0" } else { "MTL0" };
     eprintln!("I llama_prepare_model_devices: using device {device} (Fake) - 4096 MiB free");
     eprintln!("I load_tensors: offloaded {}/4 layers to GPU", if gpu && mode != "silent-cpu" { 4 } else { 0 });
+    if let Some(projector) = value("--mmproj") {
+        if mode != "mmproj-fails" {
+            eprintln!("I srv    load_model: loaded multimodal model, '{projector}'");
+        }
+    }
     if dir.join("load-delay").exists() && !dir.join("entered").exists() {
         std::fs::write(dir.join("entered"), b"entered").unwrap();
         std::thread::sleep(std::time::Duration::from_secs(60));
@@ -166,6 +172,11 @@ fn main() {
 fn chat(dir: &std::path::Path, mode: &str, gpu: bool, body: &str) -> (u16, String) {
     let mut requests = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("requests")).unwrap();
     writeln!(requests, "{}", if body.contains("\"response_format\"") { "analysis" } else { "plain" }).unwrap();
+    let images = body.matches("\"type\":\"image_url\"").count();
+    if images > 0 {
+        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("images")).unwrap();
+        writeln!(file, "{images}").unwrap();
+    }
     let first = !dir.join("entered").exists();
     std::fs::write(dir.join("entered"), b"entered").unwrap();
     if dir.join("delay").exists() || (dir.join("chat-delay").exists() && first) {

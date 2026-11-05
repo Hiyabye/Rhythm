@@ -1,5 +1,8 @@
 //! Curated weight installation. This transport is deliberately independent of notice collection.
-use crate::storage::{intelligence::AiModel, Store};
+use crate::storage::{
+    intelligence::{AiModel, AiProjector},
+    Store,
+};
 use reqwest::header;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -35,6 +38,18 @@ pub struct CatalogEntry {
     pub license: String,
     pub compatibility: String,
     pub reason: Option<String>,
+    /// Optional vision projector (mmproj). Installing it is a separate action.
+    #[serde(default)]
+    pub projector: Option<ProjectorEntry>,
+}
+/// A pinned multimodal projector artifact from the same repository/revision.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProjectorEntry {
+    pub filename: String,
+    pub bytes: u64,
+    /// Conservative estimate, not a measured peak.
+    pub memory_bytes: u64,
+    pub sha256: String,
 }
 pub fn catalog() -> Vec<CatalogEntry> {
     serde_json::from_str(include_str!("catalog.json")).expect("committed model manifest")
@@ -228,6 +243,85 @@ impl Controller {
     ) -> Result<(), String> {
         self.start_entry_with_transport(store, root, entry, lease, HttpsTransport)
     }
+    /// Installs the optional vision projector for an installed model.
+    /// Shares the single download slot with model installation.
+    pub fn start_projector_admitted(
+        &self,
+        store: Arc<Mutex<Store>>,
+        root: PathBuf,
+        model_id: String,
+        lease: crate::operation_gate::AdmissionLease,
+    ) -> Result<(), String> {
+        self.start_projector_with_transport(
+            store,
+            root,
+            model_id,
+            None,
+            Some(lease),
+            HttpsTransport,
+        )
+    }
+    #[cfg(test)]
+    fn start_projector<T: Transport + Send + 'static>(
+        &self,
+        store: Arc<Mutex<Store>>,
+        root: PathBuf,
+        model_id: String,
+        entry: CatalogEntry,
+        transport: T,
+    ) -> Result<(), String> {
+        self.start_projector_with_transport(store, root, model_id, Some(entry), None, transport)
+    }
+    fn start_projector_with_transport<T: Transport + Send + 'static>(
+        &self,
+        store: Arc<Mutex<Store>>,
+        root: PathBuf,
+        model_id: String,
+        entry: Option<CatalogEntry>,
+        lease: Option<crate::operation_gate::AdmissionLease>,
+        transport: T,
+    ) -> Result<(), String> {
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| "모델 설치 상태에 접근하지 못했습니다.")?;
+        if active.is_some() {
+            return Err("이미 다른 모델이나 이미지 인식 모듈을 설치하고 있습니다.".into());
+        }
+        let model = with_store(&store, |s| s.ai_model(&model_id))?
+            .filter(|model| model.status == "installed")
+            .ok_or("이미지 인식을 추가하려면 설치가 완료된 모델을 선택해 주세요.")?;
+        let entry = entry
+            .or_else(|| {
+                catalog()
+                    .into_iter()
+                    .find(|entry| Some(&entry.id) == model.catalog_id.as_ref())
+            })
+            .ok_or("이 모델은 배포 목록에 없어 이미지 인식 모듈을 자동으로 받을 수 없습니다.")?;
+        validate_manifest(&entry)?;
+        if with_store(&store, |s| s.ai_projector(&model_id))?
+            .is_some_and(|projector| projector.status == "installed")
+        {
+            return Err("이미 이미지 인식 모듈이 설치되어 있습니다.".into());
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        *active = Some(cancel.clone());
+        let this = self.clone();
+        tokio::spawn(async move {
+            let _lease = lease;
+            if let Err(error) =
+                install_projector(&store, &root, &model, &entry, &cancel, &transport).await
+            {
+                if !cancel.load(Ordering::Acquire) {
+                    eprintln!("AI projector install: {error}");
+                }
+            }
+            if let Ok(mut active) = this.active.lock() {
+                *active = None;
+            }
+        });
+        Ok(())
+    }
     fn start_entry_with_transport<T: Transport + Send + 'static>(
         &self,
         store: Arc<Mutex<Store>>,
@@ -342,6 +436,14 @@ fn validate_manifest(e: &CatalogEntry) -> Result<(), String> {
         || !e.filename.ends_with(".gguf")
         || e.filename.contains(['/', '\\', '\0'])
         || !e.id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        || e.projector.as_ref().is_some_and(|p| {
+            !hex(&p.sha256, 64)
+                || p.bytes == 0
+                || p.bytes > 4 * 1024 * 1024 * 1024
+                || p.memory_bytes == 0
+                || !p.filename.ends_with(".gguf")
+                || p.filename.contains(['/', '\\', '\0'])
+        })
     {
         return Err("모델 배포 목록의 고정 식별자나 검증 정보가 올바르지 않습니다.".into());
     }
@@ -354,11 +456,10 @@ fn download_url(e: &CatalogEntry) -> Result<Url, String> {
     ))
     .map_err(|_| "모델 다운로드 주소가 올바르지 않습니다.".into())
 }
-fn validate_destination(url: &Url, entry: &CatalogEntry) -> Result<(), String> {
+fn validate_destination(url: &Url, origin: &Url) -> Result<(), String> {
     let approved = match url.host_str() {
         Some("huggingface.co") => {
-            url.path() == download_url(entry)?.path()
-                && url.query().is_none_or(|q| q == "download=true")
+            url.path() == origin.path() && url.query().is_none_or(|q| q == "download=true")
         }
         Some(
             "cdn-lfs.huggingface.co"
@@ -413,7 +514,8 @@ fn public_ip(address: IpAddr) -> bool {
 trait Transport: Sync {
     fn response(
         &self,
-        entry: &CatalogEntry,
+        url: &Url,
+        total: u64,
         offset: u64,
         etag: Option<&str>,
         cancel: &AtomicBool,
@@ -450,15 +552,17 @@ struct HttpsTransport;
 impl Transport for HttpsTransport {
     async fn response(
         &self,
-        entry: &CatalogEntry,
+        url: &Url,
+        _total: u64,
         offset: u64,
         etag: Option<&str>,
         cancel: &AtomicBool,
     ) -> Result<DownloadResponse, String> {
-        let mut url = download_url(entry)?;
+        let origin = url.clone();
+        let mut url = url.clone();
         for hop in 0..=5 {
             check_cancel(cancel)?;
-            validate_destination(&url, entry)?;
+            validate_destination(&url, &origin)?;
             let host = url.host_str().ok_or("모델 서버 주소가 없습니다.")?;
             let addresses: Vec<SocketAddr> = tokio::time::timeout(
                 Duration::from_secs(15),
@@ -632,7 +736,8 @@ async fn install(
     model.downloaded_bytes = offset;
     model.error = None;
     with_store(store, |s| s.ai_upsert_model(model))?;
-    let mut response = tokio::select! {r=transport.response(entry,offset,model.resume_etag.as_deref(),cancel)=>r?,_=cancelled(cancel)=>return check_cancel(cancel)};
+    let url = download_url(entry)?;
+    let mut response = tokio::select! {r=transport.response(&url,entry.bytes,offset,model.resume_etag.as_deref(),cancel)=>r?,_=cancelled(cancel)=>return check_cancel(cancel)};
     let append =
         match validate_response(&response, offset, entry.bytes, model.resume_etag.as_deref()) {
             Ok(append) => append,
@@ -748,11 +853,334 @@ async fn finalize(
     with_store(store, |s| s.ai_upsert_model(model))
 }
 
+/// The projector artifact of a catalog entry, resolved from the same pinned
+/// repository revision as the text weights.
+fn projector_url(entry: &CatalogEntry) -> Result<(Url, &ProjectorEntry), String> {
+    let projector = entry
+        .projector
+        .as_ref()
+        .ok_or("이 모델은 이미지 인식을 지원하는 배포 항목이 없습니다.")?;
+    let url = Url::parse(&format!(
+        "https://huggingface.co/{}/resolve/{}/{}",
+        entry.repository, entry.revision, projector.filename
+    ))
+    .map_err(|_| "이미지 인식 모듈 다운로드 주소가 올바르지 않습니다.")?;
+    Ok((url, projector))
+}
+
+fn projector_record(model: &AiModel, entry: &CatalogEntry) -> Result<AiProjector, String> {
+    let projector = entry
+        .projector
+        .clone()
+        .ok_or("이 모델은 이미지 인식을 지원하는 배포 항목이 없습니다.")?;
+    Ok(AiProjector {
+        model_id: model.id.clone(),
+        path: format!("models/{}.gguf", projector.sha256),
+        sha256: None,
+        expected_sha256: projector.sha256,
+        expected_bytes: projector.bytes,
+        bytes: 0,
+        status: "pending".into(),
+        downloaded_bytes: 0,
+        resume_etag: None,
+        error: None,
+    })
+}
+
+/// Installs (or resumes) the vision projector of an installed model. It is a
+/// separate artifact: failure never changes the model weights or selection.
+async fn install_projector(
+    store: &Arc<Mutex<Store>>,
+    root: &Path,
+    model: &AiModel,
+    entry: &CatalogEntry,
+    cancel: &Arc<AtomicBool>,
+    transport: &impl Transport,
+) -> Result<(), String> {
+    check_cancel(cancel)?;
+    let projector = entry
+        .projector
+        .clone()
+        .ok_or("이 모델은 이미지 인식을 지원하는 배포 항목이 없습니다.")?;
+    let full = super::model_storage::managed_path(
+        root,
+        &format!("models/{}.gguf", projector.sha256),
+        model.storage_directory.as_deref(),
+        true,
+    )?;
+    let mut record = projector_record(model, entry)?;
+    if let Some(old) = with_store(store, |s| s.ai_projector(&model.id))? {
+        if old.status == "installed" {
+            return Err("이미 이미지 인식 모듈이 설치되어 있습니다.".into());
+        }
+        if old.path == record.path && old.expected_sha256 == record.expected_sha256 {
+            record.resume_etag = old.resume_etag;
+            record.downloaded_bytes = old.downloaded_bytes;
+        }
+    }
+    with_store(store, |s| s.ai_upsert_projector(&record))?;
+    let outcome = install_projector_bytes(
+        store,
+        entry,
+        &projector,
+        &mut record,
+        cancel,
+        transport,
+        &full,
+    )
+    .await;
+    if let Err(error) = outcome {
+        record.status = if cancel.load(Ordering::Acquire) {
+            "cancelled"
+        } else {
+            "failed"
+        }
+        .into();
+        record.error = Some(error.clone());
+        if let Err(error) = with_store(store, |s| s.ai_upsert_projector(&record)) {
+            eprintln!("AI projector status: {error}");
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn install_projector_bytes(
+    store: &Arc<Mutex<Store>>,
+    entry: &CatalogEntry,
+    projector: &ProjectorEntry,
+    record: &mut AiProjector,
+    cancel: &Arc<AtomicBool>,
+    transport: &impl Transport,
+    full: &Path,
+) -> Result<(), String> {
+    if full.exists() {
+        // A crash after the final rename: adopt only bytes this inventory wrote.
+        // A chosen shared folder could already hold a same-named file, so it is
+        // adopted only when the recorded download had received every byte.
+        if record.downloaded_bytes != projector.bytes {
+            return Err("선택한 폴더에 같은 이미지 인식 모듈 파일이 이미 있습니다. 삭제 권한을 넘겨받지 않도록 설치하지 않았습니다.".into());
+        }
+        let file = full.to_path_buf();
+        let expected = projector.clone();
+        let cancelled = cancel.clone();
+        tokio::task::spawn_blocking(move || {
+            verify_projector_file(&file, Some((&expected.sha256, expected.bytes)), &cancelled)
+        })
+        .await
+        .map_err(|_| "이미지 인식 모듈 검증 작업이 중단되었습니다.")??;
+        check_cancel(cancel)?;
+        record.status = "installed".into();
+        record.sha256 = Some(projector.sha256.clone());
+        record.bytes = projector.bytes;
+        record.downloaded_bytes = projector.bytes;
+        record.error = None;
+        return with_store(store, |s| s.ai_upsert_projector(record));
+    }
+    let part = full.with_extension("part");
+    let actual = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+    if actual == projector.bytes {
+        return finalize_projector(store, projector, record, cancel, &part, full).await;
+    }
+    let offset =
+        if actual < projector.bytes && record.resume_etag.as_deref().is_some_and(strong_etag) {
+            actual
+        } else {
+            0
+        };
+    require_space(
+        available_space(full.parent().ok_or("모델 저장 폴더가 없습니다.")?)?,
+        projector.bytes - offset,
+    )?;
+    record.status = "downloading".into();
+    record.downloaded_bytes = offset;
+    record.error = None;
+    with_store(store, |s| s.ai_upsert_projector(record))?;
+    let (url, _) = projector_url(entry)?;
+    let mut response = tokio::select! {r=transport.response(&url,projector.bytes,offset,record.resume_etag.as_deref(),cancel)=>r?,_=cancelled(cancel)=>return check_cancel(cancel)};
+    let append = match validate_response(
+        &response,
+        offset,
+        projector.bytes,
+        record.resume_etag.as_deref(),
+    ) {
+        Ok(append) => append,
+        Err(error) => {
+            if response.status == 206 || response.status == 416 {
+                tokio::fs::remove_file(&part)
+                    .await
+                    .map_err(|_| "잘못된 이어받기 파일을 정리하지 못했습니다.")?;
+                record.downloaded_bytes = 0;
+                record.resume_etag = None;
+            }
+            return Err(error);
+        }
+    };
+    let mut received = if append { offset } else { 0 };
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(!append)
+        .append(append)
+        .open(&part)
+        .await
+        .map_err(|_| "임시 이미지 인식 모듈 파일을 열지 못했습니다.")?;
+    record.resume_etag = response.etag.take();
+    record.downloaded_bytes = received;
+    with_store(store, |s| s.ai_upsert_projector(record))?;
+    let start = Instant::now();
+    let mut progress = Instant::now();
+    loop {
+        let next = tokio::select! {
+            r = tokio::time::timeout(Duration::from_secs(45), response.body.chunk()) => r.unwrap_or_else(|_| Err("이미지 인식 모듈 다운로드 응답 시간이 초과되었습니다.".into())),
+            _ = cancelled(cancel) => Err("이미지 인식 모듈 설치를 취소했습니다. 다시 선택하면 이어받습니다.".into()),
+        };
+        let chunk = match next {
+            Ok(chunk) if !cancel.load(Ordering::Acquire) => chunk,
+            outcome => {
+                file.flush()
+                    .await
+                    .map_err(|_| "임시 이미지 인식 모듈 저장에 실패했습니다.")?;
+                return Err(outcome
+                    .err()
+                    .unwrap_or_else(|| "이미지 인식 모듈 설치를 취소했습니다.".into()));
+            }
+        };
+        let Some(chunk) = chunk else { break };
+        if start.elapsed() > Duration::from_secs(2 * 60 * 60)
+            || chunk.len() as u64 > projector.bytes.saturating_sub(received)
+        {
+            return Err("이미지 인식 모듈 다운로드 크기 또는 시간 제한을 초과했습니다.".into());
+        }
+        file.write_all(&chunk).await.map_err(|_| {
+            "이미지 인식 모듈 파일을 저장하지 못했습니다. 저장 공간과 권한을 확인해 주세요."
+        })?;
+        received += chunk.len() as u64;
+        record.downloaded_bytes = received;
+        if progress.elapsed() >= Duration::from_millis(350) {
+            with_store(store, |s| s.ai_upsert_projector(record))?;
+            progress = Instant::now();
+        }
+    }
+    file.flush()
+        .await
+        .map_err(|_| "이미지 인식 모듈 파일 저장을 마무리하지 못했습니다.")?;
+    file.sync_all()
+        .await
+        .map_err(|_| "이미지 인식 모듈 파일을 디스크에 저장하지 못했습니다.")?;
+    drop(file);
+    if received != projector.bytes {
+        return Err(
+            "이미지 인식 모듈 파일을 끝까지 받지 못했습니다. 다시 선택하면 이어받습니다.".into(),
+        );
+    }
+    finalize_projector(store, projector, record, cancel, &part, full).await
+}
+
+async fn finalize_projector(
+    store: &Arc<Mutex<Store>>,
+    projector: &ProjectorEntry,
+    record: &mut AiProjector,
+    cancel: &Arc<AtomicBool>,
+    part: &Path,
+    full: &Path,
+) -> Result<(), String> {
+    record.status = "verifying".into();
+    with_store(store, |s| s.ai_upsert_projector(record))?;
+    let file = part.to_path_buf();
+    let expected = projector.clone();
+    let cancelled = cancel.clone();
+    let checked = tokio::task::spawn_blocking(move || {
+        verify_projector_file(&file, Some((&expected.sha256, expected.bytes)), &cancelled)
+    })
+    .await
+    .map_err(|_| "이미지 인식 모듈 무결성 검증이 중단되었습니다.")?;
+    if let Err(error) = checked {
+        if !cancel.load(Ordering::Acquire) {
+            tokio::fs::remove_file(part)
+                .await
+                .map_err(|_| "손상된 이미지 인식 모듈 파일을 정리하지 못했습니다.")?;
+            record.downloaded_bytes = 0;
+            record.resume_etag = None;
+        }
+        return Err(error);
+    }
+    check_cancel(cancel)?;
+    tokio::fs::rename(part, full)
+        .await
+        .map_err(|_| "검증한 이미지 인식 모듈 설치를 마무리하지 못했습니다.")?;
+    record.status = "installed".into();
+    record.sha256 = Some(projector.sha256.clone());
+    record.bytes = projector.bytes;
+    record.downloaded_bytes = projector.bytes;
+    record.error = None;
+    with_store(store, |s| s.ai_upsert_projector(record))
+}
+
+/// Removes the projector inventory entry and, unless `keep_files`, its managed bytes.
+pub(super) async fn remove_projector(
+    store: &Arc<Mutex<Store>>,
+    root: &Path,
+    model_id: &str,
+    keep_files: bool,
+) -> Result<(), String> {
+    let (projector, model) = with_store(store, |s| {
+        Ok((
+            s.ai_projector(model_id)?,
+            s.ai_model(model_id)?
+                .ok_or("등록된 모델을 찾지 못했습니다.")?,
+        ))
+    })?;
+    let Some(projector) = projector else {
+        return Ok(());
+    };
+    if !keep_files {
+        if let Ok(full) = super::model_storage::managed_path(
+            root,
+            &projector.path,
+            model.storage_directory.as_deref(),
+            false,
+        ) {
+            for path in [full.clone(), full.with_extension("part")] {
+                if let Err(error) = tokio::fs::remove_file(&path).await {
+                    if error.kind() != std::io::ErrorKind::NotFound {
+                        return Err(
+                            "이미지 인식 모듈 파일을 삭제하지 못했습니다. 권한을 확인해 주세요."
+                                .into(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    with_store(store, |s| s.ai_remove_projector(model_id))
+}
+
 /// Validates the local GGUF container and streams its complete identity. No weights are loaded.
 pub fn verify_file(
     path: &Path,
     expected: Option<(&str, u64)>,
     cancel: &AtomicBool,
+) -> Result<(String, u64), String> {
+    verify_artifact(path, expected, cancel, true)
+}
+
+/// A projector is a GGUF multimodal encoder, not a text model: its
+/// architecture is `clip`, so only the container and the pinned identity apply.
+fn verify_projector_file(
+    path: &Path,
+    expected: Option<(&str, u64)>,
+    cancel: &AtomicBool,
+) -> Result<(String, u64), String> {
+    verify_artifact(path, expected, cancel, false)
+}
+
+fn verify_artifact(
+    path: &Path,
+    expected: Option<(&str, u64)>,
+    cancel: &AtomicBool,
+    require_architecture: bool,
 ) -> Result<(String, u64), String> {
     let mut file = File::open(path).map_err(|_| "모델 파일을 열지 못했습니다.")?;
     let size = file
@@ -762,7 +1190,7 @@ pub fn verify_file(
     if size == 0 || size > 32 * 1024 * 1024 * 1024 || expected.is_some_and(|(_, n)| n != size) {
         return Err("모델 파일 크기가 올바르지 않습니다.".into());
     }
-    validate_gguf(&mut file, size)?;
+    validate_gguf(&mut file, size, require_architecture)?;
     file.rewind().map_err(|_| "모델 파일을 읽지 못했습니다.")?;
     let mut hash = Sha256::new();
     let mut buffer = vec![0; 1024 * 1024];
@@ -845,7 +1273,7 @@ fn skip_value(file: &mut File, kind: u32, size: u64, in_array: bool) -> Result<(
         _ => Err("지원하지 않는 GGUF 메타데이터입니다.".into()),
     }
 }
-fn validate_gguf(file: &mut File, size: u64) -> Result<(), String> {
+fn validate_gguf(file: &mut File, size: u64, require_architecture: bool) -> Result<(), String> {
     let mut magic = [0; 4];
     file.read_exact(&mut magic)
         .map_err(|_| "GGUF 파일이 완전하지 않습니다.")?;
@@ -861,6 +1289,9 @@ fn validate_gguf(file: &mut File, size: u64) -> Result<(), String> {
         let key = gguf_string(file, 1024)?;
         let kind = read_u32(file)?;
         if key == "general.architecture" {
+            if !require_architecture {
+                return Ok(());
+            }
             if kind != 8 {
                 return Err("GGUF 모델 아키텍처 형식이 올바르지 않습니다.".into());
             }
@@ -874,7 +1305,11 @@ fn validate_gguf(file: &mut File, size: u64) -> Result<(), String> {
         }
         skip_value(file, kind, size, false)?;
     }
-    Err("GGUF 모델 아키텍처를 찾지 못했습니다.".into())
+    if require_architecture {
+        Err("GGUF 모델 아키텍처를 찾지 못했습니다.".into())
+    } else {
+        Ok(())
+    }
 }
 pub async fn register(
     store: Arc<Mutex<Store>>,
@@ -996,6 +1431,9 @@ pub async fn remove_with_policy(
         }
         Ok(model)
     })?;
+    // The projector belongs to this model; remove its managed bytes before the
+    // weights so a failure never leaves the inventory pretending it is gone.
+    remove_projector(&store, &root, &id, keep_files).await?;
     if keep_files {
         // Explicit inventory-only recovery also works when a drive is gone.
         // Do not resolve or access any model/partial path in this branch.
@@ -1128,7 +1566,8 @@ mod tests {
     impl Transport for Fake {
         async fn response(
             &self,
-            _: &CatalogEntry,
+            _: &Url,
+            _: u64,
             offset: u64,
             etag: Option<&str>,
             _: &AtomicBool,
@@ -1168,13 +1607,14 @@ mod tests {
     impl Transport for ObservedFake {
         async fn response(
             &self,
-            entry: &CatalogEntry,
+            url: &Url,
+            total: u64,
             offset: u64,
             etag: Option<&str>,
             cancel: &AtomicBool,
         ) -> Result<DownloadResponse, String> {
             self.offsets.lock().unwrap().push(offset);
-            self.fake.response(entry, offset, etag, cancel).await
+            self.fake.response(url, total, offset, etag, cancel).await
         }
     }
     async fn wait_for_install(controller: &Controller) {
@@ -1522,7 +1962,8 @@ mod tests {
         assert_eq!(entries.len(), 4);
         for e in &entries {
             validate_manifest(e).unwrap();
-            validate_destination(&download_url(e).unwrap(), e).unwrap();
+            let origin = download_url(e).unwrap();
+            validate_destination(&origin, &origin).unwrap();
             assert_eq!(e.quantization, "Q4_K_M");
         }
         let e = &entries[0];
@@ -1535,7 +1976,7 @@ mod tests {
             "https://cas-bridge.xethub.hf.co:8443/a",
         ] {
             assert!(
-                validate_destination(&Url::parse(bad).unwrap(), e).is_err(),
+                validate_destination(&Url::parse(bad).unwrap(), &download_url(e).unwrap()).is_err(),
                 "{bad}"
             );
         }
@@ -2367,12 +2808,15 @@ mod tests {
         impl Transport for ObservedHttps {
             async fn response(
                 &self,
-                entry: &CatalogEntry,
+                url: &Url,
+                total: u64,
                 offset: u64,
                 etag: Option<&str>,
                 cancel: &AtomicBool,
             ) -> Result<DownloadResponse, String> {
-                let response = HttpsTransport.response(entry, offset, etag, cancel).await?;
+                let response = HttpsTransport
+                    .response(url, total, offset, etag, cancel)
+                    .await?;
                 self.0.lock().unwrap().push(Observation {
                     offset,
                     request_etag: etag.map(str::to_owned),
@@ -2591,5 +3035,159 @@ mod tests {
             m.sha256,
             start.elapsed()
         );
+    }
+
+    fn installed_fixture() -> (tempfile::TempDir, Arc<Mutex<Store>>, CatalogEntry, AiModel) {
+        let (dir, store, mut entry, bytes) = fixture();
+        std::fs::create_dir_all(dir.path().join("models")).unwrap();
+        let mut model = inventory(&entry);
+        std::fs::write(dir.path().join(&model.path), &bytes).unwrap();
+        model.status = "installed".into();
+        model.sha256 = Some(entry.sha256.clone());
+        model.bytes = entry.bytes;
+        model.downloaded_bytes = entry.bytes;
+        with_store(&store, |s| s.ai_upsert_model(&model)).unwrap();
+        // The fake transport serves whatever bytes it is given; keep the catalog
+        // entry and the served artifact identical.
+        entry.projector = Some(ProjectorEntry {
+            filename: "mmproj-F16.gguf".into(),
+            bytes: 0,
+            memory_bytes: 1024 * 1024 * 1024,
+            sha256: "0".repeat(64),
+        });
+        (dir, store, entry, model)
+    }
+    fn with_projector(mut entry: CatalogEntry, bytes: &[u8]) -> (CatalogEntry, Vec<u8>) {
+        entry.projector = Some(ProjectorEntry {
+            filename: "mmproj-F16.gguf".into(),
+            bytes: bytes.len() as u64,
+            memory_bytes: 1024 * 1024 * 1024,
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+        });
+        (entry, bytes.to_vec())
+    }
+    #[tokio::test]
+    async fn projector_installs_verifies_and_removes_without_touching_the_model() {
+        let (dir, store, entry, model) = installed_fixture();
+        let projector_bytes = gguf("clip");
+        let (entry, projector_bytes) = with_projector(entry, &projector_bytes);
+        validate_manifest(&entry).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        install_projector(
+            &store,
+            dir.path(),
+            &model,
+            &entry,
+            &cancel,
+            &Fake::new(projector_bytes.clone()),
+        )
+        .await
+        .unwrap();
+        let record = with_store(&store, |s| s.ai_projector(&model.id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.status, "installed");
+        assert_eq!(
+            record.sha256.as_deref(),
+            Some(entry.projector.as_ref().unwrap().sha256.as_str())
+        );
+        let projector_path = dir.path().join(&record.path);
+        assert_eq!(std::fs::read(&projector_path).unwrap(), projector_bytes);
+        assert!(dir.path().join(&model.path).exists());
+        // A successful install is not repeated over the network.
+        assert!(install_projector(
+            &store,
+            dir.path(),
+            &model,
+            &entry,
+            &cancel,
+            &Fake::new(projector_bytes.clone()),
+        )
+        .await
+        .is_err());
+        remove_projector(&store, dir.path(), &model.id, false)
+            .await
+            .unwrap();
+        assert!(with_store(&store, |s| s.ai_projector(&model.id))
+            .unwrap()
+            .is_none());
+        assert!(!projector_path.exists());
+        let kept = with_store(&store, |s| s.ai_model(&model.id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(kept.status, "installed");
+        assert!(dir.path().join(&kept.path).exists());
+    }
+    #[tokio::test]
+    async fn projector_with_a_wrong_digest_is_rejected_and_reported() {
+        let (dir, store, entry, model) = installed_fixture();
+        let projector_bytes = gguf("clip");
+        let (mut entry, _) = with_projector(entry, &projector_bytes);
+        entry.projector.as_mut().unwrap().sha256 = "1".repeat(64);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let error = install_projector(
+            &store,
+            dir.path(),
+            &model,
+            &entry,
+            &cancel,
+            &Fake::new(projector_bytes),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("SHA-256") || error.contains("무결성"),
+            "{error}"
+        );
+        let record = with_store(&store, |s| s.ai_projector(&model.id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.status, "failed");
+        assert!(!dir
+            .path()
+            .join(&record.path)
+            .with_extension("part")
+            .exists());
+        assert!(!dir.path().join(&record.path).exists());
+    }
+    #[tokio::test]
+    async fn projector_install_controller_shares_the_download_slot_and_reports_progress() {
+        let (dir, store, entry, model) = installed_fixture();
+        let projector_bytes = gguf("clip");
+        let (entry, projector_bytes) = with_projector(entry, &projector_bytes);
+        let controller = Controller::default();
+        controller
+            .start_projector(
+                store.clone(),
+                dir.path().into(),
+                model.id.clone(),
+                entry.clone(),
+                Fake::new(projector_bytes),
+            )
+            .unwrap();
+        wait_for_install(&controller).await;
+        let record = with_store(&store, |s| s.ai_projector(&model.id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.status, "installed");
+        // Removal of the model removes its projector row and bytes.
+        let projector_path = dir.path().join(&record.path);
+        remove_with_policy(
+            store.clone(),
+            dir.path().into(),
+            model.id.clone(),
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(!projector_path.exists());
+        assert!(with_store(&store, |s| s.ai_projector(&model.id))
+            .unwrap()
+            .is_none());
+        assert!(with_store(&store, |s| s.ai_model(&model.id))
+            .unwrap()
+            .is_none());
+        assert!(dir.path().join(&entry.filename).exists() == entry.filename.is_empty());
     }
 }

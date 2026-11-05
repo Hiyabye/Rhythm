@@ -18,6 +18,7 @@
   let feedback = $state('');
   let path = $state('');
   let removal = $state<string | null>(null);
+  let projectorRemoval = $state<string | null>(null);
   let executionMode = $state<AiPreferences['execution_mode']>('auto');
   let advancedOpen = $state(false);
   let disposed = false;
@@ -26,6 +27,7 @@
   const operationPhase: Record<string, string> = { verifying: '모델 파일 무결성을 확인하고 있습니다', waiting: 'AI 엔진이 준비되기를 기다리고 있습니다', restarting: 'AI 엔진을 다시 준비하고 있습니다', loading: '모델을 메모리에 불러오고 있습니다', setup: '짧은 로컬 추론으로 설치를 확인하고 있습니다', cancelling: '작업을 중단하고 메모리를 정리하고 있습니다' };
   const operationName: Record<string, string> = { load: '모델 불러오기', setup: 'AI 설정 확인', register: '외부 모델 등록' };
   const modelStatus: Record<string, string> = { pending: '다운로드 대기', downloading: '내려받는 중', verifying: '무결성 확인 중', installed: '설치됨', failed: '설치 실패', cancelled: '중단됨 · 이어받기 가능', missing: '파일 확인 필요' };
+  const projectorStatus: Record<string, string> = { pending: '이미지 인식 모듈 다운로드 대기', downloading: '이미지 인식 모듈을 내려받는 중', failed: '이미지 인식 모듈 설치 실패', cancelled: '이미지 인식 모듈 중단됨 · 이어받기 가능', missing: '이미지 인식 모듈 파일 확인 필요' };
   const installable = (entry: CatalogEntry) => ['verified', 'available'].includes(entry.compatibility);
   // One tile per offered model, plus every inventory row (external, retired or in progress) that no offered tile covers.
   let tiles = $derived.by(() => {
@@ -147,6 +149,8 @@
         {@const selected = Boolean(model) && data.preferences.active_model_id === model?.id}
         {@const retired = Boolean(model?.catalog_id) && !data.catalog.some((item) => item.id === model?.catalog_id)}
         {@const infoId = `model-${(model?.id ?? entry?.id ?? '').replace(/[^A-Za-z0-9-]/g, '-')}`}
+        {@const projectorSpec = entry?.projector ?? null}
+        {@const projector = projectorSpec && model ? data.projectors.find((row) => row.model_id === model.id) ?? null : null}
         <li class="model-tile" class:selected class:installed={model?.status === 'installed'}>
           {#if model?.status === 'installed'}
             <button class="model-select" aria-pressed={selected} aria-label={`${name} 선택`} disabled={busy || data.busy} onclick={() => { if (!selected) void action('ai_select', { id: model.id }, '사용할 모델을 선택했습니다.'); }}></button>
@@ -159,6 +163,14 @@
           {:else if model?.status === 'verifying'}<p class="model-note" role="status">무결성 확인 중</p>
           {:else if model && model.status !== 'installed'}<p class="model-note">{modelStatus[model.status] ?? model.status}</p>{/if}
           {#if model?.error}<p class="archive-error" role="alert">{model.error}</p>{/if}
+          {#if model && projectorSpec && model.status === 'installed' && model.ownership !== 'external'}
+            {#if projector && ['pending', 'downloading'].includes(projector.status)}
+              <p class="model-note" role="status">{projectorStatus[projector.status]}</p>
+              <label class="ai-progress"><span class="sr-only">이미지 인식 모듈 다운로드</span><progress max={projector.expected_bytes || 1} value={projector.downloaded_bytes}></progress><span>{archiveSize(projector.downloaded_bytes)} / {archiveSize(projector.expected_bytes)}</span></label>
+            {:else if projector?.status === 'verifying'}<p class="model-note" role="status">이미지 인식 모듈 확인 중</p>
+            {:else if projector?.status === 'installed'}<p class="model-note">이미지 인식 사용 중 · 예상 메모리 {archiveSize(projectorSpec.memory_bytes)}(실측 최대치 아님)</p>
+            {:else if projector}<p class="model-note">{projectorStatus[projector.status] ?? projector.status}</p>{#if projector.error}<p class="archive-error" role="alert">{projector.error}</p>{/if}{/if}
+          {/if}
           <div class="model-actions">
             {#if !model && entry}<button class="button small" disabled={busy || data.busy} aria-label={`${entry.name} 다운로드 및 설치`} onclick={() => action('ai_install', { catalogId: entry.id }, '모델 다운로드를 시작했습니다. 앱을 닫아도 다음 실행에서 이어받습니다.')}>설치</button>
             {:else if model && ['downloading', 'pending', 'verifying'].includes(model.status)}{#if model.status !== 'verifying'}<button class="button secondary small" disabled={cancelling} aria-label="다운로드 중단" onclick={() => interrupt('ai_cancel_download', {}, '다운로드를 중단했습니다. 받은 부분은 이어받기용으로 남겨 둡니다.')}>중단</button>{/if}
@@ -166,9 +178,17 @@
             {#if model && removal !== model.id && !['downloading', 'pending', 'verifying'].includes(model.status)}<button class="text-button" disabled={busy || data.busy} onclick={() => removal = model.id}>{model.ownership === 'external' ? '참조 해제' : '모델 삭제'}</button>{/if}
             <button class="row-icon model-info" popovertarget={infoId} aria-label={`${name} 정보`}><Icon name="info" size={15} /></button>
           </div>
+          {#if model && projectorSpec && model.status === 'installed' && model.ownership !== 'external'}
+            <div class="model-actions model-projector">
+              {#if !projector}<button class="button secondary small" disabled={busy || data.busy} aria-label={`${name} 이미지 인식 추가`} onclick={() => action('ai_install_projector', { modelId: model.id }, '이미지 인식 모듈 다운로드를 시작했습니다.')}>이미지 인식 추가 ({archiveSize(projectorSpec.bytes)})</button>
+              {:else if ['pending', 'downloading'].includes(projector.status)}<button class="button secondary small" disabled={cancelling} aria-label="이미지 인식 모듈 다운로드 중단" onclick={() => interrupt('ai_cancel_download', {}, '이미지 인식 모듈 다운로드를 중단했습니다. 받은 부분은 이어받기용으로 남겨 둡니다.')}>중단</button>
+              {:else if projector.status === 'verifying'}{:else if projector.status === 'installed'}{#if projectorRemoval !== model.id}<button class="text-button" disabled={busy || data.busy} onclick={() => projectorRemoval = model.id}>이미지 인식 제거</button>{/if}
+              {:else}<button class="button small" disabled={busy || data.busy} aria-label={`${name} 이미지 인식 다시 설치`} onclick={() => action('ai_install_projector', { modelId: model.id }, '이미지 인식 모듈 다운로드를 다시 시작했습니다.')}>다시 설치</button>{/if}
+            </div>
+          {/if}
           <Popover id={infoId} label={`${name} 정보`} wide>
             <p class="popover-title">{name}</p>
-            {#if entry}<p>{entry.description} · {compatibilityLabel(entry)}</p><p>다운로드 {archiveSize(entry.bytes)} · 예상 메모리 {archiveSize(entry.memory_bytes)}(실측 최대치 아님) · 텍스트 분석 전용</p>{#if entry.reason}<p>{entry.reason}</p>{/if}{/if}
+            {#if entry}<p>{entry.description} · {compatibilityLabel(entry)}</p><p>다운로드 {archiveSize(entry.bytes)} · 예상 메모리 {archiveSize(entry.memory_bytes)}(실측 최대치 아님) · {entry.projector ? '이미지 인식 모듈을 설치하면 보관된 이미지도 함께 읽습니다. 설치하지 않으면 텍스트만 분석합니다.' : '텍스트 분석 전용'}</p>{#if entry.projector}<p>이미지 인식 모듈 {archiveSize(entry.projector.bytes)} · 예상 추가 메모리 {archiveSize(entry.projector.memory_bytes)}(실측 최대치 아님)</p>{/if}{#if entry.reason}<p>{entry.reason}</p>{/if}{/if}
             {#if retired}<p>목록에서 내려간 모델입니다. 파일과 기존 분석은 그대로 두며, 다시 설치하거나 이어받을 수 없습니다.</p>{/if}
             {#if model}
               <p>{model.ownership === 'external' ? '외부 파일 참조 · Rhythm에서 원본을 삭제하지 않습니다.' : 'Rhythm이 관리하는 파일'}</p>
@@ -188,6 +208,15 @@
           <button class="button secondary small" disabled={busy || data.busy} onclick={async () => { await action('ai_remove', { id: model.id, confirmed: true }, '모델 등록을 정리했습니다. 기존 분석은 유지됩니다.'); removal = null; }}>확인하고 {model.ownership === 'external' ? '참조 해제' : '삭제'}</button>
           {#if model.ownership === 'managed'}<button class="text-button" disabled={busy || data.busy} onclick={async () => { await action('ai_remove', { id: model.id, confirmed: true, keepFiles: true }, '파일을 남기고 모델을 목록에서 제거했습니다. 기존 분석은 유지됩니다.'); removal = null; }}>파일을 남기고 목록에서 제거</button>{/if}
           <button class="text-button" onclick={() => removal = null}>취소</button>
+        </div>
+      </div>
+    {/each}
+    {#each data.models.filter((model) => model.id === projectorRemoval) as model (model.id)}
+      <div class="ai-confirm" role="group" aria-label={`${model.name} 이미지 인식 모듈 제거 확인`}>
+        <p>이미지 인식 모듈 파일을 삭제할까요? 모델과 기존 분석은 유지되며, 이후 분석은 텍스트만 읽습니다.</p>
+        <div class="popover-actions">
+          <button class="button secondary small" disabled={busy || data.busy} onclick={async () => { await action('ai_remove_projector', { modelId: model.id, confirmed: true }, '이미지 인식 모듈을 제거했습니다. 이후 분석은 텍스트만 읽습니다.'); projectorRemoval = null; }}>확인하고 제거</button>
+          <button class="text-button" onclick={() => projectorRemoval = null}>취소</button>
         </div>
       </div>
     {/each}

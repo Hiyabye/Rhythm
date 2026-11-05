@@ -14,7 +14,13 @@
     "sha256": "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
     "license": "Apache-2.0",
     "compatibility": "verified",
-    "reason": "macOS Apple Silicon · Metal에서 실제 한국어 분석을 확인했습니다. Windows는 CPU(RAM 16GB)와 NVIDIA GTX 1650 한 대에서 제한된 공지로만 시험했으므로 결과를 원문과 대조해 주세요. 그 밖의 환경은 미검증이며 메모리 부족 시 불러오지 못할 수 있습니다."
+    "reason": "macOS Apple Silicon · Metal에서 실제 한국어 분석을 확인했습니다. Windows는 CPU(RAM 16GB)와 NVIDIA GTX 1650 한 대에서 제한된 공지로만 시험했으므로 결과를 원문과 대조해 주세요. 그 밖의 환경은 미검증이며 메모리 부족 시 불러오지 못할 수 있습니다.",
+    "projector": {
+      "filename": "mmproj-F16.gguf",
+      "bytes": 668227264,
+      "sha256": "7035e9cb8d7c6a9681d07eef9a364783e86ea4cd73faab2eabb4f43a101830c7",
+      "memory_bytes": 1073741824
+    }
   },
   {
     "id": "qwen35-4b",
@@ -31,7 +37,13 @@
     "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
     "license": "Apache-2.0",
     "compatibility": "verified",
-    "reason": "macOS Apple Silicon · Metal에서 실제 한국어 분석을 확인했습니다. Windows는 CPU(RAM 16GB)와 NVIDIA GTX 1650 한 대에서 제한된 공지로만 시험했으므로 결과를 원문과 대조해 주세요. 그 밖의 환경은 미검증이며 메모리 부족 시 불러오지 못할 수 있습니다."
+    "reason": "macOS Apple Silicon · Metal에서 실제 한국어 분석을 확인했습니다. Windows는 CPU(RAM 16GB)와 NVIDIA GTX 1650 한 대에서 제한된 공지로만 시험했으므로 결과를 원문과 대조해 주세요. 그 밖의 환경은 미검증이며 메모리 부족 시 불러오지 못할 수 있습니다.",
+    "projector": {
+      "filename": "mmproj-F16.gguf",
+      "bytes": 672423616,
+      "sha256": "cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864",
+      "memory_bytes": 1073741824
+    }
   },
   {
     "id": "gemma4-e2b",
@@ -48,7 +60,13 @@
     "sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
     "license": "Apache-2.0",
     "compatibility": "verified",
-    "reason": "macOS Apple Silicon · Metal에서 실제 한국어 분석을 확인했습니다. Windows와 macOS CPU는 시험하지 않았습니다. 결과를 원문과 대조해 주세요. 메모리 부족 시 불러오지 못할 수 있습니다."
+    "reason": "macOS Apple Silicon · Metal에서 실제 한국어 분석을 확인했습니다. Windows와 macOS CPU는 시험하지 않았습니다. 결과를 원문과 대조해 주세요. 메모리 부족 시 불러오지 못할 수 있습니다.",
+    "projector": {
+      "filename": "mmproj-F16.gguf",
+      "bytes": 985654080,
+      "sha256": "140be8d7849741f88c50757d529b84373ee8e27052cc2236855b537f4a8215fa",
+      "memory_bytes": 1073741824
+    }
   },
   {
     "id": "gemma4-e4b",
@@ -65,6 +83,12 @@
     "sha256": "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
     "license": "Apache-2.0",
     "compatibility": "verified",
-    "reason": "macOS Apple Silicon · Metal에서 실제 한국어 분석을 확인했습니다. Windows와 macOS CPU는 시험하지 않았습니다. 결과를 원문과 대조해 주세요. 메모리 부족 시 불러오지 못할 수 있습니다."
+    "reason": "macOS Apple Silicon · Metal에서 실제 한국어 분석을 확인했습니다. Windows와 macOS CPU는 시험하지 않았습니다. 결과를 원문과 대조해 주세요. 메모리 부족 시 불러오지 못할 수 있습니다.",
+    "projector": {
+      "filename": "mmproj-F16.gguf",
+      "bytes": 990372672,
+      "sha256": "ddf46c21d7078e95338cfc22306b19b276a29a5ad089023449dd54d4b6170a51",
+      "memory_bytes": 1073741824
+    }
   }
 ]

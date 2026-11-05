@@ -1138,6 +1138,23 @@ button svg {
   gap: 10px;
   margin-top: auto;
   padding-top: 8px;
+  pointer-events: none;
+}
+/* Only the controls take the pointer; empty row space still selects the tile. */
+.model-actions > * {
+  pointer-events: auto;
+}
+.model-projector {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 8px;
+  pointer-events: none;
+}
+.model-projector > * {
+  pointer-events: auto;
 }
 .model-info {
   margin-left: auto;

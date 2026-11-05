@@ -1083,6 +1083,11 @@ mod tests {
         source_connection.execute("INSERT INTO ai_models VALUES('managed','models/managed.gguf','managed','installed',NULL,?1,?2)", rusqlite::params![format!("{:x}", Sha256::digest(present_bytes)), present_bytes.len() as i64]).unwrap();
         source_connection.execute("INSERT INTO ai_models VALUES('missing','models/missing.gguf','managed','installed',NULL,?1,?2)", rusqlite::params![format!("{:x}", Sha256::digest(absent_bytes)), absent_bytes.len() as i64]).unwrap();
         source_connection.execute("INSERT INTO ai_models VALUES('external','/outside/model.gguf','external','installed',NULL,?1,?2)", rusqlite::params![format!("{:x}", Sha256::digest(absent_bytes)), absent_bytes.len() as i64]).unwrap();
+        source_connection.execute_batch("CREATE TABLE ai_projectors(model_id TEXT PRIMARY KEY,path TEXT,sha256 TEXT,expected_sha256 TEXT,expected_bytes INTEGER,bytes INTEGER,status TEXT,downloaded_bytes INTEGER,resume_etag TEXT,error TEXT);").unwrap();
+        let present_projector = b"leave existing projector untouched";
+        source_connection.execute("INSERT INTO ai_projectors VALUES('managed','models/present-projector.gguf',?1,?1,?2,?2,'installed',?2,NULL,NULL)", rusqlite::params![format!("{:x}", Sha256::digest(present_projector)), present_projector.len() as i64]).unwrap();
+        source_connection.execute("INSERT INTO ai_projectors VALUES('missing','models/missing-projector.gguf',?1,?1,?2,?2,'installed',?2,NULL,NULL)", rusqlite::params![format!("{:x}", Sha256::digest(absent_bytes)), absent_bytes.len() as i64]).unwrap();
+        source_connection.execute("INSERT INTO ai_projectors VALUES('external','models/external-projector.gguf',?1,?1,?2,?2,'installed',?2,NULL,NULL)", rusqlite::params![format!("{:x}", Sha256::digest(absent_bytes)), absent_bytes.len() as i64]).unwrap();
         source_connection
             .execute("INSERT INTO ai_preferences VALUES('managed')", [])
             .unwrap();
@@ -1105,6 +1110,11 @@ mod tests {
         fs::write(
             root.path().join("models/unlisted.gguf"),
             b"preserve orphaned weights",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("models/present-projector.gguf"),
+            b"leave existing projector untouched",
         )
         .unwrap();
         let previous_name = format!("{PREVIOUS_PREFIX}complete");
@@ -1152,6 +1162,23 @@ mod tests {
                 .unwrap(),
             Some("managed".into())
         );
+        for (model, expected) in [
+            ("managed", "installed"),
+            ("missing", "missing"),
+            ("external", "missing"),
+        ] {
+            assert_eq!(
+                restored
+                    .query_row(
+                        "SELECT status FROM ai_projectors WHERE model_id=?1",
+                        [model],
+                        |row| row.get::<_, String>(0)
+                    )
+                    .unwrap(),
+                expected,
+                "projector state for {model}"
+            );
+        }
         assert_eq!(
             restored
                 .query_row(
@@ -1690,6 +1717,13 @@ fn reconcile_model_inventory(
             |row| row.get(0),
         )
         .map_err(|_| "백업 모델 폴더 정보를 확인하지 못했습니다.")?;
+    let has_projectors: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='ai_projectors')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| "백업 이미지 인식 모듈 목록을 확인하지 못했습니다.")?;
     let transaction = connection
         .unchecked_transaction()
         .map_err(|_| "백업 모델 상태를 갱신하지 못했습니다.")?;
@@ -1787,6 +1821,61 @@ fn reconcile_model_inventory(
                 [&id],
             )
             .map_err(|_| "백업에서 사용할 모델을 정리하지 못했습니다.")?;
+    }
+    if has_projectors {
+        // Projector bytes are excluded from backups like model weights. Only a
+        // projector whose file is still present with the recorded identity, and
+        // whose model is still installed here, may stay "installed".
+        let mut orphaned = Vec::new();
+        // Older backups have no custom-directory column; their managed models
+        // are always in the default folder.
+        let unreachable_models = if has_custom_directories {
+            "SELECT id FROM ai_models WHERE status<>'installed' OR ownership<>'managed' OR storage_directory IS NOT NULL"
+        } else {
+            "SELECT id FROM ai_models WHERE status<>'installed' OR ownership<>'managed'"
+        };
+        transaction
+            .execute(
+                &format!(
+                    "UPDATE ai_projectors SET status='missing',downloaded_bytes=0,resume_etag=NULL,
+                     error='복원한 백업의 모델을 다시 설치해야 이미지 인식 모듈을 쓸 수 있습니다.'
+                     WHERE status<>'missing' AND model_id IN ({unreachable_models})"
+                ),
+                [],
+            )
+            .map_err(|_| "백업 이미지 인식 모듈 상태를 갱신하지 못했습니다.")?;
+        let mut query = transaction
+            .prepare("SELECT model_id,path,sha256,expected_bytes FROM ai_projectors WHERE status='installed'")
+            .map_err(|_| "백업 이미지 인식 모듈 목록을 읽지 못했습니다.")?;
+        let rows = query
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                ))
+            })
+            .map_err(|_| "백업 이미지 인식 모듈 목록을 읽지 못했습니다.")?;
+        for row in rows {
+            check_cancellation(Some(cancellation))?;
+            let (id, relative, hash, bytes) =
+                row.map_err(|_| "백업 이미지 인식 모듈 목록을 읽지 못했습니다.")?;
+            if !managed_model_matches(model_root, &relative, hash.as_deref(), bytes, cancellation)?
+            {
+                orphaned.push(id);
+            }
+        }
+        drop(query);
+        for id in orphaned {
+            transaction
+                .execute(
+                    "UPDATE ai_projectors SET status='missing',downloaded_bytes=0,resume_etag=NULL,
+                     error='복원한 백업에는 이미지 인식 모듈 파일이 없습니다. 다시 설치해 주세요.' WHERE model_id=?1",
+                    [&id],
+                )
+                .map_err(|_| "백업 이미지 인식 모듈 상태를 갱신하지 못했습니다.")?;
+        }
     }
     transaction
         .commit()

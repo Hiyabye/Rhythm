@@ -697,6 +697,8 @@ fn main() {
             intelligence::commands::ai_choose_model_directory,
             intelligence::commands::ai_reset_model_directory,
             intelligence::commands::ai_install,
+            intelligence::commands::ai_install_projector,
+            intelligence::commands::ai_remove_projector,
             intelligence::commands::ai_cancel_download,
             intelligence::commands::ai_cancel_operation,
             intelligence::commands::ai_diagnostics,

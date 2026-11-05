@@ -1,6 +1,6 @@
 use super::{analysis, models, operations, WorkerStatus};
 use crate::{
-    storage::intelligence::{AiJob, AiModel, AiPreferences, AiResult},
+    storage::intelligence::{AiJob, AiModel, AiPreferences, AiProjector, AiResult},
     AppState,
 };
 use serde::Serialize;
@@ -68,6 +68,7 @@ async fn stop_inventory_worker(
 pub struct Snapshot {
     catalog: Vec<models::CatalogEntry>,
     models: Vec<AiModel>,
+    projectors: Vec<AiProjector>,
     preferences: AiPreferences,
     jobs: Vec<AiJob>,
     runtime: WorkerStatus,
@@ -202,6 +203,40 @@ async fn operation_worker(
     result
 }
 #[tauri::command]
+pub async fn ai_install_projector(
+    state: tauri::State<'_, AppState>,
+    model_id: String,
+) -> Result<(), String> {
+    let lease = state.operation_gate.shared().await?;
+    let _gate = state.ai_gate.lock().await;
+    check_open(&state)?;
+    state.models.start_projector_admitted(
+        state.store.clone(),
+        state.data_root.clone(),
+        model_id,
+        lease,
+    )
+}
+
+#[tauri::command]
+pub async fn ai_remove_projector(
+    state: tauri::State<'_, AppState>,
+    model_id: String,
+    confirmed: bool,
+) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
+    let _gate = state.ai_gate.lock().await;
+    check_open(&state)?;
+    if !confirmed {
+        return Err("이미지 인식 모듈 삭제를 확인해 주세요.".into());
+    }
+    if state.analysis.running() || state.models.busy() {
+        return Err("진행 중인 AI 작업을 먼저 취소하거나 완료해 주세요.".into());
+    }
+    models::remove_projector(&state.store, &state.data_root, &model_id, false).await
+}
+
+#[tauri::command]
 pub async fn ai_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
     let _lease = state.operation_gate.shared().await?;
     let runtime = state
@@ -214,12 +249,17 @@ pub async fn ai_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, 
             model: None,
             detail: Some("로컬 AI 작업을 처리하고 있습니다.".into()),
         });
-    let (models, preferences, jobs) = with_store(&state, |s| {
+    let (models, projectors, preferences, jobs) = with_store(&state, |s| {
         let mut jobs = s.ai_active_jobs()?;
         jobs.extend(s.ai_jobs(100)?);
         jobs.sort_by_key(|j| std::cmp::Reverse(j.id));
         jobs.dedup_by_key(|j| j.id);
-        Ok((s.ai_models()?, s.ai_preferences()?, jobs))
+        Ok((
+            s.ai_models()?,
+            s.ai_projectors()?,
+            s.ai_preferences()?,
+            jobs,
+        ))
     })?;
     let configuration_hash = preferences
         .active_model_id
@@ -251,6 +291,7 @@ pub async fn ai_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, 
     Ok(Snapshot {
         catalog: models::catalog(),
         models,
+        projectors,
         preferences,
         jobs,
         runtime,

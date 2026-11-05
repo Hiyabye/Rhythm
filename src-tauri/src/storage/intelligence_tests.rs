@@ -225,7 +225,8 @@ fn actual_backend_provenance_commits_with_result_and_survives_reopen() {
             4,
             4,
             10,
-            Some("vulkan")
+            Some("vulkan"),
+            None
         )
         .is_err());
     assert!(store
@@ -249,6 +250,7 @@ fn actual_backend_provenance_commits_with_result_and_survives_reopen() {
             4,
             10,
             Some("vulkan"),
+            None,
         )
         .unwrap();
     assert_eq!(result.model_identity["loaded_backend"], "vulkan");
@@ -921,4 +923,70 @@ fn boundaries_reject_wrong_revision_invalid_inventory_and_late_result_failure() 
     assert!(store.ai_cached_result(&key()).unwrap().is_none());
     assert_eq!(store.ai_job(job.id).unwrap().unwrap().status, "running");
     integrity(&store);
+}
+
+#[test]
+fn projector_inventory_is_separate_from_the_model_and_cascades() {
+    let (directory, store) = database();
+    let mut installed = model("test", "managed");
+    installed.path = format!("models/{}.gguf", "a".repeat(64));
+    store.ai_upsert_model(&installed).unwrap();
+    let projector = AiProjector {
+        model_id: "test".into(),
+        path: format!("models/{}.gguf", "c".repeat(64)),
+        sha256: Some("c".repeat(64)),
+        expected_sha256: "c".repeat(64),
+        expected_bytes: 1024,
+        bytes: 1024,
+        status: "installed".into(),
+        downloaded_bytes: 1024,
+        resume_etag: None,
+        error: None,
+    };
+    store.ai_upsert_projector(&projector).unwrap();
+    assert_eq!(store.ai_projectors().unwrap().len(), 1);
+    assert_eq!(
+        store.ai_projector("test").unwrap().unwrap().path,
+        projector.path
+    );
+    // An "installed" claim needs the pinned identity, not just a status string.
+    let mut wrong = projector.clone();
+    wrong.sha256 = Some("d".repeat(64));
+    assert!(store.ai_upsert_projector(&wrong).is_err());
+    let mut orphan = projector.clone();
+    orphan.model_id = "missing".into();
+    assert!(store.ai_upsert_projector(&orphan).is_err());
+    // A model without a projector row stays valid text-only inventory.
+    assert!(store.ai_projector("other").unwrap().is_none());
+    store.ai_remove_model("test").unwrap();
+    assert!(store.ai_projector("test").unwrap().is_none());
+    integrity(&store);
+    drop(store);
+    // The row survives only with its model.
+    let reopened = Store::open(&directory.path().join("db")).unwrap();
+    assert!(reopened.ai_projectors().unwrap().is_empty());
+}
+
+#[test]
+fn interrupted_projector_downloads_are_cancelled_on_reopen() {
+    let (_directory, store) = database();
+    store.ai_upsert_model(&model("test", "managed")).unwrap();
+    let projector = AiProjector {
+        model_id: "test".into(),
+        path: format!("models/{}.gguf", "c".repeat(64)),
+        sha256: None,
+        expected_sha256: "c".repeat(64),
+        expected_bytes: 1024,
+        bytes: 0,
+        status: "downloading".into(),
+        downloaded_bytes: 512,
+        resume_etag: Some("\"immutable\"".into()),
+        error: None,
+    };
+    store.ai_upsert_projector(&projector).unwrap();
+    store.reset_ai_interrupted().unwrap();
+    let current = store.ai_projector("test").unwrap().unwrap();
+    assert_eq!(current.status, "cancelled");
+    assert_eq!(current.downloaded_bytes, 512);
+    assert!(current.error.unwrap().contains("이미지 인식 모듈"));
 }
