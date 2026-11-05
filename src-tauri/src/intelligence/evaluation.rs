@@ -99,6 +99,7 @@ pub(super) fn installed_model(root: &Path, id: &str) -> AiModel {
         catalog_id: Some(entry.id),
         name: entry.name,
         ownership: "external".into(),
+        kind: entry.kind.clone(),
         path: path.canonicalize().unwrap().to_string_lossy().into_owned(),
         storage_directory: None,
         sha256: Some(entry.sha256.clone()),
@@ -241,7 +242,7 @@ async fn settle(controller: &analysis::Controller) {
 #[test]
 fn stored_result_screening_rechecks_shape_and_literal_source() {
     let source = "재학생은 2026년 4월 30일까지 장학금을 신청하세요.";
-    let valid = json!({"short_summary":"재학생 장학금 신청 안내입니다.","summary":"재학생은 2026년 4월 30일까지 신청해야 합니다.","category":"장학","uncertainty":"clear","facts":[{"kind":"deadline","label":"신청 마감","value":"2026년 4월 30일","evidence":source,"date":"2026-04-30","uncertainty":"clear"}]});
+    let valid = json!({"short_summary":"재학생 장학금 신청 안내입니다.","summary":"재학생은 2026년 4월 30일까지 신청해야 합니다.","uncertainty":"clear","facts":[{"kind":"deadline","label":"신청 마감","value":"2026년 4월 30일","evidence":source,"date":"2026-04-30","uncertainty":"clear"}]});
     assert_eq!(stored_result_checks(&valid, source), (true, true));
     assert_eq!(
         stored_result_checks(&valid, "다른 공지입니다."),
@@ -264,7 +265,6 @@ pub(super) fn stored_result_checks(result: &Value, source: &str) -> (bool, bool)
 fn assess(case: &Case, result: &Value, partial: bool) -> Value {
     let (schema_valid, literal_grounding_valid) =
         stored_result_checks(result, &format!("{}\n\n{}", case.title, case.body()));
-    let category_correct = result["category"].as_str() == Some(case.category.as_str());
     let summary = format!(
         "{} {}",
         result["short_summary"].as_str().unwrap_or(""),
@@ -297,7 +297,7 @@ fn assess(case: &Case, result: &Value, partial: bool) -> Value {
         .filter(|date| !dates.contains(date))
         .collect::<Vec<_>>();
     let deadline_correct = extra_deadline_dates.is_empty() && missing_deadline_dates.is_empty();
-    json!({"category_correct":category_correct,"deadline_correct":deadline_correct,
+    json!({"deadline_correct":deadline_correct,
         "missing_summary_terms":missing_summary_terms,
         "extra_deadline_dates":extra_deadline_dates,"missing_deadline_dates":missing_deadline_dates,
         "schema_valid":schema_valid,"literal_grounding_valid":literal_grounding_valid,
@@ -314,7 +314,7 @@ fn recovery_eligible(job_status: &str, assessment: &Value) -> bool {
 #[test]
 fn recovery_eligibility_is_independent_of_semantic_quality() {
     let assessment = json!({"schema_valid":true,"literal_grounding_valid":true,
-        "category_correct":false,"deadline_correct":true});
+        "deadline_correct":true});
     assert!(recovery_eligible("completed", &assessment));
     assert!(!recovery_eligible("failed", &assessment));
     let mut invalid = assessment.clone();
@@ -778,7 +778,6 @@ async fn actual_qwen35_analysis_evaluation() {
             }
             if sample["assessment"]["schema_valid"] != true
                 || sample["assessment"]["literal_grounding_valid"] != true
-                || sample["assessment"]["category_correct"] != true
                 || sample["assessment"]["deadline_correct"] != true
                 || sample["assessment"]["partial_disclosure_correct"] != true
                 || !sample["assessment"]["missing_summary_terms"]
@@ -1006,6 +1005,7 @@ async fn actual_vision_image_analysis_evaluation() {
         catalog_id: Some(entry.id.clone()),
         name: entry.name.clone(),
         ownership: "managed".into(),
+        kind: "generation".into(),
         path: model_relative,
         storage_directory: None,
         sha256: Some(entry.sha256.clone()),

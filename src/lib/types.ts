@@ -218,11 +218,17 @@ export interface CatalogEntry {
   bytes: number; memory_bytes: number; description: string; use_case: string;
   repository: string; revision: string; filename: string; sha256: string; license: string;
   compatibility: 'verified' | 'available' | 'experimental' | 'unsupported'; reason: string | null;
+  /** `generation` models write summaries; `embedding` models classify notices. */
+  kind?: 'generation' | 'embedding';
+  /** Pooling mode for an embedding entry. */
+  pooling?: string | null;
+  embedding_dim?: number | null;
   /** Optional image-recognition module; absent means the model can only read text. */
   projector?: { filename: string; bytes: number; memory_bytes: number; sha256: string } | null;
 }
 export interface AiModel {
-  id: string; catalog_id: string | null; name: string; ownership: 'managed' | 'external'; path: string;
+  id: string; catalog_id: string | null; name: string; ownership: 'managed' | 'external';
+  kind?: 'generation' | 'embedding'; path: string;
   storage_directory?: string | null;
   sha256: string | null; expected_sha256: string | null; expected_bytes: number | null; bytes: number;
   source_revision: string | null; source_filename: string | null; status: string;
@@ -233,6 +239,8 @@ export interface AiPreferences {
   automatic_limit: number; max_tokens: number;
   execution_mode: 'auto' | 'cpu' | 'gpu';
   model_directory: string | null;
+  embedding_model_id: string | null;
+  classification_enabled: boolean;
 }
 export interface AnalysisKey {
   document_id: number; revision_id: number; task: string; model_sha256: string;
@@ -249,7 +257,7 @@ export interface AnalysisFact {
   origin?: 'text' | 'image';
 }
 export interface Analysis {
-  short_summary: string; summary: string; category: string;
+  short_summary: string; summary: string;
   uncertainty: 'clear' | 'ambiguous' | 'unknown'; facts: AnalysisFact[];
 }
 export interface AiResult extends AnalysisKey {
@@ -273,8 +281,13 @@ export interface AiProjector {
   status: 'pending' | 'downloading' | 'verifying' | 'installed' | 'failed' | 'cancelled' | 'missing';
   downloaded_bytes: number; resume_etag: string | null; error: string | null;
 }
+export interface AiClassification {
+  document_id: number; revision_id: number; category: string;
+  low_confidence: boolean; created_at: string;
+}
 export interface AiSnapshot {
   catalog: CatalogEntry[]; models: AiModel[]; projectors: AiProjector[]; preferences: AiPreferences; jobs: AiJob[]; runtime: WorkerStatus;
+  classification: { state: 'idle' | 'classifying' | 'waiting' | 'disabled' | 'failed' | string; processed: number };
   hardware: { os: string; arch: string; ram_bytes: number; disk_available_bytes: number; backend: string };
   model_storage: { directory: string; custom: boolean; available_bytes: number | null; error: string | null };
   busy: boolean;

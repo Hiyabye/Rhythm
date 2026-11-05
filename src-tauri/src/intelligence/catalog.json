@@ -90,5 +90,25 @@
       "sha256": "ddf46c21d7078e95338cfc22306b19b276a29a5ad089023449dd54d4b6170a51",
       "memory_bytes": 1073741824
     }
+  },
+  {
+    "id": "qwen3-embedding-0-6b",
+    "kind": "embedding",
+    "name": "Qwen3-Embedding 0.6B",
+    "parameters": "0.6B",
+    "quantization": "Q8_0",
+    "bytes": 639150592,
+    "memory_bytes": 2147483648,
+    "description": "한국어 공지 분류를 위한 로컬 임베딩 모델",
+    "use_case": "공지 주제 분류",
+    "repository": "Qwen/Qwen3-Embedding-0.6B-GGUF",
+    "revision": "370f27d7550e0def9b39c1f16d3fbaa13aa67728",
+    "filename": "Qwen3-Embedding-0.6B-Q8_0.gguf",
+    "sha256": "06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
+    "license": "Apache-2.0",
+    "compatibility": "verified",
+    "reason": "macOS Apple Silicon/Metal과 macOS CPU에서 합성 한국어 공지 18건을 18/18로 분류했습니다. Windows와 그 밖의 GPU는 미검증이며 분류 결과는 참고용입니다.",
+    "pooling": "last",
+    "embedding_dim": 1024
   }
 ]

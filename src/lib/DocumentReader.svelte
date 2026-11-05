@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { DocumentDetail, SyncStatus } from './types';
+  import type { AiClassification, DocumentDetail, SyncStatus } from './types';
   import { archiveDate, archiveError, archiveSize, resourceStatus } from './archive-format';
   import Icon from './Icon.svelte';
   import AnalysisPanel from './AnalysisPanel.svelte';
@@ -10,6 +10,7 @@
     id: number; initialRevisionId?: number | null; enabled: boolean; onclose: () => void; onchange: () => void; onaisettings: () => void;
   } = $props();
   let detail = $state<DocumentDetail | null>(null);
+  let classification = $state<AiClassification | null>(null);
   let loading = $state(true);
   let busy = $state(false);
   let resourceBusy = $state(false);
@@ -63,11 +64,19 @@
     const feedbackWritePending = pendingFeedbackDocumentId === documentId;
     loading = true;
     detail = null;
+    classification = null;
     safeHtml = '';
     error = '';
     try {
       const result = await invoke<DocumentDetail>('archive_document', { id: documentId, revisionId });
       if (disposed || request !== generation || documentId !== id) return;
+      // Classification is independent of the body; render the article first and
+      // let the label fill in without delaying reading.
+      void invoke<AiClassification | null>('ai_classification', { documentId, revisionId: result.revision_id })
+        .then((value) => {
+          if (!disposed && request === generation && documentId === id) classification = value;
+        })
+        .catch(() => {});
       const rendered = await localHtml(result, request);
       if (disposed || request !== generation || documentId !== id) return;
       detail = result;
@@ -283,7 +292,7 @@
     <header class="reader-header">
       <span class="section-kicker">{detail.item.source_name}</span>
       <h2 bind:this={heading} tabindex="-1">{detail.item.title}</h2>
-      <div class="notice-meta"><time datetime={detail.item.published_at}>{archiveDate(detail.item.published_at)}</time>{#if detail.item.author}<span>{detail.item.author}</span>{/if}{#if detail.item.category}<span>{detail.item.category}</span>{/if}</div>
+      <div class="notice-meta"><time datetime={detail.item.published_at}>{archiveDate(detail.item.published_at)}</time>{#if detail.item.author}<span>{detail.item.author}</span>{/if}{#if detail.item.category}<span>{detail.item.category}</span>{/if}{#if classification}<span class="ai-tag">분류 · {classification.category}{classification.low_confidence ? ' · 확신 낮음' : ''}</span>{/if}</div>
       <div class="reader-actions">
         <button class="button secondary small" disabled={busy} onclick={() => updateState('is_read')}>{detail.item.is_read ? '읽지 않음으로 표시' : '읽음으로 표시'}</button>
         <button class="button secondary small" disabled={busy} onclick={() => updateState('saved')}><Icon name="bookmark" size={16} />{detail.item.saved ? '저장 해제' : '보관함에 저장'}</button>

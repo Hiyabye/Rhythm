@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { AiSnapshot, ArchivePage, ArchiveSummary, AiResult, DocumentItem, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
+  import type { AiSnapshot, ArchivePage, ArchiveSummary, AiResult, AiClassification, DocumentItem, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
   import analysisContract from './analysis-contract.json' with { type: 'json' };
   import { archiveDate, archiveDay, archiveError, localDayKey } from './archive-format';
   import DocumentReader from './DocumentReader.svelte';
@@ -19,6 +19,7 @@
   let summary = $state<ArchiveSummary | null>(null);
   let sources = $state<SourceInfo[]>([]);
   let recentAnalyses = $state<AiResult[]>([]);
+  let classifications = $state<Record<number, AiClassification>>({});
   let aiError = $state('');
   let aiSnapshot = $state<AiSnapshot | null>(null);
   let recommendations = $state<PersonalizedRecommendation[]>([]);
@@ -93,6 +94,16 @@
     if (desktop) void refreshContext();
   });
 
+  let lastClassificationProcessed = 0;
+  $effect(() => {
+    // The background classifier changes categories without a page navigation.
+    const processed = aiSnapshot?.classification?.processed ?? 0;
+    if (processed !== lastClassificationProcessed) {
+      lastClassificationProcessed = processed;
+      if (result.items.length) void loadClassifications(result.items.map((item) => item.id));
+    }
+  });
+
   $effect(() => {
     const currentPage = page;
     const isDesktop = desktop;
@@ -156,6 +167,9 @@
       if (!active || request !== recommendationRequest) return;
       recommendations = result.items;
       hasPreferences = result.has_preferences;
+      const rows = await invoke<AiClassification[]>('ai_classifications', { documentIds: result.items.map((item) => item.item.id) });
+      if (!active || request !== recommendationRequest) return;
+      classifications = { ...classifications, ...Object.fromEntries(rows.map((row) => [row.document_id, row])) };
     } catch (reason) {
       if (active && request === recommendationRequest) {
         recommendations = [];
@@ -181,6 +195,14 @@
     }
   }
 
+  async function loadClassifications(ids: number[]) {
+    if (!ids.length) { classifications = {}; return; }
+    try {
+      const rows = await invoke<AiClassification[]>('ai_classifications', { documentIds: ids });
+      classifications = Object.fromEntries(rows.map((row) => [row.document_id, row]));
+    } catch { classifications = {}; }
+  }
+
   async function fetchPage(filters: { query: string; source_id: string | null; category: string | null; saved_only: boolean; unread_only: boolean; ascending: boolean; offset: number; limit: number }) {
     const current = ++requestId;
     loading = true;
@@ -199,6 +221,7 @@
       }
       result = next;
       if (category && !next.categories.includes(category)) category = '';
+      await loadClassifications(next.items.map((item) => item.id));
     } catch (reason) { if (active && current === requestId) error = archiveError(reason); }
     finally {
       if (active && current === requestId && !clamped) {
@@ -348,7 +371,7 @@
                       <span class="pick-title"><span class="notice-read-dot" aria-hidden="true"></span><strong>{item.title}</strong><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}</span></span>
                       <span class="pick-meta"><span class={`board-swatch family-${familyOf(item.source_id)}`} aria-hidden="true"></span>{item.source_name} · {archiveDate(item.published_at)}{#if item.category}{' · '}{item.category}{/if}{#if item.saved}{' · '}보관함에 저장됨{/if}</span>
                       {#if recommendation.reasons.length}<span class="pick-reasons">{#each recommendation.reasons as reason, index}{#if index}{' · '}{/if}<span>{reason}</span>{/each}</span>{/if}
-                      {#if analysis}<span class="notice-ai-preview"><span class="ai-tag">저장된 AI 요약{analysis.partial ? ' · 일부 분석' : ''}</span> {analysis.result.short_summary}</span>{/if}
+                      {#if classifications[item.id] || analysis}<span class="notice-ai-preview">{#if classifications[item.id]}<span class="ai-tag">분류 · {classifications[item.id].category}{classifications[item.id].low_confidence ? ' · 확신 낮음' : ''}</span>{/if}{#if analysis} <span class="ai-tag">저장된 AI 요약{analysis.partial ? ' · 일부 분석' : ''}</span> {analysis.result.short_summary}{/if}</span>{/if}
                     </button>
                     <div class="recommendation-actions" role="group" aria-label={`${item.title} 추천 피드백`}>
                       <button class="chip" aria-pressed={recommendation.feedback === 'interested'} disabled={pendingRecommendationFeedback[item.id]} onclick={() => void setRecommendationFeedback(recommendation, recommendation.feedback === 'interested' ? null : 'interested')}>관심 있어요</button>
@@ -374,7 +397,7 @@
                   <li>
                     <button class="pick-open" id={`analysis-${analysis.id}`} onclick={() => void openDocument(analysis.document_id, `analysis-${analysis.id}`)}>
                       <strong class="pick-summary">{analysis.result.short_summary}</strong>
-                      <span class="pick-meta">AI 분류 {analysis.result.category}{#if !currentContract}{' · '}현재 분석 설정과 다를 수 있습니다{/if}</span>
+                      <span class="pick-meta">저장된 AI 분석{#if !currentContract}{' · '}현재 분석 설정과 다를 수 있습니다{/if}</span>
                       {#if analysis.partial}<span class="pick-meta">일부 내용 분석</span>{/if}
                       {#if currentContract}
                         {#each analysis.result.facts.filter((fact) => fact.date).slice(0, 2) as fact}
@@ -462,7 +485,7 @@
             <button class="notice-open" id={`notice-${item.id}`} onclick={() => open(item)}>
               <span class="notice-title"><span class="notice-read-dot" aria-hidden="true"></span><Highlighted text={item.title} {query} /><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}</span></span>
               <span class="notice-meta"><span>{item.source_name}</span><time datetime={item.published_at}>{archiveDate(item.published_at)}</time>{#if item.category}<span>{item.category}</span>{/if}</span>
-              {#if analysis && page !== 'search'}<span class="notice-ai-preview"><span class="ai-tag">AI · {analysis.result.category}</span> {analysis.result.short_summary}</span>{/if}
+              {#if (analysis || classifications[item.id]) && page !== 'search'}<span class="notice-ai-preview">{#if classifications[item.id]}<span class="ai-tag">분류 · {classifications[item.id].category}{classifications[item.id].low_confidence ? ' · 확신 낮음' : ''}</span>{/if}{#if analysis} <span class="ai-tag">AI 요약</span> {analysis.result.short_summary}{/if}</span>{/if}
               {#if page === 'search' && item.snippet}<span class="notice-snippet"><Highlighted text={item.snippet} {query} /></span>{/if}
               {#if item.content_status === 'missing_resources'}<span class="notice-resource-warning">일부 첨부 자료 미저장</span>{/if}
             </button>

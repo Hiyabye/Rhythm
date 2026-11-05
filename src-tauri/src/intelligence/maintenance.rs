@@ -327,6 +327,8 @@ mod tests {
             max_tokens: 1024,
             execution_mode: "auto".into(),
             model_directory: None,
+            embedding_model_id: None,
+            classification_enabled: true,
         }
     }
     #[test]

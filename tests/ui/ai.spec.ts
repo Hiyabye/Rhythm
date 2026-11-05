@@ -76,7 +76,6 @@ test('real reader UI submits once, shows grounded output, then reuses stored ana
   await expect(panel.getByText('장학금 신청 일정과 제출 서류를 확인하세요.', { exact: true })).toBeVisible();
   await panel.getByText('원문 근거', { exact: true }).click();
   await expect(panel.getByText('2026년 10월 30일까지 신청서를 제출하세요.', { exact: true })).toBeVisible();
-  await expect(panel.getByText('AI 분류 · 장학', { exact: true })).toBeVisible();
   // Limits are stated next to the result, not only in fine print.
   const limits = panel.getByRole('note').filter({ hasText: 'AI가 만든 참고용 정리입니다.' });
   await expect(limits).toContainText('틀리거나 빠질 수 있습니다');
@@ -90,6 +89,28 @@ test('real reader UI submits once, shows grounded output, then reuses stored ana
   expect(await callCount(page, 'ai_analyze')).toBe(1);
   await panel.getByRole('button', { name: '이 공지 분석 다시 생성', exact: true }).click();
   expect(await callCount(page, 'ai_analyze')).toBe(2);
+});
+
+test('embedding classification is shown independently and can be toggled', async ({ page }) => {
+  await mockDesktop(page, { aiInstalled: true, aiEmbeddingInstalled: true }); await page.goto('/');
+  // The list and reader show the stored classification even without opening AI analysis.
+  await expect(page.locator('#notice-1')).toContainText('분류 · 장학');
+  await page.locator('#notice-1').click();
+  await expect(page.getByRole('region', { name: '보관된 공지 읽기' }).getByText('분류 · 장학', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '목록으로 돌아가기' }).click();
+  await openSettings(page, 'AI');
+  const section = page.getByRole('group', { name: '공지 분류' });
+  await expect(section).toContainText('Qwen3-Embedding 0.6B');
+  const toggle = page.locator('#ai-classification-enabled');
+  await expect(toggle).toBeChecked();
+  await toggle.uncheck();
+  await expect.poll(() => page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'ai_classification_preferences').map((call: any) => call.args.enabled))).toEqual([false]);
+});
+
+test('low-confidence classification is marked without leaking the raw score', async ({ page }) => {
+  await mockDesktop(page, { aiEmbeddingInstalled: true, aiClassificationLow: true }); await page.goto('/');
+  await expect(page.locator('#notice-1')).toContainText('분류 · 장학 · 확신 낮음');
+  await expect(page.locator('#notice-1')).not.toContainText('0.');
 });
 
 test('a completion status cannot strand an earlier result snapshot in the empty state', async ({ page }) => {
