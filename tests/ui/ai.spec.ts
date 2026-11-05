@@ -107,6 +107,13 @@ test('embedding classification is shown independently and can be toggled', async
   await expect.poll(() => page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'ai_classification_preferences').map((call: any) => call.args.enabled))).toEqual([false]);
 });
 
+test('classification and stored summary share one preview with a separator', async ({ page }) => {
+  await mockDesktop(page, { aiInstalled: true, aiResult: true, aiEmbeddingInstalled: true }); await page.goto('/');
+  await expect(page.locator('#notice-1 .notice-ai-preview')).toContainText('분류 · 장학 · 저장된 AI 요약');
+  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
+  await expect(page.locator('.notice-list #notice-1 .notice-ai-preview')).toContainText('분류 · 장학 · AI 요약');
+});
+
 test('low-confidence classification is marked without leaking the raw score', async ({ page }) => {
   await mockDesktop(page, { aiEmbeddingInstalled: true, aiClassificationLow: true }); await page.goto('/');
   await expect(page.locator('#notice-1')).toContainText('분류 · 장학 · 확신 낮음');
