@@ -6,6 +6,8 @@ use url::Url;
 
 #[path = "community.rs"]
 mod community;
+#[path = "dormitory.rs"]
+mod dormitory;
 #[path = "engineering.rs"]
 mod engineering;
 
@@ -127,6 +129,9 @@ pub fn list_url(source: &SourceDefinition, page: u32) -> Result<Url, String> {
     if source.family == "engineering" {
         return engineering::list_url(source, page);
     }
+    if source.family == "dormitory" {
+        return dormitory::list_url(source, page);
+    }
     if source.id == "sogang-academic" {
         let mut url =
             Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData/boardList").unwrap();
@@ -161,6 +166,9 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
     if source.family == "engineering" {
         return engineering::detail_url(source, entry);
     }
+    if source.family == "dormitory" {
+        return dormitory::detail_url(source, entry);
+    }
     if source.id == "sogang-academic" {
         let mut url = Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData").unwrap();
         url.query_pairs_mut()
@@ -189,6 +197,8 @@ pub fn listing(source: &SourceDefinition, page: u32, body: &str) -> Result<Listi
         community::listing(source, page, body)
     } else if source.family == "engineering" {
         engineering::listing(source, page, body)
+    } else if source.family == "dormitory" {
+        dormitory::listing(source, page, body)
     } else if source.id == "sogang-academic" {
         main_listing(page, body)
     } else {
@@ -407,6 +417,9 @@ pub fn article(
     }
     if source.family == "engineering" {
         return engineering::article(source, entry, body);
+    }
+    if source.family == "dormitory" {
+        return dormitory::article(source, entry, body);
     }
     let (title, author, category, published_at, modified_at, content, mut resources) =
         if source.id == "sogang-academic" {

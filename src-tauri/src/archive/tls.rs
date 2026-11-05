@@ -27,7 +27,13 @@ impl ServerCertVerifier for ChainCompletion {
         ocsp_response: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, Error> {
-        if matches!(server_name, ServerName::DnsName(name) if name.as_ref() == "www.sogang.ac.kr") {
+        // Both exact hosts currently omit their intermediate. No other host, and
+        // no wildcard or suffix match, receives the supplemental candidates.
+        if matches!(
+            server_name,
+            ServerName::DnsName(name)
+                if ["www.sogang.ac.kr", "new-cms.sogang.ac.kr"].contains(&name.as_ref())
+        ) {
             let mut chain = intermediates.to_vec();
             for certificate in &self.supplemental {
                 if !chain.contains(certificate) {
@@ -176,6 +182,10 @@ mod tests {
             .is_err());
         assert!(verifier
             .verify_server_cert(&leaf(), &[], &name, &[], valid_time())
+            .is_ok());
+        let dormitory = ServerName::try_from("new-cms.sogang.ac.kr").unwrap();
+        assert!(verifier
+            .verify_server_cert(&leaf(), &[], &dormitory, &[], valid_time())
             .is_ok());
         // The wildcard leaf also covers computing, but no chain is supplied for it.
         let other = ServerName::try_from("computing.sogang.ac.kr").unwrap();

@@ -72,6 +72,20 @@ pub fn definitions() -> Vec<SourceDefinition> {
             .into(),
         false,
     );
+    for (id, menu, name) in [
+        ("general", 6975, "일반공지"),
+        ("admission", 3947, "입사 및 퇴사 공지"),
+        ("menu", 3951, "주간 메뉴"),
+    ] {
+        add(
+            &format!("dorm-{id}"),
+            name,
+            "서강대학교 · 생활관",
+            "dormitory",
+            format!("https://new-cms.sogang.ac.kr/sgdormitory/{menu}/subview.do"),
+            true,
+        );
+    }
     for (id, path, name) in [
         ("news", "community/notice01.php", "학과소식"),
         ("general", "community/notice02.php", "일반공지"),

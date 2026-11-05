@@ -1,8 +1,9 @@
 # University certificate-chain completion
 
-`www.sogang.ac.kr` currently presents its leaf without its intermediate certificate.
-Ordinary Rustls/WebPKI verification therefore fails with `UnknownIssuer` even though
-the leaf has a valid path to a Mozilla-trusted root when the intermediate is supplied.
+`www.sogang.ac.kr` and `new-cms.sogang.ac.kr` currently present their leaf without its
+intermediate certificate. Ordinary Rustls/WebPKI verification therefore fails with
+`UnknownIssuer` even though the leaf has a valid path to a Mozilla-trusted root when the
+intermediate is supplied.
 
 `sogang-intermediates.pem` contains these **public, untrusted chain candidates**:
 
@@ -16,7 +17,9 @@ Source: the user's reference collector,
 The bytes were fetched as data; no reference JavaScript was executed.
 
 `tls.rs::ChainCompletion` supplies these certificates only when the TLS server name
-is exactly `www.sogang.ac.kr`. It delegates certificate and handshake-signature
+is exactly `www.sogang.ac.kr` or `new-cms.sogang.ac.kr`. The dormitory CMS leaf observed
+on 2026-11-05 is issued by the same Sectigo OV R36 intermediate (same SHA-256), so the
+candidate file is unchanged. It delegates certificate and handshake-signature
 verification to `WebPkiServerVerifier`. They are **never added to the root store**.
 The root store is exactly `webpki_roots::TLS_SERVER_ROOTS`; system trust and global
 Rustls crypto-provider settings are not changed. Normal hostname, validity,
@@ -42,8 +45,8 @@ production trust anchor or pinned server leaf. Its properties are:
 - SHA-256: `EE:CD:35:9F:FB:9E:3F:3A:34:B8:97:43:13:89:2B:C4:DC:00:5A:96:8E:1A:2A:1A:33:2C:8A:04:F8:1F:E4:AA`.
 
 Tests use a fixed time inside that window, not the current clock. They prove that
-plain verification rejects the missing chain, exact-host completion succeeds,
-other hosts receive no completion, and malformed/tampered/expired/wrong-host
-certificates still fail. The ignored `live_main_api_uses_verified_completed_chain`
+plain verification rejects the missing chain, completion succeeds for each exact
+allowlisted host, other hosts receive no completion, and
+malformed/tampered/expired/wrong-host certificates still fail. The ignored `live_main_api_uses_verified_completed_chain`
 test performs one bounded public API GET and checks actual article JSON. It is not
 part of network-free CI and does not establish historical import or offline storage.

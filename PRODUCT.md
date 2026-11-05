@@ -44,7 +44,7 @@ Current information architecture (open to change in a redesign): 오늘 (ranked 
 
 ## Capabilities and Constraints
 
-- 32 cataloged sources, 10 supported (main academic, five computing, four engineering boards). Unsupported sources are shown as such and are never presented as working.
+- 35 cataloged sources, 22 supported (main academic, five computing, four engineering, nine electronic/system semiconductor department and three dormitory boards). Unsupported sources are shown as such and are never presented as working.
 - Historical import (resumable, cancellable) stays a separate pass from incremental "new and changed" checks, but one manual **새로고침** runs the new-notice pass first and then continues unfinished history. Progress shows real counts and phases, never fabricated percentages.
 - Reader: sanitized local content only, with no scripts, iframes, remote images or live school pages. Original links open in the OS browser on explicit action. Attachments are revealed in Finder or File Explorer, never executed. Iframe-only notices keep metadata only and explain why.
 - Local AI: Qwen3.5 2B/4B, Gemma 4 E2B/E4B and Qwen3-Embedding 0.6B GGUF, user-installed, run by a bundled llama.cpp server (Metal or CPU on macOS; Vulkan for NVIDIA GPUs or CPU on Windows). Summaries, a separate embedding-based category classification, and dates/facts grounded to source evidence. AI can be wrong, and the UI must say to verify in the original. Analysis shows real phase and elapsed time.
