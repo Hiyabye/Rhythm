@@ -71,4 +71,4 @@ Each is a future product decision, sharing the archive, search and personalizati
 - **Email:** after OAuth and provider limits are handled deliberately.
 - **Personal agent:** proposals and workflows whose consequential actions stay under user control.
 
-Platform work, also future decisions: Linux (re-review the `glib 0.18.5` / RUSTSEC-2024-0429 finding first), Intel Macs, Windows code signing, Developer ID signing and notarization.
+Platform work, also future decisions: Linux (re-review the `glib 0.18.5` / RUSTSEC-2024-0429 finding first), Intel Macs, Developer ID signing and notarization. Windows builds stay unsigned by user decision (#85); SmartScreen warnings remain expected.
