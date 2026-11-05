@@ -76,6 +76,17 @@ pub struct InferenceResponse {
     pub metrics: InferenceMetrics,
 }
 
+/// One archived raster handed to the vision encoder. Bytes were already
+/// verified against their recorded SHA-256 by the caller.
+#[derive(Clone, Copy, Debug)]
+pub struct VisionImage<'a> {
+    pub mime: &'static str,
+    pub bytes: &'a [u8],
+}
+
+const MAX_IMAGES: usize = 2;
+const MAX_IMAGE_BYTES: usize = 6 * 1024 * 1024;
+
 fn inference_response(value: Value) -> Result<InferenceResponse, String> {
     let text = value["text"]
         .as_str()
@@ -325,9 +336,13 @@ impl Worker {
         self.active_gpu && self.mode() == "auto"
     }
 
-    /// Returns the running server for `path`, starting it if needed, and
-    /// whether an existing process was reused with its load time.
-    async fn ensure_server(&mut self, path: &Path) -> Result<(bool, u64), String> {
+    /// Returns the running server for `path`/`projector`, starting it if needed,
+    /// and whether an existing process was reused with its load time.
+    async fn ensure_server(
+        &mut self,
+        path: &Path,
+        projector: Option<&Path>,
+    ) -> Result<(bool, u64), String> {
         if !path.is_file()
             || path
                 .extension()
@@ -340,20 +355,42 @@ impl Worker {
         if self
             .server
             .as_ref()
-            .is_some_and(|server| server.model == path)
+            .is_some_and(|server| server.model == path && server.projector.as_deref() == projector)
         {
             return Ok((true, 0));
         }
+        if let Some(projector) = projector {
+            if !projector.is_file() {
+                return Err("이미지 인식 모듈 파일을 찾지 못했습니다. 다시 설치해 주세요.".into());
+            }
+        }
         self.stop_server().await;
         let launch = self.selected_launch()?;
-        let server = match Server::start(&launch, path, &self.runtime, LOAD_DEADLINE).await {
-            Ok(server) => server,
-            Err(error) if self.can_fall_back() => {
-                self.fall_back_to_cpu(&error);
-                Server::start(&self.cpu.clone(), path, &self.runtime, LOAD_DEADLINE).await?
-            }
-            Err(error) => return Err(error),
-        };
+        let server =
+            match Server::start(&launch, path, projector, &self.runtime, LOAD_DEADLINE).await {
+                Ok(server) => server,
+                Err(error) if self.can_fall_back() => {
+                    self.fall_back_to_cpu(&error);
+                    Server::start(
+                        &self.cpu.clone(),
+                        path,
+                        projector,
+                        &self.runtime,
+                        LOAD_DEADLINE,
+                    )
+                    .await?
+                }
+                Err(error) => return Err(error),
+            };
+        if projector.is_some() && !server.vision {
+            // Upstream logs the multimodal encoder only after it loaded; a
+            // projector argument alone is not proof that vision is available.
+            server.stop().await;
+            return Err(
+                "이미지 인식 모듈을 실제로 불러오지 못했습니다. 다시 설치하거나 CPU 모드로 시도해 주세요."
+                    .into(),
+            );
+        }
         let load_ms = server.load_ms;
         self.server = Some(server);
         Ok((false, load_ms))
@@ -383,24 +420,41 @@ impl Worker {
         prompt: &str,
         max_tokens: u32,
     ) -> Result<InferenceResponse, String> {
-        self.infer_mode(path, prompt, max_tokens, false).await
+        self.infer_vision(path, None, prompt, &[], max_tokens, false)
+            .await
     }
     /// Closed analysis JSON generation, constrained by the generation schema.
+    /// Archived images are optional; `projector` must already be verified.
     pub async fn infer_analysis(
         &mut self,
         path: &Path,
+        projector: Option<&Path>,
         prompt: &str,
+        images: &[VisionImage<'_>],
         max_tokens: u32,
     ) -> Result<InferenceResponse, String> {
-        self.infer_mode(path, prompt, max_tokens, true).await
+        self.infer_vision(path, projector, prompt, images, max_tokens, true)
+            .await
     }
-    async fn infer_mode(
+    async fn infer_vision(
         &mut self,
         path: &Path,
+        projector: Option<&Path>,
         prompt: &str,
+        images: &[VisionImage<'_>],
         max_tokens: u32,
         analysis_json: bool,
     ) -> Result<InferenceResponse, String> {
+        if images.len() > MAX_IMAGES
+            || images
+                .iter()
+                .any(|image| image.bytes.is_empty() || image.bytes.len() > MAX_IMAGE_BYTES)
+        {
+            return Err("이미지 입력 범위를 확인해 주세요.".into());
+        }
+        if !images.is_empty() && projector.is_none() {
+            return Err("이미지 인식 모듈 없이 이미지를 분석할 수 없습니다.".into());
+        }
         if prompt.trim().is_empty() || prompt.len() > 24 * 1024 || !(1..=4096).contains(&max_tokens)
         {
             return Err("분석 입력 또는 출력 길이가 허용 범위를 벗어났습니다.".into());
@@ -411,9 +465,9 @@ impl Worker {
             self.fallback_reason = None;
             self.select_initial_backend();
         }
-        let body = chat_body(prompt, max_tokens, analysis_json);
+        let body = chat_body(prompt, images, max_tokens, analysis_json)?;
         self.status.state = "busy".into();
-        let mut result = self.infer_once(path, &body).await;
+        let mut result = self.infer_once(path, projector, &body).await;
         if let Err(error) = &result {
             if self.can_fall_back() {
                 let input_only = error.contains(server::INPUT_LIMIT);
@@ -421,7 +475,7 @@ impl Worker {
                 self.stop_server().await;
                 self.fall_back_to_cpu(&error);
                 self.return_to_gpu = input_only;
-                result = self.infer_once(path, &body).await;
+                result = self.infer_once(path, projector, &body).await;
             }
         }
         match &result {
@@ -446,8 +500,13 @@ impl Worker {
         result
     }
 
-    async fn infer_once(&mut self, path: &Path, body: &str) -> Result<InferenceResponse, String> {
-        let (model_reused, request_load_ms) = self.ensure_server(path).await?;
+    async fn infer_once(
+        &mut self,
+        path: &Path,
+        projector: Option<&Path>,
+        body: &str,
+    ) -> Result<InferenceResponse, String> {
+        let (model_reused, request_load_ms) = self.ensure_server(path, projector).await?;
         let server = self
             .server
             .as_mut()
@@ -467,7 +526,7 @@ impl Worker {
 
     pub async fn load(&mut self, path: &Path) -> Result<WorkerStatus, String> {
         self.status.state = "loading".into();
-        if let Err(error) = self.ensure_server(path).await {
+        if let Err(error) = self.ensure_server(path, None).await {
             self.stop_server().await;
             self.status.state = "failed".into();
             self.status.detail = Some(error.clone());
@@ -572,11 +631,36 @@ impl Worker {
 /// The chat completion request. No tools, thinking or remote resources;
 /// greedy decoding. Analysis requests carry the literal generation schema,
 /// spliced in unchanged because a `Value` would sort its keys.
-fn chat_body(prompt: &str, max_tokens: u32, analysis_json: bool) -> String {
+fn chat_body(
+    prompt: &str,
+    images: &[VisionImage<'_>],
+    max_tokens: u32,
+    analysis_json: bool,
+) -> Result<String, String> {
+    use base64::Engine;
+    let content = if images.is_empty() {
+        json!(prompt)
+    } else {
+        let mut parts = vec![json!({"type": "text", "text": prompt})];
+        for image in images {
+            if !["image/png", "image/jpeg", "image/webp", "image/gif"].contains(&image.mime) {
+                return Err("지원하지 않는 이미지 형식입니다.".into());
+            }
+            parts.push(json!({
+                "type": "image_url",
+                "image_url": {"url": format!(
+                    "data:{};base64,{}",
+                    image.mime,
+                    base64::engine::general_purpose::STANDARD.encode(image.bytes)
+                )},
+            }));
+        }
+        json!(parts)
+    };
     let mut body = json!({
         "messages": [
             {"role": "system", "content": SYSTEM_INSTRUCTION},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": content},
         ],
         "max_tokens": max_tokens,
         "temperature": 0,
@@ -593,7 +677,7 @@ fn chat_body(prompt: &str, max_tokens: u32, analysis_json: bool) -> String {
             analysis::GENERATION_SCHEMA
         ));
     }
-    body
+    Ok(body)
 }
 
 /// Maps an OpenAI-style completion with llama-server `timings` onto the
@@ -784,10 +868,11 @@ mod tests {
 
     #[test]
     fn analysis_body_is_json_and_keeps_the_schema_order() {
-        let plain: Value = serde_json::from_str(&chat_body("분석", 32, false)).unwrap();
+        let plain: Value =
+            serde_json::from_str(&chat_body("분석", &[], 32, false).unwrap()).unwrap();
         assert!(plain.get("response_format").is_none());
         assert_eq!(plain["messages"][1]["content"], "분석");
-        let body = chat_body("분석 \"따옴표\"", 32, true);
+        let body = chat_body("분석 \"따옴표\"", &[], 32, true).unwrap();
         let parsed: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(parsed["messages"][1]["content"], "분석 \"따옴표\"");
         assert_eq!(parsed["response_format"]["json_schema"]["strict"], true);
@@ -851,6 +936,91 @@ mod tests {
         assert!(worker.process_id().is_none());
     }
 
+    #[test]
+    fn image_parts_use_data_uris_and_plain_text_keeps_its_shape() {
+        let image = VisionImage {
+            mime: "image/png",
+            bytes: b"fixture",
+        };
+        let body = chat_body("분석", &[image], 32, true).unwrap();
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["messages"][1]["content"][0]["type"], "text");
+        assert_eq!(parsed["messages"][1]["content"][0]["text"], "분석");
+        assert_eq!(parsed["messages"][1]["content"][1]["type"], "image_url");
+        let url = parsed["messages"][1]["content"][1]["image_url"]["url"]
+            .as_str()
+            .unwrap();
+        assert!(url.starts_with("data:image/png;base64,"), "{url}");
+        assert_eq!(url, "data:image/png;base64,Zml4dHVyZQ==");
+        let plain = chat_body("분석", &[], 32, false).unwrap();
+        let parsed: Value = serde_json::from_str(&plain).unwrap();
+        assert_eq!(parsed["messages"][1]["content"], "분석");
+        assert!(chat_body(
+            "분석",
+            &[VisionImage {
+                mime: "text/plain",
+                bytes: b"1"
+            }],
+            8,
+            false
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn vision_requests_require_a_loaded_projector_and_carry_the_images() {
+        let (directory, mut worker, model) = fake("ok");
+        let image = VisionImage {
+            mime: "image/png",
+            bytes: b"\x89PNG\r\n\x1a\nfixture",
+        };
+        // Images without a projector never start a process.
+        assert!(worker
+            .infer_analysis(&model, None, "분석", &[image], 32)
+            .await
+            .is_err());
+        assert!(worker.process_id().is_none());
+        let projector = directory.path().join("mmproj.gguf");
+        std::fs::write(&projector, b"GGUF").unwrap();
+        let response = worker
+            .infer_analysis(&model, Some(&projector), "분석", &[image], 32)
+            .await
+            .unwrap();
+        assert_eq!(response.text, "analysis output");
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("images")).unwrap(),
+            "1\n"
+        );
+        // Switching the projector restarts the process; the argument is fixed
+        // for the life of one server.
+        let pid = worker.process_id().unwrap();
+        let other = directory.path().join("mmproj2.gguf");
+        std::fs::write(&other, b"GGUF").unwrap();
+        worker
+            .infer_analysis(&model, Some(&other), "분석", &[image], 32)
+            .await
+            .unwrap();
+        assert_ne!(worker.process_id(), Some(pid));
+        worker.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_projector_that_upstream_never_reports_as_loaded_is_an_error() {
+        let (directory, mut worker, model) = fake("mmproj-fails");
+        let projector = directory.path().join("mmproj.gguf");
+        std::fs::write(&projector, b"GGUF").unwrap();
+        let image = VisionImage {
+            mime: "image/png",
+            bytes: b"\x89PNG\r\n\x1a\nfixture",
+        };
+        let error = worker
+            .infer_analysis(&model, Some(&projector), "분석", &[image], 32)
+            .await
+            .unwrap_err();
+        assert!(error.contains("이미지 인식 모듈"), "{error}");
+        assert!(worker.process_id().is_none());
+    }
+
     #[tokio::test]
     async fn inference_maps_completion_metrics_and_keeps_the_text_api() {
         let (_directory, mut worker, model) = fake("ok");
@@ -892,7 +1062,7 @@ mod tests {
         let (directory, mut worker, model) = fake("ok");
         assert_eq!(
             worker
-                .infer_analysis(&model, "분석", 32)
+                .infer_analysis(&model, None, "분석", &[], 32)
                 .await
                 .unwrap()
                 .text,

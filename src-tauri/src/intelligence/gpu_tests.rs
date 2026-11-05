@@ -20,7 +20,7 @@ async fn gpu_auto_selects_gpu_and_cpu_override_is_respected() {
         let mut worker = configured(&dir, mode);
         assert_eq!(worker.refresh().await.state, "ready");
         let result = worker
-            .infer_analysis(&model, "공지 분석", 32)
+            .infer_analysis(&model, None, "공지 분석", &[], 32)
             .await
             .unwrap();
         assert_eq!(result.metrics.loaded_backend.as_deref(), Some(backend));
@@ -45,7 +45,10 @@ async fn gpu_failure_falls_back_once_only_in_auto_mode() {
             if method == "load" {
                 assert_eq!(worker.load(&model).await.unwrap().state, "ready");
             } else {
-                let result = worker.infer_analysis(&model, "공지", 32).await.unwrap();
+                let result = worker
+                    .infer_analysis(&model, None, "공지", &[], 32)
+                    .await
+                    .unwrap();
                 assert_eq!(result.metrics.loaded_backend.as_deref(), Some("cpu"));
             }
             assert!(!worker.active_gpu, "{gpu_mode}");
@@ -100,10 +103,13 @@ async fn gpu_input_overflow_runs_that_request_on_cpu_then_returns_to_gpu() {
     let (dir, model) = fixture("overflow");
     let mut worker = configured(&dir, "auto");
     assert_eq!(worker.refresh().await.state, "ready");
-    let long = worker.infer_analysis(&model, "긴 공지", 32).await.unwrap();
+    let long = worker
+        .infer_analysis(&model, None, "긴 공지", &[], 32)
+        .await
+        .unwrap();
     assert_eq!(long.metrics.loaded_backend.as_deref(), Some("cpu"));
     let next = worker
-        .infer_analysis(&model, "짧은 공지", 32)
+        .infer_analysis(&model, None, "짧은 공지", &[], 32)
         .await
         .unwrap();
     assert_eq!(next.metrics.loaded_backend.as_deref(), Some("vulkan"));

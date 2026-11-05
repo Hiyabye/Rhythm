@@ -17,6 +17,8 @@ export interface FixtureOptions {
   aiInstalled?: boolean;
   aiRetiredModel?: boolean;
   aiResult?: boolean;
+  aiImageResult?: boolean;
+  aiProjectorState?: 'downloading' | 'installed' | 'failed' | 'cancelled' | 'missing';
   aiPartial?: boolean;
   aiSetupNeeded?: boolean;
   // Windows-flavored defaults (paths); pair with a Windows user agent.
@@ -136,19 +138,24 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     const chosenModelDirectory = options.windows ? 'D:\\로컬 모델\\Rhythm' : '/Volumes/로컬 모델/Rhythm';
     const modelStorage = { directory: options.aiModelDirectory ?? defaultModelDirectory, custom: Boolean(options.aiModelDirectory), available_bytes: (options.aiModelStorageAvailable === undefined ? 27000000000 : options.aiModelStorageAvailable) as number | null, error: options.aiModelStorageError ?? null as string | null };
     const modelNames: Record<string, string> = { 'qwen35-2b': 'Qwen3.5 2B', 'qwen35-4b': 'Qwen3.5 4B', 'qwen35-9b': 'Qwen3.5 9B' };
+    const projectorSpec = { filename: 'mmproj-F16.gguf', bytes: 1234567, memory_bytes: 2345678, sha256: 'c'.repeat(64) };
     const model = (id = 'qwen35-4b') => ({ id, catalog_id: id, name: modelNames[id] ?? id, ownership: 'managed', path: `models/${id}.gguf`, storage_directory: null as string | null, sha256: 'a'.repeat(64), expected_sha256: 'a'.repeat(64), expected_bytes: 2740937888, bytes: 2740937888, source_revision: 'pinned-revision', source_filename: `${id}.gguf`, status: 'installed', downloaded_bytes: 2740937888, resume_etag: null, error: null as string | null, created_at: '2026-10-24 12:00:00', updated_at: '2026-10-24 12:00:00' });
+    const projectorRow = (status: 'downloading' | 'installed' | 'failed' | 'cancelled' | 'missing', downloaded = 0) => ({ model_id: 'qwen35-4b', path: `${options.aiModelDirectory ?? defaultModelDirectory}${separator}${projectorSpec.filename}`, sha256: status === 'installed' ? projectorSpec.sha256 : null as string | null, expected_sha256: projectorSpec.sha256, expected_bytes: projectorSpec.bytes, bytes: status === 'installed' ? projectorSpec.bytes : 0, status, downloaded_bytes: downloaded, resume_etag: null as string | null, error: status === 'failed' ? '이미지 인식 모듈 다운로드에 실패했습니다. 연결을 확인하고 다시 시도해 주세요.' : null as string | null });
     const analysis = (id: number, documentId: number, revisionId: number) => ({
       id, job_id: id, document_id: documentId, revision_id: revisionId, task: 'notice_analysis',
       model_sha256: 'a'.repeat(64),
       prompt_version: options.analysisContract === 'prompt-v2' ? 2 : contract.prompt_version,
       schema_version: contract.schema_version,
       configuration_hash: 'b'.repeat(64),
-      model_identity: { name: 'Qwen3.5 4B' },
+      model_identity: { name: 'Qwen3.5 4B', ...(options.aiImageResult ? { images_used: 1, images_available: 2 } : {}) },
       result: {
         short_summary: options.aiText ?? '장학금 신청 일정과 제출 서류를 확인하세요.',
         summary: '대상 학생은 안내된 기간에 신청서를 제출해야 합니다.',
         category: '장학', uncertainty: 'clear',
-        facts: [{
+        facts: options.aiImageResult ? [
+          { kind: 'deadline', label: '신청 마감', value: '2026년 10월 30일까지 신청', evidence: '2026년 10월 30일까지 신청서를 제출하세요.', date: '2026-10-30', uncertainty: 'clear', origin: 'text' as const },
+          { kind: 'deadline', label: '현장 접수', value: '이미지 안내문에 적힌 접수 일정', evidence: '[이미지 1]', date: '2026-11-03', uncertainty: 'ambiguous' as const, origin: 'image' as const },
+        ] : [{
           kind: 'deadline', label: '신청 마감', value: '2026년 10월 30일까지 신청',
           evidence: '2026년 10월 30일까지 신청서를 제출하세요.',
           date: '2026-10-30', uncertainty: 'clear',
@@ -160,7 +167,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       duration_ms: 1250,
       created_at: '2026-10-24 12:00:00',
     });
-    const ai = { model_storage: modelStorage, catalog: ['qwen35-4b', 'qwen35-2b'].map((id) => ({ id, name: modelNames[id], parameters: modelNames[id].split(' ')[1], quantization: 'Q4_K_M', bytes: 2740937888, memory_bytes: 6000000000, description: '한국어 공지 분석용 로컬 모델', use_case: '균형 잡힌 공지 분석', repository: 'unsloth/Qwen3.5-4B-GGUF', revision: 'pinned-revision', filename: `${id}.gguf`, sha256: 'a'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null })), models: [...(options.aiInstalled ? [model()] : []), ...(options.aiRetiredModel ? [model('qwen35-9b')] : [])], preferences: { active_model_id: options.aiInstalled ? 'qwen35-4b' : null as string | null, setup_completed: !options.aiSetupNeeded, processing_mode: 'explicit', automatic_limit: 3, max_tokens: 1024, execution_mode: options.aiExecutionMode ?? 'auto', model_directory: options.aiModelDirectory ?? null as string | null }, jobs: [] as any[], runtime: { state: 'ready', runtime_available: true, model: null as string | null, detail: options.aiRuntimeDetail ?? null }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, operation: null as AiOperation | null, progress: null as any, analysis_contract: { prompt_version: contract.prompt_version, schema_version: contract.schema_version, configuration_hash: 'b'.repeat(64) } };
+    const ai = { model_storage: modelStorage, catalog: ['qwen35-4b', 'qwen35-2b'].map((id) => ({ id, name: modelNames[id], parameters: modelNames[id].split(' ')[1], quantization: 'Q4_K_M', bytes: 2740937888, memory_bytes: 6000000000, description: '한국어 공지 분석용 로컬 모델', use_case: '균형 잡힌 공지 분석', repository: 'unsloth/Qwen3.5-4B-GGUF', revision: 'pinned-revision', filename: `${id}.gguf`, sha256: 'a'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null, projector: id === 'qwen35-4b' ? projectorSpec : null })), models: [...(options.aiInstalled ? [model()] : []), ...(options.aiRetiredModel ? [model('qwen35-9b')] : [])], projectors: options.aiInstalled && options.aiProjectorState ? [projectorRow(options.aiProjectorState, options.aiProjectorState === 'downloading' ? 600000 : 0)] : [], preferences: { active_model_id: options.aiInstalled ? 'qwen35-4b' : null as string | null, setup_completed: !options.aiSetupNeeded, processing_mode: 'explicit', automatic_limit: 3, max_tokens: 1024, execution_mode: options.aiExecutionMode ?? 'auto', model_directory: options.aiModelDirectory ?? null as string | null }, jobs: [] as any[], runtime: { state: 'ready', runtime_available: true, model: null as string | null, detail: options.aiRuntimeDetail ?? null }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, operation: null as AiOperation | null, progress: null as any, analysis_contract: { prompt_version: contract.prompt_version, schema_version: contract.schema_version, configuration_hash: 'b'.repeat(64) } };
     const analyses = options.aiResult ? [analysis(1, 1, 1)] : [];
     let personalization = { profile: { university: '', department: '', study_level: '' }, interests: copy(options.initialInterests ?? []), learning_enabled: true };
     const documentFeedback = new Map<number, string>();
@@ -395,7 +402,18 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             setTimeout(() => { if (installed!.status !== 'downloading') return; installed!.status = options.aiInstallError ? 'failed' : 'installed'; installed!.error = options.aiInstallError ? '모델 다운로드에 실패했습니다. 연결을 확인하고 이어받아 주세요.' : null; installed!.bytes = options.aiInstallError ? 0 : 2740937888; }, options.aiDelay ?? 1800);
             return null;
           }
-          case 'ai_cancel_download': ai.models.forEach((model) => { if (model.status === 'downloading') model.status = 'cancelled'; }); return null;
+          case 'ai_cancel_download': ai.models.forEach((model) => { if (model.status === 'downloading') model.status = 'cancelled'; }); ai.projectors.forEach((projector) => { if (projector.status === 'downloading') projector.status = 'cancelled'; }); return null;
+          case 'ai_install_projector': {
+            let projector = ai.projectors.find((value) => value.model_id === args.modelId);
+            if (!projector) { projector = projectorRow('downloading', 600000); ai.projectors.push(projector); }
+            projector.status = 'downloading'; projector.downloaded_bytes = 600000; projector.error = null;
+            setTimeout(() => { if (projector!.status !== 'downloading') return; projector!.status = 'installed'; projector!.sha256 = projector!.expected_sha256; projector!.bytes = projector!.expected_bytes; projector!.downloaded_bytes = projector!.expected_bytes; }, options.aiDelay ?? 1800);
+            return null;
+          }
+          case 'ai_remove_projector':
+            if (!args.confirmed) throw '이미지 인식 모듈 삭제를 확인해 주세요.';
+            ai.projectors = ai.projectors.filter((projector) => projector.model_id !== args.modelId);
+            return null;
           case 'ai_register': ai.models.push({ ...model('external-model'), catalog_id: null as any, ownership: 'external', path: args.path, name: '외부 로컬 모델' }); return null;
           case 'ai_select': ai.preferences.active_model_id = args.id; ai.runtime.model = null; return null;
           case 'ai_load': await operation('load', options.aiLoadDelay ?? 0); ai.runtime.model = ai.models.find((value) => value.id === ai.preferences.active_model_id)?.path ?? null; return null;

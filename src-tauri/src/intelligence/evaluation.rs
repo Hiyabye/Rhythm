@@ -949,3 +949,280 @@ async fn actual_qwen35_analysis_evaluation() {
         report_file.display()
     );
 }
+
+/// Real vision path for one curated model + its pinned projector: the archived
+/// image must reach the server as an image part, the result must pass the same
+/// grounding validator as text, and image-derived facts must be marked
+/// unverified. Quality is reported, not asserted, because a model may answer
+/// "unknown"; structural failures do fail the test.
+#[tokio::test]
+#[ignore = "real multi-gigabyte model + mmproj projector required; set RHYTHM_VISION_EVAL_ROOT and RHYTHM_MODEL_EVAL_ID"]
+async fn actual_vision_image_analysis_evaluation() {
+    use sha2::{Digest, Sha256};
+    let executable = crate::intelligence::staged_llama()
+        .expect("stage llama.cpp with `node scripts/stage-llama.mjs` or set RHYTHM_LLAMA_TEST_DIR");
+    let id = std::env::var("RHYTHM_MODEL_EVAL_ID").unwrap_or_else(|_| "qwen35-2b".into());
+    let entry = models::catalog()
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .expect("RHYTHM_MODEL_EVAL_ID must identify a curated artifact");
+    let projector = entry
+        .projector
+        .clone()
+        .expect("curated entry must pin a projector");
+    let artifacts = PathBuf::from(
+        std::env::var_os("RHYTHM_VISION_EVAL_ROOT")
+            .expect("set RHYTHM_VISION_EVAL_ROOT with <id>.gguf and <id>-mmproj.gguf"),
+    );
+    let model_source = artifacts.join(format!("{id}.gguf"));
+    let projector_source = artifacts.join(format!("{id}-mmproj.gguf"));
+    assert_eq!(
+        std::fs::metadata(&model_source).unwrap().len(),
+        entry.bytes,
+        "model artifact size mismatch: {}",
+        model_source.display()
+    );
+    assert_eq!(
+        std::fs::metadata(&projector_source).unwrap().len(),
+        projector.bytes,
+        "projector artifact size mismatch: {}",
+        projector_source.display()
+    );
+
+    // The production layout is a managed `models/` folder; hard links avoid
+    // copying multi-gigabyte artifacts while staying regular files.
+    let run = tempfile::tempdir().unwrap();
+    let root = run.path();
+    std::fs::create_dir(root.join("models")).unwrap();
+    let model_relative = format!("models/{}.gguf", entry.sha256);
+    let projector_relative = format!("models/{}.gguf", projector.sha256);
+    std::fs::hard_link(&model_source, root.join(&model_relative)).unwrap();
+    std::fs::hard_link(&projector_source, root.join(&projector_relative)).unwrap();
+
+    let store = Store::open(&root.join("vision.sqlite3")).unwrap();
+    seed(&store);
+    let model = AiModel {
+        id: entry.id.clone(),
+        catalog_id: Some(entry.id.clone()),
+        name: entry.name.clone(),
+        ownership: "managed".into(),
+        path: model_relative,
+        storage_directory: None,
+        sha256: Some(entry.sha256.clone()),
+        expected_sha256: Some(entry.sha256.clone()),
+        expected_bytes: Some(entry.bytes),
+        bytes: entry.bytes,
+        source_revision: Some(entry.revision.clone()),
+        source_filename: Some(entry.filename.clone()),
+        status: "installed".into(),
+        downloaded_bytes: entry.bytes,
+        resume_etag: None,
+        error: None,
+        created_at: String::new(),
+        updated_at: String::new(),
+    };
+    store.ai_upsert_model(&model).unwrap();
+    store
+        .ai_upsert_projector(&crate::storage::intelligence::AiProjector {
+            model_id: model.id.clone(),
+            path: projector_relative,
+            sha256: Some(projector.sha256.clone()),
+            expected_sha256: projector.sha256.clone(),
+            expected_bytes: projector.bytes,
+            bytes: projector.bytes,
+            status: "installed".into(),
+            downloaded_bytes: projector.bytes,
+            resume_etag: None,
+            error: None,
+        })
+        .unwrap();
+    let mut preferences = store.ai_preferences().unwrap();
+    preferences.active_model_id = Some(model.id.clone());
+    preferences.processing_mode = "explicit".into();
+    preferences.max_tokens = 1024;
+    store.ai_save_preferences(&preferences).unwrap();
+
+    // The archived body is nearly empty: the deadline exists only in the image.
+    // The default is the committed synthetic poster; RHYTHM_VISION_EVAL_IMAGE
+    // names a local raster (for example an archived notice image) for an
+    // ad-hoc run. Such a file is never committed.
+    let (poster_name, mime, poster, fixture) = match std::env::var_os("RHYTHM_VISION_EVAL_IMAGE") {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            let bytes = std::fs::read(&path).expect("read RHYTHM_VISION_EVAL_IMAGE");
+            let mime = crate::archive::sync::image_mime(&bytes)
+                .expect("RHYTHM_VISION_EVAL_IMAGE must be a PNG/JPEG/GIF/WebP raster");
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("image file name")
+                .to_owned();
+            assert!(
+                bytes.len() <= 6 * 1024 * 1024,
+                "image fixture exceeds 6 MiB"
+            );
+            (
+                name,
+                mime,
+                bytes,
+                format!("local raster {}", path.display()),
+            )
+        }
+        None => (
+            "poster.png".to_owned(),
+            "image/png",
+            include_bytes!("../archive/fixtures/vision/poster.png").to_vec(),
+            "synthetic poster; deadline exists only in the image".to_owned(),
+        ),
+    };
+    std::fs::create_dir(root.join("resources")).unwrap();
+    std::fs::write(root.join("resources").join(&poster_name), &poster).unwrap();
+    // Optional ad-hoc text alongside RHYTHM_VISION_EVAL_IMAGE so a real archived
+    // notice can be analyzed with its own title/body instead of the synthetic one.
+    let title = std::env::var("RHYTHM_VISION_EVAL_TITLE")
+        .unwrap_or_else(|_| "2026학년도 2학기 국가장학금 신청 안내".into());
+    let body = std::env::var("RHYTHM_VISION_EVAL_BODY")
+        .unwrap_or_else(|_| "붙임 포스터를 확인하세요.".into());
+    let (document_id, revision_id) = {
+        let (document_id, _) = store
+            .upsert_article(
+                "ai-evaluation",
+                &ArticleInput {
+                    external_id: "vision-poster".into(),
+                    canonical_url: "https://www.sogang.ac.kr/evaluation/vision-poster".into(),
+                    title: title.clone(),
+                    author: Some("합성 평가 자료".into()),
+                    category: None,
+                    published_at: "2026-01-01".into(),
+                    modified_at: None,
+                    original: body.clone(),
+                    unsupported_body: false,
+                    body_html: format!("<p>{body}</p>"),
+                    body_text: body.clone(),
+                    resources: Vec::new(),
+                    etag: None,
+                    last_modified: None,
+                },
+                false,
+            )
+            .unwrap();
+        let revision_id = store.document(document_id, None).unwrap().revision_id;
+        let resource = store
+            .add_resource_for_test(
+                document_id,
+                revision_id,
+                "https://www.sogang.ac.kr/evaluation/poster.png",
+                &poster_name,
+                "image",
+            )
+            .unwrap();
+        store
+            .resource_result(
+                resource,
+                "downloaded",
+                Some(mime),
+                Some(poster.len() as u64),
+                Some(&format!("resources/{poster_name}")),
+                Some(&format!("{:x}", Sha256::digest(&poster))),
+                None,
+            )
+            .unwrap();
+        (document_id, revision_id)
+    };
+
+    let store = Arc::new(Mutex::new(store));
+    let worker = Arc::new(AsyncMutex::new(evaluation_worker(
+        &executable,
+        &root.join("run"),
+    )));
+    let controller = analysis::Controller::default();
+    let started = Instant::now();
+    let response = controller
+        .start(
+            store.clone(),
+            worker.clone(),
+            root.into(),
+            document_id,
+            revision_id,
+            false,
+        )
+        .unwrap();
+    let job_id = response.job.unwrap().id;
+    settle(&controller).await;
+    let (job, results) = {
+        let store = store.lock().unwrap();
+        (
+            store.ai_job(job_id).unwrap().unwrap(),
+            store
+                .ai_document_results(document_id, Some(revision_id), 10)
+                .unwrap(),
+        )
+    };
+    let result = results.first();
+    let mut report = json!({
+        "model": model,
+        "projector": {"filename": projector.filename, "bytes": projector.bytes, "sha256": projector.sha256},
+        "worker": executable,
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "prompt_version": analysis::PROMPT_VERSION,
+        "schema_version": analysis::SCHEMA_VERSION,
+        "fixture": fixture,
+        "title": title,
+        "body": body,
+        "wall_ms": started.elapsed().as_millis(),
+        "job": job,
+        "diagnostics": controller.diagnostics(job_id),
+        "peak_worker_rss_kib": worker_rss_kib(worker.lock().await.process_id()),
+        "result": result,
+        "native_ui_verified": false,
+    });
+    let mut structural = Vec::new();
+    match (job.status.as_str(), result) {
+        ("completed", Some(result)) => {
+            let images_used = result.model_identity["images_used"].as_u64().unwrap_or(0);
+            if images_used != 1 {
+                structural.push(format!("images_used={images_used}, expected 1"));
+            }
+            let facts = result.result["facts"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let image_facts = facts
+                .iter()
+                .filter(|fact| fact["origin"] == "image")
+                .count();
+            let deadline = facts.iter().any(|fact| {
+                let value = fact["value"]
+                    .as_str()
+                    .unwrap_or("")
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect::<String>();
+                fact["kind"] == "deadline"
+                    && ["9.12", "9월12", "09-12", "2026-09-12"]
+                        .iter()
+                        .any(|marker| value.contains(marker))
+            });
+            report["image_facts"] = json!(image_facts);
+            report["deadline_read_from_poster"] = json!(deadline);
+            report["assessment"] = json!({"structural_ok": structural.is_empty(), "deadline": deadline, "image_facts": image_facts});
+        }
+        (status, _) => structural.push(format!("job status {status}: {:?}", job.error)),
+    }
+    report["structural_failures"] = json!(structural);
+    let report_file = std::env::var_os("RHYTHM_AI_EVAL_REPORT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("target")
+                .join(format!("vision-eval-{id}.json"))
+        });
+    write_report(&report_file, &report);
+    worker.lock().await.shutdown().await;
+    assert!(
+        structural.is_empty(),
+        "vision evaluation structural failure: {structural:?}; see {}",
+        report_file.display()
+    );
+}

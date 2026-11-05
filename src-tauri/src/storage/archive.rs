@@ -756,6 +756,24 @@ impl Store {
             .map_err(|e| e.to_string());
         result
     }
+    /// Inserts one resource row for deterministic tests, outside the sync path.
+    #[cfg(test)]
+    pub(crate) fn add_resource_for_test(
+        &self,
+        document_id: i64,
+        revision_id: i64,
+        url: &str,
+        filename: &str,
+        kind: &str,
+    ) -> Result<i64, String> {
+        self.connection
+            .execute(
+                "INSERT INTO resources(document_id,revision_id,url,filename,kind) VALUES(?1,?2,?3,?4,?5)",
+                params![document_id, revision_id, url, filename, kind],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(self.connection.last_insert_rowid())
+    }
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn resource_result(
         &self,

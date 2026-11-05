@@ -29,6 +29,23 @@ pub struct AiModel {
     pub updated_at: String,
 }
 
+/// Optional vision projector (mmproj) belonging to one model. It is a separate
+/// artifact with its own integrity identity, so a text-only install or a failed
+/// projector download never invalidates the model weights.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AiProjector {
+    pub model_id: String,
+    pub path: String,
+    pub sha256: Option<String>,
+    pub expected_sha256: String,
+    pub expected_bytes: u64,
+    pub bytes: u64,
+    pub status: String,
+    pub downloaded_bytes: u64,
+    pub resume_etag: Option<String>,
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiPreferences {
     pub active_model_id: Option<String>,
@@ -86,6 +103,7 @@ pub struct AiResult {
     pub created_at: String,
 }
 
+const PROJECTOR_COLUMNS: &str = "model_id,path,sha256,expected_sha256,expected_bytes,bytes,status,downloaded_bytes,resume_etag,error";
 const MODEL_COLUMNS: &str = "id,catalog_id,name,ownership,path,sha256,expected_sha256,expected_bytes,bytes,source_revision,source_filename,status,downloaded_bytes,resume_etag,error,created_at,updated_at,storage_directory";
 const JOB_COLUMNS: &str = "id,document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,priority,status,error,duration_ms,created_at,updated_at";
 const RESULT_COLUMNS: &str = "id,job_id,document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,result_json,partial,processed_chars,total_chars,duration_ms,created_at";
@@ -146,6 +164,20 @@ fn job_row(row: &Row<'_>) -> rusqlite::Result<AiJob> {
         updated_at: row.get(14)?,
     })
 }
+fn projector_row(row: &Row<'_>) -> rusqlite::Result<AiProjector> {
+    Ok(AiProjector {
+        model_id: row.get(0)?,
+        path: row.get(1)?,
+        sha256: row.get(2)?,
+        expected_sha256: row.get(3)?,
+        expected_bytes: row.get::<_, i64>(4)? as u64,
+        bytes: row.get::<_, i64>(5)? as u64,
+        status: row.get(6)?,
+        downloaded_bytes: row.get::<_, i64>(7)? as u64,
+        resume_etag: row.get(8)?,
+        error: row.get(9)?,
+    })
+}
 fn result_row(row: &Row<'_>) -> rusqlite::Result<AiResult> {
     Ok(AiResult {
         id: row.get(0)?,
@@ -202,7 +234,7 @@ fn changed(count: usize) -> Result<(), String> {
 
 impl Store {
     pub(super) fn reset_ai_interrupted(&self) -> Result<(), String> {
-        self.connection.execute_batch("UPDATE ai_jobs SET status='failed',error='앱 종료로 분석이 중단되었습니다. 다시 시도해 주세요.',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status='running'; UPDATE ai_models SET status='cancelled',error='설치가 중단되었습니다. 이어받기를 선택해 주세요.',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status IN ('downloading','verifying');").map_err(|e|e.to_string())
+        self.connection.execute_batch("UPDATE ai_jobs SET status='failed',error='앱 종료로 분석이 중단되었습니다. 다시 시도해 주세요.',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status='running'; UPDATE ai_models SET status='cancelled',error='설치가 중단되었습니다. 이어받기를 선택해 주세요.',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status IN ('downloading','verifying'); UPDATE ai_projectors SET status='cancelled',error='이미지 인식 모듈 설치가 중단되었습니다. 이어받기를 선택해 주세요.',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status IN ('downloading','verifying');").map_err(|e|e.to_string())
     }
     pub fn ai_models(&self) -> Result<Vec<AiModel>, String> {
         self.connection
@@ -266,6 +298,67 @@ impl Store {
                 .execute("DELETE FROM ai_models WHERE id=?1", [id])
                 .map_err(|e| e.to_string())?,
         )
+    }
+    pub fn ai_projectors(&self) -> Result<Vec<AiProjector>, String> {
+        self.connection
+            .prepare(&format!(
+                "SELECT {PROJECTOR_COLUMNS} FROM ai_projectors ORDER BY model_id"
+            ))
+            .map_err(|e| e.to_string())?
+            .query_map([], projector_row)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+    pub fn ai_projector(&self, model_id: &str) -> Result<Option<AiProjector>, String> {
+        self.connection
+            .query_row(
+                &format!("SELECT {PROJECTOR_COLUMNS} FROM ai_projectors WHERE model_id=?1"),
+                [model_id],
+                projector_row,
+            )
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+    /// Caller owns filesystem validation; `installed` requires the actual artifact identity.
+    pub fn ai_upsert_projector(&self, projector: &AiProjector) -> Result<(), String> {
+        if projector.path.is_empty()
+            || projector.path.len() > 8192
+            || projector.expected_bytes == 0
+            || projector.expected_bytes > i64::MAX as u64
+            || projector.bytes > i64::MAX as u64
+            || projector.downloaded_bytes > i64::MAX as u64
+            || !valid_hash(&projector.expected_sha256)
+            || projector.sha256.as_deref().is_some_and(|h| !valid_hash(h))
+            || projector.error.as_ref().is_some_and(|e| e.len() > 8192)
+            || (projector.status == "installed"
+                && (projector.sha256.as_deref() != Some(&projector.expected_sha256)
+                    || projector.bytes != projector.expected_bytes))
+        {
+            return Err("이미지 인식 모듈 정보를 확인해 주세요.".into());
+        }
+        let exists: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM ai_models WHERE id=?1)",
+                [&projector.model_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if !exists {
+            return Err("이미지 인식 모듈을 연결할 모델을 찾을 수 없습니다.".into());
+        }
+        self.connection
+            .execute("INSERT INTO ai_projectors(model_id,path,sha256,expected_sha256,expected_bytes,bytes,status,downloaded_bytes,resume_etag,error) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(model_id) DO UPDATE SET path=excluded.path,sha256=excluded.sha256,expected_sha256=excluded.expected_sha256,expected_bytes=excluded.expected_bytes,bytes=excluded.bytes,status=excluded.status,downloaded_bytes=excluded.downloaded_bytes,resume_etag=excluded.resume_etag,error=excluded.error,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')", params![projector.model_id, projector.path, projector.sha256, projector.expected_sha256, projector.expected_bytes as i64, projector.bytes as i64, projector.status, projector.downloaded_bytes as i64, projector.resume_etag, projector.error])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    /// Removes inventory only. The caller deletes verified managed bytes first.
+    pub fn ai_remove_projector(&self, model_id: &str) -> Result<(), String> {
+        self.connection
+            .execute("DELETE FROM ai_projectors WHERE model_id=?1", [model_id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
     pub fn ai_preferences(&self) -> Result<AiPreferences, String> {
         self.connection.query_row("SELECT active_model_id,setup_completed,processing_mode,automatic_limit,max_tokens,execution_mode,model_directory FROM ai_preferences WHERE id=1",[],|r|Ok(AiPreferences { active_model_id:r.get(0)?,setup_completed:r.get(1)?,processing_mode:r.get(2)?,automatic_limit:r.get(3)?,max_tokens:r.get(4)?,execution_mode:r.get(5)?,model_directory:r.get(6)? })).map_err(|e|e.to_string())
@@ -467,6 +560,7 @@ impl Store {
             total_chars,
             duration_ms,
             None,
+            None,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -479,6 +573,7 @@ impl Store {
         total_chars: u64,
         duration_ms: u64,
         loaded_backend: Option<&str>,
+        images: Option<(u64, u64)>,
     ) -> Result<AiResult, String> {
         let encoded = serde_json::to_string(result).map_err(|e| e.to_string())?;
         if total_chars > i64::MAX as u64
@@ -497,6 +592,14 @@ impl Store {
             // Record only an observed successful inference backend, atomically
             // with the result. An automatic fallback remains visible on reopen.
             changed(transaction.execute("UPDATE ai_jobs SET model_identity_json=json_set(model_identity_json,'$.loaded_backend',?2) WHERE id=?1 AND status='running'", params![id, backend]).map_err(|e| e.to_string())?)?;
+        }
+        if let Some((used, available)) = images {
+            if used > available || available > 64 {
+                return Err("이미지 분석 범위를 확인해 주세요.".into());
+            }
+            // Which archived images reached the model is part of the stored
+            // result's provenance; it is not part of the semantic cache key.
+            changed(transaction.execute("UPDATE ai_jobs SET model_identity_json=json_set(model_identity_json,'$.images_used',?2,'$.images_available',?3) WHERE id=?1 AND status='running'", params![id, used as i64, available as i64]).map_err(|e| e.to_string())?)?;
         }
         changed(transaction.execute("INSERT INTO ai_results(job_id,document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,result_json,partial,processed_chars,total_chars,duration_ms) SELECT id,document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,?2,?3,?4,?5,?6 FROM ai_jobs WHERE id=?1 AND status='running'", params![id,encoded,partial,processed_chars as i64,total_chars as i64,duration_ms as i64]).map_err(|e|e.to_string())?)?;
         let result_id = transaction.last_insert_rowid();

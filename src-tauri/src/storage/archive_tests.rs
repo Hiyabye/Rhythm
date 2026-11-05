@@ -1469,7 +1469,9 @@ fn schema_ten_upgrade_keeps_archive_and_adds_skipped_articles() {
             .unwrap();
         store
             .connection
-            .execute_batch("DROP TABLE skipped_articles; PRAGMA user_version=10;")
+            .execute_batch(
+                "DROP TABLE skipped_articles; DROP TABLE ai_projectors; PRAGMA user_version=10;",
+            )
             .unwrap();
     }
     let store = Store::open(&path).unwrap();
@@ -1512,6 +1514,7 @@ fn schema_eleven_upgrade_retries_mislabeled_and_newly_allowed_resources() {
                 "UPDATE resources SET status='too_large',error='파일이 다운로드 크기 제한을 초과했습니다.' WHERE filename='a.png';
                  UPDATE resources SET status='unsupported',error='{blocked}' WHERE filename IN ('b.png','d.pdf');
                  UPDATE resources SET status='unsupported',error='안전한 이미지 형식(PNG, JPEG, GIF, WebP)이 아니어서 보관하지 않았습니다.' WHERE filename='c.png';
+                 DROP TABLE ai_projectors;
                  PRAGMA user_version=11;"
             ))
             .unwrap();

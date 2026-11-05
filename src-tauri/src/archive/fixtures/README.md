@@ -63,3 +63,12 @@ Rhythm's own transport and robots policy, using public GETs only:
 construct invalid/empty and hostile-content cases. Counts are observations for these fixtures, not parser
 constants. Live university content may change; production mismatches must produce
 an explicit source/parser error rather than an empty successful archive.
+
+## Vision fixture
+
+- `vision/poster.png`: wholly synthetic Korean notice poster drawn locally with
+  AppKit (2026-11-05) for the local vision (`--mmproj`) evaluation. It is not
+  collected university content and contains no real personal data: the title,
+  deadline, eligibility, documents, method and the `02-705-0000` phone number are
+  invented. It exists to check that an archived image reaches the model and that
+  image-derived dates are labelled unverified, not to measure general quality.
