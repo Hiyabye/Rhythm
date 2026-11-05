@@ -394,6 +394,29 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
                 && ["notice.php", "news.php", "seminar.php"].contains(&parts[2]))
                 || path == "/robots.txt"
         }
+        "new-cms.sogang.ac.kr" => {
+            let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+            // Only the three verified dormitory menus and their board ids. Inline
+            // editor images under /CrossEditor/ are the only article resources this
+            // host serves; other school hosts' images stay blocked by policy.
+            let menus = ["6975", "3947", "3951"];
+            let boards = ["2231", "1644", "1648"];
+            let list = parts.len() == 3
+                && parts[0] == "sgdormitory"
+                && menus.contains(&parts[1])
+                && parts[2] == "subview.do";
+            let board_file = parts.len() == 5
+                && parts[..2] == ["bbs", "sgdormitory"]
+                && boards.contains(&parts[2])
+                && positive_id(parts[3])
+                && ["artclView.do", "download.do"].contains(&parts[4]);
+            let image = parts.len() == 5
+                && parts[..3] == ["CrossEditor", "binary", "images"]
+                && (1..=12).contains(&parts[3].len())
+                && parts[3].bytes().all(|b| b.is_ascii_digit())
+                && raster_name(parts[4]);
+            list || board_file || image || path == "/robots.txt"
+        }
         _ => false,
     };
     if url.scheme() != "https"
@@ -568,6 +591,53 @@ mod tests {
             assert!(!check(value, Access::EmbeddedImage), "{value}");
         }
     }
+    #[test]
+    fn dormitory_policy_is_limited_to_verified_menus_boards_and_editor_images() {
+        for path in [
+            "/sgdormitory/6975/subview.do",
+            "/sgdormitory/3947/subview.do",
+            "/sgdormitory/3951/subview.do",
+            "/bbs/sgdormitory/2231/313348/artclView.do",
+            "/bbs/sgdormitory/1644/90922/download.do",
+            "/bbs/sgdormitory/1648/374772/artclView.do",
+            "/CrossEditor/binary/images/000035/20261102092906954_POL76LWU.png",
+            "/robots.txt",
+        ] {
+            assert!(
+                validate_url(&Url::parse(&format!("https://new-cms.sogang.ac.kr{path}")).unwrap())
+                    .is_ok(),
+                "{path}"
+            );
+        }
+        for path in [
+            "/sgdormitory/6976/subview.do",
+            "/sgdormitory/6975/list.do",
+            "/sgdormitory/6975/subview.do/extra",
+            "/bbs/sgdormitory/2232/313348/artclView.do",
+            "/bbs/sgdormitory/2231/0/artclView.do",
+            "/bbs/sgdormitory/2231/313348/artclList.do",
+            "/bbs/sgdormitory/2231/313348/artclView.do/nested",
+            "/CrossEditor/binary/images/000035/page.html",
+            "/CrossEditor/binary/images/000035/nested/image.png",
+            "/CrossEditor/binary/other/000035/image.png",
+            "/Web-home/_UI/css/common/jquery-ui.css",
+        ] {
+            assert!(
+                validate_url(&Url::parse(&format!("https://new-cms.sogang.ac.kr{path}")).unwrap())
+                    .is_err(),
+                "{path}"
+            );
+            assert!(
+                validate(
+                    &Url::parse(&format!("https://new-cms.sogang.ac.kr{path}")).unwrap(),
+                    Access::EmbeddedImage
+                )
+                .is_err(),
+                "{path}"
+            );
+        }
+    }
+
     #[test]
     fn engineering_policy_is_limited_to_verified_public_routes() {
         for path in [

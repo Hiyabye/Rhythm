@@ -100,6 +100,35 @@ structures and separately construct invalid/empty and hostile-content cases.
 Counts are observations for these fixtures, not parser constants. Live university content may change; production mismatches must produce
 an explicit source/parser error rather than an empty successful archive.
 
+The following bounded captures were obtained during the dormitory source addition
+(2026-11-05), using public GETs only. Each list fixture keeps the original search
+form, `.srch_counts`, `.boardWrap` table and `pageForm` pager; each detail fixture
+keeps `og:url` and the complete `.board-view` subtree. Nothing was executed or
+retyped; line endings are LF.
+
+- `dormitory-general-list.html`, `dormitory-general-page2.html`: pages 1 and 2 of
+  `/sgdormitory/6975/subview.do`. Page 1 has six pins plus regular ordinals
+  133-127, where pin `313348` is also row 127; page 2 has the same six pins and
+  ordinals 126-120. The declared total is 133 and the pager has 19 pages.
+- `dormitory-admission-list.html`: page 1 of `/sgdormitory/3947/subview.do`
+  (eight pins, ordinals 282-276, total 282, 41 pages).
+- `dormitory-menu-list.html`, `dormitory-menu-last.html`: page 1 (one pin,
+  ordinals 389-383) and page 56 (one pin, ordinals 4-1, no next page) of
+  `/sgdormitory/3951/subview.do`; total 389, 56 pages.
+- `dormitory-general-detail-313348.html`: a text notice with no attachments and
+  one inline `scc.sogang.ac.kr` HTTP image reference.
+- `dormitory-admission-detail-283602.html`: four inline `scc.sogang.ac.kr` HTTP
+  image references and no attachments.
+- `dormitory-admission-detail-283698.html`: nine `/bbs/sgdormitory/1644/<id>/download.do`
+  attachments.
+- `dormitory-menu-detail-374772.html`: an image-only weekly menu whose sole body
+  image is `/CrossEditor/binary/images/000035/...png` on the same CMS host.
+
+The CMS host serves `/bbs/sgdormitory/...` attachments and `/CrossEditor/` editor
+images with a normal public route; both were downloaded through Rhythm's transport.
+Inline images on `scc.sogang.ac.kr` are HTTP (and the HTTPS path returns 404), so
+they remain recorded-but-unsupported references rather than being fetched.
+
 ## Vision fixture
 
 - `vision/poster.png`: wholly synthetic Korean notice poster drawn locally with
