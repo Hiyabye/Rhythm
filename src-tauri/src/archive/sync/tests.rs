@@ -366,6 +366,132 @@ async fn historical_import_exceeds_thirty_and_deduplicates_repeated_pins() {
 }
 
 #[tokio::test]
+async fn refresh_checks_new_notices_then_continues_the_unfinished_backlog() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![1, 2], vec![3, 4]]);
+    let controller = Controller::new();
+    let first = controller
+        .execute(
+            &store,
+            dir.path(),
+            &fake,
+            sources(&store, &[MAIN]),
+            "refresh",
+            Budget::default(),
+        )
+        .await;
+    assert!(first.is_ok(), "{first:?}");
+    assert_eq!(items(&store).len(), 4);
+    // The first pass seeds historical records, so a refresh does not flood them
+    // into new notices, and the following pass finishes the backlog.
+    assert!(items(&store).iter().all(|item| item.historical));
+    let source = with_store(&store, |s| s.source(MAIN)).unwrap();
+    assert_eq!(source.status, "completed");
+    assert!(source.history_complete);
+    assert_eq!(source.next_page, 3);
+    let lists = |page: &str| fake.paths().iter().filter(|url| url.contains(page)).count();
+    assert_eq!(lists("pageNum=1&"), 2, "each step read page one once");
+    assert_eq!(
+        lists("pageNum=2&"),
+        2,
+        "the backlog step resumed at page one"
+    );
+
+    fake.pages.lock().unwrap()[0].push(5);
+    let before = fake.paths().len();
+    let second = controller
+        .execute(
+            &store,
+            dir.path(),
+            &fake,
+            sources(&store, &[MAIN]),
+            "refresh",
+            Budget::default(),
+        )
+        .await;
+    assert!(second.is_ok(), "{second:?}");
+    assert_eq!(items(&store).len(), 5);
+    assert!(
+        !items(&store)
+            .into_iter()
+            .find(|item| item.title.ends_with(" 5"))
+            .unwrap()
+            .historical
+    );
+    let after = &fake.paths()[before..];
+    assert_eq!(
+        after
+            .iter()
+            .filter(|url| url.contains("pageNum=1&"))
+            .count(),
+        1
+    );
+    assert!(
+        after.iter().all(|url| !url.contains("pageNum=3&")),
+        "completed history must not be requested again: {after:?}"
+    );
+}
+
+struct CancelAfter<'a> {
+    fake: &'a Fake,
+    calls: AtomicU64,
+    cancel_on: u64,
+}
+
+impl Transport for CancelAfter<'_> {
+    async fn fetch(
+        &self,
+        url: &Url,
+        validators: Option<(Option<String>, Option<String>)>,
+        limit: usize,
+        cancel: &AtomicBool,
+        access: network::Access,
+    ) -> Result<network::Fetch, String> {
+        if self.calls.fetch_add(1, Ordering::AcqRel) + 1 == self.cancel_on {
+            cancel.store(true, Ordering::Release);
+        }
+        self.fake
+            .fetch(url, validators, limit, cancel, access)
+            .await
+    }
+}
+
+#[tokio::test]
+async fn refresh_cancelled_between_steps_keeps_new_notices_and_skips_the_backlog() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![1, 2], vec![3, 4]]);
+    let controller = Controller::new();
+    // The new-notices pass uses robots, two listings and four articles; the
+    // cancellation is requested on the backlog pass's robots request.
+    let transport = CancelAfter {
+        fake: &fake,
+        calls: AtomicU64::new(0),
+        cancel_on: 8,
+    };
+    let result = controller
+        .execute(
+            &store,
+            dir.path(),
+            &transport,
+            sources(&store, &[MAIN]),
+            "refresh",
+            Budget::default(),
+        )
+        .await;
+    assert!(result.is_err());
+    assert_eq!(
+        items(&store).len(),
+        4,
+        "the saved seed survives cancellation"
+    );
+    assert!(items(&store).iter().all(|item| item.historical));
+    let source = with_store(&store, |s| s.source(MAIN)).unwrap();
+    assert_eq!(source.status, "cancelled");
+    assert_eq!(source.next_page, 1, "the backlog step never advanced");
+    assert!(!source.history_complete);
+}
+
+#[tokio::test]
 async fn incremental_sync_only_revises_meaningful_changes_and_preserves_user_state() {
     let (dir, store) = setup(&[MAIN]);
     let fake = Fake::new(vec![vec![1, 2]]);

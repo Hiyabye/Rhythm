@@ -75,7 +75,7 @@
     finally { if (active) busy = false; }
   }
 
-  async function start(mode: 'historical' | 'incremental' | 'skipped' | 'resources', ids: string[] | null = null) {
+  async function start(mode: 'refresh' | 'skipped' | 'resources', ids: string[] | null = null) {
     busy = true;
     error = '';
     feedback = '';
@@ -102,7 +102,8 @@
   }
 
   function runningLabel(value: SyncStatus) {
-    const mode = value.mode === 'historical' ? '과거 자료 가져오는 중' : value.mode === 'resource' ? '첨부 자료 내려받는 중' : value.mode === 'skipped' ? '가져오지 못한 공지 다시 확인 중' : value.mode === 'resources' ? '첨부 자료 모두 내려받는 중' : '새 소식 확인 중';
+    const labels: Record<string, string> = { refresh: '새로고침 준비 중', incremental: '새 소식 확인 중', historical: '과거 자료 가져오는 중', resource: '첨부 자료 내려받는 중', skipped: '가져오지 못한 공지 다시 확인 중', resources: '첨부 자료 모두 내려받는 중' };
+    const mode = labels[value.mode] ?? '새 소식 확인 중';
     const source = sources.find((item) => item.id === value.source_id)?.name;
     return [mode, source, value.page > 0 ? `${value.page}쪽` : ''].filter(Boolean).join(' · ');
   }
@@ -114,10 +115,9 @@
 
 <div class="source-manager" aria-label="서강대학교 공지 정보원 관리" aria-busy={loading || busy}>
   <div class="collect-bar">
-    <button class="button small" disabled={locked || !subscribed.length} onclick={() => start('historical')}>과거 자료 가져오기</button>
-    <button class="button secondary small" disabled={locked || !subscribed.length} onclick={() => start('incremental')}>새 소식 확인</button>
+    <button class="button small" disabled={locked || !subscribed.length} onclick={() => start('refresh')}>새로고침</button>
     <button class="button secondary small" disabled={locked || !subscribed.length} onclick={() => start('resources')}>자료 모두 내려받기</button>
-    <Hint label="가져오기">구독한 게시판 전체에 실행합니다. 구독만으로는 아무것도 가져오지 않습니다. 과거 자료는 중단해도 이어받을 수 있고, 이미 가져온 기록은 새 소식으로 세지 않습니다. 자료 모두 내려받기는 보관한 공지에서 아직 받지 못한 첨부 파일과 이미지를 한 번에 최대 256 MB까지 받고, 다시 누르면 이어서 받습니다. 공지에 넣은 이미지는 다른 공개 HTTPS 사이트에서도 받습니다. 학교가 공개한 자료만 가져오며 로그인이나 접근 제한은 우회하지 않습니다.</Hint>
+    <Hint label="가져오기">구독한 게시판 전체에 실행합니다. 구독만으로는 아무것도 가져오지 않습니다. 새로고침은 먼저 새 소식과 변경을 확인하고, 아직 다 가져오지 않은 과거 자료를 이어서 받습니다. 중단해도 지금까지 저장한 자료는 남고, 다시 누르면 이어갑니다. 처음 가져오는 기록은 새 소식으로 세지 않습니다. 자료 모두 내려받기는 보관한 공지에서 아직 받지 못한 첨부 파일과 이미지를 한 번에 최대 256 MB까지 받고, 다시 누르면 이어서 받습니다. 공지에 넣은 이미지는 다른 공개 HTTPS 사이트에서도 받습니다. 학교가 공개한 자료만 가져오며 로그인이나 접근 제한은 우회하지 않습니다.</Hint>
     <span class="collect-status" role="status" aria-live="polite">
       {#if status?.running}<Icon name="refresh" size={14} />{runningLabel(status)}{:else if !loading}구독 {subscribed.length}개{/if}
     </span>
@@ -155,7 +155,7 @@
             </ul>
             {#if source.skipped_count > source.skipped.length}<p class="footnote">최근 {source.skipped.length}건만 표시합니다.</p>{/if}
           {/if}
-          {#if source.subscribed}<div class="popover-actions"><button class="button secondary small" disabled={locked} onclick={() => start('historical', [source.id])}>{source.history_complete ? '과거 자료 다시 확인' : source.last_attempt ? '과거 자료 이어받기' : '과거 자료 가져오기'}</button><button class="button secondary small" disabled={locked} onclick={() => start('incremental', [source.id])}>새 소식 확인</button>{#if source.skipped_count}<button class="button secondary small" disabled={locked} onclick={() => start('skipped', [source.id])}>가져오지 못한 공지 다시 시도</button>{/if}</div>{/if}
+          {#if source.subscribed}<div class="popover-actions"><button class="button secondary small" disabled={locked} onclick={() => start('refresh', [source.id])}>새로고침</button>{#if source.skipped_count}<button class="button secondary small" disabled={locked} onclick={() => start('skipped', [source.id])}>가져오지 못한 공지 다시 시도</button>{/if}</div>{/if}
           <code class="popover-code">{source.url}</code>
         </Popover>
       {/if}

@@ -192,7 +192,8 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         if (keepPending) pendingActivation = copy(activation);
         if (notificationHandler !== null) callbacks.get(notificationHandler)?.({ event: 'proactive://notification-clicked', id: eventId, payload: activation });
       },
-      completeSync: () => { sync = { ...sync, running: false, message: '가져오기를 마쳤습니다.' }; } };
+      completeSync: () => { sync = { ...sync, running: false, message: '가져오기를 마쳤습니다.' }; },
+      syncMode: (mode: string, page = 1) => { sync = { ...sync, running: true, source_id: 'computing-updates', mode, page }; } };
     let operationStarted = 0;
     let analysisStarted = 0;
     async function operation(kind: AiOperation['kind'], delay: number) {
@@ -510,6 +511,15 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
 
 export async function callCount(page: Page, command: string) {
   return page.evaluate((command) => (window as any).__fixture.calls.filter((call: any) => call.command === command).length, command);
+}
+
+/** Reports a later refresh step from the mocked backend, as `archive_status` would. */
+export async function syncMode(page: Page, mode: string, step = 1) {
+  await page.evaluate(({ mode, step }) => {
+    // addInitScript installs this test fixture on the page's window.
+    const pageWindow = window as unknown as { __fixture: { syncMode: (mode: string, step: number) => void } };
+    pageWindow.__fixture.syncMode(mode, step);
+  }, { mode, step });
 }
 
 type DialogWindow = Window & { __fixture: { dialogs: string[]; dialogAnswers: ('ok' | 'cancel')[] } };

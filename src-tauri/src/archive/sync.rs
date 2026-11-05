@@ -307,7 +307,15 @@ impl Controller {
         mode: String,
         lease: Option<crate::operation_gate::AdmissionLease>,
     ) -> Result<(SyncStatus, u64), String> {
-        if !["historical", "incremental", "skipped", "resources"].contains(&mode.as_str()) {
+        if ![
+            "historical",
+            "incremental",
+            "refresh",
+            "skipped",
+            "resources",
+        ]
+        .contains(&mode.as_str())
+        {
             return Err("동기화 방식을 확인해 주세요.".into());
         }
         // The same lock serializes extension disabling and job admission.
@@ -461,8 +469,21 @@ impl Controller {
                 current.archived = 0;
                 persist(store, &current, "running", None, false)?;
             }
-            let outcome = self
-                .source(
+            // A manual refresh reports new notices first, then continues an
+            // unfinished backlog in the same job. Either step's failure or
+            // cancellation stops this board and keeps what the previous step saved.
+            let outcome = if mode == "refresh" {
+                self.refresh(
+                    store,
+                    root,
+                    transport,
+                    &mut current,
+                    &budget,
+                    &mut resource_bytes,
+                )
+                .await
+            } else {
+                self.source(
                     store,
                     root,
                     transport,
@@ -471,7 +492,8 @@ impl Controller {
                     &budget,
                     &mut resource_bytes,
                 )
-                .await;
+                .await
+            };
             if let Err(error) = outcome {
                 let cancelled = self.cancel.load(Ordering::Acquire)
                     || !with_store(store, |s| s.enabled("sogang_notices"))?;
@@ -496,6 +518,44 @@ impl Controller {
         } else {
             Err(failures.join(" "))
         }
+    }
+    /// Runs one board's manual refresh: new notices and recent edits first, then
+    /// the unfinished backlog. Each pass persists its own progress, so a failure
+    /// or cancellation between them keeps what the first pass saved.
+    #[allow(clippy::too_many_arguments)] // Shares the job's transport and resource budget.
+    async fn refresh<T: Transport>(
+        &self,
+        store: &SharedStore,
+        root: &Path,
+        transport: &T,
+        current: &mut SourceInfo,
+        budget: &Budget,
+        resource_bytes: &mut u64,
+    ) -> Result<(), String> {
+        self.source(
+            store,
+            root,
+            transport,
+            current,
+            "incremental",
+            budget,
+            resource_bytes,
+        )
+        .await?;
+        if current.history_complete {
+            return Ok(());
+        }
+        active(store, &self.cancel)?;
+        self.source(
+            store,
+            root,
+            transport,
+            current,
+            "historical",
+            budget,
+            resource_bytes,
+        )
+        .await
     }
     #[allow(clippy::too_many_arguments)] // One source run shares a bounded transport and resource budget.
     async fn source<T: Transport>(
