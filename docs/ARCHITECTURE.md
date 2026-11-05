@@ -136,7 +136,7 @@ Results have deterministic publication-date/ID order, source/category and saved/
 
 ## Sources and parsers
 
-`archive/catalog.rs` has 32 stable source identities. **Catalog presence is not support.** Ten have verified list and detail extraction, local resources and offline reopen:
+`archive/catalog.rs` has 32 stable source identities. **Catalog presence is not support.** Nineteen have verified list and detail extraction, local resources and offline reopen:
 
 | Source ID | Board |
 | --- | --- |
@@ -150,10 +150,21 @@ Results have deterministic publication-date/ID order, source/category and saved/
 | `eng-careers` | 공과대학 취업정보 (`/board/recruit`) |
 | `eng-academic` | 공과대학 학사공지 (`/board/academic`) |
 | `eng-research` | 공과대학 연구공지 (`/board/research`) |
+| `ee-news` | 전자공학과 학과소식 (`/kor/community/notice01.php`, 12-row gallery) |
+| `ee-general` | 전자공학과 일반공지 (`/kor/community/notice02.php`) |
+| `ee-academic` | 전자공학과 학사공지 (`/kor/community/notice03.php`) |
+| `ee-seminars` | 전자공학과 세미나 (`/kor/community/seminar.php`) |
+| `ee-employment` | 전자공학과 취업정보 (`/kor/community/employment.php`) |
+| `ee-recruit` | 전자공학과 채용공고 (`/kor/recruit/recruit.php`) |
+| `sse-notices` | 시스템반도체공학과 학과공지 (`/kor/community/notice.php`) |
+| `sse-news` | 시스템반도체공학과 학과소식 (`/kor/community/news.php`, 9-row gallery) |
+| `sse-seminars` | 시스템반도체공학과 일반공지 (`/kor/community/seminar.php`) |
 
-The other 22 (Engineering newsletter, Electronic, Mechanical, System Semiconductor and Semiconductor boards) are shown as unsupported and cannot be subscribed. Support needs verified article and resource extraction plus fixtures, not just a working list URL.
+The other 13 (Engineering newsletter, Mechanical and Semiconductor boards) are shown as unsupported and cannot be subscribed. Support needs verified article and resource extraction plus fixtures, not just a working list URL.
 
 `parser.rs` validates board/article identity, metadata, dates, pagination and response structure. The main board uses public paginated JSON list/detail endpoints; HTML error pages are not accepted as JSON, and listings must agree on size, total, page, pins and duplicates. Computing uses desktop `.board-list table` rows (so mobile pin copies don't distort pagination), extracts `article.board-detail`, and reads attachment metadata from a restricted subset of serialized Nuxt data without running JavaScript; its public route ID, internal `DETAIL.SN` and file path must all agree, and inline image roles win when an attachment shares the URL. `engineering.rs` validates the current SSR canonical/form/board/pagination identity, ordinals, full title and body, attachment names and visible Korean time against machine UTC. Unexpected structure is an explicit source failure, never an empty success. Fixture provenance is in `archive/fixtures/README.md`.
+
+`community.rs` covers the two department sites that share the aseoul board engine but render different skins. It validates the board title, the declared total, the 5-page pager block (`FIRST`/`PREV`/`NEXT`/`LAST` links and the active page), page-local row budgets, descending regular ordinals and unique `idx` identities. Pins are sorted before regular rows and can therefore continue onto page two; the page size is 10 for tables and 12/9 for the ee/sse galleries. Details carry no canonical or self-identity link, so the parser binds the requested `?m=v&idx=` URL, the back-to-list link (`pNo` and `code`), the board title and the metadata; attachments must belong to the same article `idx`. The ee host serves attachments from `/aseoul_bbs/down.php`, but both sites' robots.txt disallows the `/se2/` editor-image and `/data/` directories, and sse also `/bbs/`, so the network policy never requests those. The parser still emits those references so the reader lists them as unsupported rather than losing the fact that they exist.
 
 Two reference collectors by the owner, [SogangFriends](https://github.com/Hiyabye/SogangFriends) and [sogang-notices](https://github.com/Hiyabye/sogang-notices), informed the catalog and parser contracts. Neither has an explicit code license, so Rhythm's Rust is written independently; observed public contracts are not permission to copy their code. Official notice and fixture content keeps its original rights.
 
@@ -199,7 +210,7 @@ A click restores the existing window and emits `proactive://notification-clicked
 
 ## Transport, resources and safe rendering
 
-`archive/network.rs` uses native Reqwest/Rustls. Automatic requests need exact approved HTTPS hosts and routes on port 443 (main, Computing and Engineering). URLs with credentials, fragments or unsafe encoded separators are rejected. DNS answers must be public and are pinned per connection; proxies and automatic redirects are off. The sync policy layer follows at most three same-origin redirects, re-running URL/DNS/TLS checks and robots authorization before each hop; transport only returns redirect targets. HTTP(S) resource references are kept as metadata so an old HTTP image doesn't discard the article, but only approved HTTPS routes are downloaded. Main images under `/dataview/board/<id>/<file>.(png|jpg|jpeg|gif|webp)` are an approved route. Requests carry an access mode: `Source` allows only those routes; `EmbeddedImage`, used for image resources only, also allows any other public HTTPS host name on port 443 (no IP literals, no other `*.sogang.ac.kr` route). Each such origin's robots.txt is loaded once per job and cached (including a failure); a 4xx robots.txt from such a host means no rules (RFC 9309), while a school host's error stays fatal. Third-party attachments are not downloaded.
+`archive/network.rs` uses native Reqwest/Rustls. Automatic requests need exact approved HTTPS hosts and routes on port 443 (main, Computing, Engineering and the Electronic/System Semiconductor community boards). URLs with credentials, fragments or unsafe encoded separators are rejected. DNS answers must be public and are pinned per connection; proxies and automatic redirects are off. The sync policy layer follows at most three same-origin redirects, re-running URL/DNS/TLS checks and robots authorization before each hop; transport only returns redirect targets. HTTP(S) resource references are kept as metadata so an old HTTP image doesn't discard the article, but only approved HTTPS routes are downloaded. Main images under `/dataview/board/<id>/<file>.(png|jpg|jpeg|gif|webp)` are an approved route. The community hosts approve only their `/kor/community` (and ee `/kor/recruit`) article pages plus ee `/aseoul_bbs/down.php`; their robots-disallowed `/se2/`, `/data/` and sse `/bbs/` routes are never requested, so those resources are recorded as unsupported. Requests carry an access mode: `Source` allows only those routes; `EmbeddedImage`, used for image resources only, also allows any other public HTTPS host name on port 443 (no IP literals, no other `*.sogang.ac.kr` route). Each such origin's robots.txt is loaded once per job and cached (including a failure); a 4xx robots.txt from such a host means no rules (RFC 9309), while a school host's error stays fatal. Third-party attachments are not downloaded.
 
 Requests are paced at least 650 ms apart. `robots.txt` is checked before collection (plain-text Accept header; Computing returns 406 otherwise); allow/disallow rules with wildcard and end-anchor matching and crawl delays up to 60 seconds apply, and malformed delays or HTML error pages fail closed. Transient errors get at most three attempts with short backoff, connect/request/attempt deadlines and cancellable waits. HTTP 429 stops with a message. No login, access restriction or anti-bot bypass is used.
 

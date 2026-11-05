@@ -59,9 +59,45 @@ Rhythm's own transport and robots policy, using public GETs only:
   (legacy tables nested about 130 levels deep). The test places it inside the
   `career/3323` page fixture, so its page shell and Nuxt data are not duplicated.
 
-`parser_tests.rs` and `engineering_tests.rs` check these structures and separately
-construct invalid/empty and hostile-content cases. Counts are observations for these fixtures, not parser
-constants. Live university content may change; production mismatches must produce
+The following bounded captures were obtained during #94 (2026-11-05), using public
+GETs only. The Electronic and System Semiconductor department sites run the same
+`aseoul` board engine (shared robots.txt rules, `?m=v&idx=` detail links, `pNo`
+paging, pins-first ordering) with different skins; the two gallery boards use 12
+and 9 rows per page, the other tables 10. Each fixture keeps only the real
+`#sub_tit` (ee) or `.ttl01` (sse) title element and the complete `#board` subtree,
+with scripts, style blocks and comments removed. Nothing was executed, resized or
+retyped; line endings are LF and trailing whitespace is removed.
+
+- `community-ee-{news,general,academic,seminars,employment,recruit}-list.html`:
+  page 1 from `/kor/community/{notice01,notice02,notice03,seminar,employment}.php`
+  and `/kor/recruit/recruit.php` with `?pNo=1&code=...`. `ee-general` page 1 holds
+  only ten pins, so `community-ee-general-page2.html` (two more pins and regular
+  ordinals 290-283) is the pin-across-pages regression.
+- `community-ee-news-last.html`: the sixteenth (last) gallery page with seven rows
+  and no next page.
+- `community-ee-{news,general,academic,seminars,employment,recruit}-detail-*`:
+  the complete `.board_view` page shell. `general/2867` keeps two inline images
+  under `/se2/photo_uploader/upload/` and one `/aseoul_bbs/down.php?d=1&idx=2867`
+  attachment; `academic/2873` carries the `[공지]` editor badge as a `<span>`.
+- `community-sse-notices-list.html`, `community-sse-notices-page2.html`: page 1
+  has ten pins; page 2 begins with three more pins and regular ordinals 117-111.
+- `community-sse-news-list.html`: the nine-row gallery.
+- `community-sse-seminars-list.html`: the only page (five rows) of a single-page
+  board.
+- `community-sse-{notices,news,seminars}-detail-*`: the `.view_bx` shell. The
+  `notices/198` page keeps one `/se2/` image and one `/bbs/down.php?d=1&idx=198`
+  attachment.
+
+Both hosts' robots.txt disallows `/se2/`, `/data/` and `/bbs/`. These fixtures
+intentionally retain those URIs so parser tests prove they are recorded, while
+the network policy refuses to request them; ee attachment downloads live under
+`/aseoul_bbs/`, which no rule covers. Running `openssl s_client
+-verify_return_error` returned `0 (ok)` for both hosts on 2026-11-05 (GoGetSSL
+chains); no intermediate exception was added.
+
+`parser_tests.rs`, `engineering_tests.rs` and `community_tests.rs` check these
+structures and separately construct invalid/empty and hostile-content cases.
+Counts are observations for these fixtures, not parser constants. Live university content may change; production mismatches must produce
 an explicit source/parser error rather than an empty successful archive.
 
 ## Vision fixture

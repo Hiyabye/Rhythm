@@ -86,7 +86,7 @@ pub fn definitions() -> Vec<SourceDefinition> {
             "서강대학교 · 전자공학과",
             "community",
             format!("https://ee.sogang.ac.kr/kor/{path}"),
-            false,
+            true,
         );
     }
     for (id, board, name) in [
@@ -118,7 +118,7 @@ pub fn definitions() -> Vec<SourceDefinition> {
             "서강대학교 · 시스템반도체공학과",
             "community",
             format!("https://sse.sogang.ac.kr/kor/community/{path}.php"),
-            false,
+            true,
         );
     }
     for (id, board, name) in [
