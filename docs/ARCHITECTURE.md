@@ -136,7 +136,7 @@ Results have deterministic publication-date/ID order, source/category and saved/
 
 ## Sources and parsers
 
-`archive/catalog.rs` has 32 stable source identities. **Catalog presence is not support.** Nineteen have verified list and detail extraction, local resources and offline reopen:
+`archive/catalog.rs` has 32 stable source identities. **Catalog presence is not support.** Nineteen have verified list and detail extraction, resource handling and offline reopen:
 
 | Source ID | Board |
 | --- | --- |
