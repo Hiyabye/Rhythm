@@ -301,7 +301,7 @@ async fn lifecycle_set_launch_at_login(
     let changed = previous.enabled != enabled;
     #[cfg(windows)]
     let autostart_snapshot = if changed {
-        Some(core::lifecycle::autostart_snapshot()?)
+        Some(core::lifecycle::autostart_snapshot(&app)?)
     } else {
         None
     };
@@ -482,6 +482,7 @@ mod notification_launch_queue_tests {
 }
 
 fn main() {
+    let context = tauri::generate_context!();
     #[cfg(windows)]
     if let Err(error) = proactive::windows_notification::initialize_process_identity() {
         eprintln!("Windows 알림 프로세스 식별자를 설정하지 못했습니다: {error}");
@@ -502,12 +503,16 @@ fn main() {
         ))
         .plugin(tauri_plugin_dialog::init());
     // Windows registers login startup directly in the per-user Run key
-    // (`core::windows_autostart`); macOS keeps the LaunchAgent plugin.
+    // (`core::windows_autostart`); macOS keeps the LaunchAgent plugin. Both
+    // name the entry after the bundle identifier, so a validation build never
+    // writes or deletes the installed app's login registration.
     #[cfg(not(windows))]
     {
         builder = builder.plugin(
             tauri_plugin_autostart::Builder::new()
-                .app_name("Rhythm")
+                .app_name(core::lifecycle::autostart_name(
+                    &context.config().identifier,
+                ))
                 .arg(core::lifecycle::AUTOSTART_ARG)
                 .build(),
         );
@@ -721,7 +726,7 @@ fn main() {
             archive::archive_reveal_resource,
             archive::archive_open_original
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("Rhythm을 시작하지 못했습니다. 로컬 저장소와 시스템 환경을 확인해 주세요.");
     app.run(|handle, event| match event {
         tauri::RunEvent::WindowEvent {
