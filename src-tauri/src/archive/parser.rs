@@ -10,6 +10,8 @@ mod community;
 mod dormitory;
 #[path = "engineering.rs"]
 mod engineering;
+#[path = "mechanical.rs"]
+mod mechanical;
 
 const PARSER_ERROR: &str = "학교 페이지 형식이 예상과 다릅니다. 기존 보관 자료는 유지됩니다.";
 fn invalid<T>() -> Result<T, String> {
@@ -132,6 +134,9 @@ pub fn list_url(source: &SourceDefinition, page: u32) -> Result<Url, String> {
     if source.family == "dormitory" {
         return dormitory::list_url(source, page);
     }
+    if source.family == "mechanical" {
+        return mechanical::list_url(source, page);
+    }
     if source.id == "sogang-academic" {
         let mut url =
             Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData/boardList").unwrap();
@@ -169,6 +174,9 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
     if source.family == "dormitory" {
         return dormitory::detail_url(source, entry);
     }
+    if source.family == "mechanical" {
+        return mechanical::detail_url(source, entry);
+    }
     if source.id == "sogang-academic" {
         let mut url = Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData").unwrap();
         url.query_pairs_mut()
@@ -199,6 +207,8 @@ pub fn listing(source: &SourceDefinition, page: u32, body: &str) -> Result<Listi
         engineering::listing(source, page, body)
     } else if source.family == "dormitory" {
         dormitory::listing(source, page, body)
+    } else if source.family == "mechanical" {
+        mechanical::listing(source, page, body)
     } else if source.id == "sogang-academic" {
         main_listing(page, body)
     } else {
@@ -254,6 +264,7 @@ fn main_listing(page: u32, body: &str) -> Result<ListingPage, String> {
                 url: main_canonical(&external_id).into(),
                 external_id,
                 pinned,
+                modified_at: None,
             });
         }
     }
@@ -390,6 +401,7 @@ fn computing_listing(
             external_id: external_id.clone(),
             url: format!("https://computing.sogang.ac.kr{prefix}{external_id}"),
             pinned,
+            modified_at: None,
         });
     }
     let start = regular.saturating_sub((page - 1) * 10);
@@ -420,6 +432,9 @@ pub fn article(
     }
     if source.family == "dormitory" {
         return dormitory::article(source, entry, body);
+    }
+    if source.family == "mechanical" {
+        return mechanical::article(source, entry, body);
     }
     let (title, author, category, published_at, modified_at, content, mut resources) =
         if source.id == "sogang-academic" {

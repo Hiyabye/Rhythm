@@ -129,6 +129,26 @@ images with a normal public route; both were downloaded through Rhythm's transpo
 Inline images on `scc.sogang.ac.kr` are HTTP (and the HTTPS path returns 404), so
 they remain recorded-but-unsupported references rather than being fetched.
 
+The following bounded captures were obtained during the mechanical source addition
+(2026-11-05), using public GETs only. Nothing was executed or retyped; line endings
+are LF.
+
+- `mechanical-sitemap.xml`: thirteen unchanged `<url>` elements trimmed from
+  `https://me.sogang.ac.kr/sitemap.xml` (826,774 bytes, 4,804 URLs, 4,674 with
+  `lastmod`). It keeps `notice` 2419/2420/66, `award` 2427, `alumni_news` 1835,
+  `research` 2425, `academic` 2395, `scholarship` 2407, `events` 1762, an unrelated
+  `gallery` article, the `notice` list page, an English-locale article and an
+  `/about` page. The sitemap is the only robots-allowed discovery document: the site
+  forbids every `?page=` listing URL (`Disallow: /*?`).
+- `mechanical-notice-detail-2419.html`, `mechanical-events-detail-1762.html`,
+  `mechanical-award-detail-2427.html`, `mechanical-alumni-detail-1835.html`,
+  `mechanical-research-detail-2425.html`: the original canonical link and complete
+  `<article class="container-site">` subtree. 2419 keeps six Supabase attachment
+  links and one inline image; 1762 keeps one legacy R2 `.jpg` attachment; 2427 has a
+  hero image outside `div.prose-sg`; 1835 has an embedded YouTube iframe (and the
+  external `youtu.be` link) that the sanitizer must drop; 2425 has one inline image
+  and no attachments. View counts and dates are the capture values.
+
 ## Vision fixture
 
 - `vision/poster.png`: wholly synthetic Korean notice poster drawn locally with

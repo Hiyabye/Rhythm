@@ -297,6 +297,7 @@ fn listing_entry(
         external_id,
         url: url.into(),
         pinned,
+        modified_at: None,
     })
 }
 fn row_entries(

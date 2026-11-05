@@ -258,6 +258,7 @@ pub(super) fn listing(
                     external_id: external.into(),
                     url: url.into(),
                     pinned: true,
+                    modified_at: None,
                 });
             }
             continue;
@@ -282,6 +283,7 @@ pub(super) fn listing(
                 external_id: external.into(),
                 url: url.into(),
                 pinned: false,
+                modified_at: None,
             });
         }
     }

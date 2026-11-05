@@ -68,7 +68,7 @@ fn cases() -> Vec<(
 fn catalog_has_exact_stable_source_identities_and_honest_support() {
     let sources = catalog::definitions();
     assert_eq!(sources.len(), 35);
-    assert_eq!(sources.iter().filter(|s| s.supported).count(), 22);
+    assert_eq!(sources.iter().filter(|s| s.supported).count(), 29);
     assert_eq!(
         sources.iter().map(|s| &s.id).collect::<HashSet<_>>().len(),
         35
@@ -197,6 +197,7 @@ fn changed_structures_wrong_identity_and_missing_fields_are_errors_not_empty_suc
         external_id: "969".into(),
         url: "https://computing.sogang.ac.kr/ko/community/academicNotice/detail/969".into(),
         pinned: true,
+        modified_at: None,
     };
     let detail = include_str!("computing-academic-detail.html");
     assert!(article(
@@ -256,6 +257,7 @@ fn iframe_only_main_articles_are_explicitly_empty_but_other_empty_results_fail()
         external_id: "551681".into(),
         url: main_canonical("551681").to_string(),
         pinned: false,
+        modified_at: None,
     };
     let mut value: Value = serde_json::from_str(include_str!("main-detail.json")).unwrap();
     value["data"]["pkId"] = 551681.into();
@@ -320,6 +322,7 @@ fn computing_news_distinguishes_public_route_from_internal_attachment_parent() {
         external_id: "282".into(),
         url: "https://computing.sogang.ac.kr/ko/community/news/detail/282".into(),
         pinned: false,
+        modified_at: None,
     };
     let body = include_str!("computing-news-detail-282.html");
     for broken in [
@@ -386,6 +389,7 @@ fn an_attachment_also_used_inline_retains_its_image_role() {
         external_id: "551637".into(),
         url: main_canonical("551637").into(),
         pinned: true,
+        modified_at: None,
     };
     let mut body: Value = serde_json::from_str(include_str!("main-detail.json")).unwrap();
     let url = "https://www.sogang.ac.kr/file-fe-prd/editor/example.png";
@@ -414,6 +418,7 @@ fn wrapped_iframe_body_is_iframe_only_but_wrapped_text_is_not() {
         external_id: "551377".into(),
         url: main_canonical("551377").to_string(),
         pinned: false,
+        modified_at: None,
     };
     // Captured body: an empty paragraph and `div.iframe-wrapper` around the viewer.
     let captured = include_str!("main-detail-551377.json");
@@ -451,6 +456,7 @@ fn deeply_nested_legacy_tables_keep_their_text() {
         external_id: "3323".into(),
         url: "https://computing.sogang.ac.kr/ko/community/career/detail/3323".into(),
         pinned: false,
+        modified_at: None,
     };
     let archived = article(&source, &entry, &page).unwrap();
     for text in ["신입사원 모집", "질문하기", "ymjeon@shinhan.com"] {
