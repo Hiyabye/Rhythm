@@ -20,6 +20,47 @@ pub const AUTOSTART_ARG: &str = "--autostart";
 /// Manual debugging/launch flag for a hidden start. Login launches decide
 /// visibility from the persisted `start_hidden` preference instead.
 pub const HIDDEN_ARG: &str = "--hidden";
+/// Bundle identifier of the distributed application.
+const PRODUCTION_IDENTIFIER: &str = "io.github.hiyabye.rhythm";
+/// Login entry already created by every released build.
+///
+/// macOS names the LaunchAgent file and label after it; Windows names the
+/// per-user `Run` value after it. Production builds keep writing exactly this
+/// entry, so an installed app keeps its login registration across upgrades.
+#[cfg(not(windows))]
+const LEGACY_AUTOSTART_NAME: &str = "Rhythm";
+#[cfg(windows)]
+const LEGACY_AUTOSTART_NAME: &str = "Rhythm.io.github.hiyabye.rhythm";
+
+/// Login registration name for the build with `identifier`.
+///
+/// Only the production identifier owns the historical entry. Every other
+/// identifier (a `.validation` build, a test identifier) gets its own entry
+/// named after that identifier, so it can never read, replace or delete the
+/// installed app's registration. The name ends up in a LaunchAgent file name
+/// or a registry value name, so it keeps only ASCII alphanumerics, `-` and `.`.
+pub fn autostart_name(identifier: &str) -> String {
+    if identifier == PRODUCTION_IDENTIFIER {
+        return LEGACY_AUTOSTART_NAME.into();
+    }
+    let cleaned: String = identifier
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '.') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if cleaned.trim_matches(['-', '.']).is_empty() {
+        // A config identifier that is empty or punctuation-only still needs a
+        // distinct, usable name; it must never fall back to the legacy entry.
+        "Rhythm-test-build".into()
+    } else {
+        cleaned
+    }
+}
 
 const TRAY_SHOW: &str = "tray.show";
 const TRAY_QUIT: &str = "tray.quit";
@@ -95,8 +136,11 @@ pub struct AutostartStatus {
 }
 
 #[cfg(windows)]
-pub(crate) fn autostart_snapshot() -> Result<super::windows_autostart::Snapshot, String> {
-    super::windows_autostart::snapshot().map_err(|error| autostart_error("확인하지", error))
+pub(crate) fn autostart_snapshot(
+    app: &AppHandle,
+) -> Result<super::windows_autostart::Snapshot, String> {
+    super::windows_autostart::snapshot(&autostart_entry(app))
+        .map_err(|error| autostart_error("확인하지", error))
 }
 
 #[cfg(windows)]
@@ -244,19 +288,25 @@ fn autostart_error(action: &str, error: impl std::fmt::Display) -> String {
     format!("로그인 시 자동 실행을 {action} 못했습니다. {place}과 앱 설치 위치를 확인해 주세요.")
 }
 
-/// Reads the actual OS login-registration state.
+/// The login entry name this build must own.
 #[cfg(windows)]
-pub fn autostart_status(_app: &AppHandle) -> Result<AutostartStatus, String> {
-    super::windows_autostart::status()
+fn autostart_entry(app: &AppHandle) -> String {
+    autostart_name(&app.config().identifier)
+}
+
+/// Reads the actual OS login-registration state for this build's entry.
+#[cfg(windows)]
+pub fn autostart_status(app: &AppHandle) -> Result<AutostartStatus, String> {
+    super::windows_autostart::status(&autostart_entry(app))
         .map(|enabled| AutostartStatus { enabled })
         .map_err(|error| autostart_error("확인하지", error))
 }
 
-/// Enables or disables OS login registration. The registry module re-reads
-/// the Run and StartupApproved values; a silent failure is an error.
+/// Enables or disables this build's OS login registration. The registry module
+/// re-reads the Run and StartupApproved values; a silent failure is an error.
 #[cfg(windows)]
-pub fn set_autostart(_app: &AppHandle, enabled: bool) -> Result<AutostartStatus, String> {
-    super::windows_autostart::set(enabled)
+pub fn set_autostart(app: &AppHandle, enabled: bool) -> Result<AutostartStatus, String> {
+    super::windows_autostart::set(&autostart_entry(app), enabled)
         .map(|enabled| AutostartStatus { enabled })
         .map_err(|error| autostart_error(if enabled { "켜지" } else { "끄지" }, error))
 }
@@ -344,5 +394,58 @@ mod tests {
         assert!(manual.start_hidden(true, false));
 
         assert!(!LaunchMode::default().start_hidden(true, false));
+    }
+
+    #[test]
+    fn production_identifier_keeps_the_entry_installed_builds_already_use() {
+        // Upgrading must not lose the user's login registration: the installed
+        // entry name is unchanged, so the OS state check still finds it.
+        assert_eq!(autostart_name(PRODUCTION_IDENTIFIER), LEGACY_AUTOSTART_NAME);
+        assert_eq!(
+            autostart_name(PRODUCTION_IDENTIFIER),
+            match cfg!(windows) {
+                true => "Rhythm.io.github.hiyabye.rhythm",
+                false => "Rhythm",
+            }
+        );
+    }
+
+    #[test]
+    fn the_packaged_identifier_is_the_production_one() {
+        // The upgrade path depends on `tauri.conf.json` keeping the identifier
+        // that maps to the login entry released builds already created.
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        assert_eq!(config["identifier"], PRODUCTION_IDENTIFIER);
+    }
+
+    #[test]
+    fn other_identifiers_never_touch_the_installed_entry() {
+        for identifier in [
+            "io.github.hiyabye.rhythm.validation",
+            "io.github.hiyabye.rhythm-test",
+            "com.example.rhythm.test",
+        ] {
+            let name = autostart_name(identifier);
+            assert_eq!(name, identifier);
+            assert_ne!(name, LEGACY_AUTOSTART_NAME);
+            assert_ne!(name, autostart_name(PRODUCTION_IDENTIFIER));
+        }
+    }
+
+    #[test]
+    fn entry_names_are_safe_for_device_files_and_registry_values() {
+        let name = autostart_name("com.example.rhythm test/빌드");
+        assert_eq!(name, "com.example.rhythm-test---");
+        assert!(name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '.')));
+        // An unusable identifier still gets a distinct name instead of the
+        // production entry.
+        for identifier in ["", "/", "..", "  "] {
+            let name = autostart_name(identifier);
+            assert!(!name.is_empty());
+            assert_ne!(name, LEGACY_AUTOSTART_NAME);
+        }
     }
 }

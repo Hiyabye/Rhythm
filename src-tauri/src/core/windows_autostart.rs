@@ -12,13 +12,28 @@ use windows::{
     },
 };
 
-const NAME: PCWSTR = w!("Rhythm.io.github.hiyabye.rhythm");
 const RUN: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const APPROVED: PCWSTR =
     w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run");
 
+/// Null-terminated UTF-16 name of this build's `Run` and `StartupApproved`
+/// value. `core::lifecycle` decides the name from the bundle identifier so a
+/// validation build cannot touch the installed app's entry.
+struct ValueName(Vec<u16>);
+
+impl ValueName {
+    fn new(name: &str) -> Self {
+        Self(name.encode_utf16().chain(std::iter::once(0)).collect())
+    }
+
+    fn as_pcwstr(&self) -> PCWSTR {
+        PCWSTR::from_raw(self.0.as_ptr())
+    }
+}
+
 /// Exact per-user values, including a registered but Windows-disabled entry.
 pub(crate) struct Snapshot {
+    name: ValueName,
     run: Option<(REG_VALUE_TYPE, Vec<u8>)>,
     approved: Option<(REG_VALUE_TYPE, Vec<u8>)>,
 }
@@ -60,11 +75,19 @@ fn open(path: PCWSTR, access: REG_SAM_FLAGS, create: bool) -> Result<Option<Key>
     Ok(Some(Key(key)))
 }
 
-fn read(key: &Key) -> Result<Option<(REG_VALUE_TYPE, Vec<u8>)>, String> {
+fn read(key: &Key, name: &ValueName) -> Result<Option<(REG_VALUE_TYPE, Vec<u8>)>, String> {
     let mut size = 0u32;
     let mut kind = REG_VALUE_TYPE::default();
-    let code =
-        unsafe { RegQueryValueExW(key.0, NAME, None, Some(&mut kind), None, Some(&mut size)) };
+    let code = unsafe {
+        RegQueryValueExW(
+            key.0,
+            name.as_pcwstr(),
+            None,
+            Some(&mut kind),
+            None,
+            Some(&mut size),
+        )
+    };
     if code == ERROR_FILE_NOT_FOUND {
         return Ok(None);
     }
@@ -75,7 +98,7 @@ fn read(key: &Key) -> Result<Option<(REG_VALUE_TYPE, Vec<u8>)>, String> {
     let code = unsafe {
         RegQueryValueExW(
             key.0,
-            NAME,
+            name.as_pcwstr(),
             None,
             Some(&mut kind),
             Some(bytes.as_mut_ptr()),
@@ -89,15 +112,15 @@ fn read(key: &Key) -> Result<Option<(REG_VALUE_TYPE, Vec<u8>)>, String> {
     Ok(Some((kind, bytes)))
 }
 
-fn read_path(path: PCWSTR) -> Result<Option<(REG_VALUE_TYPE, Vec<u8>)>, String> {
+fn read_path(path: PCWSTR, name: &ValueName) -> Result<Option<(REG_VALUE_TYPE, Vec<u8>)>, String> {
     match open(path, KEY_QUERY_VALUE, false)? {
-        Some(key) => read(&key),
+        Some(key) => read(&key, name),
         None => Ok(None),
     }
 }
 
-fn write(key: &Key, kind: REG_VALUE_TYPE, bytes: &[u8]) -> Result<(), String> {
-    let code = unsafe { RegSetValueExW(key.0, NAME, None, kind, Some(bytes)) };
+fn write(key: &Key, name: &ValueName, kind: REG_VALUE_TYPE, bytes: &[u8]) -> Result<(), String> {
+    let code = unsafe { RegSetValueExW(key.0, name.as_pcwstr(), None, kind, Some(bytes)) };
     if code == ERROR_SUCCESS {
         Ok(())
     } else {
@@ -105,8 +128,8 @@ fn write(key: &Key, kind: REG_VALUE_TYPE, bytes: &[u8]) -> Result<(), String> {
     }
 }
 
-fn delete(key: &Key) -> Result<(), String> {
-    let code = unsafe { RegDeleteValueW(key.0, NAME) };
+fn delete(key: &Key, name: &ValueName) -> Result<(), String> {
+    let code = unsafe { RegDeleteValueW(key.0, name.as_pcwstr()) };
     if code == ERROR_SUCCESS || code == ERROR_FILE_NOT_FOUND {
         Ok(())
     } else {
@@ -146,11 +169,11 @@ fn command_bytes(command: &str) -> Vec<u8> {
         .collect()
 }
 
-fn registered_command() -> Result<Option<String>, String> {
+fn registered_command(name: &ValueName) -> Result<Option<String>, String> {
     let Some(key) = open(RUN, KEY_QUERY_VALUE, false)? else {
         return Ok(None);
     };
-    let Some((kind, data)) = read(&key)? else {
+    let Some((kind, data)) = read(&key, name)? else {
         return Ok(None);
     };
     if kind != REG_SZ {
@@ -161,11 +184,11 @@ fn registered_command() -> Result<Option<String>, String> {
         .ok_or_else(|| "자동 시작 항목의 형식이 올바르지 않습니다.".into())
 }
 
-fn approval_entry() -> Result<Option<Vec<u8>>, String> {
+fn approval_entry(name: &ValueName) -> Result<Option<Vec<u8>>, String> {
     let Some(key) = open(APPROVED, KEY_QUERY_VALUE, false)? else {
         return Ok(None);
     };
-    let Some((kind, bytes)) = read(&key)? else {
+    let Some((kind, bytes)) = read(&key, name)? else {
         return Ok(None);
     };
     if kind != REG_BINARY {
@@ -186,8 +209,8 @@ fn approval_flag(bytes: &[u8]) -> Result<bool, String> {
     }
 }
 
-fn approval_state() -> Result<bool, String> {
-    match approval_entry()? {
+fn approval_state(name: &ValueName) -> Result<bool, String> {
+    match approval_entry(name)? {
         None => Ok(true),
         Some(bytes) => approval_flag(&bytes),
     }
@@ -197,57 +220,73 @@ fn expected() -> Result<String, String> {
     executable_command(&std::env::current_exe().map_err(|e| e.to_string())?)
 }
 
-fn checked_registration(expected: &str) -> Result<bool, String> {
-    match registered_command()? {
+fn checked_registration(name: &ValueName, expected: &str) -> Result<bool, String> {
+    match registered_command(name)? {
         None => Ok(false),
         Some(command) if command.eq_ignore_ascii_case(expected) => Ok(true),
         Some(_) => Err("다른 실행 파일이 이 자동 시작 항목을 사용하고 있습니다. Windows 시작 앱 설정을 확인해 주세요.".into()),
     }
 }
 
-pub(super) fn status() -> Result<bool, String> {
-    if !checked_registration(&expected()?)? {
+fn status_of(name: &ValueName) -> Result<bool, String> {
+    if !checked_registration(name, &expected()?)? {
         return Ok(false);
     }
-    approval_state()
+    approval_state(name)
 }
 
-pub(crate) fn snapshot() -> Result<Snapshot, String> {
+pub(super) fn status(name: &str) -> Result<bool, String> {
+    status_of(&ValueName::new(name))
+}
+
+fn snapshot_of(name: &ValueName) -> Result<Snapshot, String> {
     // Do not take ownership of another executable's entry.
-    checked_registration(&expected()?)?;
-    approval_entry()?;
+    checked_registration(name, &expected()?)?;
+    approval_entry(name)?;
     Ok(Snapshot {
-        run: read_path(RUN)?,
-        approved: read_path(APPROVED)?,
+        run: read_path(RUN, name)?,
+        approved: read_path(APPROVED, name)?,
+        name: ValueName(name.0.clone()),
     })
 }
 
-fn restore_value(path: PCWSTR, value: &Option<(REG_VALUE_TYPE, Vec<u8>)>) -> Result<(), String> {
+pub(crate) fn snapshot(name: &str) -> Result<Snapshot, String> {
+    snapshot_of(&ValueName::new(name))
+}
+
+fn restore_value(
+    path: PCWSTR,
+    name: &ValueName,
+    value: &Option<(REG_VALUE_TYPE, Vec<u8>)>,
+) -> Result<(), String> {
     let Some(key) = open(path, KEY_QUERY_VALUE | KEY_SET_VALUE, value.is_some())? else {
         return Ok(());
     };
     match value {
-        Some((kind, bytes)) => write(&key, *kind, bytes),
-        None => delete(&key),
+        Some((kind, bytes)) => write(&key, name, *kind, bytes),
+        None => delete(&key, name),
     }
 }
 
 pub(crate) fn restore(snapshot: &Snapshot) -> Result<(), String> {
     // A third party may have taken the name since snapshot; never overwrite it.
-    checked_registration(&expected()?)?;
-    let run_result = restore_value(RUN, &snapshot.run);
-    let approval_result = restore_value(APPROVED, &snapshot.approved);
+    checked_registration(&snapshot.name, &expected()?)?;
+    let run_result = restore_value(RUN, &snapshot.name, &snapshot.run);
+    let approval_result = restore_value(APPROVED, &snapshot.name, &snapshot.approved);
     run_result?;
     approval_result?;
-    if read_path(RUN)? != snapshot.run || read_path(APPROVED)? != snapshot.approved {
+    if read_path(RUN, &snapshot.name)? != snapshot.run
+        || read_path(APPROVED, &snapshot.name)? != snapshot.approved
+    {
         return Err("이전 자동 시작 상태가 완전히 복구되지 않았습니다.".into());
     }
     Ok(())
 }
 
-pub(super) fn set(enabled: bool) -> Result<bool, String> {
+pub(super) fn set(name: &str, enabled: bool) -> Result<bool, String> {
+    let name = ValueName::new(name);
     let command = expected()?;
-    let before = snapshot()?;
+    let before = snapshot_of(&name)?;
     let existed = before.run.is_some();
     if !enabled && !existed {
         return Ok(false);
@@ -261,9 +300,9 @@ pub(super) fn set(enabled: bool) -> Result<bool, String> {
     let run = open(RUN, KEY_QUERY_VALUE | KEY_SET_VALUE, enabled)?
         .ok_or("자동 시작 설정을 열지 못했습니다.")?;
     if enabled {
-        write(&run, REG_SZ, &command_bytes(&command))?;
+        write(&run, &name, REG_SZ, &command_bytes(&command))?;
     } else {
-        delete(&run)?;
+        delete(&run, &name)?;
     }
     let operation = (|| -> Result<bool, String> {
         if approval_disabled {
@@ -271,9 +310,14 @@ pub(super) fn set(enabled: bool) -> Result<bool, String> {
             // It is changed only for this entry after the user turns it on.
             let key = open(APPROVED, KEY_QUERY_VALUE | KEY_SET_VALUE, false)?
                 .ok_or("Windows 시작 앱 상태를 열지 못했습니다.")?;
-            write(&key, REG_BINARY, &[2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])?;
+            write(
+                &key,
+                &name,
+                REG_BINARY,
+                &[2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            )?;
         }
-        let actual = status()?;
+        let actual = status_of(&name)?;
         if actual != enabled {
             return Err("Windows가 자동 시작 변경을 반영하지 않았습니다.".into());
         }
