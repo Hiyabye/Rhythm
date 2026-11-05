@@ -332,7 +332,13 @@ fn validate_manifest(e: &CatalogEntry) -> Result<(), String> {
         || !hex(&e.revision, 40)
         || e.bytes == 0
         || e.bytes > 12 * 1024 * 1024 * 1024
-        || !["unsloth/Qwen3.5-2B-GGUF", "unsloth/Qwen3.5-4B-GGUF"].contains(&e.repository.as_str())
+        || ![
+            "unsloth/Qwen3.5-2B-GGUF",
+            "unsloth/Qwen3.5-4B-GGUF",
+            "unsloth/gemma-4-E2B-it-GGUF",
+            "unsloth/gemma-4-E4B-it-GGUF",
+        ]
+        .contains(&e.repository.as_str())
         || !e.filename.ends_with(".gguf")
         || e.filename.contains(['/', '\\', '\0'])
         || !e.id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
@@ -859,7 +865,7 @@ fn validate_gguf(file: &mut File, size: u64) -> Result<(), String> {
                 return Err("GGUF 모델 아키텍처 형식이 올바르지 않습니다.".into());
             }
             let architecture = gguf_string(file, 128)?;
-            if !["qwen3", "qwen35"].contains(&architecture.as_str()) {
+            if !["qwen3", "qwen35", "gemma4"].contains(&architecture.as_str()) {
                 return Err(format!(
                     "이 GGUF 아키텍처는 Rhythm에서 검증하지 않았습니다: {architecture}"
                 ));
@@ -1063,7 +1069,7 @@ mod tests {
             .map(|entry| entry.id)
             .collect();
         // 9B was never run and 0.8B failed the synthetic evaluation; both were removed.
-        assert_eq!(ids, ["qwen35-2b", "qwen35-4b"]);
+        assert_eq!(ids, ["qwen35-2b", "qwen35-4b", "gemma4-e2b", "gemma4-e4b"]);
         let mut experimental = catalog().remove(0);
         experimental.compatibility = "experimental".into();
         assert!(check_installable(&experimental).is_err());
@@ -1513,7 +1519,7 @@ mod tests {
     #[test]
     fn catalog_provenance_and_destination_policy() {
         let entries = catalog();
-        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.len(), 4);
         for e in &entries {
             validate_manifest(e).unwrap();
             validate_destination(&download_url(e).unwrap(), e).unwrap();
@@ -2318,6 +2324,15 @@ mod tests {
         assert_eq!(results[0].id, saved.id);
         assert_eq!(results[0].result, saved.result);
         assert_eq!(results[0].key.model_sha256, saved.key.model_sha256);
+    }
+    #[test]
+    fn verified_architectures_accept_curated_families() {
+        let dir = tempfile::tempdir().unwrap();
+        for architecture in ["qwen3", "qwen35", "gemma4"] {
+            let path = dir.path().join(format!("{architecture}.gguf"));
+            std::fs::write(&path, gguf(architecture)).unwrap();
+            verify_file(&path, None, &AtomicBool::new(false)).unwrap();
+        }
     }
     #[test]
     fn truncated_and_unsupported_gguf_rejected() {

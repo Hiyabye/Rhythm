@@ -14,7 +14,7 @@ v1.1.0 adds:
 v1.2.0 adds:
 
 - Local AI runs in upstream `llama-server` (llama.cpp b12068, bundled and supervised by Rhythm) instead of the AI workers, on both platforms (#8, #61). Earlier results read as outdated until they are regenerated. On Windows it was observed on one GTX 1650 PC (Vulkan and CPU).
-- Model catalog: Qwen3.5 0.8B added as experimental; 9B removed (existing installs keep working).
+- Model catalog: Qwen3.5 2B/4B and Gemma 4 E2B/E4B verified on macOS Apple Silicon / Metal; 9B and 0.8B removed (existing installs keep working).
 - Native-macOS redesign of the app shell and Today, and Settings split into panes.
 - CI split by concern and gated by changed paths; a tag-triggered workflow (`release.yml`) that builds both platforms and creates a draft release. v1.1.0 is its first run.
 - Release pipeline for in-app updates on unsigned builds: signed updater packages for both platforms and a verified `latest.json` in every release. v1.2.0 is the first release with the updater key; installed v1.1.0 apps embed no key and need one manual update.
