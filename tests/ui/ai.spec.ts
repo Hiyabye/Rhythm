@@ -45,6 +45,20 @@ test('catalog installation progress, cancellation, selection, loading and setup 
   expect(await callCount(page, 'ai_unload')).toBe(1);
 });
 
+test('idle backlog analysis is a separate opt-in analysis mode', async ({ page }) => {
+  await mockDesktop(page, { aiInstalled: true }); await page.goto('/');
+  await openSettings(page, 'AI');
+  const mode = page.locator('#ai-processing-mode');
+  await expect(mode).toHaveValue('explicit');
+  await expect(mode.locator('option[value="backlog"]')).toHaveText('쉬는 동안 전체 공지 분석');
+  await expect(page.getByText('과거 자료', { exact: false })).toHaveCount(0);
+  await mode.selectOption('backlog');
+  await expect.poll(() => page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'ai_preferences').map((call: any) => call.args.preferences.processing_mode))).toEqual(['backlog']);
+  await expect(mode).toHaveValue('backlog');
+  // The per-session limit belongs to the recent mode only.
+  await expect(page.locator('#ai-automatic-limit')).toHaveCount(0);
+});
+
 test('installation failure exposes retry without hiding local archives', async ({ page }) => {
   await mockDesktop(page, { aiInstallError: true }); await page.goto('/');
   await openSettings(page, 'AI');

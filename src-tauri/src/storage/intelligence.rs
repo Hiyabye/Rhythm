@@ -370,7 +370,7 @@ impl Store {
                 return Err("설치가 완료된 모델을 선택해 주세요.".into());
             }
         }
-        if !["explicit", "recent"].contains(&preferences.processing_mode.as_str())
+        if !["explicit", "recent", "backlog"].contains(&preferences.processing_mode.as_str())
             || !["auto", "cpu", "gpu"].contains(&preferences.execution_mode.as_str())
             || preferences.automatic_limit > 20
             || !(128..=4096).contains(&preferences.max_tokens)
@@ -491,6 +491,27 @@ impl Store {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
     }
+    /// Latest revisions of notices that still have no attempt for that revision,
+    /// newest publication first. Unlike `ai_recent_candidates` this includes the
+    /// initial historical backfill; it is the opt-in idle backlog pass. Notices
+    /// without archived text are skipped because the pipeline cannot ground them.
+    pub fn ai_backlog_candidates(&self, limit: u32) -> Result<Vec<(i64, i64)>, String> {
+        self.connection
+            .prepare(
+                "SELECT d.id,r.id FROM documents d
+                 JOIN document_revisions r ON r.id=(
+                     SELECT MAX(latest.id) FROM document_revisions latest WHERE latest.document_id=d.id
+                 )
+                 WHERE length(trim(d.body_text))>0
+                   AND NOT EXISTS(SELECT 1 FROM ai_jobs j WHERE j.document_id=d.id AND j.revision_id=r.id)
+                 ORDER BY d.published_at DESC,d.id DESC LIMIT ?1",
+            )
+            .map_err(|e| e.to_string())?
+            .query_map([limit.min(100)], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
     pub fn ai_has_model_jobs(&self, model_sha256: &str) -> Result<bool, String> {
         self.connection
             .query_row(
@@ -498,6 +519,17 @@ impl Store {
                 [model_sha256],
                 |row| row.get(0),
             )
+            .map_err(|e| e.to_string())
+    }
+    /// Cancels only a pending/running attempt. Returns false when it already reached
+    /// a terminal state, so a concurrent completion is not treated as an error.
+    pub fn ai_cancel_if_running(&self, id: i64, error: &str) -> Result<bool, String> {
+        self.connection
+            .execute(
+                "UPDATE ai_jobs SET status='cancelled',error=?2,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?1 AND status IN ('pending','running')",
+                params![id, error],
+            )
+            .map(|count| count > 0)
             .map_err(|e| e.to_string())
     }
     /// Atomically claims one pending job. Application-level concurrency remains one worker.

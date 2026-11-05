@@ -66,6 +66,16 @@ test('removing last saved item from page two returns to the last valid page', as
   await expect(page.getByText('아직 저장한 공지가 없습니다', { exact: true })).toHaveCount(0);
 });
 
+test('archived notices carry no past-record label wherever they were collected', async ({ page }) => {
+  await mockDesktop(page, {});
+  await page.goto('/');
+  await navigate(page, '받은 소식');
+  await expect(page.locator('.notice-list > li')).toHaveCount(2);
+  // Fixture records are marked as backfilled, but the UI must not expose that concept.
+  await expect(page.getByText('과거 자료', { exact: false })).toHaveCount(0);
+  await expect(page.locator('.notice-meta').filter({ hasText: '과거' })).toHaveCount(0);
+});
+
 test('marking final unread page item read clamps paging after reader closes', async ({ page }) => {
   await mockDesktop(page, { count: 61 });
   await page.goto('/');
@@ -240,7 +250,7 @@ test('subscriptions have no automatic collection, protect refreshing state, show
   await syncMode(page, 'incremental');
   await expect(page.locator('.collect-status')).toContainText('새 소식 확인 중');
   await syncMode(page, 'historical', 2);
-  await expect(page.locator('.collect-status')).toContainText('과거 자료 가져오는 중 · 소식 · 2쪽');
+  await expect(page.locator('.collect-status')).toContainText('이전 공지 가져오는 중 · 소식 · 2쪽');
   await expect(page.getByRole('button', { name: '가져오기 중단', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '가져오기 중단', exact: true }).click();
   await expect(page.locator('.source-manager .archive-feedback')).toContainText('이미 저장한 공지는 유지됩니다');

@@ -193,11 +193,16 @@ impl Cancellation {
         }
     }
 }
+struct ActiveJob {
+    id: i64,
+    priority: i32,
+    cancellation: Arc<Cancellation>,
+}
 #[derive(Default)]
 struct State {
     running: bool,
     stopped: bool,
-    active: Option<(i64, Arc<Cancellation>)>,
+    active: Option<ActiveJob>,
 }
 #[derive(Default)]
 struct Inner {
@@ -216,6 +221,11 @@ fn with_store<T>(
 ) -> Result<T, String> {
     operation(&mut *store.lock().map_err(|_| "저장소에 접근하지 못했습니다.")?)
 }
+
+/// Explicit/user-requested analysis. The queue runs this before any backlog work.
+pub const DIRECT_PRIORITY: i32 = 100;
+/// Opt-in idle backlog work. It must never run ahead of a direct request.
+pub const BACKLOG_PRIORITY: i32 = 10;
 
 impl Controller {
     /// Explicit admission only. A valid cache hit never starts the worker or verifies weights.
@@ -238,9 +248,11 @@ impl Controller {
             document_id,
             revision_id,
             regenerate,
+            DIRECT_PRIORITY,
             None,
         )
     }
+    /// `priority` separates direct requests from opt-in idle backlog work.
     #[allow(clippy::too_many_arguments)]
     pub fn start_admitted(
         &self,
@@ -250,6 +262,7 @@ impl Controller {
         document_id: i64,
         revision_id: i64,
         regenerate: bool,
+        priority: i32,
         lease: crate::operation_gate::AdmissionLease,
     ) -> Result<StartResponse, String> {
         self.start_with_lease(
@@ -259,6 +272,7 @@ impl Controller {
             document_id,
             revision_id,
             regenerate,
+            priority,
             Some(lease),
         )
     }
@@ -271,6 +285,7 @@ impl Controller {
         document_id: i64,
         revision_id: i64,
         regenerate: bool,
+        priority: i32,
         lease: Option<crate::operation_gate::AdmissionLease>,
     ) -> Result<StartResponse, String> {
         let admission_started = Instant::now();
@@ -319,7 +334,7 @@ impl Controller {
                 "catalog_id":model.catalog_id,"source_revision":model.source_revision,
                 "source_filename":model.source_filename,"max_tokens":preferences.max_tokens,
                 "execution_mode":preferences.execution_mode,"runtime_policy":"llama-server-v1"});
-            let job = store.ai_enqueue(&key, &identity, 100)?;
+            let job = store.ai_enqueue(&key, &identity, priority)?;
             Ok(StartResponse {
                 cached: None,
                 job: Some(job),
@@ -353,20 +368,45 @@ impl Controller {
             }
             store.ai_finish_job(id, "cancelled", Some(CANCELLED), None)
         })?;
-        if let Some((active, cancellation)) = &state.active {
-            if *active == id {
-                cancellation.cancel();
-            }
+        if let Some(active) = state.active.as_ref().filter(|active| active.id == id) {
+            active.cancellation.cancel();
         }
         Ok(())
+    }
+
+    /// Opt-in backlog work yields to explicit user actions. Cancels only a running
+    /// backlog attempt and waits for it to finish, so the caller can reuse or stop
+    /// the worker without abandoning a user-requested analysis.
+    pub async fn cancel_automatic(&self, store: &SharedStore) -> Result<bool, String> {
+        let target = {
+            let state = self
+                .inner
+                .state
+                .lock()
+                .map_err(|_| "AI 작업 상태에 접근하지 못했습니다.")?;
+            state
+                .active
+                .as_ref()
+                .filter(|active| active.priority < DIRECT_PRIORITY)
+                .map(|active| (active.id, active.cancellation.clone()))
+        };
+        let Some((id, cancellation)) = target else {
+            return Ok(false);
+        };
+        let cancelled = with_store(store, |store| store.ai_cancel_if_running(id, CANCELLED))?;
+        // A concurrent completion is harmless: the flag still stops any late work
+        // and waiting settles the queue before the caller reuses the worker.
+        cancellation.cancel();
+        self.wait().await;
+        Ok(cancelled)
     }
 
     /// Stops admission and cancels only the active operation. Pending jobs remain recoverable.
     pub fn stop(&self) {
         if let Ok(mut state) = self.inner.state.lock() {
             state.stopped = true;
-            if let Some((_, cancellation)) = &state.active {
-                cancellation.cancel();
+            if let Some(active) = &state.active {
+                active.cancellation.cancel();
             }
         }
     }
@@ -508,7 +548,11 @@ impl Controller {
                 match next {
                     Ok(Some(job)) => {
                         let cancellation = Arc::new(Cancellation::default());
-                        state.active = Some((job.id, cancellation.clone()));
+                        state.active = Some(ActiveJob {
+                            id: job.id,
+                            priority: job.priority,
+                            cancellation: cancellation.clone(),
+                        });
                         self.begin_profile(job.id);
                         Some((job, cancellation))
                     }
@@ -2990,6 +3034,49 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+        worker.lock().await.stop().await;
+    }
+    #[tokio::test]
+    async fn backlog_attempt_yields_to_a_user_operation_and_reaps_the_server() {
+        let (directory, store, id, revision) = fixture();
+        std::fs::write(directory.path().join("delay"), b"delay").unwrap();
+        let worker = fake_engine(directory.path());
+        let controller = Controller::default();
+        let gate = std::sync::Arc::new(crate::operation_gate::AdmissionGate::default());
+        let lease = gate.shared().await.unwrap();
+        controller
+            .start_admitted(
+                store.clone(),
+                worker.clone(),
+                directory.path().into(),
+                id,
+                revision,
+                false,
+                BACKLOG_PRIORITY,
+                lease,
+            )
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            while !directory.path().join("entered").exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        // The user's inventory action cancels backlog work and waits for the
+        // server to be reaped before it may reuse the worker.
+        assert!(controller.cancel_automatic(&store).await.unwrap());
+        assert!(!controller.running());
+        let backlog = with_store(&store, |store| store.ai_jobs(1)).unwrap();
+        assert_eq!(backlog[0].priority, BACKLOG_PRIORITY);
+        assert_eq!(backlog[0].status, "cancelled");
+        assert!(
+            with_store(&store, |store| store.ai_document_results(id, None, 10))
+                .unwrap()
+                .is_empty()
+        );
+        // Nothing automatic is active any more, so a further action is a no-op.
+        assert!(!controller.cancel_automatic(&store).await.unwrap());
         worker.lock().await.stop().await;
     }
     #[tokio::test]

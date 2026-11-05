@@ -6,6 +6,7 @@ pub mod commands;
 mod evaluation;
 #[cfg(all(test, windows))]
 mod gpu_tests;
+pub(crate) mod idle;
 pub mod maintenance;
 pub(crate) mod model_storage;
 pub mod models;

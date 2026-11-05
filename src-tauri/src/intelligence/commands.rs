@@ -15,6 +15,15 @@ async fn exiting(shutdown: &AtomicBool) {
     }
 }
 const EXIT_ERROR: &str = "앱을 종료하고 있습니다.";
+/// Opt-in idle backlog work must not block an explicit user action. A
+/// user-requested analysis is never cancelled here; its error stays as before.
+async fn yield_backlog(state: &AppState) -> Result<(), String> {
+    state
+        .analysis
+        .cancel_automatic(&state.store)
+        .await
+        .map(|_| ())
+}
 fn check_open(state: &AppState) -> Result<(), String> {
     if state.maintenance_shutdown.load(Ordering::Acquire) {
         Err(EXIT_ERROR.into())
@@ -230,6 +239,7 @@ pub async fn ai_remove_projector(
     if !confirmed {
         return Err("이미지 인식 모듈 삭제를 확인해 주세요.".into());
     }
+    yield_backlog(&state).await?;
     if state.analysis.running() || state.models.busy() {
         return Err("진행 중인 AI 작업을 먼저 취소하거나 완료해 주세요.".into());
     }
@@ -307,8 +317,9 @@ pub async fn ai_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, 
         },
     })
 }
-fn check_storage_change(state: &AppState) -> Result<(), String> {
+async fn check_storage_change(state: &AppState) -> Result<(), String> {
     check_open(state)?;
+    yield_backlog(state).await?;
     if state.models.busy() || state.analysis.running() || state.ai_operation.status().is_some() {
         return Err("진행 중인 AI 작업을 완료하거나 취소한 뒤 설치 폴더를 변경해 주세요.".into());
     }
@@ -323,7 +334,7 @@ pub async fn ai_choose_model_directory(
     use tauri_plugin_dialog::DialogExt;
     let _lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
-    check_storage_change(&state)?;
+    check_storage_change(&state).await?;
     let initial = with_store(&state, |s| Ok(s.ai_preferences()?.model_directory))?
         .map(PathBuf::from)
         .unwrap_or_else(|| state.data_root.clone());
@@ -339,7 +350,7 @@ pub async fn ai_choose_model_directory(
     let Some(selected) = selected else {
         return Ok(false);
     };
-    check_storage_change(&state)?;
+    check_storage_change(&state).await?;
     let path = selected
         .into_path()
         .map_err(|_| "선택한 폴더 경로를 읽지 못했습니다.")?;
@@ -347,7 +358,7 @@ pub async fn ai_choose_model_directory(
         tokio::task::spawn_blocking(move || super::model_storage::prepare_selection(&path))
             .await
             .map_err(|_| "설치 폴더를 확인하지 못했습니다.")??;
-    check_storage_change(&state)?;
+    check_storage_change(&state).await?;
     with_store(&state, |s| s.ai_save_model_directory(Some(&directory)))?;
     Ok(true)
 }
@@ -356,7 +367,7 @@ pub async fn ai_choose_model_directory(
 pub async fn ai_reset_model_directory(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let _lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
-    check_storage_change(&state)?;
+    check_storage_change(&state).await?;
     with_store(&state, |s| s.ai_save_model_directory(None))
 }
 
@@ -428,6 +439,7 @@ pub async fn ai_select(
     let _lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
     check_open(&state)?;
+    yield_backlog(&state).await?;
     if state.analysis.running() {
         return Err("분석을 취소하거나 완료한 뒤 모델을 변경해 주세요.".into());
     }
@@ -449,6 +461,7 @@ pub async fn ai_load(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let _lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
     check_open(&state)?;
+    yield_backlog(&state).await?;
     if state.analysis.running() {
         return Err("분석이 완료된 뒤 다시 시도해 주세요.".into());
     }
@@ -468,6 +481,7 @@ pub async fn ai_unload(state: tauri::State<'_, AppState>) -> Result<(), String> 
     let _lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
     check_open(&state)?;
+    yield_backlog(&state).await?;
     if state.analysis.running() {
         return Err("먼저 진행 중인 분석을 취소해 주세요.".into());
     }
@@ -478,6 +492,7 @@ pub async fn ai_restart(state: tauri::State<'_, AppState>) -> Result<(), String>
     let _lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
     check_open(&state)?;
+    yield_backlog(&state).await?;
     if state.analysis.running() {
         return Err("먼저 진행 중인 분석을 취소해 주세요.".into());
     }
@@ -496,6 +511,7 @@ pub async fn ai_remove(
     }
     let _gate = state.ai_gate.lock().await;
     check_open(&state)?;
+    yield_backlog(&state).await?;
     if state.analysis.running() || state.models.busy() {
         return Err("진행 중인 AI 작업을 먼저 취소하거나 완료해 주세요.".into());
     }
@@ -556,6 +572,7 @@ pub async fn ai_preferences(
         if !["auto", "cpu", "gpu"].contains(&preferences.execution_mode.as_str()) {
             return Err("AI 실행 장치를 확인해 주세요.".into());
         }
+        yield_backlog(&state).await?;
         if state.analysis.running() {
             return Err("분석을 취소하거나 완료한 뒤 실행 장치를 변경해 주세요.".into());
         }
@@ -579,6 +596,7 @@ pub async fn ai_preferences(
         return Ok(());
     }
     if preferences.setup_completed && !old.setup_completed {
+        yield_backlog(&state).await?;
         if state.analysis.running() {
             return Err("분석이 끝난 뒤 설정을 완료해 주세요.".into());
         }
@@ -615,6 +633,7 @@ pub async fn ai_analyze(
         document_id,
         revision_id,
         regenerate,
+        analysis::DIRECT_PRIORITY,
         lease,
     )
 }

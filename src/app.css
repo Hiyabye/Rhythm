@@ -1745,13 +1745,6 @@ select:focus-visible {
   line-height: 1.5;
   font-variant-numeric: tabular-nums;
 }
-.notice-history {
-  font-size: 11px;
-  padding: 0 6px;
-  border: 1px solid var(--line);
-  background: var(--pane);
-  border-radius: 4px;
-}
 .notice-snippet {
   color: var(--secondary);
   font-size: 12px;

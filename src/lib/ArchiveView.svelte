@@ -322,7 +322,7 @@
               <p>Rhythm은 서강대학교의 공개 공지를 이 기기에 보관해 인터넷 없이도 읽고 검색할 수 있게 합니다. 계정이나 클라우드 없이 모든 자료와 설정은 이 기기에만 저장됩니다.</p>
               <ol>
                 <li>설정 → 확장 기능에서 서강대학교 공지를 켜고 게시판을 구독합니다. 원문 수집을 확인한 게시판만 구독할 수 있습니다.</li>
-                <li>새로고침을 누르면 새 소식과 아직 받지 않은 과거 자료를 차례로 가져옵니다. 직접 시작하거나 자동 동기화를 켠 경우에만 네트워크를 사용합니다.</li>
+                <li>새로고침을 누르면 새 소식과 아직 받지 않은 이전 공지를 차례로 가져옵니다. 직접 시작하거나 자동 동기화를 켠 경우에만 네트워크를 사용합니다.</li>
                 <li>로컬 AI 모델은 선택 사항입니다. 모델 없이도 읽기, 검색과 추천을 사용할 수 있습니다.</li>
                 <li>백그라운드 실행, 자동 동기화와 알림은 처음에 모두 꺼져 있습니다. 켜더라도 Rhythm이 실행 중이고 기기가 깨어 있을 때만 동작합니다.</li>
               </ol>
@@ -404,7 +404,7 @@
                     <li><button class="event" class:notice-unread={!item.is_read} id={`week-${item.id}`} onclick={() => void open(item, `week-${item.id}`)}>
                       <span class={`event-bar family-${familyOf(item.source_id)}`} aria-hidden="true"></span>
                       <span class="event-title">{item.title}</span>
-                      <span class="event-meta">{item.source_name}{#if item.historical}{' · '}과거 자료{/if}</span>
+                      <span class="event-meta">{item.source_name}</span>
                     </button></li>
                   {/each}
                   {#if day.notices.length > weekDayLimit}<li class="day-more">외 {day.notices.length - weekDayLimit}건 · 받은 소식에서 모두 보기</li>{/if}
@@ -461,7 +461,7 @@
           <li class:notice-unread={!item.is_read}>
             <button class="notice-open" id={`notice-${item.id}`} onclick={() => open(item)}>
               <span class="notice-title"><span class="notice-read-dot" aria-hidden="true"></span><Highlighted text={item.title} {query} /><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}</span></span>
-              <span class="notice-meta"><span>{item.source_name}</span><time datetime={item.published_at}>{archiveDate(item.published_at)}</time>{#if item.category}<span>{item.category}</span>{/if}{#if item.historical}<span class="notice-history">과거 자료</span>{/if}</span>
+              <span class="notice-meta"><span>{item.source_name}</span><time datetime={item.published_at}>{archiveDate(item.published_at)}</time>{#if item.category}<span>{item.category}</span>{/if}</span>
               {#if analysis && page !== 'search'}<span class="notice-ai-preview"><span class="ai-tag">AI · {analysis.result.category}</span> {analysis.result.short_summary}</span>{/if}
               {#if page === 'search' && item.snippet}<span class="notice-snippet"><Highlighted text={item.snippet} {query} /></span>{/if}
               {#if item.content_status === 'missing_resources'}<span class="notice-resource-warning">일부 첨부 자료 미저장</span>{/if}

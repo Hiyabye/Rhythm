@@ -1,7 +1,11 @@
 //! Bounded maintenance while the application is open; not a background scheduler.
-use crate::{storage::intelligence::AiPreferences, AppState};
+use crate::{
+    intelligence::{analysis, idle},
+    storage::intelligence::AiPreferences,
+    AppState,
+};
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -9,6 +13,12 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::Manager;
+
+/// Opt-in backlog work starts only after this much OS user inactivity.
+const BACKLOG_IDLE_MINIMUM: Duration = Duration::from_secs(5 * 60);
+/// Rolling-hour cap for backlog attempts, independent of the session cap.
+const BACKLOG_HOURLY_LIMIT: usize = 20;
+const BACKLOG_WINDOW: Duration = Duration::from_secs(60 * 60);
 
 fn automatic_budget(energy: &str, preferences: &AiPreferences, focused: bool) -> u32 {
     if !focused
@@ -25,6 +35,29 @@ fn automatic_budget(energy: &str, preferences: &AiPreferences, focused: bool) ->
         _ => 0,
     }
 }
+
+/// Backlog is opt-in, idle-only and never runs in Eco. Both platform probes are
+/// required; an unknown observation (None) never admits work.
+fn backlog_allowed(energy: &str, preferences: &AiPreferences, ready: bool) -> bool {
+    ready
+        && preferences.processing_mode == "backlog"
+        && preferences.setup_completed
+        && preferences.active_model_id.is_some()
+        && energy != "eco"
+}
+
+/// Drops timestamps older than the rolling hour and reports whether one more
+/// backlog attempt fits under the cap.
+fn backlog_window_allows(window: &mut VecDeque<Instant>, now: Instant) -> bool {
+    while window
+        .front()
+        .is_some_and(|started| now.saturating_duration_since(*started) >= BACKLOG_WINDOW)
+    {
+        window.pop_front();
+    }
+    window.len() < BACKLOG_HOURLY_LIMIT
+}
+
 fn idle_limit(energy: &str) -> Duration {
     Duration::from_secs(match energy {
         "eco" => 30,
@@ -89,6 +122,7 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
     let boundary = session_boundary(SystemTime::now());
     let mut attempted = HashSet::new();
     let mut admitted = 0;
+    let mut backlog_window = VecDeque::new();
     let mut last_activity = Instant::now();
     let mut previous_model = None;
     let mut previous_job = None;
@@ -165,15 +199,50 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
                 last_activity = Instant::now();
             }
         }
-        if admitted >= automatic_budget(&energy, &preferences, focused) {
+        if admitted < automatic_budget(&energy, &preferences, focused) {
+            let Some(boundary) = boundary.as_deref() else {
+                continue;
+            };
+            // Bound recent ingestion/revision candidates, independent of publication
+            // order. Initial historical backfill and already-attempted work are excluded.
+            let candidate = recent_candidates(&state, &preferences, boundary, &attempted);
+            let Some((document, revision)) = candidate else {
+                continue;
+            };
+            attempted.insert((document, revision));
+            if shutdown.load(Ordering::Acquire) {
+                break;
+            }
+            match state.analysis.start_admitted(
+                state.store.clone(),
+                state.worker.clone(),
+                state.data_root.clone(),
+                document,
+                revision,
+                false,
+                analysis::DIRECT_PRIORITY,
+                lease,
+            ) {
+                Ok(response) if response.job.is_some() => {
+                    admitted += 1;
+                    last_activity = Instant::now();
+                }
+                Ok(_) => (),
+                Err(error) => eprintln!("AI opportunistic admission: {error}"),
+            }
             continue;
         }
-        let Some(boundary) = boundary.as_deref() else {
+        // Opt-in idle backlog. The platform probes run only when the mode is on.
+        let backlog_ready = preferences.processing_mode == "backlog"
+            && backlog_allowed(
+                &energy,
+                &preferences,
+                idle::user_is_idle(BACKLOG_IDLE_MINIMUM) && idle::on_external_power(),
+            );
+        if !backlog_ready || !backlog_window_allows(&mut backlog_window, Instant::now()) {
             continue;
-        };
-        // Bound recent ingestion/revision candidates, independent of publication
-        // order. Initial historical backfill and already-attempted work are excluded.
-        let candidate = candidates(&state, &preferences, boundary, &attempted);
+        }
+        let candidate = backlog_candidate(&state, &preferences, &attempted);
         let Some((document, revision)) = candidate else {
             continue;
         };
@@ -188,33 +257,59 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
             document,
             revision,
             false,
+            analysis::BACKLOG_PRIORITY,
             lease,
         ) {
             Ok(response) if response.job.is_some() => {
-                admitted += 1;
+                backlog_window.push_back(Instant::now());
                 last_activity = Instant::now();
             }
             Ok(_) => (),
-            Err(error) => eprintln!("AI opportunistic admission: {error}"),
+            Err(error) => eprintln!("AI backlog admission: {error}"),
         }
     }
 }
 
-fn candidates(
+fn selected_model(
+    state: &AppState,
+    preferences: &AiPreferences,
+) -> Option<crate::storage::intelligence::AiModel> {
+    let store = state.store.try_lock().ok()?;
+    store
+        .ai_model(preferences.active_model_id.as_deref()?)
+        .ok()?
+}
+
+fn recent_candidates(
     state: &AppState,
     preferences: &AiPreferences,
     boundary: &str,
     attempted: &HashSet<(i64, i64)>,
 ) -> Option<(i64, i64)> {
-    let store = state.store.try_lock().ok()?;
-    let model = store
-        .ai_model(preferences.active_model_id.as_deref()?)
-        .ok()??;
-    if model.status != "installed" {
+    if selected_model(state, preferences)?.status != "installed" {
         return None;
     }
+    let store = state.store.try_lock().ok()?;
     store
         .ai_recent_candidates(boundary, 20)
+        .ok()?
+        .into_iter()
+        .find(|identity| !attempted.contains(identity))
+}
+
+/// Newest publication first across the whole archive, including the initial
+/// backfill. Revisions with any prior attempt or result are excluded by the query.
+fn backlog_candidate(
+    state: &AppState,
+    preferences: &AiPreferences,
+    attempted: &HashSet<(i64, i64)>,
+) -> Option<(i64, i64)> {
+    if selected_model(state, preferences)?.status != "installed" {
+        return None;
+    }
+    let store = state.store.try_lock().ok()?;
+    store
+        .ai_backlog_candidates(BACKLOG_HOURLY_LIMIT as u32)
         .ok()?
         .into_iter()
         .find(|identity| !attempted.contains(identity))
@@ -251,6 +346,8 @@ mod tests {
         assert_eq!(automatic_budget("performance", &p, false), 0);
         p.processing_mode = "explicit".into();
         assert_eq!(automatic_budget("performance", &p, true), 0);
+        p.processing_mode = "backlog".into();
+        assert_eq!(automatic_budget("performance", &p, true), 0);
         p.processing_mode = "recent".into();
         p.setup_completed = false;
         assert_eq!(automatic_budget("balanced", &p, true), 0);
@@ -267,6 +364,38 @@ mod tests {
         assert_eq!(automatic_budget("performance", &p, true), 0);
         p.automatic_limit = u32::MAX;
         assert_eq!(automatic_budget("performance", &p, true), 20);
+    }
+    #[test]
+    fn backlog_requires_opt_in_idle_power_and_non_eco() {
+        let mut p = preferences();
+        p.processing_mode = "backlog".into();
+        assert!(backlog_allowed("balanced", &p, true));
+        assert!(!backlog_allowed("eco", &p, true));
+        assert!(!backlog_allowed("balanced", &p, false));
+        p.processing_mode = "recent".into();
+        assert!(!backlog_allowed("performance", &p, true));
+        p.processing_mode = "backlog".into();
+        p.setup_completed = false;
+        assert!(!backlog_allowed("balanced", &p, true));
+        p.setup_completed = true;
+        p.active_model_id = None;
+        assert!(!backlog_allowed("balanced", &p, true));
+    }
+    #[test]
+    fn backlog_hourly_window_prunes_and_caps() {
+        let now = Instant::now();
+        let mut window = VecDeque::new();
+        for _ in 0..BACKLOG_HOURLY_LIMIT {
+            assert!(backlog_window_allows(&mut window, now));
+            window.push_back(now);
+        }
+        assert!(!backlog_window_allows(&mut window, now));
+        // Entries older than an hour are dropped before the cap is applied.
+        assert!(backlog_window_allows(
+            &mut window,
+            now + BACKLOG_WINDOW + Duration::from_secs(1)
+        ));
+        assert_eq!(window.len(), 0);
     }
     #[test]
     fn utc_boundary_and_residency_policy_are_deterministic() {
