@@ -12,21 +12,21 @@ Inference runs in upstream `llama-server` from llama.cpp build **b12068** (`0.8.
 
 | Model | Repository / file | Revision | Bytes | Status |
 | --- | --- | --- | ---: | --- |
-| Qwen3.5 0.8B | [`unsloth/Qwen3.5-0.8B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF) / `Qwen3.5-0.8B-Q4_K_M.gguf` | `6ab461498e2023f6e3c1baea90a8f0fe38ab64d0` | 532,517,120 | Experimental: never downloaded or run |
 | Qwen3.5 2B | [`unsloth/Qwen3.5-2B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF) / `Qwen3.5-2B-Q4_K_M.gguf` | `f6d5376be1edb4d416d56da11e5397a961aca8ae` | 1,280,835,840 | Verified for macOS Apple Silicon / Metal; Windows GTX 1650 / Vulkan and Windows CPU |
 | Qwen3.5 4B | [`unsloth/Qwen3.5-4B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF) / `Qwen3.5-4B-Q4_K_M.gguf` | `e87f176479d0855a907a41277aca2f8ee7a09523` | 2,740,937,888 | Verified for macOS Apple Silicon / Metal; Windows GTX 1650 / Vulkan and Windows CPU (4 of 18 fixtures) |
 
 ```text
-0.8B bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517
 2B   aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223
 4B   00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4
 ```
 
-Catalog memory values (2/4/7 GiB) are estimates, not measured peaks. `verified` means the qualified artifact/backend evidence below, not factual correctness. 9B (`qwen35-9b`) was removed from the catalog after v1.0.0 without ever being run; existing installs keep working.
+Catalog memory values (4/7 GiB) are estimates, not measured peaks. `verified` means the qualified artifact/backend evidence below, not factual correctness. 9B (`qwen35-9b`) was removed from the catalog after v1.0.0 without ever being run, and 0.8B (`qwen35-0-8b`, [`unsloth/Qwen3.5-0.8B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF) `Qwen3.5-0.8B-Q4_K_M.gguf` at `6ab461498e2023f6e3c1baea90a8f0fe38ab64d0`, SHA-256 `bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517`) after failing the evaluation below; existing installs keep working.
 
 ## Current evidence
 
 **llama-server b12068, Metal, 2B** (macOS 27.2, M1 Pro, 16 GiB; all 18 synthetic fixtures, production controller → validation → Store path, `llama-server` from a bundled debug `Rhythm.app`): 18/18 jobs completed with schema-valid, grounded output, 1 needing its one repair; 7/18 also passed every screening check (category, deadline set, summary terms). 8 had the wrong category and 2 the wrong deadline set. Total inference 92 s (≈65 completion tok/s, 2–10 s per notice); `offloaded 25/25 layers to GPU`. In the same harness and fixtures, the former mistral.rs Metal release worker completed 18/18 and passed 7/18 in 236 s.
+
+**llama-server b12068, Metal, 0.8B, rejected (#74)** (same Mac, harness and 18 fixtures; the pinned file downloaded through `real_curated_model_install`, 532,517,120 bytes, SHA-256 matched): only 14/18 jobs completed; 4 (`no_deadline`, `complex_eligibility`, `relative_date`, `long_tail_correction`) failed validation after their one repair, and 3 completed jobs also needed it. 3/18 passed every screening check; of the 14 completed, 7 had the wrong category and 4 the wrong deadline set. Total inference 61 s (≈111 completion tok/s), server RSS ≈1.1 GiB. Completed results were not useful: for `incomplete_source` (body says only that details are in an unextracted attachment) it saved a summary about a "2024년 1월 1일부터 2월 20일까지의 군사 훈련" and a "2 월 20 일" deadline fact, none of which is in the source; `long` reversed the 휴학생 exclusion and `event_only` turned the event time into a deadline. Windows was not run.
 
 **llama-server b12068, installed macOS app (#83):** a release `Rhythm.app` (`817f25d`, production identifier) launched by its executable with a temporary `HOME` on the populated synthetic fixture profile; the pinned 2B file (size and SHA-256 matched, cloned from an earlier validation profile, so the in-app download was not exercised) was registered as an external file. The app used the loopback fallback (the scratch path exceeds the socket limit) on 127.0.0.1 only, and `run/` was empty afterwards.
 
@@ -45,7 +45,7 @@ Evidence from the former mistral.rs worker (same artifacts, different engine), n
 
 **llama-server b12068, Windows 11, GTX 1650:** 2B and 4B on Vulkan and 2B on CPU completed 18/18 fixtures, 4B on CPU the first 4; an isolated installed app analyzed one synthetic notice on GPU and CPU. Details in [Windows validation](WINDOWS_VALIDATION.md#ai-on-windows).
 
-Not verified with llama-server: 4B on macOS and CPU analysis quality on macOS; in the installed macOS app, the in-app download, cancellation during generation (only during server start), a Unix-socket launch and the production profile; cancellation or crash recovery in the installed Windows app. Never verified: 0.8B, NVIDIA GPUs other than one GTX 1650, Intel Macs, and any broad accuracy rate.
+Not verified with llama-server: 4B on macOS and CPU analysis quality on macOS; in the installed macOS app, the in-app download, cancellation during generation (only during server start), a Unix-socket launch and the production profile; cancellation or crash recovery in the installed Windows app. Never verified: NVIDIA GPUs other than one GTX 1650, Intel Macs, and any broad accuracy rate.
 
 ## Known quality limits
 

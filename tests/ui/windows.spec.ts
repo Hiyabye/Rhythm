@@ -141,6 +141,8 @@ test('model installation folder changes explain and preserve a cancelled downloa
   await expect(page.getByText('중단한 다운로드는 원래 폴더에서 이어받습니다.', { exact: false })).toBeVisible();
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Qwen3.5 4B 설치 다시 시도 / 이어받기', exact: true }).click();
+  // Wait for the mocked install to finish: the tile's layout change can scroll the page, which closes an open popover.
+  await expect(page.getByRole('button', { name: 'Qwen3.5 4B 선택', exact: true })).toBeVisible({ timeout: 15000 });
   const installed = await modelInfo(page, 'Qwen3.5 4B');
   await expect(installed.getByText('C:\\Rhythm-test\\models', { exact: true })).toBeVisible();
   await expect(installed.getByText('C:\\Rhythm-test\\models\\qwen35-4b.gguf', { exact: true })).toBeVisible();

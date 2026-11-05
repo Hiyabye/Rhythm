@@ -215,7 +215,7 @@ The Rust sanitizer keeps a limited structural HTML subset, strips scripts, ifram
 
 ## Managed models and downloads
 
-`intelligence/models.rs` owns curated downloads, separate from notice transport. `catalog.json` pins Qwen3.5 0.8B/2B/4B Q4_K_M revisions, files, sizes and SHA-256 (see [AI evaluation](AI_EVALUATION.md#pinned-artifacts)). One-click installation accepts only `verified` entries. Inventory rows don't depend on the catalog: a row whose catalog entry was removed (9B) still opens, selects, removes and restores, and the UI marks it as no longer offered; its bytes are never deleted implicitly.
+`intelligence/models.rs` owns curated downloads, separate from notice transport. `catalog.json` pins Qwen3.5 2B/4B Q4_K_M revisions, files, sizes and SHA-256 (see [AI evaluation](AI_EVALUATION.md#pinned-artifacts)). One-click installation accepts only `verified` entries. Inventory rows don't depend on the catalog: a row whose catalog entry was removed (9B, 0.8B) still opens, selects, removes and restores, and the UI marks it as no longer offered; its bytes are never deleted implicitly.
 
 Downloads use HTTPS to exact approved Hugging Face/CDN hosts with pinned public DNS per hop, normal TLS, no proxy and at most five reviewed redirects. A disk check reserves 1 GiB beyond the remaining bytes. Paths are generated: `models/<sha256>.part` and `models/<sha256>.gguf` under the default folder or the model's recorded custom destination (`model_storage.rs`). Resume needs a strong ETag, `Range`/`If-Range`, an exact `Content-Range` and the expected remaining size; a full `200` restarts. Files sync and pass GGUF preflight, exact size and committed SHA-256 before an atomic rename.
 

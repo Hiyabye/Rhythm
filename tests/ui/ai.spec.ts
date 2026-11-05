@@ -353,17 +353,10 @@ test('managed model removal can keep files after an inaccessible folder error an
   await expect(page.getByRole('region', { name: '공지 AI 분석' }).getByText('장학금 신청 일정과 제출 서류를 확인하세요.', { exact: true })).toBeVisible();
 });
 
-test('experimental 0.8B is listed without one-click install and a retired 9B stays removable', async ({ page }) => {
+test('a retired 9B stays removable and is never offered for installation', async ({ page }) => {
   await mockDesktop(page, { aiRetiredModel: true });
   await page.goto('/');
   await openSettings(page, 'AI');
-  // Offered models are tiles; the experimental one waits under 고급 and cannot be installed in one click.
-  await expect(page.locator('.model-tile').filter({ hasText: 'Qwen3.5 0.8B' })).toHaveCount(0);
-  await advanced(page);
-  const small = page.locator('.ai-experimental').filter({ hasText: 'Qwen3.5 0.8B' });
-  await expect(small).toContainText('실험적 · 추론 미검증');
-  await expect(small.getByRole('button', { name: 'Qwen3.5 0.8B 다운로드 및 설치', exact: true })).toBeDisabled();
-  await expect(page.locator('.ai-experimental').filter({ hasText: 'Qwen3.5 9B' })).toHaveCount(0);
   const retired = page.locator('.model-tile').filter({ has: page.getByRole('heading', { name: 'Qwen3.5 9B', exact: true }) });
   await expect(retired.getByText('더 이상 제공하지 않는 모델', { exact: true })).toBeVisible();
   await expect(retired.getByRole('button', { name: /다운로드 및 설치|이어받기/ })).toHaveCount(0);
