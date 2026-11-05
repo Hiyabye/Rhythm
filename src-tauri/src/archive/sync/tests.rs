@@ -2542,3 +2542,120 @@ async fn resources_mode_downloads_missing_files_without_touching_board_state() {
     .await;
     assert_eq!(fake.paths().len(), calls);
 }
+
+fn community_listing(total: u32, rows: &[(&str, u32, &str, &str)]) -> String {
+    let rows: String = rows
+        .iter()
+        .map(|(title, ordinal, date, idx)| {
+            format!(
+                "<tr><td>{ordinal}</td><td><a href=\"/kor/community/notice02.php?m=v&amp;idx={idx}&amp;pNo=1&amp;code=general\">{title}</a></td><td>{date}</td><td>1</td></tr>"
+            )
+        })
+        .collect();
+    format!(
+        "<!DOCTYPE html><html><body><h3 id=\"sub_tit\">일반공지</h3><div id=\"board\">\
+<div class=\"list_top\"><p>총 <span>{total}</span>건의 게시물</p></div>\
+<table class=\"basic_list\"><tbody>{rows}</tbody></table>\
+<div class=\"b_page_no\"><div>\
+<a class='pageBtn pageBtn_first'>FIRST</a><a class='pageBtn pageBtn_prev'>PREV</a>\
+<div><a class='on'>1</a></div>\
+<a class='pageBtn pageBtn_next'>NEXT</a><a class='pageBtn pageBtn_last'>LAST</a>\
+</div></div></div></body></html>"
+    )
+}
+
+#[tokio::test]
+async fn community_board_syncs_text_and_robots_allowed_attachment_then_reopens_offline() {
+    let (dir, store) = setup(&["ee-general"]);
+    let fake = Fake::new(vec![]);
+    let list = "https://ee.sogang.ac.kr/kor/community/notice02.php?pNo=1&code=general";
+    let detail =
+        "https://ee.sogang.ac.kr/kor/community/notice02.php?m=v&idx=2867&pNo=1&code=general";
+    let attachment = "https://ee.sogang.ac.kr/aseoul_bbs/down.php?d=1&idx=2867";
+    fake.extra.lock().unwrap().insert(
+        list.into(),
+        Some((
+            community_listing(
+                1,
+                &[(
+                    "2026 서강대-LG이노텍 Track 상담부스 및 설명회 안내(11/3 화)",
+                    1,
+                    "2026.11.02",
+                    "2867",
+                )],
+            )
+            .into_bytes(),
+            "text/html".into(),
+        )),
+    );
+    fake.extra.lock().unwrap().insert(
+        detail.into(),
+        Some((
+            include_str!("../fixtures/community-ee-general-detail-2867.html")
+                .replace(
+                    "/kor/community/notice02.php?pNo=2&amp;code=general",
+                    "/kor/community/notice02.php?pNo=1&amp;code=general",
+                )
+                .into_bytes(),
+            "text/html".into(),
+        )),
+    );
+    fake.extra.lock().unwrap().insert(
+        attachment.into(),
+        Some((PDF.to_vec(), "application/pdf".into())),
+    );
+    let controller = Controller::new();
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &["ee-general"],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    let items = items(&store);
+    assert_eq!(items.len(), 1);
+    assert!(items[0].historical);
+    assert!(items[0].title.contains("LG이노텍"));
+    let detail = with_store(&store, |s| s.document(items[0].id, None)).unwrap();
+    assert!(detail.body_text.contains("서강대"));
+    assert_eq!(detail.resources.len(), 3);
+    let downloaded = detail
+        .resources
+        .iter()
+        .find(|resource| resource.kind == "attachment")
+        .unwrap();
+    assert_eq!(downloaded.status, "downloaded");
+    assert!(downloaded.sha256.is_some());
+    assert_eq!(
+        detail
+            .resources
+            .iter()
+            .filter(|resource| resource.kind == "image")
+            .count(),
+        2
+    );
+    assert!(detail
+        .resources
+        .iter()
+        .filter(|resource| resource.kind == "image")
+        .all(|resource| resource.status == "unsupported"));
+    // robots.txt disallows /se2/; the policy rejects those URLs before any request.
+    assert!(
+        fake.paths().iter().all(|url| !url.contains("/se2/")),
+        "{:?}",
+        fake.paths()
+    );
+    drop(store);
+    let reopened = Arc::new(Mutex::new(
+        Store::open(&dir.path().join("rhythm.sqlite3")).unwrap(),
+    ));
+    let offline = with_store(&reopened, |s| s.document(items[0].id, None)).unwrap();
+    assert_eq!(offline.resources.len(), 3);
+    assert!(offline
+        .resources
+        .iter()
+        .any(|resource| resource.kind == "attachment" && resource.status == "downloaded"));
+}

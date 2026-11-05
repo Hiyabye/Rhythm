@@ -365,6 +365,35 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
                     .any(|extension| parts[2].to_ascii_lowercase().ends_with(extension));
             board || download || image || path == "/robots.txt"
         }
+        "ee.sogang.ac.kr" => {
+            let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+            // robots.txt disallows /se2/ (inline editor images) and /data/; the
+            // /aseoul_bbs/ attachment route is not covered by any rule.
+            let article = parts.len() == 3
+                && ((parts[0] == "kor"
+                    && parts[1] == "community"
+                    && [
+                        "notice01.php",
+                        "notice02.php",
+                        "notice03.php",
+                        "seminar.php",
+                        "employment.php",
+                    ]
+                    .contains(&parts[2]))
+                    || parts[..2] == ["kor", "recruit"] && parts[2] == "recruit.php");
+            let attachment = parts.len() == 2 && parts[0] == "aseoul_bbs" && parts[1] == "down.php";
+            article || attachment || path == "/robots.txt"
+        }
+        "sse.sogang.ac.kr" => {
+            let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+            // robots.txt disallows /se2/, /data/ and /bbs/, so attachments and
+            // inline images are never requested from this host.
+            (parts.len() == 3
+                && parts[0] == "kor"
+                && parts[1] == "community"
+                && ["notice.php", "news.php", "seminar.php"].contains(&parts[2]))
+                || path == "/robots.txt"
+        }
         _ => false,
     };
     if url.scheme() != "https"
@@ -457,6 +486,47 @@ mod tests {
             &Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData?pkId=1").unwrap()
         )
         .is_ok());
+    }
+    #[test]
+    fn community_policy_is_limited_to_current_routes_and_robots_allowed_resources() {
+        for value in [
+            "https://ee.sogang.ac.kr/kor/community/notice01.php?pNo=2&code=news",
+            "https://ee.sogang.ac.kr/kor/community/notice02.php?m=v&idx=2867&pNo=2&code=general",
+            "https://ee.sogang.ac.kr/kor/recruit/recruit.php?pNo=1&code=recruit",
+            "https://ee.sogang.ac.kr/aseoul_bbs/down.php?d=1&idx=2867",
+            "https://ee.sogang.ac.kr/robots.txt",
+            "https://sse.sogang.ac.kr/kor/community/notice.php?pNo=2",
+            "https://sse.sogang.ac.kr/kor/community/news.php?m=v&idx=233&pNo=1",
+            "https://sse.sogang.ac.kr/kor/community/seminar.php",
+            "https://sse.sogang.ac.kr/robots.txt",
+        ] {
+            assert!(validate_url(&Url::parse(value).unwrap()).is_ok(), "{value}");
+        }
+        for value in [
+            // robots.txt disallows these paths on both hosts.
+            "https://ee.sogang.ac.kr/se2/photo_uploader/upload/1793606246.png",
+            "https://sse.sogang.ac.kr/se2/photo_uploader/upload/1777513674.png",
+            "https://sse.sogang.ac.kr/data/bbsData/0635011001792981167.png",
+            "https://sse.sogang.ac.kr/bbs/down.php?d=1&idx=198",
+            "https://ee.sogang.ac.kr/bbs/down.php?d=1&idx=198",
+            "https://ee.sogang.ac.kr/aseoul/down.php?d=1&idx=1",
+            "https://ee.sogang.ac.kr/aseoul_bbs/upload.php",
+            "https://ee.sogang.ac.kr/aseoul_bbs/down.php/nested",
+            "https://ee.sogang.ac.kr/kor/community/notice04.php",
+            "https://ee.sogang.ac.kr/kor/community/notice01.php/extra",
+            "https://sse.sogang.ac.kr/kor/community/notice02.php",
+            "https://sse.sogang.ac.kr/kor/recruit/recruit.php",
+            "http://ee.sogang.ac.kr/kor/community/notice01.php",
+        ] {
+            assert!(
+                validate_url(&Url::parse(value).unwrap()).is_err(),
+                "{value}"
+            );
+            assert!(
+                validate(&Url::parse(value).unwrap(), Access::EmbeddedImage).is_err(),
+                "{value}"
+            );
+        }
     }
     #[test]
     fn embedded_images_may_use_other_public_https_hosts_but_school_hosts_stay_exact() {
