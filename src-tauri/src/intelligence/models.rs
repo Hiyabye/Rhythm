@@ -193,11 +193,7 @@ impl Controller {
             .into_iter()
             .find(|e| e.id == catalog_id)
             .ok_or("모델 목록에서 항목을 선택해 주세요.")?;
-        if !matches!(entry.compatibility.as_str(), "verified" | "available") {
-            return Err(
-                "이 모델은 실제 추론 검증 전이므로 원클릭 설치를 제공하지 않습니다.".into(),
-            );
-        }
+        check_installable(&entry)?;
         self.start_entry_with_lease(store, root, entry, None)
     }
     pub fn start_admitted(
@@ -211,11 +207,7 @@ impl Controller {
             .into_iter()
             .find(|e| e.id == catalog_id)
             .ok_or("모델 목록에서 항목을 선택해 주세요.")?;
-        if !matches!(entry.compatibility.as_str(), "verified" | "available") {
-            return Err(
-                "이 모델은 실제 추론 검증 전이므로 원클릭 설치를 제공하지 않습니다.".into(),
-            );
-        }
+        check_installable(&entry)?;
         self.start_entry_with_lease(store, root, entry, Some(lease))
     }
     #[cfg(test)]
@@ -323,6 +315,13 @@ fn inventory(entry: &CatalogEntry) -> AiModel {
         updated_at: String::new(),
     }
 }
+fn check_installable(entry: &CatalogEntry) -> Result<(), String> {
+    if matches!(entry.compatibility.as_str(), "verified" | "available") {
+        Ok(())
+    } else {
+        Err("이 모델은 실제 추론 검증 전이므로 원클릭 설치를 제공하지 않습니다.".into())
+    }
+}
 fn validate_manifest(e: &CatalogEntry) -> Result<(), String> {
     let hex = |s: &str, n| {
         s.len() == n
@@ -333,12 +332,7 @@ fn validate_manifest(e: &CatalogEntry) -> Result<(), String> {
         || !hex(&e.revision, 40)
         || e.bytes == 0
         || e.bytes > 12 * 1024 * 1024 * 1024
-        || ![
-            "unsloth/Qwen3.5-0.8B-GGUF",
-            "unsloth/Qwen3.5-2B-GGUF",
-            "unsloth/Qwen3.5-4B-GGUF",
-        ]
-        .contains(&e.repository.as_str())
+        || !["unsloth/Qwen3.5-2B-GGUF", "unsloth/Qwen3.5-4B-GGUF"].contains(&e.repository.as_str())
         || !e.filename.ends_with(".gguf")
         || e.filename.contains(['/', '\\', '\0'])
         || !e.id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
@@ -1062,19 +1056,17 @@ mod tests {
         assert!(available_space(&path.join("없는 폴더")).is_err());
     }
     #[test]
-    fn catalog_distinguishes_verified_from_experimental() {
-        let entries = catalog();
-        assert_eq!(
-            entries
-                .iter()
-                .filter(|entry| entry.compatibility == "verified")
-                .count(),
-            2
-        );
-        assert!(entries
-            .iter()
-            .any(|entry| entry.id == "qwen35-0-8b" && entry.compatibility == "experimental"));
-        assert!(entries.iter().all(|entry| entry.id != "qwen35-9b"));
+    fn catalog_offers_only_verified_models() {
+        let ids: Vec<_> = catalog()
+            .into_iter()
+            .inspect(|entry| assert_eq!(entry.compatibility, "verified", "{}", entry.id))
+            .map(|entry| entry.id)
+            .collect();
+        // 9B was never run and 0.8B failed the synthetic evaluation; both were removed.
+        assert_eq!(ids, ["qwen35-2b", "qwen35-4b"]);
+        let mut experimental = catalog().remove(0);
+        experimental.compatibility = "experimental".into();
+        assert!(check_installable(&experimental).is_err());
     }
     #[test]
     fn sha256_target_features_preserve_standard_known_answers() {
@@ -1521,7 +1513,7 @@ mod tests {
     #[test]
     fn catalog_provenance_and_destination_policy() {
         let entries = catalog();
-        assert_eq!(entries.len(), 3);
+        assert_eq!(entries.len(), 2);
         for e in &entries {
             validate_manifest(e).unwrap();
             validate_destination(&download_url(e).unwrap(), e).unwrap();
@@ -1682,14 +1674,10 @@ mod tests {
         );
         assert!(!dir.path().join("models").exists());
         let c = Controller::default();
-        // Use the unverified candidate, never a promoted downloadable entry:
+        // Use an ID the catalog does not offer, never a downloadable entry:
         // ordinary tests must not start a real weight transfer.
-        let unverified = catalog()
-            .into_iter()
-            .find(|entry| !matches!(entry.compatibility.as_str(), "verified" | "available"))
-            .expect("update admission test if all catalog entries become verified");
         assert!(c
-            .start(store.clone(), dir.path().into(), unverified.id)
+            .start(store.clone(), dir.path().into(), "qwen35-0-8b".into())
             .is_err());
         *c.active.lock().unwrap() = Some(Arc::new(AtomicBool::new(false)));
         assert!(c

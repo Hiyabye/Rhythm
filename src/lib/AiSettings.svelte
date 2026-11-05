@@ -37,7 +37,6 @@
     }
     return list;
   });
-  let experimental = $derived(data?.catalog.filter((entry) => !installable(entry) && !data!.models.some((model) => model.catalog_id === entry.id)) ?? []);
   let activeModel = $derived(data?.models.find((model) => model.id === data?.preferences.active_model_id) ?? null);
   let hasInstalled = $derived(data?.models.some((model) => model.status === 'installed') ?? false);
 
@@ -242,9 +241,6 @@
 
       <h3 class="settings-group-title">다른 모델</h3>
       <div class="settings-group">
-        {#each experimental as entry (entry.id)}
-          <div class="settings-row ai-experimental"><span class="row-label">{entry.name}<span class="row-detail">{compatibilityLabel(entry)} · {archiveSize(entry.bytes)}</span></span><button class="button secondary small" disabled aria-label={`${entry.name} 다운로드 및 설치`}>설치</button></div>
-        {/each}
         <div class="settings-row stacked">
           <span class="row-label"><label for="local-model-path">이미 가진 GGUF 파일 등록</label><Hint label="GGUF 파일 등록">파일을 복사하지 않고 그 위치를 참조합니다. 참조를 해제해도 원본 파일은 지우지 않습니다.</Hint></span>
           <div class="field-with-button"><input id="local-model-path" type="text" bind:value={path} placeholder={isWindows ? 'C:\\모델\\model.gguf' : '/전체/경로/model.gguf'} spellcheck="false" /><button class="button secondary small" disabled={busy || data.busy || !path.trim()} aria-label="외부 파일 참조로 등록" onclick={() => action('ai_register', { path: path.trim() }, '로컬 모델을 등록했습니다. 선택한 뒤 불러와 호환성을 확인하세요.')}>등록</button></div>
