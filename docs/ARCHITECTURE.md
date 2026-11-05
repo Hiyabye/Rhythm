@@ -66,6 +66,7 @@ Rust owns persistence; browser previews never substitute localStorage or simulat
 | `011_skipped_articles` | `skipped_articles`: notices whose fetched response was rejected for its content, with listing URL, original historical marking, reason and response SHA-256 |
 | `012_resource_retry` | Data only: `too_large` rows (mostly mislabeled by an exhausted job budget) and images blocked only by the former route list become `pending` |
 | `013_ai_projector` | `ai_projectors`: optional vision projector (mmproj) artifact per model |
+| `014_ai_backlog_mode` | Data only: widens `ai_preferences.processing_mode` to `explicit`/`recent`/`backlog` by rebuilding the single-row table, and indexes `ai_jobs(document_id,revision_id,status)` for candidate queries |
 
 ### Archive tables
 
@@ -263,13 +264,15 @@ Diagnostics are transient: at most 20 terminal reports in memory with stage timi
 
 `intelligence/maintenance.rs` checks every five seconds while the app runs. Optional `recent` processing needs completed setup, an installed selected model and a focused main window. It considers at most 20 eligible latest revisions by collection time after session start, excluding historical backfill, startup history and revisions with any prior attempt. Attempts are capped per session.
 
+Optional `backlog` processing is idle-only and needs completed setup, an installed selected model, at least five minutes of OS user inactivity, external power and a non-Eco profile. It considers the latest revision of every notice that has archived text and no attempt for that revision, newest publication first, and admits at most 20 attempts per rolling hour while the app runs. `intelligence/idle.rs` reports OS idle time (CoreGraphics on macOS, `GetLastInputInfo` on Windows) and the power source (IOKit, `GetSystemPowerStatus`); an unavailable probe admits nothing. A running backlog attempt is cancelled and reaped before an explicit worker/inventory action reuses the engine. A direct analysis is never cancelled; pending work is claimed by priority (direct 100, backlog 10), so a running backlog item finishes and the direct request runs before any further backlog item.
+
 | Profile | Automatic analysis | Idle model residency | Scheduler cadence when interval is `0` |
 | --- | --- | --- | --- |
 | Eco | None (explicit only) | 30 s | 60 min |
 | Balanced | Up to `min(automatic_limit, 3)` | 120 s | 30 min |
 | Performance | Up to `min(automatic_limit, 20)` | 600 s | 15 min |
 
-Active work, a busy operation gate or model/job changes reset residency. Battery state is not detected; Eco disables automatic AI on AC and battery.
+Active work, a busy operation gate or model/job changes reset residency. Battery state is detected only to block backlog admission; Eco disables all automatic AI on AC and battery.
 
 ## Backup, restore and updater
 

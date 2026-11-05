@@ -704,6 +704,153 @@ fn recent_candidate_window_is_bounded_and_has_stable_ingestion_order() {
     integrity(&store);
 }
 #[test]
+fn backlog_candidates_include_backfill_and_order_by_publication_newest_first() {
+    let (_directory, store) = database();
+    store
+        .connection
+        .execute("DELETE FROM documents", [])
+        .unwrap();
+    let old = recent_record(
+        &store,
+        "backfill-old",
+        "2024-03-01",
+        true,
+        "2026-10-01T00:00:00.000Z",
+    );
+    let new = recent_record(
+        &store,
+        "newest",
+        "2026-09-01",
+        false,
+        "2026-10-01T00:00:00.000Z",
+    );
+    let attempted = recent_record(
+        &store,
+        "attempted",
+        "2026-10-01",
+        false,
+        "2026-10-01T00:00:00.000Z",
+    );
+    store
+        .ai_enqueue(
+            &AnalysisKey {
+                document_id: attempted.0,
+                revision_id: attempted.1,
+                ..key()
+            },
+            &json!({}),
+            1,
+        )
+        .unwrap();
+    let empty = store
+        .upsert_article(
+            "test",
+            &recent_article("empty-body", "2026-11-01", ""),
+            false,
+        )
+        .unwrap()
+        .0;
+    assert!(store.document(empty, None).unwrap().body_text.is_empty());
+    assert_eq!(store.ai_backlog_candidates(20).unwrap(), [new, old]);
+    assert_eq!(store.ai_backlog_candidates(1).unwrap(), [new]);
+    assert!(store.ai_backlog_candidates(0).unwrap().is_empty());
+    integrity(&store);
+}
+#[test]
+fn backlog_mode_migrates_schema_thirteen_and_persists_across_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    populated_schema_two(&path);
+    let connection = Connection::open(&path).unwrap();
+    for migration in [
+        include_str!("../../migrations/003_intelligence.sql"),
+        include_str!("../../migrations/004_personalization.sql"),
+        include_str!("../../migrations/005_proactive.sql"),
+        include_str!("../../migrations/006_notification_attempts.sql"),
+        include_str!("../../migrations/007_notification_activation.sql"),
+        include_str!("../../migrations/008_ai_execution_mode.sql"),
+        include_str!("../../migrations/009_ai_model_directory.sql"),
+        include_str!("../../migrations/010_update_check.sql"),
+        include_str!("../../migrations/011_skipped_articles.sql"),
+        include_str!("../../migrations/012_resource_retry.sql"),
+        include_str!("../../migrations/013_ai_projector.sql"),
+    ] {
+        connection.execute_batch(migration).unwrap();
+    }
+    connection
+        .execute_batch(
+            "UPDATE ai_preferences SET processing_mode='recent',setup_completed=1,
+             automatic_limit=7,max_tokens=2048;",
+        )
+        .unwrap();
+    drop(connection);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
+    let mut preferences = store.ai_preferences().unwrap();
+    assert_eq!(preferences.processing_mode, "recent");
+    assert!(preferences.setup_completed);
+    assert_eq!(preferences.automatic_limit, 7);
+    assert_eq!(preferences.max_tokens, 2048);
+    preferences.processing_mode = "backlog".into();
+    store.ai_save_preferences(&preferences).unwrap();
+    assert_eq!(store.ai_preferences().unwrap().processing_mode, "backlog");
+    preferences.processing_mode = "invalid".into();
+    assert!(store.ai_save_preferences(&preferences).is_err());
+    drop(store);
+    assert_eq!(
+        Store::open(&path)
+            .unwrap()
+            .ai_preferences()
+            .unwrap()
+            .processing_mode,
+        "backlog"
+    );
+}
+#[test]
+fn queue_claims_direct_requests_before_idle_backlog_work() {
+    let (_directory, mut store) = database();
+    let backlog = recent_record(
+        &store,
+        "backlog",
+        "2026-05-01",
+        true,
+        "2026-10-01T00:00:00.000Z",
+    );
+    let direct = recent_record(
+        &store,
+        "direct",
+        "2026-05-02",
+        false,
+        "2026-10-01T00:00:00.000Z",
+    );
+    let backlog_job = store
+        .ai_enqueue(
+            &AnalysisKey {
+                document_id: backlog.0,
+                revision_id: backlog.1,
+                ..key()
+            },
+            &json!({}),
+            10,
+        )
+        .unwrap();
+    let direct_job = store
+        .ai_enqueue(
+            &AnalysisKey {
+                document_id: direct.0,
+                revision_id: direct.1,
+                ..key()
+            },
+            &json!({}),
+            100,
+        )
+        .unwrap();
+    assert_eq!(store.ai_claim_next().unwrap().unwrap().id, direct_job.id);
+    assert_eq!(store.ai_claim_next().unwrap().unwrap().id, backlog_job.id);
+    assert!(store.ai_claim_next().unwrap().is_none());
+    integrity(&store);
+}
+#[test]
 fn populated_schema_two_upgrade_preserves_archive_and_settings() {
     let (directory, store) = database();
     assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);

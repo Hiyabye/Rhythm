@@ -224,8 +224,8 @@
     <h3 class="settings-group-title">분석</h3>
     <div class="settings-group">
       <div class="settings-row">
-        <span class="row-label"><label for="ai-processing-mode">분석 방식</label><Hint label="분석 방식">직접 요청은 공지에서 분석을 누를 때만 실행합니다. 최근 공지 소량 분석은 앱을 쓰는 동안 새로 보관되거나 바뀐 공지를 상한만큼만 분석합니다. 과거 자료와 이미 시도한 공지는 제외하며, 절전 모드나 앱 종료 후에는 분석하지 않습니다.</Hint></span>
-        <select id="ai-processing-mode" value={data.preferences.processing_mode} disabled={controlsBusy} onchange={(event) => preference({ processing_mode: event.currentTarget.value as AiPreferences['processing_mode'] })}><option value="explicit">직접 요청한 공지만</option><option value="recent">최근 공지 소량 분석</option></select>
+        <span class="row-label"><label for="ai-processing-mode">분석 방식</label><Hint label="분석 방식">직접 요청은 공지에서 분석을 누를 때만 실행합니다. 최근 공지 소량 분석은 앱을 쓰는 동안 새로 보관되거나 바뀐 공지를 상한만큼만 분석합니다. 쉬는 동안 전체 공지 분석은 앱을 쓰는 동안에는 자동으로 분석하지 않고, 컴퓨터를 5분 이상 쓰지 않을 때 아직 분석하지 않은 공지를 최신 게시일부터 시간당 20건까지 분석합니다. 절전 모드, 배터리 사용 중, 앱 종료 후에는 분석하지 않으며 이미 시도한 공지는 다시 시도하지 않습니다.</Hint></span>
+        <select id="ai-processing-mode" value={data.preferences.processing_mode} disabled={controlsBusy} onchange={(event) => preference({ processing_mode: event.currentTarget.value as AiPreferences['processing_mode'] })}><option value="explicit">직접 요청한 공지만</option><option value="recent">최근 공지 소량 분석</option><option value="backlog">쉬는 동안 전체 공지 분석</option></select>
       </div>
       {#if data.preferences.processing_mode === 'recent'}
         <div class="settings-row"><label class="row-label" for="ai-automatic-limit">한 번에 자동 분석할 공지</label><input id="ai-automatic-limit" class="number-field" type="number" min="0" max="20" value={data.preferences.automatic_limit} disabled={controlsBusy} onchange={(event) => preference({ automatic_limit: Number(event.currentTarget.value) })} /></div>
