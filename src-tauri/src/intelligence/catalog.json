@@ -32,5 +32,39 @@
     "license": "Apache-2.0",
     "compatibility": "verified",
     "reason": "macOS Apple Silicon · Metal에서 실제 한국어 분석을 확인했습니다. Windows는 CPU(RAM 16GB)와 NVIDIA GTX 1650 한 대에서 제한된 공지로만 시험했으므로 결과를 원문과 대조해 주세요. 그 밖의 환경은 미검증이며 메모리 부족 시 불러오지 못할 수 있습니다."
+  },
+  {
+    "id": "gemma4-e2b",
+    "name": "Gemma 4 E2B",
+    "parameters": "E2B",
+    "quantization": "Q4_K_M",
+    "bytes": 3106738272,
+    "memory_bytes": 6442450944,
+    "description": "한국어 공지 요약과 정보 추출을 위한 로컬 모델",
+    "use_case": "가벼운 공지 분석",
+    "repository": "unsloth/gemma-4-E2B-it-GGUF",
+    "revision": "0314792d7f1f7e229411f620751375812bb9faf2",
+    "filename": "gemma-4-E2B-it-Q4_K_M.gguf",
+    "sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
+    "license": "Apache-2.0",
+    "compatibility": "verified",
+    "reason": "macOS Apple Silicon · Metal에서 실제 한국어 분석을 확인했습니다. Windows와 macOS CPU는 시험하지 않았습니다. 결과를 원문과 대조해 주세요. 메모리 부족 시 불러오지 못할 수 있습니다."
+  },
+  {
+    "id": "gemma4-e4b",
+    "name": "Gemma 4 E4B",
+    "parameters": "E4B",
+    "quantization": "Q4_K_M",
+    "bytes": 4977171584,
+    "memory_bytes": 9663676416,
+    "description": "한국어 공지 요약과 정보 추출을 위한 로컬 모델",
+    "use_case": "균형 잡힌 공지 분석",
+    "repository": "unsloth/gemma-4-E4B-it-GGUF",
+    "revision": "bfc15c382204943c3a8fff0c750b94ae2364d7a3",
+    "filename": "gemma-4-E4B-it-Q4_K_M.gguf",
+    "sha256": "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
+    "license": "Apache-2.0",
+    "compatibility": "verified",
+    "reason": "macOS Apple Silicon · Metal에서 실제 한국어 분석을 확인했습니다. Windows와 macOS CPU는 시험하지 않았습니다. 결과를 원문과 대조해 주세요. 메모리 부족 시 불러오지 못할 수 있습니다."
   }
 ]

@@ -18,7 +18,7 @@ Rhythm은 학교 공지를 내 Mac에 모아 보관하고, 로컬 AI로 핵심�
 - **오늘 · 받은 소식 · 탐색 · 보관함 · 설정** 다섯 화면.
 - 서강대학교 공개 게시판 구독. **새로고침** 한 번으로 새 소식·변경을 먼저 확인하고 아직 받지 않은 과거 자료를 이어서 가져오며, 의미 있는 수정 이력을 보관합니다.
 - 오프라인 읽기, 제목·본문 한국어 검색, 읽음·저장 상태, 본문 이미지와 첨부 파일의 로컬 저장.
-- Qwen3.5 로컬 모델 설치·관리, 한국어 요약·분류와 원문 근거가 있는 일정·요건 추출. 결과는 저장되어 다시 열 때 바로 표시됩니다.
+- Qwen3.5·Gemma 4 로컬 모델 설치·관리, 한국어 요약·분류와 원문 근거가 있는 일정·요건 추출. 결과는 저장되어 다시 열 때 바로 표시됩니다.
 - 관심 분야, 공지별 피드백, 제어 가능한 학습을 바탕으로 한 설명 가능한 추천. AI 모델 없이도 동작합니다.
 - 선택 사항: 창을 닫아도 메뉴 막대(Windows는 알림 영역)에서 계속 실행, 로그인 시 자동 시작, 예약 동기화, 운영체제 알림(방해 금지 시간·중복 방지 포함), 절전·균형·성능 모드.
 - `.rhythm-backup` 단일 파일 백업과 복원.
@@ -52,12 +52,14 @@ Rhythm은 학교 공지를 내 Mac에 모아 보관하고, 로컬 AI로 핵심�
 | --- | --- | --- |
 | Qwen3.5 2B Q4_K_M (1.28 GB) | Apple Silicon Metal·CPU와 Windows PC 한 대(GTX 1650 Vulkan, CPU)에서 실제 한국어 분석 확인 | [unsloth/Qwen3.5-2B-GGUF](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF), Apache-2.0 |
 | Qwen3.5 4B Q4_K_M (2.74 GB) | Apple Silicon Metal과 Windows PC 한 대(GTX 1650 Vulkan, CPU 일부)에서 실제 한국어 분석 확인. macOS CPU는 미검증 | [unsloth/Qwen3.5-4B-GGUF](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF), Apache-2.0 |
+| Gemma 4 E2B Q4_K_M (3.11 GB) | Apple Silicon Metal에서 실제 한국어 분석 확인. Windows와 macOS CPU는 미검증 | [unsloth/gemma-4-E2B-it-GGUF](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF), Apache-2.0 |
+| Gemma 4 E4B Q4_K_M (4.98 GB) | Apple Silicon Metal에서 실제 한국어 분석 확인. Windows와 macOS CPU는 미검증 | [unsloth/gemma-4-E4B-it-GGUF](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF), Apache-2.0 |
 
-각 파일은 고정된 리비전, 크기, SHA-256으로 검사합니다. 이미 가진 `qwen3`·`qwen35` GGUF 파일을 참조로 등록할 수도 있지만, 등록 검사를 통과해도 추론 성공이 보장되지는 않습니다. 설정에는 실제로 불러온 백엔드(Metal 또는 CPU)가 표시됩니다.
+각 파일은 고정된 리비전, 크기, SHA-256으로 검사합니다. 이미 가진 `qwen3`·`qwen35`·`gemma4` GGUF 파일을 참조로 등록할 수도 있지만, 등록 검사를 통과해도 추론 성공이 보장되지는 않습니다. 설정에는 실제로 불러온 백엔드(Metal 또는 CPU)가 표시됩니다.
 
 이전 버전에 있던 Qwen3.5 9B는 목록에서 뺐습니다. Qwen3.5 0.8B는 시험 결과 공지 원문에 없는 내용을 지어내는 경우가 있어 목록에서 뺐습니다. 이미 설치했다면 **내 모델**에 남아 계속 쓰거나 직접 삭제할 수 있으며, 앱이 파일을 자동으로 지우지 않습니다.
 
-M1 Pro·16 GiB에서 2B로 시험용 공지 하나를 추론하는 데 Metal로 약 2–10초(생성 약 65 토큰/초)가 걸렸습니다. 분석마다 하는 모델 파일 무결성 검사 시간은 포함하지 않았습니다. 한 기기·18개 시험 입력의 측정값이며 성능을 보장하지 않습니다.
+M1 Pro·16 GiB에서 2B로 시험용 공지 하나를 추론하는 데 Metal로 약 2–10초(생성 약 65 토큰/초)가 걸렸습니다. 같은 조건에서 Gemma 4 E2B는 약 42 토큰/초, E4B는 약 25 토큰/초였습니다. 분석마다 하는 모델 파일 무결성 검사 시간은 포함하지 않았습니다. 한 기기·18개 시험 입력의 측정값이며 성능을 보장하지 않습니다.
 
 AI 요약과 추출은 구조와 원문 근거를 검사하지만, 의미를 잘못 해석할 수 있습니다. 분류나 마감을 틀린 사례도 있었습니다. **신청 조건과 일정은 반드시 원문에서 확인하세요.** AI가 추출한 날짜는 추천 순위나 알림에 쓰지 않습니다. 긴 공지는 일부 구간만 분석하며, 첨부 파일과 이미지의 내용은 분석하지 않습니다.
 
@@ -210,6 +212,6 @@ Windows 11 x64에서의 빌드 준비(Visual Studio C++ 도구 등)는 [Windows 
 
 ## 라이선스
 
-Rhythm은 [MIT 라이선스](LICENSE), © Jihoon Lee로 배포합니다. 자체 제작한 Beat 로고도 같은 라이선스를 따릅니다. [Pretendard](https://github.com/orioncactus/pretendard)는 SIL Open Font License 1.1이며 [라이선스 사본](assets/licenses/Pretendard-OFL.txt)을 저장소와 앱에 포함합니다. 앱에 포함된 [llama.cpp](https://github.com/ggml-org/llama.cpp)는 MIT 라이선스이며 라이선스 사본을 함께 넣습니다. Qwen3.5 모델은 Apache-2.0이며 앱에 포함되지 않습니다. 의존성은 각각의 라이선스를 따릅니다.
+Rhythm은 [MIT 라이선스](LICENSE), © Jihoon Lee로 배포합니다. 자체 제작한 Beat 로고도 같은 라이선스를 따릅니다. [Pretendard](https://github.com/orioncactus/pretendard)는 SIL Open Font License 1.1이며 [라이선스 사본](assets/licenses/Pretendard-OFL.txt)을 저장소와 앱에 포함합니다. 앱에 포함된 [llama.cpp](https://github.com/ggml-org/llama.cpp)는 MIT 라이선스이며 라이선스 사본을 함께 넣습니다. Qwen3.5와 Gemma 4 모델은 Apache-2.0이며 앱에 포함되지 않습니다. 의존성은 각각의 라이선스를 따릅니다.
 
 학교 공지와 첨부 자료의 권리는 원저작자에게 있으며, Rhythm의 라이선스가 학교 자료의 재배포 권한을 부여하지는 않습니다.
