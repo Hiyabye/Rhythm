@@ -371,7 +371,7 @@
                       <span class="pick-title"><span class="notice-read-dot" aria-hidden="true"></span><strong>{item.title}</strong><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}</span></span>
                       <span class="pick-meta"><span class={`board-swatch family-${familyOf(item.source_id)}`} aria-hidden="true"></span>{item.source_name} · {archiveDate(item.published_at)}{#if item.category}{' · '}{item.category}{/if}{#if item.saved}{' · '}보관함에 저장됨{/if}</span>
                       {#if recommendation.reasons.length}<span class="pick-reasons">{#each recommendation.reasons as reason, index}{#if index}{' · '}{/if}<span>{reason}</span>{/each}</span>{/if}
-                      {#if classifications[item.id] || analysis}<span class="notice-ai-preview">{#if classifications[item.id]}<span class="ai-tag">분류 · {classifications[item.id].category}{classifications[item.id].low_confidence ? ' · 확신 낮음' : ''}</span>{/if}{#if analysis} <span class="ai-tag">저장된 AI 요약{analysis.partial ? ' · 일부 분석' : ''}</span> {analysis.result.short_summary}{/if}</span>{/if}
+                      {#if classifications[item.id] || analysis}<span class="notice-ai-preview">{#if classifications[item.id]}<span class="ai-tag">분류 · {classifications[item.id].category}{classifications[item.id].low_confidence ? ' · 확신 낮음' : ''}</span>{/if}{#if analysis}{#if classifications[item.id]}{' · '}{/if}<span class="ai-tag">저장된 AI 요약{analysis.partial ? ' · 일부 분석' : ''}</span> {analysis.result.short_summary}{/if}</span>{/if}
                     </button>
                     <div class="recommendation-actions" role="group" aria-label={`${item.title} 추천 피드백`}>
                       <button class="chip" aria-pressed={recommendation.feedback === 'interested'} disabled={pendingRecommendationFeedback[item.id]} onclick={() => void setRecommendationFeedback(recommendation, recommendation.feedback === 'interested' ? null : 'interested')}>관심 있어요</button>
@@ -485,7 +485,7 @@
             <button class="notice-open" id={`notice-${item.id}`} onclick={() => open(item)}>
               <span class="notice-title"><span class="notice-read-dot" aria-hidden="true"></span><Highlighted text={item.title} {query} /><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}</span></span>
               <span class="notice-meta"><span>{item.source_name}</span><time datetime={item.published_at}>{archiveDate(item.published_at)}</time>{#if item.category}<span>{item.category}</span>{/if}</span>
-              {#if (analysis || classifications[item.id]) && page !== 'search'}<span class="notice-ai-preview">{#if classifications[item.id]}<span class="ai-tag">분류 · {classifications[item.id].category}{classifications[item.id].low_confidence ? ' · 확신 낮음' : ''}</span>{/if}{#if analysis} <span class="ai-tag">AI 요약</span> {analysis.result.short_summary}{/if}</span>{/if}
+              {#if (analysis || classifications[item.id]) && page !== 'search'}<span class="notice-ai-preview">{#if classifications[item.id]}<span class="ai-tag">분류 · {classifications[item.id].category}{classifications[item.id].low_confidence ? ' · 확신 낮음' : ''}</span>{/if}{#if analysis}{#if classifications[item.id]}{' · '}{/if}<span class="ai-tag">AI 요약</span> {analysis.result.short_summary}{/if}</span>{/if}
               {#if page === 'search' && item.snippet}<span class="notice-snippet"><Highlighted text={item.snippet} {query} /></span>{/if}
               {#if item.content_status === 'missing_resources'}<span class="notice-resource-warning">일부 첨부 자료 미저장</span>{/if}
             </button>
