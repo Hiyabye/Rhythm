@@ -1,6 +1,6 @@
 //! Opt-in evaluation of already archived notices. Source archives are always read-only.
 //! Local reports contain source-derived text and must not be committed or uploaded.
-use super::{analysis, evaluation, Worker};
+use super::{analysis, evaluation};
 use crate::{
     archive::model::{ArticleInput, SourceDefinition},
     storage::Store,
@@ -133,10 +133,9 @@ async fn actual_archived_notice_evaluation() {
         imported.push((document, revision));
     }
     let store = Arc::new(Mutex::new(isolated));
-    let worker = Arc::new(AsyncMutex::new(Worker::launch_configured(
+    let worker = Arc::new(AsyncMutex::new(evaluation::evaluation_worker(
         &executable,
         &directory.path().join("run"),
-        "auto",
     )));
     let controller = analysis::Controller::default();
     let report_path = evaluation::report_path(&format!("archived-{id}"));

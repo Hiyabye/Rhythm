@@ -123,6 +123,17 @@ fn configure(store: &Store, model: &AiModel) {
     preferences.max_tokens = 1024;
     store.ai_save_preferences(&preferences).unwrap();
 }
+/// Test-only backend override. The bundled macOS build falls back to the same
+/// binary with `-ngl 0 --device none` after a load or request failure; selecting
+/// that CPU launch directly makes the fallback session evaluable end to end.
+pub(super) fn evaluation_worker(executable: &Path, runtime: &Path) -> Worker {
+    if std::env::var("RHYTHM_AI_EVAL_FORCE_CPU").as_deref() != Ok("1") {
+        return Worker::launch_configured(executable, runtime, "auto");
+    }
+    let (_, cpu) = super::bundled(executable);
+    Worker::with_launches(None, cpu, runtime, "auto")
+}
+
 pub(super) fn report_path(id: &str) -> PathBuf {
     std::env::var_os("RHYTHM_AI_EVAL_REPORT")
         .map(PathBuf::from)
@@ -514,10 +525,9 @@ async fn actual_analysis_latency_benchmark() {
     let revision_id = store.document(document_id, None).unwrap().revision_id;
     let store = Arc::new(Mutex::new(store));
     let startup = Instant::now();
-    let worker = Arc::new(AsyncMutex::new(Worker::launch_configured(
+    let worker = Arc::new(AsyncMutex::new(evaluation_worker(
         &executable,
         &directory.path().join("run"),
-        "auto",
     )));
     let health = worker.lock().await.refresh().await;
     let mut report = json!({"label":std::env::var("RHYTHM_AI_BENCH_LABEL").ok(),
@@ -657,10 +667,9 @@ async fn actual_qwen35_analysis_evaluation() {
     seed(&store);
     configure(&store, &model);
     let store = Arc::new(Mutex::new(store));
-    let worker = Arc::new(AsyncMutex::new(Worker::launch_configured(
+    let worker = Arc::new(AsyncMutex::new(evaluation_worker(
         &executable,
         &directory.path().join("run"),
-        "auto",
     )));
     let controller = analysis::Controller::default();
     let mut report = json!({
@@ -677,12 +686,18 @@ async fn actual_qwen35_analysis_evaluation() {
     let load_started = Instant::now();
     let loaded = worker.lock().await.load(Path::new(&model.path)).await;
     report["load_ms"] = json!(load_started.elapsed().as_millis());
+    report["forced_cpu"] = json!(std::env::var("RHYTHM_AI_EVAL_FORCE_CPU").as_deref() == Ok("1"));
     report["post_load_worker_rss_kib"] = json!(worker_rss_kib(worker.lock().await.process_id()));
-    if let Err(error) = loaded {
-        report["load_error"] = json!(error);
-        write_report(&report_file, &report);
-        worker.lock().await.shutdown().await;
-        panic!("actual Qwen3.5 load failed; see {}", report_file.display());
+    match loaded {
+        // The status detail reports the backend the server actually loaded, so a
+        // forced CPU run is evidence, not just the requested launch.
+        Ok(status) => report["loaded_worker_status"] = json!(status),
+        Err(error) => {
+            report["load_error"] = json!(error);
+            write_report(&report_file, &report);
+            worker.lock().await.shutdown().await;
+            panic!("actual Qwen3.5 load failed; see {}", report_file.display());
+        }
     }
     let limit = std::env::var("RHYTHM_AI_EVAL_LIMIT")
         .ok()
