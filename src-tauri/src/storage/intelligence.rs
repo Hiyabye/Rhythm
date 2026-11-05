@@ -1,6 +1,6 @@
 //! Persistent AI inventory, attempts and validated result cache. No filesystem or inference work.
 use super::Store;
-use rusqlite::{params, OptionalExtension, Row};
+use rusqlite::{params, params_from_iter, types::Value as SqlValue, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -10,6 +10,10 @@ pub struct AiModel {
     pub catalog_id: Option<String>,
     pub name: String,
     pub ownership: String,
+    /// `generation` or `embedding`; persisted so a retired catalog entry keeps
+    /// its role and an embedding model can never be selected for analysis.
+    #[serde(default = "default_model_kind")]
+    pub kind: String,
     pub path: String,
     #[serde(default)]
     pub storage_directory: Option<String>,
@@ -57,6 +61,50 @@ pub struct AiPreferences {
     pub execution_mode: String,
     #[serde(default)]
     pub model_directory: Option<String>,
+    /// Selected embedding model; independent from the generation model.
+    #[serde(default)]
+    pub embedding_model_id: Option<String>,
+    /// Automatic classification runs only when an embedding model is installed.
+    #[serde(default = "default_enabled")]
+    pub classification_enabled: bool,
+}
+
+fn default_model_kind() -> String {
+    "generation".into()
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+/// One revision-scoped embedding classification. The raw score and margin stay
+/// local; the UI receives only the category and the low-confidence marker.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AiClassification {
+    pub document_id: i64,
+    pub revision_id: i64,
+    pub category: String,
+    pub low_confidence: bool,
+    pub created_at: String,
+}
+
+/// One validated classification write. A struct keeps the persistence
+/// boundary readable without loosening argument validation.
+pub struct ClassificationWrite<'a> {
+    pub document_id: i64,
+    pub revision_id: i64,
+    pub model_sha256: &'a str,
+    pub config_hash: &'a str,
+    pub category: &'a str,
+    pub score: f32,
+    pub margin: f32,
+    pub low_confidence: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct StoredEmbedding {
+    pub dim: u32,
+    pub vector: Vec<f32>,
 }
 
 fn default_execution_mode() -> String {
@@ -104,7 +152,7 @@ pub struct AiResult {
 }
 
 const PROJECTOR_COLUMNS: &str = "model_id,path,sha256,expected_sha256,expected_bytes,bytes,status,downloaded_bytes,resume_etag,error";
-const MODEL_COLUMNS: &str = "id,catalog_id,name,ownership,path,sha256,expected_sha256,expected_bytes,bytes,source_revision,source_filename,status,downloaded_bytes,resume_etag,error,created_at,updated_at,storage_directory";
+const MODEL_COLUMNS: &str = "id,catalog_id,name,ownership,path,sha256,expected_sha256,expected_bytes,bytes,source_revision,source_filename,status,downloaded_bytes,resume_etag,error,created_at,updated_at,storage_directory,kind";
 const JOB_COLUMNS: &str = "id,document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,priority,status,error,duration_ms,created_at,updated_at";
 const RESULT_COLUMNS: &str = "id,job_id,document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,result_json,partial,processed_chars,total_chars,duration_ms,created_at";
 const KEY_WHERE: &str = "document_id=?1 AND revision_id=?2 AND task=?3 AND model_sha256=?4 AND prompt_version=?5 AND schema_version=?6 AND configuration_hash=?7";
@@ -149,6 +197,7 @@ fn model_row(row: &Row<'_>) -> rusqlite::Result<AiModel> {
         created_at: row.get(15)?,
         updated_at: row.get(16)?,
         storage_directory: row.get(17)?,
+        kind: row.get(18)?,
     })
 }
 fn job_row(row: &Row<'_>) -> rusqlite::Result<AiJob> {
@@ -284,20 +333,46 @@ impl Store {
                     || model
                         .expected_bytes
                         .is_some_and(|expected| expected != model.bytes)))
+            || !["generation", "embedding"].contains(&model.kind.as_str())
             || model.error.as_ref().is_some_and(|e| e.len() > 8192)
         {
             return Err("모델 등록 정보를 확인해 주세요.".into());
         }
-        self.connection.execute("INSERT INTO ai_models(id,catalog_id,name,ownership,path,sha256,expected_sha256,expected_bytes,bytes,source_revision,source_filename,status,downloaded_bytes,resume_etag,error,storage_directory) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16) ON CONFLICT(id) DO UPDATE SET catalog_id=excluded.catalog_id,name=excluded.name,ownership=excluded.ownership,path=excluded.path,sha256=excluded.sha256,expected_sha256=excluded.expected_sha256,expected_bytes=excluded.expected_bytes,bytes=excluded.bytes,source_revision=excluded.source_revision,source_filename=excluded.source_filename,status=excluded.status,downloaded_bytes=excluded.downloaded_bytes,resume_etag=excluded.resume_etag,error=excluded.error,storage_directory=excluded.storage_directory,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')", params![model.id,model.catalog_id,model.name,model.ownership,model.path,model.sha256,model.expected_sha256,model.expected_bytes.map(|v|v as i64),model.bytes as i64,model.source_revision,model.source_filename,model.status,model.downloaded_bytes as i64,model.resume_etag,model.error,model.storage_directory]).map_err(|e|e.to_string())?;
+        self.connection.execute("INSERT INTO ai_models(id,catalog_id,name,ownership,path,sha256,expected_sha256,expected_bytes,bytes,source_revision,source_filename,status,downloaded_bytes,resume_etag,error,storage_directory,kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17) ON CONFLICT(id) DO UPDATE SET catalog_id=excluded.catalog_id,name=excluded.name,ownership=excluded.ownership,path=excluded.path,sha256=excluded.sha256,expected_sha256=excluded.expected_sha256,expected_bytes=excluded.expected_bytes,bytes=excluded.bytes,source_revision=excluded.source_revision,source_filename=excluded.source_filename,status=excluded.status,downloaded_bytes=excluded.downloaded_bytes,resume_etag=excluded.resume_etag,error=excluded.error,storage_directory=excluded.storage_directory,kind=excluded.kind,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')", params![model.id,model.catalog_id,model.name,model.ownership,model.path,model.sha256,model.expected_sha256,model.expected_bytes.map(|v|v as i64),model.bytes as i64,model.source_revision,model.source_filename,model.status,model.downloaded_bytes as i64,model.resume_etag,model.error,model.storage_directory,model.kind]).map_err(|e|e.to_string())?;
         Ok(())
     }
-    /// Removes inventory only. Never deletes files or historical results.
+    /// Removes inventory only. Never deletes files or historical analysis
+    /// results. Derived embedding vectors and classifications are removed with
+    /// the model identity they belong to.
     pub fn ai_remove_model(&self, id: &str) -> Result<(), String> {
+        let sha: Option<String> = self
+            .connection
+            .query_row("SELECT sha256 FROM ai_models WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(|e| e.to_string())?
+            .flatten();
         changed(
             self.connection
                 .execute("DELETE FROM ai_models WHERE id=?1", [id])
                 .map_err(|e| e.to_string())?,
-        )
+        )?;
+        if let Some(sha) = sha {
+            self.connection
+                .execute(
+                    "DELETE FROM notice_embeddings WHERE model_sha256=?1",
+                    [&sha],
+                )
+                .map_err(|e| e.to_string())?;
+            self.connection
+                .execute(
+                    "DELETE FROM notice_classifications WHERE model_sha256=?1",
+                    [&sha],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
     pub fn ai_projectors(&self) -> Result<Vec<AiProjector>, String> {
         self.connection
@@ -361,13 +436,24 @@ impl Store {
         Ok(())
     }
     pub fn ai_preferences(&self) -> Result<AiPreferences, String> {
-        self.connection.query_row("SELECT active_model_id,setup_completed,processing_mode,automatic_limit,max_tokens,execution_mode,model_directory FROM ai_preferences WHERE id=1",[],|r|Ok(AiPreferences { active_model_id:r.get(0)?,setup_completed:r.get(1)?,processing_mode:r.get(2)?,automatic_limit:r.get(3)?,max_tokens:r.get(4)?,execution_mode:r.get(5)?,model_directory:r.get(6)? })).map_err(|e|e.to_string())
+        self.connection.query_row("SELECT active_model_id,setup_completed,processing_mode,automatic_limit,max_tokens,execution_mode,model_directory,embedding_model_id,classification_enabled FROM ai_preferences WHERE id=1",[],|r|Ok(AiPreferences { active_model_id:r.get(0)?,setup_completed:r.get(1)?,processing_mode:r.get(2)?,automatic_limit:r.get(3)?,max_tokens:r.get(4)?,execution_mode:r.get(5)?,model_directory:r.get(6)?,embedding_model_id:r.get(7)?,classification_enabled:r.get(8)? })).map_err(|e|e.to_string())
     }
     pub fn ai_save_preferences(&self, preferences: &AiPreferences) -> Result<(), String> {
         validate_model_directory(preferences.model_directory.as_deref())?;
         if let Some(id) = &preferences.active_model_id {
-            if self.ai_model(id)?.is_none_or(|m| m.status != "installed") {
-                return Err("설치가 완료된 모델을 선택해 주세요.".into());
+            if self
+                .ai_model(id)?
+                .is_none_or(|m| m.status != "installed" || m.kind != "generation")
+            {
+                return Err("설치가 완료된 분석 모델을 선택해 주세요.".into());
+            }
+        }
+        if let Some(id) = &preferences.embedding_model_id {
+            if self
+                .ai_model(id)?
+                .is_none_or(|m| m.status != "installed" || m.kind != "embedding")
+            {
+                return Err("설치가 완료된 분류 모델을 선택해 주세요.".into());
             }
         }
         if !["explicit", "recent", "backlog"].contains(&preferences.processing_mode.as_str())
@@ -377,7 +463,7 @@ impl Store {
         {
             return Err("AI 처리 설정을 확인해 주세요.".into());
         }
-        self.connection.execute("UPDATE ai_preferences SET active_model_id=?1,setup_completed=?2,processing_mode=?3,automatic_limit=?4,max_tokens=?5,execution_mode=?6,model_directory=?7 WHERE id=1", params![preferences.active_model_id,preferences.setup_completed,preferences.processing_mode,preferences.automatic_limit,preferences.max_tokens,preferences.execution_mode,preferences.model_directory]).map_err(|e|e.to_string())?;
+        self.connection.execute("UPDATE ai_preferences SET active_model_id=?1,setup_completed=?2,processing_mode=?3,automatic_limit=?4,max_tokens=?5,execution_mode=?6,model_directory=?7,embedding_model_id=?8,classification_enabled=?9 WHERE id=1", params![preferences.active_model_id,preferences.setup_completed,preferences.processing_mode,preferences.automatic_limit,preferences.max_tokens,preferences.execution_mode,preferences.model_directory,preferences.embedding_model_id,preferences.classification_enabled]).map_err(|e|e.to_string())?;
         Ok(())
     }
     /// Changes only the destination for future downloads, never model inventory.
@@ -510,6 +596,231 @@ impl Store {
             .query_map([limit.min(100)], |row| Ok((row.get(0)?, row.get(1)?)))
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+    /// Latest revisions whose current model/config classification is missing,
+    /// newest publication first. A stored vector from another config is reused
+    /// by the caller, so this query only tracks the classification row.
+    pub fn ai_embedding_candidates(
+        &self,
+        model_sha256: &str,
+        config_hash: &str,
+        limit: u32,
+    ) -> Result<Vec<(i64, i64)>, String> {
+        if !valid_hash(model_sha256) || !valid_hash(config_hash) {
+            return Err("분류 모델 정보가 올바르지 않습니다.".into());
+        }
+        self.connection
+            .prepare(
+                "SELECT d.id,r.id FROM documents d
+                 JOIN document_revisions r ON r.id=(
+                     SELECT MAX(latest.id) FROM document_revisions latest WHERE latest.document_id=d.id
+                 )
+                 WHERE length(trim(r.title))>0
+                   AND NOT EXISTS(
+                       SELECT 1 FROM notice_classifications c
+                       WHERE c.document_id=d.id AND c.revision_id=r.id
+                         AND c.model_sha256=?1 AND c.config_hash=?2
+                   )
+                 ORDER BY r.collected_at DESC,r.id DESC LIMIT ?3",
+            )
+            .map_err(|e| e.to_string())?
+            .query_map(params![model_sha256, config_hash, limit.min(100)], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+    /// Title and archived body for classification. Reads one revision only and
+    /// never fetches the source or opens attachments.
+    pub fn classification_text(
+        &self,
+        document_id: i64,
+        revision_id: i64,
+    ) -> Result<Option<(String, String)>, String> {
+        self.connection
+            .query_row(
+                "SELECT title,body_text FROM document_revisions WHERE id=?1 AND document_id=?2",
+                params![revision_id, document_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+    pub fn ai_embedding(
+        &self,
+        document_id: i64,
+        revision_id: i64,
+        model_sha256: &str,
+    ) -> Result<Option<StoredEmbedding>, String> {
+        if !valid_hash(model_sha256) {
+            return Err("분류 모델 정보가 올바르지 않습니다.".into());
+        }
+        let row: Option<(i64, Vec<u8>)> = self
+            .connection
+            .query_row(
+                "SELECT dim,vector FROM notice_embeddings WHERE document_id=?1 AND revision_id=?2 AND model_sha256=?3",
+                params![document_id, revision_id, model_sha256],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        row.map(|(dim, bytes)| {
+            let dim = u32::try_from(dim)
+                .map_err(|_| "저장된 임베딩 크기가 올바르지 않습니다.".to_string())?;
+            if dim == 0 || dim as usize > 8192 || bytes.len() != dim as usize * 4 {
+                return Err("저장된 임베딩이 완전하지 않습니다.".into());
+            }
+            let vector = bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|chunk| f32::from_le_bytes(*chunk))
+                .collect::<Vec<_>>();
+            if vector.iter().any(|value| !value.is_finite()) {
+                return Err("저장된 임베딩 값이 올바르지 않습니다.".into());
+            }
+            Ok(StoredEmbedding { dim, vector })
+        })
+        .transpose()
+    }
+    pub fn ai_save_embedding(
+        &self,
+        document_id: i64,
+        revision_id: i64,
+        model_sha256: &str,
+        vector: &[f32],
+    ) -> Result<(), String> {
+        if !valid_hash(model_sha256)
+            || vector.is_empty()
+            || vector.len() > 8192
+            || vector.iter().any(|value| !value.is_finite())
+        {
+            return Err("임베딩 값을 저장할 수 없습니다.".into());
+        }
+        let mut bytes = Vec::with_capacity(vector.len() * 4);
+        for value in vector {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        self.connection
+            .execute(
+                "INSERT INTO notice_embeddings(document_id,revision_id,model_sha256,dim,vector)
+                 VALUES(?1,?2,?3,?4,?5)
+                 ON CONFLICT(document_id,revision_id,model_sha256) DO UPDATE SET
+                   dim=excluded.dim,vector=excluded.vector,created_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+                params![document_id, revision_id, model_sha256, vector.len() as i64, bytes],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub fn ai_save_classification(&self, value: &ClassificationWrite<'_>) -> Result<(), String> {
+        if !valid_hash(value.model_sha256)
+            || !valid_hash(value.config_hash)
+            || value.category.is_empty()
+            || value.category.len() > 32
+            || !value.score.is_finite()
+            || !value.margin.is_finite()
+            || !(-1.0..=1.0).contains(&value.score)
+            || !(-2.0..=2.0).contains(&value.margin)
+        {
+            return Err("분류 결과를 저장할 수 없습니다.".into());
+        }
+        self.connection
+            .execute(
+                "INSERT INTO notice_classifications(document_id,revision_id,model_sha256,config_hash,category,score,margin,low_confidence)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
+                 ON CONFLICT(document_id,revision_id,model_sha256,config_hash) DO UPDATE SET
+                   category=excluded.category,score=excluded.score,margin=excluded.margin,
+                   low_confidence=excluded.low_confidence,created_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+                params![
+                    value.document_id,
+                    value.revision_id,
+                    value.model_sha256,
+                    value.config_hash,
+                    value.category,
+                    value.score as f64,
+                    value.margin as f64,
+                    value.low_confidence
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    /// Latest-revision classifications for a visible page. Only the current
+    /// model and config are returned; stale rows stay as history.
+    pub fn ai_classifications_for_documents(
+        &self,
+        document_ids: &[i64],
+        model_sha256: &str,
+        config_hash: &str,
+    ) -> Result<Vec<AiClassification>, String> {
+        if document_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if document_ids.len() > 200 || !valid_hash(model_sha256) || !valid_hash(config_hash) {
+            return Err("분류 조회 범위를 확인해 주세요.".into());
+        }
+        let placeholders = (0..document_ids.len())
+            .map(|index| format!("?{}", index + 3))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT c.document_id,c.revision_id,c.category,c.low_confidence,c.created_at
+             FROM notice_classifications c
+             WHERE c.model_sha256=?1 AND c.config_hash=?2
+               AND c.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=c.document_id)
+               AND c.document_id IN ({placeholders})
+             ORDER BY c.document_id"
+        );
+        let mut values = vec![
+            SqlValue::Text(model_sha256.to_owned()),
+            SqlValue::Text(config_hash.to_owned()),
+        ];
+        values.extend(document_ids.iter().map(|id| SqlValue::Integer(*id)));
+        self.connection
+            .prepare(&sql)
+            .map_err(|e| e.to_string())?
+            .query_map(params_from_iter(values), |row| {
+                Ok(AiClassification {
+                    document_id: row.get(0)?,
+                    revision_id: row.get(1)?,
+                    category: row.get(2)?,
+                    low_confidence: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+    pub fn ai_classification(
+        &self,
+        document_id: i64,
+        revision_id: i64,
+        model_sha256: &str,
+        config_hash: &str,
+    ) -> Result<Option<AiClassification>, String> {
+        if !valid_hash(model_sha256) || !valid_hash(config_hash) {
+            return Err("분류 모델 정보가 올바르지 않습니다.".into());
+        }
+        self.connection
+            .query_row(
+                "SELECT document_id,revision_id,category,low_confidence,created_at
+                 FROM notice_classifications
+                 WHERE document_id=?1 AND revision_id=?2 AND model_sha256=?3 AND config_hash=?4",
+                params![document_id, revision_id, model_sha256, config_hash],
+                |row| {
+                    Ok(AiClassification {
+                        document_id: row.get(0)?,
+                        revision_id: row.get(1)?,
+                        category: row.get(2)?,
+                        low_confidence: row.get(3)?,
+                        created_at: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
             .map_err(|e| e.to_string())
     }
     pub fn ai_has_model_jobs(&self, model_sha256: &str) -> Result<bool, String> {

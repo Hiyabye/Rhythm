@@ -162,12 +162,21 @@ fn main() {
             (200, r#"{"status":"ok"}"#.to_string())
         } else if !authorized {
             (401, r#"{"error":{"code":401,"type":"authentication_error"}}"#.to_string())
+        } else if request_line.starts_with("POST /v1/embeddings") {
+            embeddings(&dir, &body)
         } else {
             chat(&dir, &mode, gpu, &body)
         };
         let reason = if status == 200 { "OK" } else { "Error" };
         let _ = write!(stream, "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{response}", response.len());
     }
+}
+fn embeddings(dir: &std::path::Path, _body: &str) -> (u16, String) {
+    let mut requests = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("requests")).unwrap();
+    writeln!(requests, "embedding").unwrap();
+    // Two deterministic vectors, normalized by the parent. The fixture is
+    // compiled without third-party crates, so it does not parse the input.
+    (200, r#"{"data":[{"index":0,"embedding":[3.0,4.0]},{"index":1,"embedding":[0.0,5.0]}]}"#.to_string())
 }
 fn chat(dir: &std::path::Path, mode: &str, gpu: bool, body: &str) -> (u16, String) {
     let mut requests = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("requests")).unwrap();

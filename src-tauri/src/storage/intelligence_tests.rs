@@ -310,6 +310,7 @@ fn model(id: &str, ownership: &str) -> AiModel {
         catalog_id: None,
         name: "Qwen test".into(),
         ownership: ownership.into(),
+        kind: "generation".into(),
         path: format!("/tmp/{id}.gguf"),
         storage_directory: None,
         sha256: Some("a".repeat(64)),
@@ -1136,4 +1137,164 @@ fn interrupted_projector_downloads_are_cancelled_on_reopen() {
     assert_eq!(current.status, "cancelled");
     assert_eq!(current.downloaded_bytes, 512);
     assert!(current.error.unwrap().contains("이미지 인식 모듈"));
+}
+
+#[test]
+fn embedding_schema_upgrades_schema_fourteen_without_losing_preferences() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    populated_schema_two(&path);
+    let connection = Connection::open(&path).unwrap();
+    for migration in [
+        include_str!("../../migrations/003_intelligence.sql"),
+        include_str!("../../migrations/004_personalization.sql"),
+        include_str!("../../migrations/005_proactive.sql"),
+        include_str!("../../migrations/006_notification_attempts.sql"),
+        include_str!("../../migrations/007_notification_activation.sql"),
+        include_str!("../../migrations/008_ai_execution_mode.sql"),
+        include_str!("../../migrations/009_ai_model_directory.sql"),
+        include_str!("../../migrations/010_update_check.sql"),
+        include_str!("../../migrations/011_skipped_articles.sql"),
+        include_str!("../../migrations/012_resource_retry.sql"),
+        include_str!("../../migrations/013_ai_projector.sql"),
+        include_str!("../../migrations/014_ai_backlog_mode.sql"),
+    ] {
+        connection.execute_batch(migration).unwrap();
+    }
+    connection
+        .execute_batch(
+            "UPDATE ai_preferences SET processing_mode='backlog',max_tokens=2048 WHERE id=1;",
+        )
+        .unwrap();
+    drop(connection);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
+    let preferences = store.ai_preferences().unwrap();
+    assert_eq!(preferences.processing_mode, "backlog");
+    assert_eq!(preferences.max_tokens, 2048);
+    assert_eq!(preferences.embedding_model_id, None);
+    assert!(preferences.classification_enabled);
+    // New tables and the model role column exist and default generation.
+    let count: i64 = store
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM notice_embeddings e JOIN notice_classifications c ON 1=0",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+    assert_eq!(
+        store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('ai_models') WHERE name='kind'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn classification_roundtrip_is_model_and_config_scoped() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    populated_schema_two(&path);
+    let store = Store::open(&path).unwrap();
+    let revision = store.document(1, None).unwrap().revision_id;
+    let model_a = "a".repeat(64);
+    let model_b = "b".repeat(64);
+    let config = "c".repeat(64);
+    store
+        .ai_save_embedding(1, revision, &model_a, &[0.6, 0.8])
+        .unwrap();
+    let stored = store.ai_embedding(1, revision, &model_a).unwrap().unwrap();
+    assert_eq!(stored.dim, 2);
+    assert_eq!(stored.vector, vec![0.6, 0.8]);
+    assert!(store.ai_embedding(1, revision, &model_b).unwrap().is_none());
+    store
+        .ai_save_classification(&ClassificationWrite {
+            document_id: 1,
+            revision_id: revision,
+            model_sha256: &model_a,
+            config_hash: &config,
+            category: "장학",
+            score: 0.8,
+            margin: 0.1,
+            low_confidence: false,
+        })
+        .unwrap();
+    assert_eq!(
+        store
+            .ai_classification(1, revision, &model_a, &config)
+            .unwrap()
+            .unwrap()
+            .category,
+        "장학"
+    );
+    assert!(store
+        .ai_classification(1, revision, &model_b, &config)
+        .unwrap()
+        .is_none());
+    assert!(store
+        .ai_embedding_candidates(&model_a, &config, 10)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        store
+            .ai_embedding_candidates(&model_b, &config, 10)
+            .unwrap(),
+        vec![(1, revision)]
+    );
+    let rows = store
+        .ai_classifications_for_documents(&[1], &model_a, &config)
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].category, "장학");
+    assert!(!rows[0].low_confidence);
+
+    // Removing the embedding model removes only its derived rows.
+    let model = AiModel {
+        id: "embedding-test".into(),
+        catalog_id: Some("qwen3-embedding-0-6b".into()),
+        name: "embedding".into(),
+        ownership: "external".into(),
+        kind: "embedding".into(),
+        path: "/tmp/embedding-test.gguf".into(),
+        storage_directory: None,
+        sha256: Some(model_a.clone()),
+        expected_sha256: None,
+        expected_bytes: None,
+        bytes: 8,
+        source_revision: None,
+        source_filename: None,
+        status: "installed".into(),
+        downloaded_bytes: 0,
+        resume_etag: None,
+        error: None,
+        created_at: String::new(),
+        updated_at: String::new(),
+    };
+    store.ai_upsert_model(&model).unwrap();
+    let mut preferences = store.ai_preferences().unwrap();
+    preferences.embedding_model_id = Some(model.id.clone());
+    store.ai_save_preferences(&preferences).unwrap();
+    assert_eq!(
+        store.ai_preferences().unwrap().embedding_model_id,
+        Some(model.id.clone())
+    );
+    // A generation model cannot occupy the embedding slot, and vice versa.
+    preferences.active_model_id = Some(model.id.clone());
+    assert!(store.ai_save_preferences(&preferences).is_err());
+    preferences.active_model_id = None;
+    preferences.embedding_model_id = None;
+    store.ai_save_preferences(&preferences).unwrap();
+    store.ai_remove_model(&model.id).unwrap();
+    assert!(store.ai_embedding(1, revision, &model_a).unwrap().is_none());
+    assert!(store
+        .ai_classification(1, revision, &model_a, &config)
+        .unwrap()
+        .is_none());
 }

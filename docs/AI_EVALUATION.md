@@ -16,12 +16,14 @@ Inference runs in upstream `llama-server` from llama.cpp build **b12068** (`0.8.
 | Qwen3.5 4B | [`unsloth/Qwen3.5-4B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF) / `Qwen3.5-4B-Q4_K_M.gguf` | `e87f176479d0855a907a41277aca2f8ee7a09523` | 2,740,937,888 | Verified for macOS Apple Silicon / Metal (18 fixtures); Windows GTX 1650 / Vulkan and Windows CPU (4 of 18 fixtures) |
 | Gemma 4 E2B | [`unsloth/gemma-4-E2B-it-GGUF`](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF) / `gemma-4-E2B-it-Q4_K_M.gguf` | `0314792d7f1f7e229411f620751375812bb9faf2` | 3,106,738,272 | Verified for macOS Apple Silicon / Metal (18 fixtures) |
 | Gemma 4 E4B | [`unsloth/gemma-4-E4B-it-GGUF`](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF) / `gemma-4-E4B-it-Q4_K_M.gguf` | `bfc15c382204943c3a8fff0c750b94ae2364d7a3` | 4,977,171,584 | Verified for macOS Apple Silicon / Metal (18 fixtures) |
+| Qwen3-Embedding 0.6B | [`Qwen/Qwen3-Embedding-0.6B-GGUF`](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF) / `Qwen3-Embedding-0.6B-Q8_0.gguf` | `370f27d7550e0def9b39c1f16d3fbaa13aa67728` | 639,150,592 | Notice classification; macOS Metal and CPU (18 fixtures) |
 
 ```text
 2B    aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223
 4B    00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4
 E2B   740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8
 E4B   85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87
+Embedding 06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439
 ```
 
 Each entry also pins the same-revision `mmproj-F16.gguf` projector. The projector is an independent artifact with its own size/SHA-256; installing it is a separate user action, and a model without it stays text-only. Estimated projector memory is 1 GiB (not a measured peak).
@@ -36,6 +38,8 @@ Each entry also pins the same-revision `mmproj-F16.gguf` projector. The projecto
 Catalog memory values (4/7 GiB for Qwen3.5, 6/9 GiB for Gemma 4) are estimates, not measured peaks. `verified` means the qualified artifact/backend evidence below, not factual correctness. 9B (`qwen35-9b`) was removed from the catalog after v1.0.0 without ever being run, and 0.8B (`qwen35-0-8b`, [`unsloth/Qwen3.5-0.8B-GGUF`](https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF) `Qwen3.5-0.8B-Q4_K_M.gguf` at `6ab461498e2023f6e3c1baea90a8f0fe38ab64d0`, SHA-256 `bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517`) after failing the evaluation below; existing installs keep working.
 
 ## Current evidence
+
+The LLM runs below predate prompt 5. They still show summary, deadline and grounding behavior; their category figures are historical measurements, because category is now produced by the embedding classifier instead of the generation schema.
 
 **llama-server b12068, Metal, 2B** (macOS 27.2, M1 Pro, 16 GiB; all 18 synthetic fixtures, production controller → validation → Store path, `llama-server` from a bundled debug `Rhythm.app`): 18/18 jobs completed with schema-valid, grounded output, 1 needing its one repair; 7/18 also passed every screening check (category, deadline set, summary terms). 8 had the wrong category and 2 the wrong deadline set. Total inference 92 s (≈65 completion tok/s, 2–10 s per notice); `offloaded 25/25 layers to GPU`. In the same harness and fixtures, the former mistral.rs Metal release worker completed 18/18 and passed 7/18 in 236 s.
 
@@ -81,6 +85,31 @@ Evidence from the former mistral.rs worker (same artifacts, different engine), n
 
 Not verified with llama-server: in the installed macOS app, the in-app download, cancellation during generation (only during server start), a Unix-socket launch and the production profile; cancellation or crash recovery in the installed Windows app. Never verified: NVIDIA GPUs other than one GTX 1650, Intel Macs, and any broad accuracy rate.
 
+## Embedding classification
+
+`intelligence/classification.rs` embeds the instruction, title and first 1000 body characters, then compares the unit vector against 35 authored Korean prototypes (five per non-`기타` category) using the best (max) cosine. The best match below `0.50` becomes `기타` with a low-confidence marker. The prototype set, input shape, scoring and threshold form the config hash stored with each classification; vectors are stored per revision and embedding-model SHA-256 so a prototype change reclassifies without re-embedding. The tracing/evaluation harness is the ignored `actual_embedding_classification_evaluation`, which uses the same 18 synthetic fixtures and never touches the production profile.
+
+Measured on one Mac (macOS 27.2, M1 Pro, 16 GiB) with the staged `llama-server`, three candidate artifacts downloaded into a temporary directory and verified against their pinned size/SHA-256. Input variants grew from title only (0 body characters) to title + 1500 characters; the table reports the best variant per model.
+
+| Model | Pinned artifact | Dim | Category | Time / notice (Metal) | Peak RSS | Load |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| **Qwen3-Embedding 0.6B Q8_0** | `Qwen/Qwen3-Embedding-0.6B-GGUF` `370f27d…`, 639,150,592 B | 1024 | **18/18** (title + 300 chars) | 73 ms | 1.7 GiB | 0.8 s |
+| bge-m3 Q8_0 | `gpustack/bge-m3-GGUF` `2d48f17…`, 634,553,760 B | 1024 | 17/18 (`ambiguous` → wrong) | 40–58 ms | 0.84 GiB | 0.9 s |
+| multilingual-e5-small | `rodion-m/multilingual-e5-small-gguf` `a4ad957…` fp32, 476,369,248 B | 384 | 6/18 | 5–8 ms | 0.61 GiB | 0.4 s |
+
+The `cstr` and `TwinSunsLLC` Q8_0 e5-small conversions failed to load in b12068 (`bert model needs to define token type count`); only the `rodion-m` fp32 conversion loaded. Qwen3-Embedding was also run on macOS CPU (`-ngl 0 --device none`): 18/18 at title + 300 characters, 237 ms/notice, 2.2 GiB peak RSS. For comparison, the generation models' category results on the same 18 fixtures were 2B 10/18, 4B 16/18, E2B 15/18 and E4B 18/18, at 2–18 s per notice. These are synthetic fixtures and authored prototypes, not a broad Korean accuracy rate; Windows CPU/Vulkan classification is unverified. bge-m3 and e5-small are not shipped.
+
+To reproduce, download a candidate into an isolated directory and run:
+
+```sh
+RHYTHM_EMBEDDING_EVAL_MODEL=/tmp/qwen3-embedding-0.6b.gguf \
+RHYTHM_EMBEDDING_EVAL_ID=qwen3 RHYTHM_EMBEDDING_EVAL_POOLING=last \
+RHYTHM_EMBEDDING_EVAL_PREFIX=qwen RHYTHM_EMBEDDING_EVAL_REPORT=/tmp/qwen3.json \
+cargo test --locked --release -p rhythm actual_embedding_classification_evaluation -- --ignored --nocapture
+```
+
+Set `RHYTHM_EMBEDDING_EVAL_FORCE_CPU=1` for the CPU launch. The report includes every case's expected/predicted category, score, margin and elapsed time. The generation-model category figures above predate prompt 5; category is no longer generated, so the LLM harness no longer scores it.
+
 ## Known quality limits
 
 Literal grounding catches invented quotes and dates, not wrong meaning. Observed on schema-valid, grounded output:
@@ -97,7 +126,7 @@ The UI labels every result as AI-generated and tells the user to check condition
 
 ## Constrained decoding decision
 
-Analysis sends a static closed JSON schema as the request's `response_format`; llama.cpp compiles it to a grammar. The grammar emits properties in schema order, so the schema is literal JSON with the summary fields before `facts`. Sent with alphabetically sorted keys (`category` and `facts` first), the same 2B run completed only 14/18: four jobs failed date grounding after their repair because facts were written before the summaries. With the former worker, a same-input A/B test (8 synthetic + 3 archived notices, 2B and 4B) raised completed jobs from 17/22 to 20/22 under constrained decoding. Category and deadline errors remain in every mode.
+Analysis sends a static closed JSON schema as the request's `response_format`; llama.cpp compiles it to a grammar. The grammar emits properties in schema order, so the schema is literal JSON with the summary fields before `facts`. Sent with alphabetically sorted keys (`category` and `facts` first), the same 2B run completed only 14/18: four jobs failed date grounding after their repair because facts were written before the summaries. With the former worker, a same-input A/B test (8 synthetic + 3 archived notices, 2B and 4B) raised completed jobs from 17/22 to 20/22 under constrained decoding. Deadline errors remain in every mode; category is no longer generated.
 
 ## Running evaluations
 

@@ -1470,7 +1470,11 @@ fn schema_ten_upgrade_keeps_archive_and_adds_skipped_articles() {
         store
             .connection
             .execute_batch(
-                "DROP TABLE skipped_articles; DROP TABLE ai_projectors; PRAGMA user_version=10;",
+                "DROP TABLE skipped_articles; DROP TABLE ai_projectors; DROP TABLE notice_embeddings; DROP TABLE notice_classifications;
+                 ALTER TABLE ai_models DROP COLUMN kind;
+                 ALTER TABLE ai_preferences DROP COLUMN embedding_model_id;
+                 ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
+                 PRAGMA user_version=10;",
             )
             .unwrap();
     }
@@ -1515,6 +1519,10 @@ fn schema_eleven_upgrade_retries_mislabeled_and_newly_allowed_resources() {
                  UPDATE resources SET status='unsupported',error='{blocked}' WHERE filename IN ('b.png','d.pdf');
                  UPDATE resources SET status='unsupported',error='안전한 이미지 형식(PNG, JPEG, GIF, WebP)이 아니어서 보관하지 않았습니다.' WHERE filename='c.png';
                  DROP TABLE ai_projectors;
+                 DROP TABLE notice_embeddings; DROP TABLE notice_classifications;
+                 ALTER TABLE ai_models DROP COLUMN kind;
+                 ALTER TABLE ai_preferences DROP COLUMN embedding_model_id;
+                 ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  PRAGMA user_version=11;"
             ))
             .unwrap();

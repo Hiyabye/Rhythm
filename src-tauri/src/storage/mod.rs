@@ -16,7 +16,7 @@ mod personalization_tests;
 pub mod proactive;
 #[cfg(test)]
 mod proactive_tests;
-pub(crate) const SCHEMA_VERSION: i64 = 14;
+pub(crate) const SCHEMA_VERSION: i64 = 15;
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
     let migrations = [
@@ -34,6 +34,7 @@ fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
         include_str!("../../migrations/012_resource_retry.sql"),
         include_str!("../../migrations/013_ai_projector.sql"),
         include_str!("../../migrations/014_ai_backlog_mode.sql"),
+        include_str!("../../migrations/015_ai_embedding.sql"),
     ];
     for migration in migrations.iter().skip(version as usize) {
         let transaction = connection.transaction().map_err(|e| e.to_string())?;

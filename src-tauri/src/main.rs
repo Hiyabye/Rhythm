@@ -33,6 +33,7 @@ pub(crate) struct AppState {
     network: archive::Client,
     registry: Registry,
     pub(crate) worker: Arc<tokio::sync::Mutex<Worker>>,
+    pub(crate) classifier: Arc<intelligence::classification::Controller>,
     pub(crate) analysis: Arc<intelligence::analysis::Controller>,
     pub(crate) models: intelligence::models::Controller,
     hardware: intelligence::models::Hardware,
@@ -47,10 +48,12 @@ pub(crate) struct AppMaintenanceGuard {
     _gate: operation_gate::MaintenanceGuard,
     proactive: Arc<proactive::Scheduler>,
     analysis: Arc<intelligence::analysis::Controller>,
+    classifier_guard: Option<intelligence::classification::PauseGuard>,
 }
 
 impl Drop for AppMaintenanceGuard {
     fn drop(&mut self) {
+        drop(self.classifier_guard.take());
         self.analysis.resume();
         if let Err(error) = self.proactive.start() {
             eprintln!("Proactive: 유지보수 후 스케줄러를 다시 시작하지 못했습니다: {error}");
@@ -106,10 +109,14 @@ impl AppState {
             .acquire()
             .await?;
         preparation.armed = false;
+        // A classification batch writes SQLite; exclude it from backup/restore
+        // snapshots and wait for one already in flight before returning.
+        let classifier_guard = self.classifier.quiesce().await;
         Ok(AppMaintenanceGuard {
             _gate: gate,
             proactive: self.proactive.clone(),
             analysis: self.analysis.clone(),
+            classifier_guard: Some(classifier_guard),
         })
     }
 }
@@ -607,6 +614,12 @@ fn main() {
             // server's socket or per-launch access key.
             let llama = app.path().resource_dir().map_err(std::io::Error::other)?.join("llama");
             let runtime = data_root.join("run");
+            // The embedding process needs its own socket/key directory; sharing
+            // `run/` would let either server remove the other's files.
+            let classifier = Arc::new(intelligence::classification::Controller::new(
+                &llama,
+                &runtime.join("embedding"),
+            ));
             let worker = tauri::async_runtime::block_on(async {
                 let mode = store.lock().map_err(|_| std::io::Error::other("설정 잠금 오류"))?
                     .ai_preferences().map_err(std::io::Error::other)?.execution_mode;
@@ -629,6 +642,7 @@ fn main() {
                 archive,
                 network,
                 worker: Arc::new(tokio::sync::Mutex::new(worker)),
+                classifier,
                 analysis: Arc::new(intelligence::analysis::Controller::default()),
                 models: intelligence::models::Controller::default(),
                 hardware,
@@ -642,6 +656,10 @@ fn main() {
             #[cfg(windows)]
             notification_launches_ready(app.handle());
             tauri::async_runtime::spawn(updater::run_auto_check(
+                app.handle().clone(),
+                maintenance_shutdown.clone(),
+            ));
+            tauri::async_runtime::spawn(intelligence::classification::run(
                 app.handle().clone(),
                 maintenance_shutdown.clone(),
             ));
@@ -714,6 +732,9 @@ fn main() {
             intelligence::commands::ai_results,
             intelligence::commands::ai_document_jobs,
             intelligence::commands::ai_recent,
+            intelligence::commands::ai_classifications,
+            intelligence::commands::ai_classification,
+            intelligence::commands::ai_classification_preferences,
             archive::archive_sources,
             archive::archive_subscribe,
             archive::archive_summary,
@@ -763,6 +784,7 @@ fn main() {
                 state.archive.wait().await;
                 state.analysis.wait().await;
                 state.models.wait().await;
+                state.classifier.shutdown().await;
                 state.worker.lock().await.shutdown().await;
             });
         }

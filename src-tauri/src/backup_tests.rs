@@ -57,6 +57,7 @@ fn model(id: &str, ownership: &str, path: &str, bytes: &[u8]) -> AiModel {
         catalog_id: None,
         name: id.into(),
         ownership: ownership.into(),
+        kind: "generation".into(),
         path: path.into(),
         storage_directory: None,
         sha256: Some(digest(bytes)),

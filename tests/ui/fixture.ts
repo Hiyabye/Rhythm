@@ -15,6 +15,8 @@ export interface FixtureOptions {
   imageDelay?: number;
   queryGate?: boolean;
   aiInstalled?: boolean;
+  aiEmbeddingInstalled?: boolean;
+  aiClassificationLow?: boolean;
   aiRetiredModel?: boolean;
   aiResult?: boolean;
   aiImageResult?: boolean;
@@ -137,9 +139,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     const defaultModelDirectory = options.windows ? 'C:\\Rhythm-test\\models' : '/isolated/models';
     const chosenModelDirectory = options.windows ? 'D:\\로컬 모델\\Rhythm' : '/Volumes/로컬 모델/Rhythm';
     const modelStorage = { directory: options.aiModelDirectory ?? defaultModelDirectory, custom: Boolean(options.aiModelDirectory), available_bytes: (options.aiModelStorageAvailable === undefined ? 27000000000 : options.aiModelStorageAvailable) as number | null, error: options.aiModelStorageError ?? null as string | null };
-    const modelNames: Record<string, string> = { 'qwen35-2b': 'Qwen3.5 2B', 'qwen35-4b': 'Qwen3.5 4B', 'qwen35-9b': 'Qwen3.5 9B' };
+    const modelNames: Record<string, string> = { 'qwen35-2b': 'Qwen3.5 2B', 'qwen35-4b': 'Qwen3.5 4B', 'qwen35-9b': 'Qwen3.5 9B', 'qwen3-embedding-0-6b': 'Qwen3-Embedding 0.6B' };
     const projectorSpec = { filename: 'mmproj-F16.gguf', bytes: 1234567, memory_bytes: 2345678, sha256: 'c'.repeat(64) };
-    const model = (id = 'qwen35-4b') => ({ id, catalog_id: id, name: modelNames[id] ?? id, ownership: 'managed', path: `models/${id}.gguf`, storage_directory: null as string | null, sha256: 'a'.repeat(64), expected_sha256: 'a'.repeat(64), expected_bytes: 2740937888, bytes: 2740937888, source_revision: 'pinned-revision', source_filename: `${id}.gguf`, status: 'installed', downloaded_bytes: 2740937888, resume_etag: null, error: null as string | null, created_at: '2026-10-24 12:00:00', updated_at: '2026-10-24 12:00:00' });
+    const model = (id = 'qwen35-4b', kind: 'generation' | 'embedding' = 'generation') => ({ id, catalog_id: id, name: modelNames[id] ?? id, ownership: 'managed', kind, path: `models/${id}.gguf`, storage_directory: null as string | null, sha256: 'a'.repeat(64), expected_sha256: 'a'.repeat(64), expected_bytes: kind === 'embedding' ? 639150592 : 2740937888, bytes: kind === 'embedding' ? 639150592 : 2740937888, source_revision: 'pinned-revision', source_filename: `${id}.gguf`, status: 'installed', downloaded_bytes: kind === 'embedding' ? 639150592 : 2740937888, resume_etag: null, error: null as string | null, created_at: '2026-10-24 12:00:00', updated_at: '2026-10-24 12:00:00' });
     const projectorRow = (status: 'downloading' | 'installed' | 'failed' | 'cancelled' | 'missing', downloaded = 0) => ({ model_id: 'qwen35-4b', path: `${options.aiModelDirectory ?? defaultModelDirectory}${separator}${projectorSpec.filename}`, sha256: status === 'installed' ? projectorSpec.sha256 : null as string | null, expected_sha256: projectorSpec.sha256, expected_bytes: projectorSpec.bytes, bytes: status === 'installed' ? projectorSpec.bytes : 0, status, downloaded_bytes: downloaded, resume_etag: null as string | null, error: status === 'failed' ? '이미지 인식 모듈 다운로드에 실패했습니다. 연결을 확인하고 다시 시도해 주세요.' : null as string | null });
     const analysis = (id: number, documentId: number, revisionId: number) => ({
       id, job_id: id, document_id: documentId, revision_id: revisionId, task: 'notice_analysis',
@@ -151,7 +153,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       result: {
         short_summary: options.aiText ?? '장학금 신청 일정과 제출 서류를 확인하세요.',
         summary: '대상 학생은 안내된 기간에 신청서를 제출해야 합니다.',
-        category: '장학', uncertainty: 'clear',
+        uncertainty: 'clear',
         facts: options.aiImageResult ? [
           { kind: 'deadline', label: '신청 마감', value: '2026년 10월 30일까지 신청', evidence: '2026년 10월 30일까지 신청서를 제출하세요.', date: '2026-10-30', uncertainty: 'clear', origin: 'text' as const },
           { kind: 'deadline', label: '현장 접수', value: '이미지 안내문에 적힌 접수 일정', evidence: '[이미지 1]', date: '2026-11-03', uncertainty: 'ambiguous' as const, origin: 'image' as const },
@@ -167,8 +169,13 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       duration_ms: 1250,
       created_at: '2026-10-24 12:00:00',
     });
-    const ai = { model_storage: modelStorage, catalog: ['qwen35-4b', 'qwen35-2b'].map((id) => ({ id, name: modelNames[id], parameters: modelNames[id].split(' ')[1], quantization: 'Q4_K_M', bytes: 2740937888, memory_bytes: 6000000000, description: '한국어 공지 분석용 로컬 모델', use_case: '균형 잡힌 공지 분석', repository: 'unsloth/Qwen3.5-4B-GGUF', revision: 'pinned-revision', filename: `${id}.gguf`, sha256: 'a'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null, projector: id === 'qwen35-4b' ? projectorSpec : null })), models: [...(options.aiInstalled ? [model()] : []), ...(options.aiRetiredModel ? [model('qwen35-9b')] : [])], projectors: options.aiInstalled && options.aiProjectorState ? [projectorRow(options.aiProjectorState, options.aiProjectorState === 'downloading' ? 600000 : 0)] : [], preferences: { active_model_id: options.aiInstalled ? 'qwen35-4b' : null as string | null, setup_completed: !options.aiSetupNeeded, processing_mode: 'explicit', automatic_limit: 3, max_tokens: 1024, execution_mode: options.aiExecutionMode ?? 'auto', model_directory: options.aiModelDirectory ?? null as string | null }, jobs: [] as any[], runtime: { state: 'ready', runtime_available: true, model: null as string | null, detail: options.aiRuntimeDetail ?? null }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, operation: null as AiOperation | null, progress: null as any, analysis_contract: { prompt_version: contract.prompt_version, schema_version: contract.schema_version, configuration_hash: 'b'.repeat(64) } };
+    const embeddingCatalog = { id: 'qwen3-embedding-0-6b', kind: 'embedding', name: 'Qwen3-Embedding 0.6B', parameters: '0.6B', quantization: 'Q8_0', bytes: 639150592, memory_bytes: 2147483648, description: '공지 분류용 임베딩 모델', use_case: '공지 주제 분류', repository: 'Qwen/Qwen3-Embedding-0.6B-GGUF', revision: 'pinned-revision', filename: 'Qwen3-Embedding-0.6B-Q8_0.gguf', sha256: 'd'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null, pooling: 'last', embedding_dim: 1024, projector: null };
+    const ai = { model_storage: modelStorage, catalog: [...['qwen35-4b', 'qwen35-2b'].map((id) => ({ id, kind: 'generation' as const, name: modelNames[id], parameters: modelNames[id].split(' ')[1], quantization: 'Q4_K_M', bytes: 2740937888, memory_bytes: 6000000000, description: '한국어 공지 분석용 로컬 모델', use_case: '균형 잡힌 공지 분석', repository: 'unsloth/Qwen3.5-4B-GGUF', revision: 'pinned-revision', filename: `${id}.gguf`, sha256: 'a'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null, projector: id === 'qwen35-4b' ? projectorSpec : null })), embeddingCatalog], models: [...(options.aiInstalled ? [model()] : []), ...(options.aiRetiredModel ? [model('qwen35-9b')] : []), ...(options.aiEmbeddingInstalled ? [model('qwen3-embedding-0-6b', 'embedding')] : [])], projectors: options.aiInstalled && options.aiProjectorState ? [projectorRow(options.aiProjectorState, options.aiProjectorState === 'downloading' ? 600000 : 0)] : [], preferences: { active_model_id: options.aiInstalled ? 'qwen35-4b' : null as string | null, setup_completed: !options.aiSetupNeeded, processing_mode: 'explicit', automatic_limit: 3, max_tokens: 1024, execution_mode: options.aiExecutionMode ?? 'auto', model_directory: options.aiModelDirectory ?? null as string | null, embedding_model_id: options.aiEmbeddingInstalled ? 'qwen3-embedding-0-6b' : null as string | null, classification_enabled: true }, jobs: [] as any[], runtime: { state: 'ready', runtime_available: true, model: null as string | null, detail: options.aiRuntimeDetail ?? null }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, operation: null as AiOperation | null, progress: null as any, analysis_contract: { prompt_version: contract.prompt_version, schema_version: contract.schema_version, configuration_hash: 'b'.repeat(64) }, classification: { state: options.aiEmbeddingInstalled ? 'idle' : 'disabled', processed: 0 } };
     const analyses = options.aiResult ? [analysis(1, 1, 1)] : [];
+    const classifications = entries.map((item) => ({
+      document_id: item.id, revision_id: 1, category: '장학',
+      low_confidence: Boolean(options.aiClassificationLow), created_at: '2026-10-24 12:00:00',
+    }));
     let personalization = { profile: { university: '', department: '', study_level: '' }, interests: copy(options.initialInterests ?? []), learning_enabled: true };
     const documentFeedback = new Map<number, string>();
     let resultLagUsed = false;
@@ -385,21 +392,33 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           }
           case 'ai_document_jobs': return copy([...ai.jobs, ...fixture.documentJobs].filter((job) => job.document_id === args.documentId && job.revision_id === args.revisionId).sort((a, b) => b.id - a.id));
           case 'ai_diagnostics': return copy(ai.progress?.job_id === args.jobId ? ai.progress : null);
+          case 'ai_classifications': return copy(classifications.filter((row) => args.documentIds.includes(row.document_id)));
+          case 'ai_classification': return copy(classifications.find((row) => row.document_id === args.documentId && row.revision_id === args.revisionId) ?? null);
+          case 'ai_classification_preferences': ai.preferences.classification_enabled = Boolean(args.enabled); ai.classification = { state: args.enabled ? 'idle' : 'disabled', processed: ai.classification.processed }; return null;
           case 'ai_recent': return copy(analyses.filter((result) => result.revision_id === 1));
           case 'ai_results':
             if (fixture.resultsFailures > 0) { fixture.resultsFailures -= 1; throw '분석 정보를 일시적으로 확인하지 못했습니다.'; }
             if (options.aiResultLag && !resultLagUsed && ai.jobs.some((job) => job.status === 'completed')) { resultLagUsed = true; return []; }
             return copy(analyses.filter((result) => result.document_id === args.documentId && result.revision_id === args.revisionId).sort((a, b) => b.id - a.id));
           case 'ai_install': {
+            const entry = ai.catalog.find((value) => value.id === args.catalogId);
             let installed = ai.models.find((value) => value.id === args.catalogId);
             if (!installed) {
-              installed = model(args.catalogId);
+              installed = model(args.catalogId, entry?.kind === 'embedding' ? 'embedding' : 'generation');
               installed.storage_directory = ai.model_storage.directory;
               installed.path = `${ai.model_storage.directory}${separator}${args.catalogId}.gguf`;
               ai.models.push(installed);
             }
-            installed.status = 'downloading'; installed.downloaded_bytes = 1200000000; installed.bytes = 0; installed.error = null;
-            setTimeout(() => { if (installed!.status !== 'downloading') return; installed!.status = options.aiInstallError ? 'failed' : 'installed'; installed!.error = options.aiInstallError ? '모델 다운로드에 실패했습니다. 연결을 확인하고 이어받아 주세요.' : null; installed!.bytes = options.aiInstallError ? 0 : 2740937888; }, options.aiDelay ?? 1800);
+            const total = entry?.bytes ?? 2740937888;
+            installed.status = 'downloading'; installed.downloaded_bytes = Math.min(1200000000, total); installed.bytes = 0; installed.error = null;
+            setTimeout(() => {
+              if (installed!.status !== 'downloading') return;
+              installed!.status = options.aiInstallError ? 'failed' : 'installed';
+              installed!.error = options.aiInstallError ? '모델 다운로드에 실패했습니다. 연결을 확인하고 이어받아 주세요.' : null;
+              installed!.bytes = options.aiInstallError ? 0 : total;
+              installed!.downloaded_bytes = options.aiInstallError ? 0 : total;
+              if (!options.aiInstallError && installed!.kind === 'embedding') ai.preferences.embedding_model_id = installed!.id;
+            }, options.aiDelay ?? 1800);
             return null;
           }
           case 'ai_cancel_download': ai.models.forEach((model) => { if (model.status === 'downloading') model.status = 'cancelled'; }); ai.projectors.forEach((projector) => { if (projector.status === 'downloading') projector.status = 'cancelled'; }); return null;

@@ -1717,6 +1717,13 @@ fn reconcile_model_inventory(
             |row| row.get(0),
         )
         .map_err(|_| "백업 모델 폴더 정보를 확인하지 못했습니다.")?;
+    let has_embedding_model: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('ai_preferences') WHERE name='embedding_model_id')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| "백업 분류 모델 정보를 확인하지 못했습니다.")?;
     let has_projectors: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='ai_projectors')",
@@ -1739,6 +1746,16 @@ fn reconcile_model_inventory(
                  );",
             )
             .map_err(|_| "백업의 외부 모델 폴더 권한을 초기화하지 못했습니다.")?;
+        if has_embedding_model {
+            transaction
+                .execute(
+                    "UPDATE ai_preferences SET embedding_model_id=NULL WHERE embedding_model_id IN (
+                         SELECT id FROM ai_models WHERE ownership='managed' AND storage_directory IS NOT NULL
+                     )",
+                    [],
+                )
+                .map_err(|_| "백업의 분류 모델 선택을 초기화하지 못했습니다.")?;
+        }
         let custom_models = transaction
             .prepare("SELECT id,path,storage_directory FROM ai_models WHERE ownership='managed' AND storage_directory IS NOT NULL")
             .map_err(|_| "백업의 외부 모델 목록을 읽지 못했습니다.")?
@@ -1821,6 +1838,14 @@ fn reconcile_model_inventory(
                 [&id],
             )
             .map_err(|_| "백업에서 사용할 모델을 정리하지 못했습니다.")?;
+        if has_embedding_model {
+            transaction
+                .execute(
+                    "UPDATE ai_preferences SET embedding_model_id=NULL WHERE embedding_model_id=?1",
+                    [&id],
+                )
+                .map_err(|_| "백업에서 사용할 분류 모델을 정리하지 못했습니다.")?;
+        }
     }
     if has_projectors {
         // Projector bytes are excluded from backups like model weights. Only a

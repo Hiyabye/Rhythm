@@ -1,6 +1,8 @@
-use super::{analysis, models, operations, WorkerStatus};
+use super::{analysis, classification, models, operations, WorkerStatus};
 use crate::{
-    storage::intelligence::{AiJob, AiModel, AiPreferences, AiProjector, AiResult},
+    storage::intelligence::{
+        AiClassification, AiJob, AiModel, AiPreferences, AiProjector, AiResult,
+    },
     AppState,
 };
 use serde::Serialize;
@@ -87,6 +89,7 @@ pub struct Snapshot {
     operation: Option<operations::Status>,
     progress: Option<analysis::Diagnostics>,
     analysis_contract: AnalysisContract,
+    classification: classification::Status,
 }
 #[derive(Serialize)]
 pub struct AnalysisContract {
@@ -315,6 +318,7 @@ pub async fn ai_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, 
             schema_version: analysis::SCHEMA_VERSION,
             configuration_hash,
         },
+        classification: state.classifier.status(),
     })
 }
 async fn check_storage_change(state: &AppState) -> Result<(), String> {
@@ -519,8 +523,22 @@ pub async fn ai_remove(
     let mut prefs = previous_preferences.clone();
     // Unload even if an earlier selection was cleared, so no mapped model file is deleted.
     stop_inventory_worker(&state.worker, &state.maintenance_shutdown).await?;
+    let kind = with_store(&state, |s| Ok(s.ai_model(&id)?.map(|model| model.kind)))?;
+    let _classifier_paused = if kind.as_deref() == Some("embedding") {
+        // Windows cannot unlink a file mapped by the embedding process. Hold
+        // classification paused until inventory and file removal finish.
+        let guard = state.classifier.quiesce().await;
+        state.classifier.stop_worker().await;
+        Some(guard)
+    } else {
+        None
+    };
     if prefs.active_model_id.as_deref() == Some(&id) {
         prefs.active_model_id = None;
+        with_store(&state, |s| s.ai_save_preferences(&prefs))?;
+    }
+    if prefs.embedding_model_id.as_deref() == Some(&id) {
+        prefs.embedding_model_id = None;
         with_store(&state, |s| s.ai_save_preferences(&prefs))?;
     }
     let result = if keep_files == Some(true) {
@@ -567,6 +585,11 @@ pub async fn ai_preferences(
     }
     if old.active_model_id != preferences.active_model_id {
         return Err("모델 선택 기능으로 활성 모델을 변경해 주세요.".into());
+    }
+    if old.embedding_model_id != preferences.embedding_model_id
+        || old.classification_enabled != preferences.classification_enabled
+    {
+        return Err("공지 분류 설정은 분류 설정 기능으로 변경해 주세요.".into());
     }
     if old.execution_mode != preferences.execution_mode {
         if !["auto", "cpu", "gpu"].contains(&preferences.execution_mode.as_str()) {
@@ -616,6 +639,26 @@ pub async fn ai_preferences(
     }
     with_store(&state, |s| s.ai_save_preferences(&preferences))
 }
+/// The only command that changes automatic classification. It quiesces the
+/// running batch so the saved preference and the worker cannot disagree.
+#[tauri::command]
+pub async fn ai_classification_preferences(
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
+    let _gate = state.ai_gate.lock().await;
+    check_open(&state)?;
+    let _paused = state.classifier.quiesce().await;
+    let result = with_store(&state, |store| {
+        let mut preferences = store.ai_preferences()?;
+        preferences.classification_enabled = enabled;
+        store.ai_save_preferences(&preferences)
+    });
+    state.classifier.invalidate();
+    result
+}
+
 #[tauri::command]
 pub async fn ai_analyze(
     state: tauri::State<'_, AppState>,
@@ -676,6 +719,71 @@ pub async fn ai_diagnostics(
     let _lease = state.operation_gate.shared().await?;
     Ok(state.analysis.diagnostics(job_id))
 }
+/// Latest-revision classifications for the visible page. Returns nothing when
+/// no embedding model is selected or classification is disabled.
+#[tauri::command]
+pub async fn ai_classifications(
+    state: tauri::State<'_, AppState>,
+    document_ids: Vec<i64>,
+) -> Result<Vec<AiClassification>, String> {
+    if document_ids.len() > 200 || document_ids.iter().any(|id| *id <= 0) {
+        return Err("분류 조회 범위를 확인해 주세요.".into());
+    }
+    let target = with_store(&state, |store| {
+        let preferences = store.ai_preferences()?;
+        // Turning automatic classification off keeps existing rows visible.
+        let Some(id) = preferences.embedding_model_id else {
+            return Ok(None);
+        };
+        Ok(store
+            .ai_model(&id)?
+            .filter(|model| model.kind == "embedding" && model.status == "installed")
+            .and_then(|model| model.sha256))
+    })?;
+    let Some(sha) = target else {
+        return Ok(Vec::new());
+    };
+    with_store(&state, |store| {
+        store.ai_classifications_for_documents(&document_ids, &sha, classification::config_hash())
+    })
+}
+
+/// Revision-scoped classification for the reader. Older revisions without a
+/// stored row return `None`; they are classified only through the latest-revision
+/// background pass.
+#[tauri::command]
+pub async fn ai_classification(
+    state: tauri::State<'_, AppState>,
+    document_id: i64,
+    revision_id: i64,
+) -> Result<Option<AiClassification>, String> {
+    if document_id <= 0 || revision_id <= 0 {
+        return Err("분류 조회 식별자가 올바르지 않습니다.".into());
+    }
+    let target = with_store(&state, |store| {
+        let preferences = store.ai_preferences()?;
+        // Turning automatic classification off keeps existing rows visible.
+        let Some(id) = preferences.embedding_model_id else {
+            return Ok(None);
+        };
+        Ok(store
+            .ai_model(&id)?
+            .filter(|model| model.kind == "embedding" && model.status == "installed")
+            .and_then(|model| model.sha256))
+    })?;
+    let Some(sha) = target else {
+        return Ok(None);
+    };
+    with_store(&state, |store| {
+        store.ai_classification(
+            document_id,
+            revision_id,
+            &sha,
+            classification::config_hash(),
+        )
+    })
+}
+
 #[tauri::command]
 pub async fn ai_recent(state: tauri::State<'_, AppState>) -> Result<Vec<AiResult>, String> {
     let _lease = state.operation_gate.shared().await?;

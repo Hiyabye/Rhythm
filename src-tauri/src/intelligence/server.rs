@@ -34,11 +34,21 @@ pub(super) struct Launch {
     /// Backend this launch targets: `metal`, `vulkan` or `cpu`.
     pub backend: &'static str,
     pub context: u32,
+    /// Some only for the dedicated embedding process. Generation launches keep
+    /// the chat flags and never receive `--embedding`.
+    pub embedding: Option<EmbeddingLaunch>,
 }
 impl Launch {
     fn gpu(&self) -> bool {
         self.backend != "cpu"
     }
+}
+
+/// Model-declared pooling mode. The vector is normalized by the server, so
+/// callers only need cosine similarity.
+#[derive(Clone, Debug)]
+pub(super) struct EmbeddingLaunch {
+    pub pooling: String,
 }
 
 enum Endpoint {
@@ -68,6 +78,8 @@ pub(super) struct Server {
     pub projector: Option<PathBuf>,
     /// True only when upstream logged the multimodal encoder as loaded.
     pub vision: bool,
+    /// True only for a dedicated embedding process.
+    pub embedding: bool,
     pub loaded_backend: &'static str,
     pub load_ms: u64,
     #[cfg(windows)]
@@ -115,12 +127,6 @@ impl Server {
         command.args([
             "--no-webui",
             "--no-slots",
-            "--jinja",
-            // Analysis is deterministic JSON, never a reasoning task. This also
-            // stops Gemma 4's optional thought channel from consuming the whole
-            // output budget before the JSON begins.
-            "--reasoning-budget",
-            "0",
             "-np",
             "1",
             "-c",
@@ -129,6 +135,35 @@ impl Server {
             "-lv",
             "4",
         ]);
+        match &launch.embedding {
+            Some(embedding) => {
+                // Dedicated embedding models have no chat template and reject
+                // chat-only flags. Request a unit-length vector from upstream.
+                // Without a large physical batch one long notice exceeds the
+                // default 512-token ubatch and the server returns HTTP 500.
+                command.args([
+                    "--embedding",
+                    "--pooling",
+                    &embedding.pooling,
+                    "--embd-normalize",
+                    "2",
+                    "--batch-size",
+                    "2048",
+                    "--ubatch-size",
+                    "2048",
+                ]);
+            }
+            None => {
+                command.args([
+                    "--jinja",
+                    // Analysis is deterministic JSON, never a reasoning task. This also
+                    // stops Gemma 4's optional thought channel from consuming the whole
+                    // output budget before the JSON begins.
+                    "--reasoning-budget",
+                    "0",
+                ]);
+            }
+        }
         if launch.backend == "vulkan" {
             let device = nvidia_device(&launch.executable).await?;
             command.args(["-ngl", "99", "--device", &device]);
@@ -186,6 +221,7 @@ impl Server {
             model: model.to_owned(),
             projector: projector.map(Path::to_owned),
             vision: multimodal && projector.is_some(),
+            embedding: launch.embedding.is_some(),
             loaded_backend,
             load_ms: started.elapsed().as_millis() as u64,
             #[cfg(windows)]
@@ -224,6 +260,27 @@ impl Server {
             String::from_utf8_lossy(&response)
         );
         Err("로컬 추론에 실패했습니다. AI 엔진 로그를 확인해 주세요.".into())
+    }
+
+    /// Sends one OpenAI-style embeddings request. The server returns one vector
+    /// per input; `index` is honored because batching order is not guaranteed.
+    pub async fn embeddings(&mut self, body: &str, deadline: Duration) -> Result<Value, String> {
+        let (status, response) = timeout(
+            deadline,
+            request(&self.endpoint, "POST", "/v1/embeddings", body.as_bytes()),
+        )
+        .await
+        .map_err(|_| "AI 엔진 응답 시간이 초과되었습니다.".to_string())??;
+        let value: Value = serde_json::from_slice(&response)
+            .map_err(|_| "AI 엔진 응답 형식이 올바르지 않습니다.".to_string())?;
+        if status == 200 && value["data"].is_array() {
+            return Ok(value);
+        }
+        eprintln!(
+            "AI engine embedding request failed with HTTP {status}: {}",
+            String::from_utf8_lossy(&response)
+        );
+        Err("로컬 임베딩 계산에 실패했습니다. AI 엔진 로그를 확인해 주세요.".into())
     }
 
     pub fn exited(&mut self) -> bool {

@@ -38,6 +38,16 @@ pub struct CatalogEntry {
     pub license: String,
     pub compatibility: String,
     pub reason: Option<String>,
+    /// `generation` (default) or `embedding`. Embedding entries are never
+    /// selectable for summary analysis and need their own explicit install.
+    #[serde(default = "default_kind")]
+    pub kind: String,
+    /// Pooling mode passed to `llama-server --pooling`; embedding entries only.
+    #[serde(default)]
+    pub pooling: Option<String>,
+    /// Declared vector size; `None` for generation entries.
+    #[serde(default)]
+    pub embedding_dim: Option<u32>,
     /// Optional vision projector (mmproj). Installing it is a separate action.
     #[serde(default)]
     pub projector: Option<ProjectorEntry>,
@@ -50,6 +60,9 @@ pub struct ProjectorEntry {
     /// Conservative estimate, not a measured peak.
     pub memory_bytes: u64,
     pub sha256: String,
+}
+fn default_kind() -> String {
+    "generation".into()
 }
 pub fn catalog() -> Vec<CatalogEntry> {
     serde_json::from_str(include_str!("catalog.json")).expect("committed model manifest")
@@ -393,6 +406,7 @@ fn inventory(entry: &CatalogEntry) -> AiModel {
         catalog_id: Some(entry.id.clone()),
         name: entry.name.clone(),
         ownership: "managed".into(),
+        kind: entry.kind.clone(),
         path: format!("models/{}.gguf", entry.sha256),
         storage_directory: None,
         sha256: None,
@@ -431,8 +445,17 @@ fn validate_manifest(e: &CatalogEntry) -> Result<(), String> {
             "unsloth/Qwen3.5-4B-GGUF",
             "unsloth/gemma-4-E2B-it-GGUF",
             "unsloth/gemma-4-E4B-it-GGUF",
+            "Qwen/Qwen3-Embedding-0.6B-GGUF",
         ]
         .contains(&e.repository.as_str())
+        || !["generation", "embedding"].contains(&e.kind.as_str())
+        || (e.kind == "embedding"
+            && (e
+                .pooling
+                .as_deref()
+                .is_none_or(|pooling| !["none", "mean", "cls", "last", "rank"].contains(&pooling))
+                || e.embedding_dim.is_none_or(|dim| dim == 0 || dim > 8192)))
+        || (e.kind == "generation" && (e.pooling.is_some() || e.embedding_dim.is_some()))
         || !e.filename.ends_with(".gguf")
         || e.filename.contains(['/', '\\', '\0'])
         || !e.id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
@@ -850,7 +873,19 @@ async fn finalize(
     model.bytes = entry.bytes;
     model.downloaded_bytes = entry.bytes;
     model.error = None;
-    with_store(store, |s| s.ai_upsert_model(model))
+    with_store(store, |s| s.ai_upsert_model(model))?;
+    if entry.kind == "embedding" {
+        // An explicit embedding install is the opt-in: select it for
+        // classification, but never touch the generation model.
+        if let Err(error) = with_store(store, |s| {
+            let mut preferences = s.ai_preferences()?;
+            preferences.embedding_model_id = Some(model.id.clone());
+            s.ai_save_preferences(&preferences)
+        }) {
+            eprintln!("Embedding model selection: {error}");
+        }
+    }
+    Ok(())
 }
 
 /// The projector artifact of a catalog entry, resolved from the same pinned
@@ -1351,6 +1386,7 @@ pub async fn register(
         catalog_id: None,
         name,
         ownership: "external".into(),
+        kind: "generation".into(),
         path,
         storage_directory: None,
         sha256: Some(hash),
@@ -1507,7 +1543,16 @@ mod tests {
             .map(|entry| entry.id)
             .collect();
         // 9B was never run and 0.8B failed the synthetic evaluation; both were removed.
-        assert_eq!(ids, ["qwen35-2b", "qwen35-4b", "gemma4-e2b", "gemma4-e4b"]);
+        assert_eq!(
+            ids,
+            [
+                "qwen35-2b",
+                "qwen35-4b",
+                "gemma4-e2b",
+                "gemma4-e4b",
+                "qwen3-embedding-0-6b"
+            ]
+        );
         let mut experimental = catalog().remove(0);
         experimental.compatibility = "experimental".into();
         assert!(check_installable(&experimental).is_err());
@@ -1959,12 +2004,18 @@ mod tests {
     #[test]
     fn catalog_provenance_and_destination_policy() {
         let entries = catalog();
-        assert_eq!(entries.len(), 4);
+        assert_eq!(entries.len(), 5);
         for e in &entries {
             validate_manifest(e).unwrap();
             let origin = download_url(e).unwrap();
             validate_destination(&origin, &origin).unwrap();
-            assert_eq!(e.quantization, "Q4_K_M");
+            if e.kind == "generation" {
+                assert_eq!(e.quantization, "Q4_K_M");
+            } else {
+                assert_eq!(e.kind, "embedding");
+                assert_eq!(e.quantization, "Q8_0");
+                assert!(e.pooling.is_some() && e.embedding_dim == Some(1024));
+            }
         }
         let e = &entries[0];
         for bad in [
@@ -3014,7 +3065,7 @@ mod tests {
             .expect("curated model ID");
         let manager = Controller::default();
         manager
-            .start_entry(store.clone(), root.clone(), entry)
+            .start_entry(store.clone(), root.clone(), entry.clone())
             .unwrap();
         let start = Instant::now();
         while manager.busy() {
@@ -3027,6 +3078,18 @@ mod tests {
         }
         let m = store.lock().unwrap().ai_model(&id).unwrap().unwrap();
         assert_eq!(m.status, "installed", "{:?}", m.error);
+        if entry.kind == "embedding" {
+            assert_eq!(
+                store
+                    .lock()
+                    .unwrap()
+                    .ai_preferences()
+                    .unwrap()
+                    .embedding_model_id,
+                Some(id.clone()),
+                "an embedding install selects itself without touching the generation model"
+            );
+        }
         eprintln!(
             "VERIFIED {} {} bytes {} sha256 {:?}, elapsed {:?}",
             m.name,
