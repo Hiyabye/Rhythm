@@ -1,6 +1,6 @@
 # Roadmap
 
-Rhythm stays local-first and Korean-first. The current release is **v1.2.0**. Support targets macOS Apple Silicon and Windows 11 x64; Linux and Intel Macs are not supported. Planned work is tracked in [GitHub issues](https://github.com/Hiyabye/Rhythm/issues); this page records the current state and what has actually been verified.
+Rhythm stays local-first and Korean-first. The current release is **v1.3.0**. Support targets macOS Apple Silicon and Windows 11 x64; Linux and Intel Macs are not supported. Planned work is tracked in [GitHub issues](https://github.com/Hiyabye/Rhythm/issues); this page records the current state and what has actually been verified.
 
 ## Current state
 
@@ -20,9 +20,15 @@ v1.2.0 adds:
 - Release pipeline for in-app updates on unsigned builds: signed updater packages for both platforms and a verified `latest.json` in every release. v1.2.0 is the first release with the updater key; installed v1.1.0 apps embed no key and need one manual update.
 - Automatic update checks, on by default in builds with the key (schema 10): daily while the app is open, announce-only, off switch in Settings → 데이터 및 정보.
 
-Unreleased:
+v1.3.0 adds:
 
+- **새로고침** merges the new-notice check and the earlier-notice import into one action (#73). Notices whose body cannot be archived are skipped and listed per board instead of blocking collection (#78).
+- The 과거 자료 concept is gone. Opt-in "analyze older notices while idle" (#75, schema 14) analyzes up to 20 unanalyzed notices per hour while the computer is idle on external power, newest publication first.
+- Model catalog: Qwen3.5 0.8B removed because it invented content (#74; existing installs keep working). Gemma 4 E2B/E4B verified on macOS Apple Silicon / Metal.
 - Local embedding classification (#76, schema 15): Qwen3-Embedding 0.6B Q8_0 as a separate explicit install and transient `llama-server` process. It classifies the existing archive and new revisions, with a low-confidence `기타` fallback. Category is removed from the generation schema (prompt 5 / schema 3); earlier analyses remain readable as outdated. Measured on macOS Metal and CPU with 18 synthetic fixtures; Windows and broader accuracy are unverified.
+- Optional vision projector (#111): an installed `mmproj` adds up to two already-downloaded images of a notice to its analysis; image facts are marked as read from an image and ambiguous dates stay unknown.
+- Notice images may be downloaded from any public HTTPS host (that host's robots.txt applies), and 자료 모두 내려받기 fetches every missing file of a board (#104).
+- The login item is named after the bundle identifier, so a validation build no longer shares the production entry (#67). A failed analysis shows a Korean user-facing error instead of the model's repair instruction (#98).
 
 ## Verification status
 
