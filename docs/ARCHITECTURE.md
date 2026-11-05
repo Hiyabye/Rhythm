@@ -160,6 +160,7 @@ A new notice whose body is only iframes (blank text and textless `p`/`div`/`span
 
 - **Historical:** start at the persisted `next_page`, follow public pagination, deduplicate pins and IDs, and checkpoint only after no article on the page failed transiently (see below). Existing text is not refetched, but pending resources resume. `history_complete` becomes true only at the last public page, never at a safety or test limit.
 - **Incremental:** start at page one and recheck recent pages and pins with ETag/Last-Modified validators. The minimum recheck window is three pages; discovery continues past it until a page of known regular records marks the frontier. Repeated pins never establish the frontier.
+- **Refresh:** the manual action (새로고침) runs one job per board: an incremental pass first so new notices appear quickly, then a historical pass only while `history_complete` is false. Either step's failure or cancellation stops that board and keeps what the earlier step saved. The scheduler never uses it, so automatic work cannot start a backlog download.
 - **First incremental seed:** with no local documents, fetch at most three pages as historical records, without counting them as new or marking history complete.
 - **Scope:** incremental sync is not an audit of every old edit.
 

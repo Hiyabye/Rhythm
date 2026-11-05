@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mockDesktop, callCount, openSettings } from './fixture';
+import { mockDesktop, callCount, openSettings, syncMode } from './fixture';
 import type { ResourceRecord } from '../../src/lib/types';
 
 const image: ResourceRecord = { id: 7, url: 'https://computing.sogang.ac.kr/web/file/editor/test.png', filename: '본문.png',
@@ -233,21 +233,28 @@ test('subscriptions have no automatic collection, protect refreshing state, show
   await expect(subscribe).toBeEnabled();
   expect(await callCount(page, 'archive_start')).toBe(0);
   const starts = () => page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'archive_start').map((call: any) => call.args));
-  await page.getByRole('button', { name: '과거 자료 가져오기', exact: true }).click();
-  await expect.poll(starts).toEqual([{ sourceIds: null, mode: 'historical' }]);
+  await page.getByRole('button', { name: '새로고침', exact: true }).click();
+  await expect.poll(starts).toEqual([{ sourceIds: null, mode: 'refresh' }]);
+  await expect(page.locator('.collect-status')).toContainText('새로고침 준비 중');
+  // The one job reports each step, so the label follows new notices into the backlog.
+  await syncMode(page, 'incremental');
+  await expect(page.locator('.collect-status')).toContainText('새 소식 확인 중');
+  await syncMode(page, 'historical', 2);
+  await expect(page.locator('.collect-status')).toContainText('과거 자료 가져오는 중 · 소식 · 2쪽');
   await expect(page.getByRole('button', { name: '가져오기 중단', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '가져오기 중단', exact: true }).click();
   await expect(page.locator('.source-manager .archive-feedback')).toContainText('이미 저장한 공지는 유지됩니다');
-  // One board can still be collected on its own from its status popover.
+  // One board can still be refreshed on its own from its status popover.
   await page.getByRole('button', { name: '소프트웨어융합대학 소식 상태', exact: true }).click();
-  await status.getByRole('button', { name: '새 소식 확인', exact: true }).click();
-  await expect.poll(starts).toEqual([{ sourceIds: null, mode: 'historical' }, { sourceIds: ['computing-updates'], mode: 'incremental' }]);
+  await expect(status.getByRole('button', { name: '새 소식 확인', exact: true })).toHaveCount(0);
+  await status.getByRole('button', { name: '새로고침', exact: true }).click();
+  await expect.poll(starts).toEqual([{ sourceIds: null, mode: 'refresh' }, { sourceIds: ['computing-updates'], mode: 'refresh' }]);
   // Missing files of every subscribed board download through one explicit action.
   await page.keyboard.press('Escape');
   await page.evaluate(() => (window as any).__fixture.completeSync());
   await expect(page.getByRole('button', { name: '자료 모두 내려받기', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: '자료 모두 내려받기', exact: true }).click();
-  await expect.poll(starts).toEqual([{ sourceIds: null, mode: 'historical' }, { sourceIds: ['computing-updates'], mode: 'incremental' }, { sourceIds: null, mode: 'resources' }]);
+  await expect.poll(starts).toEqual([{ sourceIds: null, mode: 'refresh' }, { sourceIds: ['computing-updates'], mode: 'refresh' }, { sourceIds: null, mode: 'resources' }]);
   await expect(page.locator('.collect-status')).toContainText('첨부 자료 모두 내려받는 중');
 });
 
