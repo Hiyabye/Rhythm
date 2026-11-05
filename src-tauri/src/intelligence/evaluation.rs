@@ -1043,9 +1043,46 @@ async fn actual_vision_image_analysis_evaluation() {
     store.ai_save_preferences(&preferences).unwrap();
 
     // The archived body is nearly empty: the deadline exists only in the image.
-    let poster = include_bytes!("../archive/fixtures/vision/poster.png");
+    // The default is the committed synthetic poster; RHYTHM_VISION_EVAL_IMAGE
+    // names a local raster (for example an archived notice image) for an
+    // ad-hoc run. Such a file is never committed.
+    let (poster_name, mime, poster, fixture) = match std::env::var_os("RHYTHM_VISION_EVAL_IMAGE") {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            let bytes = std::fs::read(&path).expect("read RHYTHM_VISION_EVAL_IMAGE");
+            let mime = crate::archive::sync::image_mime(&bytes)
+                .expect("RHYTHM_VISION_EVAL_IMAGE must be a PNG/JPEG/GIF/WebP raster");
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("image file name")
+                .to_owned();
+            assert!(
+                bytes.len() <= 6 * 1024 * 1024,
+                "image fixture exceeds 6 MiB"
+            );
+            (
+                name,
+                mime,
+                bytes,
+                format!("local raster {}", path.display()),
+            )
+        }
+        None => (
+            "poster.png".to_owned(),
+            "image/png",
+            include_bytes!("../archive/fixtures/vision/poster.png").to_vec(),
+            "synthetic poster; deadline exists only in the image".to_owned(),
+        ),
+    };
     std::fs::create_dir(root.join("resources")).unwrap();
-    std::fs::write(root.join("resources/poster.png"), poster).unwrap();
+    std::fs::write(root.join("resources").join(&poster_name), &poster).unwrap();
+    // Optional ad-hoc text alongside RHYTHM_VISION_EVAL_IMAGE so a real archived
+    // notice can be analyzed with its own title/body instead of the synthetic one.
+    let title = std::env::var("RHYTHM_VISION_EVAL_TITLE")
+        .unwrap_or_else(|_| "2026학년도 2학기 국가장학금 신청 안내".into());
+    let body = std::env::var("RHYTHM_VISION_EVAL_BODY")
+        .unwrap_or_else(|_| "붙임 포스터를 확인하세요.".into());
     let (document_id, revision_id) = {
         let (document_id, _) = store
             .upsert_article(
@@ -1053,15 +1090,15 @@ async fn actual_vision_image_analysis_evaluation() {
                 &ArticleInput {
                     external_id: "vision-poster".into(),
                     canonical_url: "https://www.sogang.ac.kr/evaluation/vision-poster".into(),
-                    title: "2026학년도 2학기 국가장학금 신청 안내".into(),
+                    title: title.clone(),
                     author: Some("합성 평가 자료".into()),
                     category: None,
                     published_at: "2026-01-01".into(),
                     modified_at: None,
-                    original: "붙임 포스터를 확인하세요.".into(),
+                    original: body.clone(),
                     unsupported_body: false,
-                    body_html: "<p>붙임 포스터를 확인하세요.</p>".into(),
-                    body_text: "붙임 포스터를 확인하세요.".into(),
+                    body_html: format!("<p>{body}</p>"),
+                    body_text: body.clone(),
                     resources: Vec::new(),
                     etag: None,
                     last_modified: None,
@@ -1075,7 +1112,7 @@ async fn actual_vision_image_analysis_evaluation() {
                 document_id,
                 revision_id,
                 "https://www.sogang.ac.kr/evaluation/poster.png",
-                "poster.png",
+                &poster_name,
                 "image",
             )
             .unwrap();
@@ -1083,10 +1120,10 @@ async fn actual_vision_image_analysis_evaluation() {
             .resource_result(
                 resource,
                 "downloaded",
-                Some("image/png"),
+                Some(mime),
                 Some(poster.len() as u64),
-                Some("resources/poster.png"),
-                Some(&format!("{:x}", Sha256::digest(poster))),
+                Some(&format!("resources/{poster_name}")),
+                Some(&format!("{:x}", Sha256::digest(&poster))),
                 None,
             )
             .unwrap();
@@ -1130,7 +1167,9 @@ async fn actual_vision_image_analysis_evaluation() {
         "arch": std::env::consts::ARCH,
         "prompt_version": analysis::PROMPT_VERSION,
         "schema_version": analysis::SCHEMA_VERSION,
-        "fixture": "synthetic poster; deadline exists only in the image",
+        "fixture": fixture,
+        "title": title,
+        "body": body,
         "wall_ms": started.elapsed().as_millis(),
         "job": job,
         "diagnostics": controller.diagnostics(job_id),
