@@ -1,0 +1,73 @@
+<script>
+$(function() {
+  
+  $.ajax({
+    url: "/ilos/cls/st/co/efile_list.acl",
+    type: "POST",
+    data: { 
+      ud : "20990001",
+      ky : "A202631099990101",
+      pf_st_flag : "2",
+      CONTENT_SEQ : "SYNTHETICSEQ01",
+      encoding : "utf-8"
+          },
+    async: true,
+    success: function(html){
+      $("#tbody_file").append(html);
+    }
+  });
+  $(".editor_content").setEditorView();
+});
+</script>
+<header class="dialog_header">
+  <div class="view_header">
+    <div class="view_menu">
+      <div class="font_subtitle3 menu_icon notice">공지사항</div>
+    </div>
+    <div class="view_title_wrap">
+      <div class="view_title">
+        <span class="font_headline2">[중요] 중간고사 범위 안내</span>
+      </div>
+    </div>
+  </div>
+</header>
+<article class="dialog_contents">
+  <section id="tab_content1" class="notice_tab_content">
+    <div class="notice_table">
+      <table class="bbsview">
+        <caption>과제물 게시판 내용 상세보기</caption>
+        <tbody>
+          <tr>
+           <th scope="row">작성자</th>
+           <td>김조교</td>
+          </tr>
+          <tr>
+           <th scope="row">게시일</th>
+           <td>10월 23일 (금) 23:42</td>
+          </tr>
+          <tr>
+            <th scope="row">공지 만료일</th>
+            <td>
+              <div>기간제한 없음</div>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">조회수</th>
+            <td class="count"><span class="view">42</span></td>
+          </tr>
+          <tr>
+            <td class="textviewer font_body2" colspan="2">
+              <div class="editor_content"><p style="color: #161718;">안녕하세요, 자료구조실습 조교입니다.</p><div class="x"><p>중간고사 범위는 <b>1주차부터 7주차</b>까지입니다.</p></div><table><tbody><tr><td>문제</td><td>배점</td></tr></tbody></table><p><img class="imaxsoftUfiles" id="SYNIMG01" alt="" src="/ilosfiles/editor-file/0000/2026/SYNIMG01.png" width="604" height="395" /></p><p><img alt="외부" src="https://example.org/remote.png"></p><script>alert(1)</script></div>
+              <div id="tbody_file" class="attach_container"></div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="comment_zone">
+      <button type="button" id="btnArtlConfirm" class="notice_confirm_btn_done" onkeypress="this.onclick;">
+        <div class="notice_confirm_done">공지 확인 완료</div>
+      </button>
+    </div>
+  </section>
+</article>

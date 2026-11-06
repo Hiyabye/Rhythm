@@ -23,6 +23,9 @@ use tokio::sync::{Mutex as AsyncMutex, Notify};
 
 pub const PROMPT_VERSION: u32 = 5;
 pub const SCHEMA_VERSION: u32 = 3;
+/// Cybercampus documents are the user's own course data (#86, #77).
+pub const PRIVATE_REMOTE: &str =
+    "사이버캠퍼스 자료는 원격 AI로 보내지 않습니다. 로컬 엔진으로 분석해 주세요.";
 const CONSTRAINED_OUTPUT_DEFAULT: bool = true;
 pub(super) fn decoding_mode() -> &'static str {
     #[cfg(test)]
@@ -301,11 +304,14 @@ impl Controller {
             return Err("앱이 종료 중이어서 AI 분석을 시작할 수 없습니다.".into());
         }
         let mut response = with_store(&store, |store| {
-            store.document(document_id, Some(revision_id))?;
+            let document = store.document(document_id, Some(revision_id))?;
             let preferences = store.ai_preferences()?;
             // Both engines share the queue and the semantic cache. Their keys
             // differ, so switching engines never overwrites the other's results.
             let (key, identity) = if preferences.engine == "openai-compatible" {
+                if document.item.source_id == crate::storage::intelligence::PRIVATE_SOURCE {
+                    return Err(PRIVATE_REMOTE.into());
+                }
                 if !preferences.remote_consent {
                     return Err("원격 AI 사용에 먼저 동의해 주세요.".into());
                 }
@@ -813,6 +819,11 @@ async fn execute(
     drop(document_stage);
     // Pending attempts can outlive an application upgrade. Never run the current
     // prompt/configuration while recording an older semantic cache identity.
+    // Checked again at execution: a queued job must not reach the remote engine
+    // for a private source even if the admission check was bypassed.
+    if remote_job && document.item.source_id == crate::storage::intelligence::PRIVATE_SOURCE {
+        return Err(PRIVATE_REMOTE.into());
+    }
     let remote_config = if remote_job {
         let config =
             super::remote::GenerationConfig::from_preferences(&preferences).map_err(|_| {
@@ -3098,6 +3109,45 @@ mod tests {
             local.configuration_hash,
             configuration_hash(1024, "analysis_json_v1", "auto")
         );
+    }
+
+    #[tokio::test]
+    async fn remote_analysis_refuses_cybercampus_documents_before_any_request() {
+        let (directory, store, id, revision) = fixture();
+        with_store(&store, |store| {
+            store.catalog(&crate::archive::definitions())?;
+            store.move_document_for_test(id, crate::storage::intelligence::PRIVATE_SOURCE)?;
+            let mut preferences = store.ai_preferences()?;
+            preferences.engine = "openai-compatible".into();
+            preferences.remote_base_url = Some("https://api.example.com".into());
+            preferences.remote_model = Some("test-model".into());
+            preferences.remote_consent = true;
+            store.ai_save_preferences(&preferences)
+        })
+        .unwrap();
+        let remote = Arc::new(super::super::remote::Remote::memory());
+        remote
+            .set_key("https://api.example.com", "sk-test-secret")
+            .unwrap();
+        let controller = Controller::default();
+        let gate = Arc::new(crate::operation_gate::AdmissionGate::default());
+        let lease = gate.shared().await.unwrap();
+        let Err(error) = controller.start_admitted(
+            store.clone(),
+            fake_engine(directory.path()),
+            directory.path().into(),
+            id,
+            revision,
+            false,
+            DIRECT_PRIORITY,
+            lease,
+            Some(remote),
+        ) else {
+            panic!("a course notice was admitted to the remote engine");
+        };
+        assert_eq!(error, PRIVATE_REMOTE);
+        let jobs = with_store(&store, |store| store.ai_document_jobs(id, revision, 20)).unwrap();
+        assert!(jobs.is_empty());
     }
 
     #[tokio::test]

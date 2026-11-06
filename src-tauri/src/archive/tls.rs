@@ -27,12 +27,13 @@ impl ServerCertVerifier for ChainCompletion {
         ocsp_response: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, Error> {
-        // Both exact hosts currently omit their intermediate. No other host, and
+        // These exact hosts currently omit their intermediate. No other host, and
         // no wildcard or suffix match, receives the supplemental candidates.
         if matches!(
             server_name,
             ServerName::DnsName(name)
-                if ["www.sogang.ac.kr", "new-cms.sogang.ac.kr"].contains(&name.as_ref())
+                if ["www.sogang.ac.kr", "new-cms.sogang.ac.kr", "eclass.sogang.ac.kr"]
+                    .contains(&name.as_ref())
         ) {
             let mut chain = intermediates.to_vec();
             for certificate in &self.supplemental {

@@ -67,15 +67,20 @@ fn cases() -> Vec<(
 #[test]
 fn catalog_has_exact_stable_source_identities_and_honest_support() {
     let sources = catalog::definitions();
-    assert_eq!(sources.len(), 34);
-    assert_eq!(sources.iter().filter(|s| s.supported).count(), 34);
+    assert_eq!(sources.len(), 35);
+    assert_eq!(sources.iter().filter(|s| s.supported).count(), 35);
     assert_eq!(
         sources.iter().map(|s| &s.id).collect::<HashSet<_>>().len(),
-        34
+        35
     );
     for s in sources {
         assert!(Url::parse(&s.url).is_ok());
-        assert!(list_url(&s, 1).is_ok());
+        // The Cybercampus connector reads through its session, not a public list.
+        if s.family == "cybercampus" {
+            assert!(list_url(&s, 1).is_err());
+        } else {
+            assert!(list_url(&s, 1).is_ok());
+        }
     }
 }
 #[test]

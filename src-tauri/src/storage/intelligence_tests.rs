@@ -675,10 +675,13 @@ fn recent_candidates_follow_ingestion_not_publication_and_exclude_startup_backfi
     );
     recent_record(&store, "at-boundary", "2026-12-30", false, boundary);
     assert_eq!(
-        store.ai_recent_candidates(boundary, 20).unwrap(),
+        store.ai_recent_candidates(boundary, 20, false).unwrap(),
         [expected]
     );
-    assert!(store.ai_recent_candidates(boundary, 0).unwrap().is_empty());
+    assert!(store
+        .ai_recent_candidates(boundary, 0, false)
+        .unwrap()
+        .is_empty());
     integrity(&store);
 }
 #[test]
@@ -740,7 +743,10 @@ fn recent_candidates_include_meaningful_revisions_of_old_and_historical_document
         true,
         "2026-10-25T12:00:00.900Z",
     );
-    assert_eq!(store.ai_recent_candidates(boundary, 20).unwrap(), expected);
+    assert_eq!(
+        store.ai_recent_candidates(boundary, 20, false).unwrap(),
+        expected
+    );
     integrity(&store);
 }
 #[test]
@@ -828,7 +834,7 @@ fn recent_candidates_never_retry_cached_failed_cancelled_or_active_revisions() {
         "2026-10-25T12:00:00.600Z",
     );
     assert_eq!(
-        store.ai_recent_candidates(boundary, 20).unwrap(),
+        store.ai_recent_candidates(boundary, 20, false).unwrap(),
         [untouched]
     );
     assert!(store
@@ -854,11 +860,11 @@ fn recent_candidate_window_is_bounded_and_has_stable_ingestion_order() {
     }
     identities.reverse();
     assert_eq!(
-        store.ai_recent_candidates(boundary, 3).unwrap(),
+        store.ai_recent_candidates(boundary, 3, false).unwrap(),
         identities[..3]
     );
     assert_eq!(
-        store.ai_recent_candidates(boundary, 1000).unwrap(),
+        store.ai_recent_candidates(boundary, 1000, false).unwrap(),
         identities[..100]
     );
     integrity(&store);
@@ -911,10 +917,72 @@ fn backlog_candidates_include_backfill_and_order_by_publication_newest_first() {
         .unwrap()
         .0;
     assert!(store.document(empty, None).unwrap().body_text.is_empty());
-    assert_eq!(store.ai_backlog_candidates(20).unwrap(), [new, old]);
-    assert_eq!(store.ai_backlog_candidates(1).unwrap(), [new]);
-    assert!(store.ai_backlog_candidates(0).unwrap().is_empty());
+    assert_eq!(store.ai_backlog_candidates(20, false).unwrap(), [new, old]);
+    assert_eq!(store.ai_backlog_candidates(1, false).unwrap(), [new]);
+    assert!(store.ai_backlog_candidates(0, false).unwrap().is_empty());
     integrity(&store);
+}
+#[test]
+fn remote_candidates_never_include_cybercampus_documents() {
+    let (_directory, store) = database();
+    store.catalog(&crate::archive::definitions()).unwrap();
+    store
+        .connection
+        .execute("DELETE FROM documents", [])
+        .unwrap();
+    let public = recent_record(
+        &store,
+        "public",
+        "2026-10-01",
+        false,
+        "2026-10-02T00:00:00.000Z",
+    );
+    let (id, _) = store
+        .upsert_article(
+            "cybercampus",
+            &recent_article("A202631099990101-9000001", "2026-10-03", "과제 안내"),
+            false,
+        )
+        .unwrap();
+    let course = (id, store.document(id, None).unwrap().revision_id);
+    store
+        .connection
+        .execute_batch(
+            "UPDATE documents SET collected_at='2026-10-02T00:00:00.000Z';
+             UPDATE document_revisions SET collected_at='2026-10-02T00:00:00.000Z';",
+        )
+        .unwrap();
+    let boundary = "2026-10-01T00:00:00.000Z";
+    // The local engine may analyze the user's course notices.
+    assert_eq!(
+        store.ai_recent_candidates(boundary, 20, false).unwrap(),
+        [course, public]
+    );
+    assert_eq!(
+        store.ai_backlog_candidates(20, false).unwrap(),
+        [course, public]
+    );
+    // A remote engine never receives them, automatically or by classification.
+    assert_eq!(
+        store.ai_recent_candidates(boundary, 20, true).unwrap(),
+        [public]
+    );
+    assert_eq!(store.ai_backlog_candidates(20, true).unwrap(), [public]);
+    let model = "a".repeat(64);
+    let config = "b".repeat(64);
+    assert_eq!(
+        store
+            .ai_embedding_candidates(&model, &config, 10, false)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        store
+            .ai_embedding_candidates(&model, &config, 10, true)
+            .unwrap(),
+        [public]
+    );
 }
 #[test]
 fn backlog_mode_migrates_schema_thirteen_and_persists_across_reopen() {
@@ -1398,12 +1466,12 @@ fn classification_roundtrip_is_model_and_config_scoped() {
         .unwrap()
         .is_none());
     assert!(store
-        .ai_embedding_candidates(&model_a, &config, 10)
+        .ai_embedding_candidates(&model_a, &config, 10, false)
         .unwrap()
         .is_empty());
     assert_eq!(
         store
-            .ai_embedding_candidates(&model_b, &config, 10)
+            .ai_embedding_candidates(&model_b, &config, 10, false)
             .unwrap(),
         vec![(1, revision)]
     );

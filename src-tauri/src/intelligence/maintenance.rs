@@ -410,7 +410,7 @@ fn recent_candidates(
     attempted: &HashSet<(i64, i64)>,
 ) -> Option<(i64, i64)> {
     candidate_store(state, preferences)?
-        .ai_recent_candidates(boundary, 20)
+        .ai_recent_candidates(boundary, 20, preferences.engine == "openai-compatible")
         .ok()?
         .into_iter()
         .find(|identity| !attempted.contains(identity))
@@ -424,7 +424,10 @@ fn backlog_candidate(
     attempted: &HashSet<(i64, i64)>,
 ) -> Option<(i64, i64)> {
     candidate_store(state, preferences)?
-        .ai_backlog_candidates(BACKLOG_HOURLY_LIMIT as u32)
+        .ai_backlog_candidates(
+            BACKLOG_HOURLY_LIMIT as u32,
+            preferences.engine == "openai-compatible",
+        )
         .ok()?
         .into_iter()
         .find(|identity| !attempted.contains(identity))

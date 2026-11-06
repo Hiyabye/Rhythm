@@ -397,6 +397,9 @@ fn changed(count: usize) -> Result<(), String> {
     }
 }
 
+/// The source holding the user's personal data (the Cybercampus connector,
+/// #86). Its documents never go to a remote engine, automatically or on request.
+pub const PRIVATE_SOURCE: &str = crate::archive::cybercampus::SOURCE_ID;
 impl Store {
     pub(super) fn reset_ai_interrupted(&self) -> Result<(), String> {
         self.connection.execute_batch("UPDATE ai_jobs SET status='failed',error='앱 종료로 분석이 중단되었습니다. 다시 시도해 주세요.',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status='running'; UPDATE ai_models SET status='cancelled',error='설치가 중단되었습니다. 이어받기를 선택해 주세요.',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status IN ('downloading','verifying'); UPDATE ai_projectors SET status='cancelled',error='이미지 인식 모듈 설치가 중단되었습니다. 이어받기를 선택해 주세요.',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status IN ('downloading','verifying');").map_err(|e|e.to_string())
@@ -749,10 +752,12 @@ impl Store {
     /// Initial historical backfill is excluded, but a meaningful later revision is
     /// eligible even if the document was originally historical. Any prior attempt
     /// suppresses automatic reanalysis/retry; explicit requests remain independent.
+    /// `remote` excludes private sources, which never go to a remote engine.
     pub fn ai_recent_candidates(
         &self,
         boundary: &str,
         limit: u32,
+        remote: bool,
     ) -> Result<Vec<(i64, i64)>, String> {
         self.connection
             .prepare(
@@ -765,10 +770,11 @@ impl Store {
                        SELECT 1 FROM document_revisions earlier WHERE earlier.document_id=d.id AND earlier.id<r.id
                    ))
                    AND NOT EXISTS(SELECT 1 FROM ai_jobs j WHERE j.document_id=d.id AND j.revision_id=r.id)
+                   AND (?3=0 OR d.source_id<>?4)
                  ORDER BY r.collected_at DESC,r.id DESC LIMIT ?2",
             )
             .map_err(|e| e.to_string())?
-            .query_map(params![boundary, limit.min(MAX_LIST_LIMIT)], id_pair)
+            .query_map(params![boundary, limit.min(MAX_LIST_LIMIT), remote, PRIVATE_SOURCE], id_pair)
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
@@ -777,7 +783,11 @@ impl Store {
     /// newest publication first. Unlike `ai_recent_candidates` this includes the
     /// initial historical backfill; it is the opt-in idle backlog pass. Notices
     /// without archived text are skipped because the pipeline cannot ground them.
-    pub fn ai_backlog_candidates(&self, limit: u32) -> Result<Vec<(i64, i64)>, String> {
+    pub fn ai_backlog_candidates(
+        &self,
+        limit: u32,
+        remote: bool,
+    ) -> Result<Vec<(i64, i64)>, String> {
         self.connection
             .prepare(
                 "SELECT d.id,r.id FROM documents d
@@ -786,10 +796,11 @@ impl Store {
                  )
                  WHERE length(trim(d.body_text))>0
                    AND NOT EXISTS(SELECT 1 FROM ai_jobs j WHERE j.document_id=d.id AND j.revision_id=r.id)
+                   AND (?2=0 OR d.source_id<>?3)
                  ORDER BY d.published_at DESC,d.id DESC LIMIT ?1",
             )
             .map_err(|e| e.to_string())?
-            .query_map([limit.min(MAX_LIST_LIMIT)], id_pair)
+            .query_map(params![limit.min(MAX_LIST_LIMIT), remote, PRIVATE_SOURCE], id_pair)
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
@@ -802,6 +813,7 @@ impl Store {
         model_sha256: &str,
         config_hash: &str,
         limit: u32,
+        remote: bool,
     ) -> Result<Vec<(i64, i64)>, String> {
         if !valid_hash(model_sha256) || !valid_hash(config_hash) {
             return Err("분류 모델 정보가 올바르지 않습니다.".into());
@@ -818,10 +830,11 @@ impl Store {
                        WHERE c.document_id=d.id AND c.revision_id=r.id
                          AND c.model_sha256=?1 AND c.config_hash=?2
                    )
+                   AND (?4=0 OR d.source_id<>?5)
                  ORDER BY r.collected_at DESC,r.id DESC LIMIT ?3",
             )
             .map_err(|e| e.to_string())?
-            .query_map(params![model_sha256, config_hash, limit.min(MAX_LIST_LIMIT)], id_pair)
+            .query_map(params![model_sha256, config_hash, limit.min(MAX_LIST_LIMIT), remote, PRIVATE_SOURCE], id_pair)
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())

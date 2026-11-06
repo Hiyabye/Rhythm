@@ -475,7 +475,12 @@ impl Controller {
             let Ok(store) = app.store.try_lock() else {
                 return;
             };
-            match store.ai_embedding_candidates(&identity, config_hash(), BATCH) {
+            match store.ai_embedding_candidates(
+                &identity,
+                config_hash(),
+                BATCH,
+                matches!(source, Source::Remote(_)),
+            ) {
                 Ok(candidates) => candidates,
                 Err(error) => {
                     eprintln!("Classification candidates: {error}");

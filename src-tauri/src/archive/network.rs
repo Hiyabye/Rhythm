@@ -545,7 +545,7 @@ fn exact_query(url: &Url, allowed: &[QueryRule]) -> bool {
     }
     true
 }
-fn public_ip(address: IpAddr) -> bool {
+pub(super) fn public_ip(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(ip) => {
             let [a, b, c, _] = ip.octets();

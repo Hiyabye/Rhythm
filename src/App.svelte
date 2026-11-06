@@ -10,6 +10,7 @@
   import BackupSettings from './lib/BackupSettings.svelte';
   import UpdaterSettings from './lib/UpdaterSettings.svelte';
   import ProactiveSettings from './lib/ProactiveSettings.svelte';
+  import CybercampusTasks from './lib/CybercampusTasks.svelte';
   import Hint from './lib/Hint.svelte';
   import './lib/ai.css';
   import { archiveError as message, archiveDay, localDayKey } from './lib/archive-format';
@@ -20,6 +21,7 @@
     { id: 'inbox', label: '받은 소식' },
     { id: 'search', label: '탐색' },
     { id: 'bookmark', label: '보관함' },
+    { id: 'tasks', label: '과제·마감' },
     { id: 'settings', label: '설정' },
   ];
   type SettingsPane = 'general' | 'boards' | 'ai' | 'personalization' | 'notifications' | 'data';
@@ -73,6 +75,8 @@
   let activeSource = $state('');
   let weekPane = $state(false);
   let boards = $derived(sources.filter((item) => item.supported && item.subscribed));
+  // Deadlines come from the Cybercampus connector, so the page appears once it is subscribed.
+  let primaryNavigation = $derived(navigation.filter((item) => item.id !== 'settings' && (item.id !== 'tasks' || page === 'tasks' || boards.some((board) => board.family === 'cybercampus'))));
   // Board names repeat across institutions ("학사 공지" / "학사공지"), so the sidebar groups them by organization.
   let boardGroups = $derived.by(() => {
     const groups = new Map<string, SourceInfo[]>();
@@ -281,7 +285,7 @@
     <div class="brand"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>Rhythm</span></div>
     <nav aria-label="기본 탐색">
       <ul class="source-list">
-        {#each navigation.slice(0, 4) as item}
+        {#each primaryNavigation as item}
           {@const count = item.id === 'inbox' ? summary?.unread : item.id === 'bookmark' ? summary?.saved : undefined}
           <li><button class="source-item" class:active={page === item.id && !activeSource} aria-label={item.label} aria-current={page === item.id && !activeSource ? 'page' : undefined} aria-describedby={count ? `nav-count-${item.id}` : undefined} onclick={() => navigate(item.id)}>
             <Icon name={item.id} size={17} /><span class="source-label">{item.label}</span>
@@ -370,6 +374,8 @@
           {/if}
         </section>
       </div>
+    {:else if page === 'tasks'}
+      <CybercampusTasks {desktop} onsettings={() => openSettings('boards')} />
     {:else}
       <ArchiveView {page} {desktop} enabled={noticesEnabled} {sourceRequest} activation={proactiveActivation} onactivationhandled={() => proactiveActivation = null} onsettings={(pane) => openSettings(pane ?? 'boards')} onaisettings={aiSettings}
         onsourcechange={(id) => activeSource = id}

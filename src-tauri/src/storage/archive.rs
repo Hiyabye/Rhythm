@@ -1041,6 +1041,18 @@ impl Store {
             .map_err(|e| e.to_string());
         result
     }
+    /// Moves a document to another source for deterministic tests.
+    #[cfg(test)]
+    pub(crate) fn move_document_for_test(&self, id: i64, source: &str) -> Result<(), String> {
+        require_changed(
+            self.connection
+                .execute(
+                    "UPDATE documents SET source_id=?2 WHERE id=?1",
+                    params![id, source],
+                )
+                .map_err(|e| e.to_string())?,
+        )
+    }
     /// Inserts one resource row for deterministic tests, outside the sync path.
     #[cfg(test)]
     pub(crate) fn add_resource_for_test(
