@@ -1,4 +1,4 @@
-//! Current Sogang dormitory (생활관) CMS boards. The public menu pages render the
+//! Current Sogang dormitory (벨라르미노 학사) CMS boards. The public menu pages render the
 //! `JW_bbs_table` list shell; article and attachment routes live under
 //! `/bbs/sgdormitory/<board>/...` on the same host. Robots.txt allows these
 //! public routes and forbids only `/*/*Mngr`, login and top-login paths.
