@@ -246,10 +246,23 @@ fn normalized_title(title: &str) -> String {
         .join(" ")
         .to_lowercase()
 }
-fn digit_runs(text: &str) -> Vec<&str> {
-    text.split(|c: char| !c.is_ascii_digit())
-        .filter(|run| !run.is_empty())
-        .collect()
+/// Full-width digits (U+FF10–U+FF19) read as ASCII, so `３월` and `3월` match
+/// and two full-width dates still differ. Dates written in words are not read.
+fn digit_runs(text: &str) -> Vec<String> {
+    let mut runs = Vec::new();
+    let mut run = String::new();
+    for c in text.chars() {
+        match c {
+            '0'..='9' => run.push(c),
+            '０'..='９' => run.push(char::from(b'0' + (c as u32 - '０' as u32) as u8)),
+            _ if !run.is_empty() => runs.push(std::mem::take(&mut run)),
+            _ => {}
+        }
+    }
+    if !run.is_empty() {
+        runs.push(run);
+    }
+    runs
 }
 struct WindowNotice {
     document_id: i64,
