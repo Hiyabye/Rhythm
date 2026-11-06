@@ -87,15 +87,15 @@ try {
     $report.vc_runtime = @(Get-RhythmVcRuntime $resolvedDir)
     if ($ExpectedVcRuntimeDir) {
         $expectedRuntime = @(Get-RhythmVcRuntime $ExpectedVcRuntimeDir)
-        $matches = $true
+        $allMatch = $true
         foreach ($item in $report.vc_runtime) {
             $expected = $expectedRuntime | Where-Object { $_.name -eq $item.name }
             if ($null -eq $expected -or $expected.sha256 -ine $item.sha256) {
-                $matches = $false
+                $allMatch = $false
                 $problems.Add("Installed runtime file hash does not match: $($item.name)")
             }
         }
-        $report.runtime_hashes_verified = $matches
+        $report.runtime_hashes_verified = $allMatch
     }
 } catch {
     $problems.Add("Could not verify app-local Microsoft runtime: $($_.Exception.Message)")

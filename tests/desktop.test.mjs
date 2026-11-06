@@ -43,7 +43,6 @@ if (command === 'npm' && process.argv.includes('build') && !process.argv.include
 `;
     // .mjs source keeps the stub independent of the temporary directory's package type.
     const source = join(root, 'mock.mjs');
-    writeFileSync(source, mock);
     for (const command of ['rustc', 'npm']) {
       writeFileSync(join(root, 'bin', command), `#!/bin/sh\nexec "${process.execPath}" "${source}" "$0" "$@"\n`, { mode: 0o755 });
     }
