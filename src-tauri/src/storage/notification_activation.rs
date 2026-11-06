@@ -52,7 +52,11 @@ impl Store {
             return Err("대기 중인 알림이 너무 많습니다.".into());
         }
         for (id, attempt) in attempts {
-            if *id <= 0 || *attempt == 0 || *attempt > 3 || !seen.insert(*id) {
+            if *id <= 0
+                || *attempt == 0
+                || *attempt > super::proactive::MAX_DELIVERY_ATTEMPTS
+                || !seen.insert(*id)
+            {
                 return Err("알림 전달 정보가 올바르지 않습니다.".into());
             }
             let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM proactive_events WHERE id=?1 AND attempt_count=?2 AND state='claimed')", params![id, attempt], |r| r.get(0)).map_err(|e| e.to_string())?;
@@ -103,7 +107,11 @@ impl Store {
         let mut seen = HashSet::new();
         let mut first = None;
         for (id, attempt) in &attempts {
-            if *id <= 0 || *attempt == 0 || *attempt > 3 || !seen.insert(*id) {
+            if *id <= 0
+                || *attempt == 0
+                || *attempt > super::proactive::MAX_DELIVERY_ATTEMPTS
+                || !seen.insert(*id)
+            {
                 return Err("알림 활성화 정보가 올바르지 않습니다.".into());
             }
             let event: Option<(i64,i64)> = tx.query_row("SELECT document_id,revision_id FROM proactive_events WHERE id=?1 AND attempt_count=?2 AND state IN ('claimed','attempted')", params![id, attempt], |r| Ok((r.get(0)?,r.get(1)?))).optional().map_err(|e| e.to_string())?;

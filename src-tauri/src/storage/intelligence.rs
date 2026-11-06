@@ -156,6 +156,24 @@ const MODEL_COLUMNS: &str = "id,catalog_id,name,ownership,path,sha256,expected_s
 const JOB_COLUMNS: &str = "id,document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,priority,status,error,duration_ms,created_at,updated_at";
 const RESULT_COLUMNS: &str = "id,job_id,document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,result_json,partial,processed_chars,total_chars,duration_ms,created_at";
 const KEY_WHERE: &str = "document_id=?1 AND revision_id=?2 AND task=?3 AND model_sha256=?4 AND prompt_version=?5 AND schema_version=?6 AND configuration_hash=?7";
+/// Upper bound on rows returned by the list/candidate queries below.
+const MAX_LIST_LIMIT: u32 = 100;
+/// Byte cap for stored paths and error text.
+const MAX_FIELD_BYTES: usize = 8192;
+/// Largest stored embedding dimension.
+const MAX_EMBEDDING_DIM: usize = 8192;
+fn id_pair(row: &Row<'_>) -> rusqlite::Result<(i64, i64)> {
+    Ok((row.get(0)?, row.get(1)?))
+}
+fn classification_row(row: &Row<'_>) -> rusqlite::Result<AiClassification> {
+    Ok(AiClassification {
+        document_id: row.get(0)?,
+        revision_id: row.get(1)?,
+        category: row.get(2)?,
+        low_confidence: row.get(3)?,
+        created_at: row.get(4)?,
+    })
+}
 fn json_column(row: &Row<'_>, column: usize) -> rusqlite::Result<Value> {
     let value: String = row.get(column)?;
     serde_json::from_str(&value).map_err(|error| {
@@ -317,7 +335,7 @@ impl Store {
             || model.name.trim().is_empty()
             || model.name.len() > 512
             || model.path.is_empty()
-            || model.path.len() > 8192
+            || model.path.len() > MAX_FIELD_BYTES
             || model.sha256.as_deref().is_some_and(|h| !valid_hash(h))
             || model
                 .expected_sha256
@@ -334,7 +352,10 @@ impl Store {
                         .expected_bytes
                         .is_some_and(|expected| expected != model.bytes)))
             || !["generation", "embedding"].contains(&model.kind.as_str())
-            || model.error.as_ref().is_some_and(|e| e.len() > 8192)
+            || model
+                .error
+                .as_ref()
+                .is_some_and(|e| e.len() > MAX_FIELD_BYTES)
         {
             return Err("모델 등록 정보를 확인해 주세요.".into());
         }
@@ -398,14 +419,17 @@ impl Store {
     /// Caller owns filesystem validation; `installed` requires the actual artifact identity.
     pub fn ai_upsert_projector(&self, projector: &AiProjector) -> Result<(), String> {
         if projector.path.is_empty()
-            || projector.path.len() > 8192
+            || projector.path.len() > MAX_FIELD_BYTES
             || projector.expected_bytes == 0
             || projector.expected_bytes > i64::MAX as u64
             || projector.bytes > i64::MAX as u64
             || projector.downloaded_bytes > i64::MAX as u64
             || !valid_hash(&projector.expected_sha256)
             || projector.sha256.as_deref().is_some_and(|h| !valid_hash(h))
-            || projector.error.as_ref().is_some_and(|e| e.len() > 8192)
+            || projector
+                .error
+                .as_ref()
+                .is_some_and(|e| e.len() > MAX_FIELD_BYTES)
             || (projector.status == "installed"
                 && (projector.sha256.as_deref() != Some(&projector.expected_sha256)
                     || projector.bytes != projector.expected_bytes))
@@ -508,7 +532,7 @@ impl Store {
                 "SELECT {JOB_COLUMNS} FROM ai_jobs ORDER BY id DESC LIMIT ?1"
             ))
             .map_err(|e| e.to_string())?
-            .query_map([limit.min(100)], job_row)
+            .query_map([limit.min(MAX_LIST_LIMIT)], job_row)
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
@@ -544,7 +568,10 @@ impl Store {
                  )) ORDER BY id DESC"
             ))
             .map_err(|e| e.to_string())?
-            .query_map(params![document_id, revision_id, limit.min(100)], job_row)
+            .query_map(
+                params![document_id, revision_id, limit.min(MAX_LIST_LIMIT)],
+                job_row,
+            )
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
@@ -572,7 +599,7 @@ impl Store {
                  ORDER BY r.collected_at DESC,r.id DESC LIMIT ?2",
             )
             .map_err(|e| e.to_string())?
-            .query_map(params![boundary, limit.min(100)], |row| Ok((row.get(0)?, row.get(1)?)))
+            .query_map(params![boundary, limit.min(MAX_LIST_LIMIT)], id_pair)
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
@@ -593,7 +620,7 @@ impl Store {
                  ORDER BY d.published_at DESC,d.id DESC LIMIT ?1",
             )
             .map_err(|e| e.to_string())?
-            .query_map([limit.min(100)], |row| Ok((row.get(0)?, row.get(1)?)))
+            .query_map([limit.min(MAX_LIST_LIMIT)], id_pair)
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
@@ -625,9 +652,7 @@ impl Store {
                  ORDER BY r.collected_at DESC,r.id DESC LIMIT ?3",
             )
             .map_err(|e| e.to_string())?
-            .query_map(params![model_sha256, config_hash, limit.min(100)], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })
+            .query_map(params![model_sha256, config_hash, limit.min(MAX_LIST_LIMIT)], id_pair)
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
@@ -669,7 +694,7 @@ impl Store {
         row.map(|(dim, bytes)| {
             let dim = u32::try_from(dim)
                 .map_err(|_| "저장된 임베딩 크기가 올바르지 않습니다.".to_string())?;
-            if dim == 0 || dim as usize > 8192 || bytes.len() != dim as usize * 4 {
+            if dim == 0 || dim as usize > MAX_EMBEDDING_DIM || bytes.len() != dim as usize * 4 {
                 return Err("저장된 임베딩이 완전하지 않습니다.".into());
             }
             let vector = bytes
@@ -694,7 +719,7 @@ impl Store {
     ) -> Result<(), String> {
         if !valid_hash(model_sha256)
             || vector.is_empty()
-            || vector.len() > 8192
+            || vector.len() > MAX_EMBEDDING_DIM
             || vector.iter().any(|value| !value.is_finite())
         {
             return Err("임베딩 값을 저장할 수 없습니다.".into());
@@ -781,15 +806,7 @@ impl Store {
         self.connection
             .prepare(&sql)
             .map_err(|e| e.to_string())?
-            .query_map(params_from_iter(values), |row| {
-                Ok(AiClassification {
-                    document_id: row.get(0)?,
-                    revision_id: row.get(1)?,
-                    category: row.get(2)?,
-                    low_confidence: row.get(3)?,
-                    created_at: row.get(4)?,
-                })
-            })
+            .query_map(params_from_iter(values), classification_row)
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
@@ -810,15 +827,7 @@ impl Store {
                  FROM notice_classifications
                  WHERE document_id=?1 AND revision_id=?2 AND model_sha256=?3 AND config_hash=?4",
                 params![document_id, revision_id, model_sha256, config_hash],
-                |row| {
-                    Ok(AiClassification {
-                        document_id: row.get(0)?,
-                        revision_id: row.get(1)?,
-                        category: row.get(2)?,
-                        low_confidence: row.get(3)?,
-                        created_at: row.get(4)?,
-                    })
-                },
+                classification_row,
             )
             .optional()
             .map_err(|e| e.to_string())
@@ -877,7 +886,7 @@ impl Store {
     ) -> Result<(), String> {
         if duration_ms.is_some_and(|v| v > i64::MAX as u64)
             || !["failed", "cancelled", "stale"].contains(&status)
-            || error.is_some_and(|e| e.len() > 8192)
+            || error.is_some_and(|e| e.len() > MAX_FIELD_BYTES)
         {
             return Err("AI 작업 상태를 확인해 주세요.".into());
         }
@@ -967,10 +976,10 @@ impl Store {
         revision_id: Option<i64>,
         limit: u32,
     ) -> Result<Vec<AiResult>, String> {
-        self.connection.prepare(&format!("SELECT {RESULT_COLUMNS} FROM ai_results WHERE document_id=?1 AND (?2 IS NULL OR revision_id=?2) ORDER BY id DESC LIMIT ?3")).map_err(|e|e.to_string())?.query_map(params![document_id,revision_id,limit.min(100)],result_row).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())
+        self.connection.prepare(&format!("SELECT {RESULT_COLUMNS} FROM ai_results WHERE document_id=?1 AND (?2 IS NULL OR revision_id=?2) ORDER BY id DESC LIMIT ?3")).map_err(|e|e.to_string())?.query_map(params![document_id,revision_id,limit.min(MAX_LIST_LIMIT)],result_row).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())
     }
     pub fn ai_recent_results(&self, limit: u32) -> Result<Vec<AiResult>, String> {
         // One latest result per current revision, not a history/regeneration flood.
-        self.connection.prepare(&format!("SELECT {RESULT_COLUMNS} FROM ai_results a WHERE a.id=(SELECT MAX(b.id) FROM ai_results b WHERE b.document_id=a.document_id AND b.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=a.document_id)) ORDER BY a.id DESC LIMIT ?1")).map_err(|e|e.to_string())?.query_map([limit.min(100)],result_row).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())
+        self.connection.prepare(&format!("SELECT {RESULT_COLUMNS} FROM ai_results a WHERE a.id=(SELECT MAX(b.id) FROM ai_results b WHERE b.document_id=a.document_id AND b.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=a.document_id)) ORDER BY a.id DESC LIMIT ?1")).map_err(|e|e.to_string())?.query_map([limit.min(MAX_LIST_LIMIT)],result_row).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())
     }
 }
