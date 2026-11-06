@@ -181,15 +181,6 @@ pub(super) fn listing(
 /// The attachment section is the only place the site exposes files. They live on
 /// public file hosts (the department's Supabase project or a legacy R2 bucket),
 /// which the transport records but never downloads as attachments.
-fn attachment_extension(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    [
-        ".pdf", ".hwp", ".hwpx", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip", ".txt",
-        ".png", ".jpg", ".jpeg", ".gif", ".webp",
-    ]
-    .iter()
-    .any(|extension| lower.ends_with(extension))
-}
 fn attachment_filename(url: &Url, fallback: &str) -> String {
     url.query_pairs()
         .find(|(key, _)| key == "download")

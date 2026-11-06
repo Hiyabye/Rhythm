@@ -270,15 +270,7 @@ fn attachment_name(name: &str) -> bool {
         && name.len() <= 512
         && !name.contains(['/', '\\'])
         && !name.chars().any(char::is_control)
-        && {
-            let lower = name.to_ascii_lowercase();
-            [
-                ".pdf", ".hwp", ".hwpx", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip",
-                ".txt", ".png", ".jpg", ".jpeg", ".gif", ".webp",
-            ]
-            .iter()
-            .any(|extension| lower.ends_with(extension))
-        }
+        && attachment_extension(name)
 }
 
 pub(super) fn article(
