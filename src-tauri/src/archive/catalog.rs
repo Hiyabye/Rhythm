@@ -63,15 +63,6 @@ pub fn definitions() -> Vec<SourceDefinition> {
             true,
         );
     }
-    add(
-        "eng-newsletter",
-        "뉴스레터",
-        "서강대학교 · 공과대학",
-        "cms",
-        "https://eng.sogang.ac.kr/front/cmsboardlist.do?bbsConfigFK=1621&siteId=eng&currentPage=1"
-            .into(),
-        false,
-    );
     for (id, menu, name) in [
         ("general", 6975, "일반공지"),
         ("admission", 3947, "입사 및 퇴사 공지"),

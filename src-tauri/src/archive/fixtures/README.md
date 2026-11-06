@@ -33,7 +33,8 @@ The following additional bounded captures were obtained during v0.2.1 verificati
 - `eng-{notice,academic,recruit,research}-list.html`: original canonical link and
   `<main>` from `https://eng.sogang.ac.kr/board/{board}` (notice/academic include
   `?page=1`). These current SSR pages replace the four corresponding retired CMS
-  listing routes, not the unsupported Engineering newsletter.
+  listing routes. The e뉴스레터 gallery (`/board/newsletter`) is not a source and
+  has no fixtures.
 - `eng-notice-page2.html`: same extraction from `/board/notice?page=2`. Unlike
   Computing, Engineering pins appear only on page one. Total 361 includes five
   pins; regular ordinals go from 356 on page one to 346 on page two.
