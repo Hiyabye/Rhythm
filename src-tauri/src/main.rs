@@ -761,7 +761,11 @@ fn main() {
             archive::archive_retry_resource,
             archive::archive_resource_image,
             archive::archive_reveal_resource,
-            archive::archive_open_original
+            archive::archive_open_original,
+            archive::cybercampus::cybercampus_status,
+            archive::cybercampus::cybercampus_save_login,
+            archive::cybercampus::cybercampus_forget_login,
+            archive::cybercampus::cybercampus_tasks
         ])
         .build(context)
         .expect("Rhythm을 시작하지 못했습니다. 로컬 저장소와 시스템 환경을 확인해 주세요.");

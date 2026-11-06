@@ -142,5 +142,16 @@ pub fn definitions() -> Vec<SourceDefinition> {
             true,
         );
     }
+    // The logged-in user's own course notices, read through the eClass session
+    // (#86); not a public board, so it has its own description.
+    sources.push(SourceDefinition {
+        id: super::cybercampus::SOURCE_ID.into(),
+        name: "강의 공지".into(),
+        organization: "서강대학교 · 사이버캠퍼스".into(),
+        description: "로그인한 계정의 이번 학기 수강 강좌 공지와 첨부 파일을 보관하고, 과제와 마감을 함께 가져옵니다.".into(),
+        url: "https://eclass.sogang.ac.kr/ilos/main/main_form.acl".into(),
+        family: super::cybercampus::FAMILY.into(),
+        supported: true,
+    });
     sources
 }

@@ -668,7 +668,10 @@ fn iframe_only(content: &str) -> bool {
     only_iframes(fragment.root_element(), 0, &mut found) && found
 }
 
-fn sanitize(content: &str, base: &str) -> Result<(String, String, Vec<ResourceInput>), String> {
+pub(super) fn sanitize(
+    content: &str,
+    base: &str,
+) -> Result<(String, String, Vec<ResourceInput>), String> {
     let fragment = Html::parse_fragment(content);
     let mut html = String::new();
     let mut plain = String::new();

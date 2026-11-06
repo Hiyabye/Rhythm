@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import analysisContract from '../../src/lib/analysis-contract.json' with { type: 'json' };
-import type { AiOperation, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation } from '../../src/lib/types';
+import type { AiOperation, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation } from '../../src/lib/types';
 
 export interface FixtureOptions {
   count?: number;
@@ -94,6 +94,9 @@ export interface FixtureOptions {
   // check already found 1.1.1 before the window subscribed.
   autoUpdateCheck?: boolean;
   autoUpdateFound?: boolean;
+  // Saved Cybercampus login ID; `cybercampus_save_login` accepts only the password "right".
+  cybercampusId?: string | null;
+  cybercampusTasks?: CybercampusTask[];
 }
 
 // Only the IPC boundary is faked: tests exercise the production Svelte build,
@@ -235,6 +238,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         if (current.cancelling) throw 'AI 작업을 취소했습니다.';
       } finally { if (ai.operation === current) ai.operation = null; }
     }
+    const cybercampus = { id: options.cybercampusId ?? null, rejected: false, courses: options.cybercampusId ? [{ course_key: 'A1', name: '자료구조실습', year: 2026, term: '3' }] : [] };
     Object.assign(window, { isTauri: true, __fixture: fixture, __TAURI_EVENT_PLUGIN_INTERNALS__: {
       unregisterListener: (event: string, _id: number) => {
         if (event === 'updater://progress') updaterHandler = null;
@@ -579,6 +583,13 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             return copy(sync);
           case 'archive_reveal_resource':
           case 'archive_open_original': return null;
+          case 'cybercampus_status': return copy(cybercampus);
+          case 'cybercampus_save_login':
+            if (args.password !== 'right') { cybercampus.rejected = true; throw '사이버캠퍼스 로그인에 실패했습니다. 아이디와 비밀번호를 확인해 다시 저장해 주세요.'; }
+            Object.assign(cybercampus, { id: args.id, rejected: false, courses: [{ course_key: 'A1', name: '자료구조실습', year: 2026, term: '3' }] });
+            return copy(cybercampus);
+          case 'cybercampus_forget_login': cybercampus.id = null; return copy(cybercampus);
+          case 'cybercampus_tasks': return copy(options.cybercampusTasks ?? []);
           default: throw `테스트에서 예상하지 않은 명령: ${command}`;
         }
       },

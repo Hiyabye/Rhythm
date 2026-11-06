@@ -1,4 +1,5 @@
 mod catalog;
+pub mod cybercampus;
 pub mod model;
 mod network;
 mod parser;

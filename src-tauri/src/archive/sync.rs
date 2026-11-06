@@ -1,4 +1,4 @@
-use super::{model::*, network, parser};
+use super::{cybercampus, model::*, network, parser};
 use crate::storage::Store;
 use sha2::{Digest, Sha256};
 use std::{
@@ -51,14 +51,14 @@ pub fn with_store<T>(
         .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
     operation(&guard)
 }
-fn active(store: &SharedStore, cancel: &AtomicBool) -> Result<(), String> {
+pub(super) fn active(store: &SharedStore, cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::Acquire) || !with_store(store, |s| s.enabled("sogang_notices"))? {
         Err("동기화를 중단했습니다. 저장된 자료는 유지됩니다.".into())
     } else {
         Ok(())
     }
 }
-fn ensure_active(store: &Store, cancel: &AtomicBool) -> Result<(), String> {
+pub(super) fn ensure_active(store: &Store, cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::Acquire) || !store.enabled("sogang_notices")? {
         return Err("동기화를 중단했습니다.".into());
     }
@@ -80,6 +80,8 @@ pub struct Controller {
     task_notifications: Mutex<HashMap<u64, Arc<Notify>>>,
     /// robots.txt of other image hosts, loaded once per job.
     image_robots: RobotsCache,
+    /// The eClass session and stored login of the `cybercampus` source.
+    pub cybercampus: cybercampus::Connector,
 }
 type RobotsCache = Mutex<HashMap<String, Result<Arc<Robots>, String>>>;
 #[derive(Clone, Debug)]
@@ -105,6 +107,7 @@ impl Controller {
             active_task_id: AtomicU64::new(0),
             task_notifications: Mutex::new(HashMap::new()),
             image_robots: Mutex::new(HashMap::new()),
+            cybercampus: cybercampus::Connector::native(),
         })
     }
     pub fn status(&self) -> Result<SyncStatus, String> {
@@ -408,6 +411,20 @@ impl Controller {
         tauri::async_runtime::spawn(async move {
             let _lease = lease;
             let result = async {
+                if cybercampus::owns(&resource.url) {
+                    let mut bytes = 0;
+                    return cybercampus::download(
+                        &controller.cybercampus,
+                        &cybercampus::client::Reqwest,
+                        &store,
+                        &root,
+                        &controller.cancel,
+                        &resource,
+                        &mut bytes,
+                    )
+                    .await?
+                    .into_result();
+                }
                 let url =
                     Url::parse(&resource.url).map_err(|_| "첨부 자료 주소가 올바르지 않습니다.")?;
                 let access = if resource.kind == "image" {
@@ -472,7 +489,10 @@ impl Controller {
             // A manual refresh reports new notices first, then continues an
             // unfinished backlog in the same job. Either step's failure or
             // cancellation stops this board and keeps what the previous step saved.
-            let outcome = if mode == "refresh" {
+            let outcome = if current.definition.family == cybercampus::FAMILY {
+                self.cybercampus(store, root, &mut current, mode, &mut resource_bytes)
+                    .await
+            } else if mode == "refresh" {
                 self.refresh(
                     store,
                     root,
@@ -517,6 +537,49 @@ impl Controller {
             Ok(())
         } else {
             Err(failures.join(" "))
+        }
+    }
+    /// The `cybercampus` source has no public listing; its connector reads the
+    /// logged-in user's courses through the eClass session instead.
+    async fn cybercampus(
+        &self,
+        store: &SharedStore,
+        root: &Path,
+        current: &mut SourceInfo,
+        mode: &str,
+        resource_bytes: &mut u64,
+    ) -> Result<(), String> {
+        let http = cybercampus::client::Reqwest;
+        match mode {
+            // Its skipped notices have no body to retry; the next sync lists them again.
+            "skipped" => Ok(()),
+            "resources" => {
+                cybercampus::download_missing(
+                    &self.cybercampus,
+                    &http,
+                    store,
+                    root,
+                    &self.cancel,
+                    resource_bytes,
+                )
+                .await
+            }
+            _ => {
+                let id = current.definition.id.clone();
+                let report = |message: &str| self.update(Some(id.clone()), mode, 1, message);
+                cybercampus::sync(
+                    &self.cybercampus,
+                    &http,
+                    store,
+                    root,
+                    &self.cancel,
+                    current,
+                    cybercampus::Progress { report: &report },
+                    resource_bytes,
+                )
+                .await?;
+                persist(store, current, "completed", None, true)
+            }
         }
     }
     /// Runs one board's manual refresh: new notices and recent edits first, then
@@ -1318,12 +1381,12 @@ async fn image_policy<T: Transport>(
     loaded
 }
 #[derive(Debug)]
-enum DownloadOutcome {
+pub enum DownloadOutcome {
     Downloaded,
     Failed(String),
 }
 impl DownloadOutcome {
-    fn into_result(self) -> Result<(), String> {
+    pub fn into_result(self) -> Result<(), String> {
         match self {
             Self::Downloaded => Ok(()),
             Self::Failed(error) => Err(error),
@@ -1359,92 +1422,211 @@ async fn download_resource<T: Transport>(
     // download. A size failure then says nothing about the file itself.
     let mut budget_bound = false;
     let outcome: Result<(), String> = async {
-        let url=Url::parse(&resource.url).map_err(|_|"첨부 자료 주소를 해석하지 못했습니다.")?;
-        let access=if resource.kind=="image" {network::Access::EmbeddedImage} else {network::Access::Source};
-        network::validate(&url,access)?;
-        let cap=if resource.kind=="image" {10*1024*1024} else {FILE_LIMIT};
-        let remaining=IMPORT_RESOURCES.saturating_sub(*total) as usize;
-        budget_bound=remaining<cap;
-        if remaining==0 {return Err(BUDGET_REACHED.into());}
-        let limit=cap.min(remaining);
+        let url = Url::parse(&resource.url).map_err(|_| "첨부 자료 주소를 해석하지 못했습니다.")?;
+        let access = if resource.kind == "image" {
+            network::Access::EmbeddedImage
+        } else {
+            network::Access::Source
+        };
+        network::validate(&url, access)?;
+        let limit = resource_limit(resource, *total, &mut budget_bound)?;
         let other;
-        let policy=if url.origin().ascii_serialization()==policy.origin {policy} else {
-            other=image_policy(transport,image_robots,&url,cancel).await?;
+        let policy = if url.origin().ascii_serialization() == policy.origin {
+            policy
+        } else {
+            other = image_policy(transport, image_robots, &url, cancel).await?;
             &*other
         };
-        match fetch(transport,&url,None,limit,cancel,policy,access).await? {
-            network::Fetch::Body{bytes,mime,..}=>{
-                // Charge received bytes even when format validation or disk writes fail.
-                // The transport independently caps the next response to remaining budget.
-                *total=total.saturating_add(bytes.len() as u64);
-                if bytes.len()>limit || *total>IMPORT_RESOURCES {return Err(BUDGET_REACHED.into());}
-                let media=if resource.kind=="image" {Some(raster(&bytes).ok_or("안전한 이미지 형식(PNG, JPEG, GIF, WebP)이 아니어서 보관하지 않았습니다.")?.to_string())} else {
-                    let mime=mime.filter(|m|!matches!(m.as_str(),"text/html"|"application/xhtml+xml"|"application/javascript"|"text/javascript"|"image/svg+xml"));
-                    if mime.is_none() || bytes.is_empty(){return Err("첨부 파일 대신 오류 페이지 또는 지원하지 않는 자료를 받았습니다.".into());}
-                    let lower=resource.filename.to_ascii_lowercase();
-                    if ![".pdf",".hwp",".hwpx",".doc",".docx",".xls",".xlsx",".ppt",".pptx",".zip",".txt",".png",".jpg",".jpeg",".gif",".webp"].iter().any(|ext|lower.ends_with(ext)){return Err("자동 다운로드를 지원하지 않는 첨부 파일 형식입니다.".into());}
-                    if lower.ends_with(".pdf") && !bytes.starts_with(b"%PDF-"){return Err("PDF 파일 형식 검증에 실패했습니다.".into());}
-                    mime
-                };
-                active(store,cancel)?;
-                let hash=format!("{:x}",Sha256::digest(&bytes));
-                let extension = if resource.kind=="image" {match media.as_deref(){Some("image/png")=>"png",Some("image/jpeg")=>"jpg",Some("image/gif")=>"gif",_=>"webp"}} else {resource.filename.rsplit('.').next().unwrap_or("bin")};
-                let extension=extension.to_ascii_lowercase();
-                let relative=format!("resources/{hash}.{extension}");
-                tokio::fs::create_dir_all(root.join("resources")).await.map_err(|_|"첨부 저장 폴더를 만들지 못했습니다. 저장 공간과 권한을 확인해 주세요.")?;
-                let temporary=root.join(format!("resources/{hash}.part"));
-                tokio::fs::write(&temporary,&bytes).await.map_err(|_|"첨부 파일을 저장하지 못했습니다. 남은 저장 공간과 권한을 확인해 주세요.")?;
-                let destination=root.join(&relative);
-                // Generated hash paths never contain a remote filename. A completed file
-                // is installed before its reference is committed to SQLite.
-                if tokio::fs::try_exists(&destination).await.map_err(|_|"첨부 파일 경로를 확인하지 못했습니다.")? {
-                    // A retry must repair corrupt bytes, not discard its verified download.
-                    let size=tokio::fs::metadata(&destination).await.map_err(|_|"기존 첨부 파일을 확인하지 못했습니다.")?.len();
-                    let matches = if size<=FILE_LIMIT as u64 {
-                        let existing=tokio::fs::read(&destination).await.map_err(|_|"기존 첨부 파일을 확인하지 못했습니다.")?;
-                        Sha256::digest(&existing)==Sha256::digest(&bytes)
-                    } else {false};
-                    if matches {
-                        tokio::fs::remove_file(&temporary).await.map_err(|_|"임시 첨부 파일을 정리하지 못했습니다.")?;
-                    } else {
-                        // Windows does not replace an existing destination on rename.
-                        tokio::fs::remove_file(&destination).await.map_err(|_|"손상된 첨부 파일을 교체하지 못했습니다.")?;
-                        tokio::fs::rename(&temporary,&destination).await.map_err(|_|"첨부 파일 복구를 완료하지 못했습니다.")?;
-                    }
-                } else {tokio::fs::rename(&temporary,&destination).await.map_err(|_|"첨부 파일 저장을 완료하지 못했습니다.")?;}
-                with_store(store,|s|{ensure_active(s,cancel)?;s.resource_result(resource.id,"downloaded",media.as_deref(),Some(bytes.len() as u64),Some(&relative),Some(&hash),None)})?;
-                Ok(())
-            },_=>Err("첨부 파일에 잘못된 변경 없음 응답이 도착했습니다.".into())
+        match fetch(transport, &url, None, limit, cancel, policy, access).await? {
+            network::Fetch::Body { bytes, mime, .. } => {
+                install_resource(store, root, cancel, resource, bytes, mime, limit, total).await
+            }
+            _ => Err("첨부 파일에 잘못된 변경 없음 응답이 도착했습니다.".into()),
         }
-    }.await;
-    if let Err(error) = outcome {
-        active(store, cancel)?;
-        if budget_bound && (error == BUDGET_REACHED || error.contains("크기")) {
-            // Leave the row as it was (normally pending) for a later run.
-            return Ok(DownloadOutcome::Failed(BUDGET_REACHED.into()));
-        }
-        if resource.status == "downloaded" && local_resource(store, root, resource.id).await.is_ok()
-        {
-            return Ok(DownloadOutcome::Failed(format!(
-                "다시 내려받지 못했습니다. 기존 로컬 자료는 안전하게 유지됩니다. {error}"
-            )));
-        }
-        let status = if error.contains("크기") || error.contains("한도") {
-            "too_large"
-        } else if error.contains("지원")
-            || error.contains("검증된")
-            || error.contains("안전한 이미지")
-        {
-            "unsupported"
-        } else {
-            "failed"
-        };
-        with_store(store, |s| {
-            s.resource_result(resource.id, status, None, None, None, None, Some(&error))
-        })?;
-        return Ok(DownloadOutcome::Failed(error));
     }
-    Ok(DownloadOutcome::Downloaded)
+    .await;
+    match outcome {
+        Ok(()) => Ok(DownloadOutcome::Downloaded),
+        Err(error) => record_failure(store, root, cancel, resource, error, budget_bound).await,
+    }
+}
+/// The byte limit of one download: the per-file cap or what is left of the
+/// job budget, whichever is smaller.
+pub(super) fn resource_limit(
+    resource: &ResourceRecord,
+    total: u64,
+    budget_bound: &mut bool,
+) -> Result<usize, String> {
+    let cap = if resource.kind == "image" {
+        10 * 1024 * 1024
+    } else {
+        FILE_LIMIT
+    };
+    let remaining = IMPORT_RESOURCES.saturating_sub(total) as usize;
+    *budget_bound = remaining < cap;
+    if remaining == 0 {
+        return Err(BUDGET_REACHED.into());
+    }
+    Ok(cap.min(remaining))
+}
+/// Validates received bytes and installs them at their generated hash path
+/// before the reference is committed. Every transport shares this step.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn install_resource(
+    store: &SharedStore,
+    root: &Path,
+    cancel: &AtomicBool,
+    resource: &ResourceRecord,
+    bytes: Vec<u8>,
+    mime: Option<String>,
+    limit: usize,
+    total: &mut u64,
+) -> Result<(), String> {
+    // Charge received bytes even when format validation or disk writes fail.
+    // The transport independently caps the next response to remaining budget.
+    *total = total.saturating_add(bytes.len() as u64);
+    if bytes.len() > limit || *total > IMPORT_RESOURCES {
+        return Err(BUDGET_REACHED.into());
+    }
+    let media = if resource.kind == "image" {
+        Some(
+            raster(&bytes)
+                .ok_or("안전한 이미지 형식(PNG, JPEG, GIF, WebP)이 아니어서 보관하지 않았습니다.")?
+                .to_string(),
+        )
+    } else {
+        let mime = mime.filter(|m| {
+            !matches!(
+                m.as_str(),
+                "text/html"
+                    | "application/xhtml+xml"
+                    | "application/javascript"
+                    | "text/javascript"
+                    | "image/svg+xml"
+            )
+        });
+        if mime.is_none() || bytes.is_empty() {
+            return Err("첨부 파일 대신 오류 페이지 또는 지원하지 않는 자료를 받았습니다.".into());
+        }
+        let lower = resource.filename.to_ascii_lowercase();
+        if ![
+            ".pdf", ".hwp", ".hwpx", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip",
+            ".txt", ".png", ".jpg", ".jpeg", ".gif", ".webp",
+        ]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+        {
+            return Err("자동 다운로드를 지원하지 않는 첨부 파일 형식입니다.".into());
+        }
+        if lower.ends_with(".pdf") && !bytes.starts_with(b"%PDF-") {
+            return Err("PDF 파일 형식 검증에 실패했습니다.".into());
+        }
+        mime
+    };
+    active(store, cancel)?;
+    let hash = format!("{:x}", Sha256::digest(&bytes));
+    let extension = if resource.kind == "image" {
+        match media.as_deref() {
+            Some("image/png") => "png",
+            Some("image/jpeg") => "jpg",
+            Some("image/gif") => "gif",
+            _ => "webp",
+        }
+    } else {
+        resource.filename.rsplit('.').next().unwrap_or("bin")
+    };
+    let extension = extension.to_ascii_lowercase();
+    let relative = format!("resources/{hash}.{extension}");
+    tokio::fs::create_dir_all(root.join("resources"))
+        .await
+        .map_err(|_| "첨부 저장 폴더를 만들지 못했습니다. 저장 공간과 권한을 확인해 주세요.")?;
+    let temporary = root.join(format!("resources/{hash}.part"));
+    tokio::fs::write(&temporary, &bytes)
+        .await
+        .map_err(|_| "첨부 파일을 저장하지 못했습니다. 남은 저장 공간과 권한을 확인해 주세요.")?;
+    let destination = root.join(&relative);
+    // Generated hash paths never contain a remote filename. A completed file
+    // is installed before its reference is committed to SQLite.
+    if tokio::fs::try_exists(&destination)
+        .await
+        .map_err(|_| "첨부 파일 경로를 확인하지 못했습니다.")?
+    {
+        // A retry must repair corrupt bytes, not discard its verified download.
+        let size = tokio::fs::metadata(&destination)
+            .await
+            .map_err(|_| "기존 첨부 파일을 확인하지 못했습니다.")?
+            .len();
+        let matches = if size <= FILE_LIMIT as u64 {
+            let existing = tokio::fs::read(&destination)
+                .await
+                .map_err(|_| "기존 첨부 파일을 확인하지 못했습니다.")?;
+            Sha256::digest(&existing) == Sha256::digest(&bytes)
+        } else {
+            false
+        };
+        if matches {
+            tokio::fs::remove_file(&temporary)
+                .await
+                .map_err(|_| "임시 첨부 파일을 정리하지 못했습니다.")?;
+        } else {
+            // Windows does not replace an existing destination on rename.
+            tokio::fs::remove_file(&destination)
+                .await
+                .map_err(|_| "손상된 첨부 파일을 교체하지 못했습니다.")?;
+            tokio::fs::rename(&temporary, &destination)
+                .await
+                .map_err(|_| "첨부 파일 복구를 완료하지 못했습니다.")?;
+        }
+    } else {
+        tokio::fs::rename(&temporary, &destination)
+            .await
+            .map_err(|_| "첨부 파일 저장을 완료하지 못했습니다.")?;
+    }
+    with_store(store, |s| {
+        ensure_active(s, cancel)?;
+        s.resource_result(
+            resource.id,
+            "downloaded",
+            media.as_deref(),
+            Some(bytes.len() as u64),
+            Some(&relative),
+            Some(&hash),
+            None,
+        )
+    })?;
+    Ok(())
+}
+/// Records a failed download without discarding a verified earlier copy.
+pub(super) async fn record_failure(
+    store: &SharedStore,
+    root: &Path,
+    cancel: &AtomicBool,
+    resource: &ResourceRecord,
+    error: String,
+    budget_bound: bool,
+) -> Result<DownloadOutcome, String> {
+    active(store, cancel)?;
+    if budget_bound && (error == BUDGET_REACHED || error.contains("크기")) {
+        // Leave the row as it was (normally pending) for a later run.
+        return Ok(DownloadOutcome::Failed(BUDGET_REACHED.into()));
+    }
+    if resource.status == "downloaded" && local_resource(store, root, resource.id).await.is_ok() {
+        return Ok(DownloadOutcome::Failed(format!(
+            "다시 내려받지 못했습니다. 기존 로컬 자료는 안전하게 유지됩니다. {error}"
+        )));
+    }
+    let status = if error.contains("크기") || error.contains("한도") {
+        "too_large"
+    } else if error.contains("지원") || error.contains("검증된") || error.contains("안전한 이미지")
+    {
+        "unsupported"
+    } else {
+        "failed"
+    };
+    with_store(store, |s| {
+        s.resource_result(resource.id, status, None, None, None, None, Some(&error))
+    })?;
+    Ok(DownloadOutcome::Failed(error))
 }
 pub async fn local_resource(
     store: &SharedStore,

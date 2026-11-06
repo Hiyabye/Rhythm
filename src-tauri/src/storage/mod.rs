@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 mod archive;
+pub mod cybercampus;
 pub(crate) use archive::search_terms;
 #[cfg(test)]
 mod archive_tests;
@@ -17,7 +18,7 @@ mod personalization_tests;
 pub mod proactive;
 #[cfg(test)]
 mod proactive_tests;
-pub(crate) const SCHEMA_VERSION: i64 = 17;
+pub(crate) const SCHEMA_VERSION: i64 = 18;
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
     let migrations = [
@@ -38,6 +39,7 @@ fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
         include_str!("../../migrations/015_ai_embedding.sql"),
         include_str!("../../migrations/016_remote_engine.sql"),
         include_str!("../../migrations/017_retire_eng_newsletter.sql"),
+        include_str!("../../migrations/018_cybercampus.sql"),
     ];
     for migration in migrations.iter().skip(version as usize) {
         let transaction = connection.transaction().map_err(|e| e.to_string())?;

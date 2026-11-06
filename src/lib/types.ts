@@ -357,3 +357,34 @@ export interface RestoreOutcome {
 // updater.rs `UpdateInfo` and `AutoCheck` (camelCase).
 export type UpdateInfo = { version: string; currentVersion: string; date: string | null; body: string | null };
 export type AutoUpdateCheck = { enabled: boolean; available: UpdateInfo | null };
+
+// archive/cybercampus `Status`; the password is never returned.
+export interface CybercampusCourse {
+  course_key: string;
+  name: string;
+  year: number;
+  term: string;
+}
+export interface CybercampusStatus {
+  id: string | null;
+  rejected: boolean;
+  courses: CybercampusCourse[];
+}
+// storage/cybercampus `CybercampusTask`. Dates are Korean local time,
+// `YYYY-MM-DDTHH:MM` or `YYYY-MM-DD`.
+export interface CybercampusTask {
+  course_key: string;
+  course_name: string;
+  category: string;
+  item_id: string;
+  label: string;
+  title: string;
+  week: number | null;
+  opens_at: string | null;
+  due_at: string | null;
+  late_due_at: string | null;
+  status: string | null;
+  submitted_at: string | null;
+  pending: boolean;
+  updated_at: string;
+}

@@ -36,6 +36,10 @@ v1.4.0 adds:
 - New source families, each verified for full article and local-resource extraction: 전자공학과·시스템반도체공학과 community boards (9, #94), 벨라르미노 학사 dormitory boards (3, #116), 기계공학과 boards discovered through the site's sitemap (7, #95) and 반도체공학과 boards (5, #96). The catalog lists 34 boards, all subscribable; the unsupported 공과대학 뉴스레터 was retired (#93).
 - The notice preview separates the classification label from the AI summary (#119). The unsigned Windows distribution decision is recorded (#85).
 
+Unreleased (next release):
+
+- An opt-in Cybercampus (eClass) connector (#86): with a login saved in the OS credential store, the `cybercampus` source archives the current term's course notices with their attachments and images, and a 과제·마감 page lists assignments and TODO deadlines. Read-only; its documents never go to the remote AI engine (schema 18).
+
 ## Verification status
 
 Native observations are from one Mac (macOS 27.2, M1 Pro, 16 GiB) unless noted, mostly in isolated profiles or validation bundle identifiers. Windows observations are in [Windows validation](WINDOWS_VALIDATION.md); AI in [AI evaluation](AI_EVALUATION.md). Automated tests, mocked-IPC UI tests and native observations are separate claims.
@@ -56,6 +60,7 @@ Native observations are from one Mac (macOS 27.2, M1 Pro, 16 GiB) unless noted, 
 | Similar notices | Storage tests for the bounded window, model-hash and latest-revision isolation and the duplicate guard (title and body digits); mocked-IPC reader and list-grouping tests (#126) | Thresholds on real notices; native reader/list rendering |
 | Semantic search | macOS Metal, pinned Qwen3-Embedding 0.6B, 18 synthetic fixtures and 12 paraphrase queries: shipped query instruction MRR 0.882; fused ranking put a relevant fixture in the top five for 12/12 queries (text-only 1/12). Storage tests for fusion, paging past the fused head, filters, model hash and dimension mismatch; fake-server query tests (instruction, cache, paused/failed engine); mocked-IPC no-model fallback and meaning-only marker (#127) | Ranking quality on the real archive; Windows; native search rendering and first-search latency in the app |
 | Accessibility | Accessibility API review of v0.9.2 and v1.0.0: landmarks, headings, names, states, tab order, focus return, contrast pairs | Spoken VoiceOver output, OS text size, increased contrast and reduced motion; the redesigned shell and Today natively (only Playwright captures) |
+| Cybercampus | Live macOS run on 2026-11-06 with one student account (5 courses) in a temporary profile through the production session client: login with the TLS chain completion, 44 notices, all 12 attachments and 3 editor images downloaded and hash-verified, 24 deadlines (3 pending); a second sync refetched no notice (16 s). Parsers checked against that account's captured pages; fake-server tests for session expiry, rejected login, route allowlist, password only on the login route, unchanged-notice skipping. Mocked-IPC login and 과제·마감 tests | Windows; Keychain/Credential Manager prompts in the app; the native Settings login and 과제·마감 page; the scheduler path with a real account; TA rooms; other course layouts, English pages, a term change |
 | Remote AI | Fake OpenAI-compatible endpoint: URL policy, request-body privacy, schema fallback, errors without key echo, cancellation, cache separation, automatic cap; mocked-IPC settings/reader tests | Any real provider or model (structured output, Korean quality, latency, limits, cost); remote embedding accuracy; native Keychain/Credential Manager prompts |
 
 Known performance note: restore staging flushes each file with `F_FULLFSYNC` (≈6 ms per file, ≈66 s for 11,081 files). Changing this is a durability decision.
@@ -71,7 +76,6 @@ Each is a GitHub issue:
 
 Each is a future product decision, sharing the archive, search and personalization core:
 
-- **Cybercampus:** announcements, assignments, courses and deadlines, as a native Rust connector.
 - **Opportunities:** competitions, activities, internships, research and jobs.
 - **Calendar and tasks:** schedules, deadlines, reminders and daily planning. The
   dormitory calendar (`/sgdormitory/6558/subview.do`) is a month grid of title/time

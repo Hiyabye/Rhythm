@@ -18,7 +18,7 @@ The job: never miss school information that matters, without checking a dozen un
 
 Rhythm collects public Sogang notice boards into a local archive. It ranks what matters to this user with explainable, deterministic rules and can summarize notices and extract dates with a local AI model. Archived content stays readable and searchable offline.
 
-The direction is a personal planning hub: the place the user's day is organized around. Notices are the first data source. Possible later extensions (Cybercampus courses/assignments/deadlines, opportunities, calendar and tasks, a personal agent) share the same archive, search and personalization core. These extensions are possible future decisions, not current features.
+The direction is a personal planning hub: the place the user's day is organized around. Notices are the first data source. An opt-in Cybercampus connector adds the user's own course notices and deadlines. Possible later extensions (opportunities, calendar and tasks, a personal agent) share the same archive, search and personalization core. These extensions are possible future decisions, not current features.
 
 Success: the user trusts Rhythm to bring forward what matters, at the right time, and rarely needs to visit school sites to check.
 
@@ -44,7 +44,7 @@ Current information architecture (open to change in a redesign): 오늘 (ranked 
 
 ## Capabilities and Constraints
 
-- 34 cataloged sources, all supported (main academic, five computing, four engineering, nine electronic/system semiconductor department, three dormitory, seven mechanical engineering and five semiconductor engineering boards). Unsupported sources, if any, are shown as such and are never presented as working.
+- 34 cataloged public sources, all supported (main academic, five computing, four engineering, nine electronic/system semiconductor department, three dormitory, seven mechanical engineering and five semiconductor engineering boards), plus the opt-in Cybercampus course-notice source that needs the user's own login. Unsupported sources, if any, are shown as such and are never presented as working.
 - Historical import (resumable, cancellable) stays a separate pass from incremental "new and changed" checks, but one manual **새로고침** runs the new-notice pass first and then continues unfinished history. Progress shows real counts and phases, never fabricated percentages.
 - Reader: sanitized local content only, with no scripts, iframes, remote images or live school pages. Original links open in the OS browser on explicit action. Attachments are revealed in Finder or File Explorer, never executed. Iframe-only notices keep metadata only and explain why.
 - Local AI: Qwen3.5 2B/4B, Gemma 4 E2B/E4B and Qwen3-Embedding 0.6B GGUF, user-installed, run by a bundled llama.cpp server (Metal or CPU on macOS; Vulkan for NVIDIA GPUs or CPU on Windows). Summaries, a separate embedding-based category classification, and dates/facts grounded to source evidence. AI can be wrong, and the UI must say to verify in the original. Analysis shows real phase and elapsed time.
