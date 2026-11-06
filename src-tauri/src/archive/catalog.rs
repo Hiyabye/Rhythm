@@ -148,7 +148,7 @@ pub fn definitions() -> Vec<SourceDefinition> {
             "서강대학교 · 반도체공학과",
             "semiconductor",
             format!("https://se.sogang.ac.kr/board/board_list.php?board_id={board}"),
-            false,
+            true,
         );
     }
     sources

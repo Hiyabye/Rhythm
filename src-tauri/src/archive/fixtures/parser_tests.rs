@@ -68,7 +68,7 @@ fn cases() -> Vec<(
 fn catalog_has_exact_stable_source_identities_and_honest_support() {
     let sources = catalog::definitions();
     assert_eq!(sources.len(), 35);
-    assert_eq!(sources.iter().filter(|s| s.supported).count(), 29);
+    assert_eq!(sources.iter().filter(|s| s.supported).count(), 34);
     assert_eq!(
         sources.iter().map(|s| &s.id).collect::<HashSet<_>>().len(),
         35
