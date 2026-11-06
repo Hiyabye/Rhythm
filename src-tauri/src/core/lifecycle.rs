@@ -89,16 +89,11 @@ impl LaunchMode {
     /// Non-Unicode arguments cannot match our flags and are not a reason to
     /// abort startup.
     pub fn current() -> Self {
-        let mut mode = Self::default();
-        for argument in std::env::args_os().skip(1) {
-            let argument = argument.to_string_lossy();
-            if argument == AUTOSTART_ARG {
-                mode.autostart = true;
-            } else if argument == HIDDEN_ARG {
-                mode.hidden = true;
-            }
-        }
-        mode
+        Self::from_args(
+            std::env::args_os()
+                .skip(1)
+                .map(|argument| argument.to_string_lossy().into_owned()),
+        )
     }
 
     pub fn from_args<I, S>(args: I) -> Self

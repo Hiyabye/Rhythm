@@ -299,13 +299,17 @@ pub(super) fn resolved_interval(requested: u32, profile: &str) -> u32 {
     }
 }
 
+fn lock_store(store: &sync::SharedStore) -> Result<std::sync::MutexGuard<'_, Store>, String> {
+    store
+        .lock()
+        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.".to_string())
+}
+
 fn with_store<T>(
     store: &sync::SharedStore,
     operation: impl FnOnce(&Store) -> Result<T, String>,
 ) -> Result<T, String> {
-    let guard = store
-        .lock()
-        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
+    let guard = lock_store(store)?;
     operation(&guard)
 }
 
@@ -366,6 +370,26 @@ fn task_is_active(prefs: &ProactiveSettings, extension_enabled: bool, subscribed
     prefs.scheduler_enabled && !prefs.scheduler_paused && extension_enabled && subscribed
 }
 
+fn task_inputs(
+    store: &sync::SharedStore,
+    source_id: &str,
+) -> Result<(ProactiveSettings, bool, bool), String> {
+    with_store(store, |store| {
+        let prefs = store.proactive_settings()?;
+        let extension_enabled = store.enabled("sogang_notices")?;
+        let subscribed = store
+            .sources()?
+            .into_iter()
+            .any(|source| source.definition.id == source_id && source.subscribed);
+        Ok((prefs, extension_enabled, subscribed))
+    })
+}
+
+fn task_currently_active(store: &sync::SharedStore, source_id: &str) -> Result<bool, String> {
+    let (prefs, extension_enabled, subscribed) = task_inputs(store, source_id)?;
+    Ok(task_is_active(&prefs, extension_enabled, subscribed))
+}
+
 pub(super) fn can_admit_task(
     stop: &watch::Receiver<bool>,
     prefs: &ProactiveSettings,
@@ -406,15 +430,7 @@ async fn wait_scheduled_job(
                 }
             }
             _ = recheck.tick() => {
-                let active = with_store(store, |store| {
-                    let settings = store.proactive_settings()?;
-                    let extension = store.enabled("sogang_notices")?;
-                    let subscribed = store.sources()?.into_iter().any(|source| {
-                        source.definition.id == source_id && source.subscribed
-                    });
-                    Ok(task_is_active(&settings, extension, subscribed))
-                })?;
-                if !active {
+                if !task_currently_active(store, source_id)? {
                     return cancel_or_take_scheduled_outcome(archive, task_id).await;
                 }
             }
@@ -432,15 +448,7 @@ pub(super) async fn run_scheduled_task<T: sync::Transport + Clone + 'static>(
     stop: &mut watch::Receiver<bool>,
 ) -> Result<ProactiveOutcome, String> {
     let source_id = task.task_id.strip_prefix("source:").unwrap_or("");
-    let (prefs, enabled, subscribed) = with_store(store, |store| {
-        let prefs = store.proactive_settings()?;
-        let extension_enabled = store.enabled("sogang_notices")?;
-        let subscribed = store
-            .sources()?
-            .into_iter()
-            .any(|source| source.definition.id == source_id && source.subscribed);
-        Ok((prefs, extension_enabled, subscribed))
-    })?;
+    let (prefs, enabled, subscribed) = task_inputs(store, source_id)?;
     let outcome = if stop_requested(stop) || !task_is_active(&prefs, enabled, subscribed) {
         ProactiveOutcome::Cancelled
     } else {
@@ -461,16 +469,7 @@ pub(super) async fn run_scheduled_task<T: sync::Transport + Clone + 'static>(
             }
             Err(error) if error.contains("다른 동기화") => ProactiveOutcome::Skipped,
             Err(_) => {
-                let active = with_store(store, |store| {
-                    let prefs = store.proactive_settings()?;
-                    let enabled = store.enabled("sogang_notices")?;
-                    let subscribed = store
-                        .sources()?
-                        .into_iter()
-                        .any(|source| source.definition.id == source_id && source.subscribed);
-                    Ok(task_is_active(&prefs, enabled, subscribed))
-                })?;
-                if active {
+                if task_currently_active(store, source_id)? {
                     ProactiveOutcome::Failure
                 } else {
                     ProactiveOutcome::Cancelled
@@ -538,16 +537,8 @@ async fn cycle(
             if stop_requested(stop) {
                 break;
             }
-            let (updated, _) = settings(store)?;
-            let active = with_store(store, |store| {
-                let extension = store.enabled("sogang_notices")?;
-                let subscribed = store
-                    .sources()?
-                    .into_iter()
-                    .any(|source| source.definition.id == source_id && source.subscribed);
-                Ok(can_admit_task(stop, &updated, extension, subscribed))
-            })?;
-            if active {
+            let (updated, extension, subscribed) = task_inputs(store, &source_id)?;
+            if can_admit_task(stop, &updated, extension, subscribed) {
                 discover_and_deliver(store, &updated, app, notifications, stop).await?;
             }
         }
@@ -688,20 +679,11 @@ pub(super) fn revalidate_delivery_batch(
     for mut item in items {
         let candidate = store.proactive_event_candidate(item.event_id)?;
         let score = store.personalization_notification_score(item.document_id)?;
-        if !candidate.source_active
-            || score
-                .as_ref()
-                .is_none_or(|score| !notification::eligible(prefs.notification_sensitivity, score))
-        {
-            let reason = if !candidate.source_active {
-                "정보원 구독 또는 확장 기능이 꺼져 있습니다.".to_string()
-            } else {
-                score
-                    .as_ref()
-                    .map(|score| score.reasons.join(", "))
-                    .filter(|reason| !reason.is_empty())
-                    .unwrap_or_else(|| "현재 알림 기준에 맞지 않습니다.".into())
-            };
+        if let Some(reason) = notification::suppression_reason(
+            candidate.source_active,
+            prefs.notification_sensitivity,
+            score.as_ref(),
+        ) {
             store.proactive_suppress_event(
                 item.event_id,
                 Some(item.attempt_count),
@@ -724,9 +706,7 @@ pub(super) fn reserve_delivery_batch(
     shared: &sync::SharedStore,
     items: Vec<DeliveryItem>,
 ) -> Result<Vec<DeliveryItem>, String> {
-    let store = shared
-        .lock()
-        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
+    let store = lock_store(shared)?;
     let eligible = revalidate_delivery_batch(&store, items)?;
     if eligible.is_empty() {
         return Ok(eligible);
@@ -760,9 +740,7 @@ pub(super) fn handoff_validated<P>(
     prepare: impl FnOnce(&Store, &[DeliveryItem]) -> Result<P, String>,
     send: impl FnOnce(P) -> Result<(), String>,
 ) -> Result<(), String> {
-    let store = shared
-        .lock()
-        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
+    let store = lock_store(shared)?;
     let items = revalidate_delivery_batch(&store, items)?;
     if items.is_empty() {
         return Ok(());
@@ -860,27 +838,14 @@ async fn discover_and_deliver(
         .take(slots)
     {
         let item = {
-            let store = store
-                .lock()
-                .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
+            let store = lock_store(store)?;
             let candidate = store.proactive_event_candidate(event.id)?;
             let score = store.personalization_notification_score(event.document_id)?;
-            let rejection_reason = if !candidate.source_active {
-                Some("정보원 구독 또는 확장 기능이 꺼져 있습니다.".to_string())
-            } else if score
-                .as_ref()
-                .is_none_or(|score| !notification::eligible(prefs.notification_sensitivity, score))
-            {
-                Some(
-                    score
-                        .as_ref()
-                        .map(|score| score.reasons.join(", "))
-                        .filter(|reason| !reason.is_empty())
-                        .unwrap_or_else(|| "현재 알림 기준에 맞지 않습니다.".into()),
-                )
-            } else {
-                None
-            };
+            let rejection_reason = notification::suppression_reason(
+                candidate.source_active,
+                prefs.notification_sensitivity,
+                score.as_ref(),
+            );
             if let Some(reason) = rejection_reason {
                 store.proactive_suppress_event(
                     event.id,
@@ -924,9 +889,7 @@ async fn discover_and_deliver(
         }
     }
     if deliver.len() < slots {
-        let store = store
-            .lock()
-            .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
+        let store = lock_store(store)?;
         let fresh = notification::consider_candidates(&store, prefs)?;
         for candidate in fresh.into_iter().take(slots - deliver.len()) {
             let claim = store.proactive_claim_event(&ProactiveEventKey {

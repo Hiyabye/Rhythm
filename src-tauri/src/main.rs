@@ -91,11 +91,11 @@ impl AppState {
         };
         self.archive.cancel();
         self.analysis.stop();
-        self.models.stop();
+        self.models.cancel();
         self.ai_operation.cancel();
         let ai_gate = self.ai_gate.lock().await;
         self.analysis.stop();
-        self.models.stop();
+        self.models.cancel();
         self.ai_operation.cancel();
         drop(ai_gate);
         self.proactive.quiesce().await;
@@ -778,7 +778,7 @@ fn main() {
             state.registry.stop_all();
             state.ai_operation.cancel();
             state.analysis.stop();
-            state.models.stop();
+            state.models.cancel();
             tauri::async_runtime::block_on(async {
                 state.proactive.shutdown().await;
                 state.archive.wait().await;

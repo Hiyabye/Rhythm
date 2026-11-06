@@ -27,6 +27,13 @@ pub struct ProactiveSnapshot {
     pub notification_permission: &'static str,
 }
 
+fn lock_store<'a>(state: &'a AppState) -> Result<std::sync::MutexGuard<'a, Store>, String> {
+    state
+        .store
+        .lock()
+        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.".to_string())
+}
+
 fn snapshot(
     store: &Store,
     pending_activation: Option<NotificationActivation>,
@@ -43,10 +50,7 @@ fn snapshot(
 #[tauri::command]
 pub async fn proactive_snapshot(state: State<'_, AppState>) -> Result<ProactiveSnapshot, String> {
     let _lease = state.operation_gate.shared().await?;
-    let store = state
-        .store
-        .lock()
-        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
+    let store = lock_store(&state)?;
     snapshot(&store, state.proactive.take_activation()?)
 }
 
@@ -56,10 +60,7 @@ pub async fn proactive_save(
     settings: ProactiveSettings,
 ) -> Result<ProactiveSnapshot, String> {
     let _lease = state.operation_gate.shared().await?;
-    let store = state
-        .store
-        .lock()
-        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
+    let store = lock_store(&state)?;
     let persisted_settings = store.proactive_settings()?;
     let settings = preserve_lifecycle_settings(settings, &persisted_settings);
     store.proactive_save_settings(&settings)?;
@@ -82,10 +83,7 @@ pub async fn proactive_history(
     limit: Option<usize>,
 ) -> Result<Vec<ProactiveHistoryItem>, String> {
     let _lease = state.operation_gate.shared().await?;
-    let store = state
-        .store
-        .lock()
-        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
+    let store = lock_store(&state)?;
     store.proactive_history(limit.unwrap_or(50))
 }
 
@@ -94,10 +92,7 @@ pub async fn proactive_clear_history(
     state: State<'_, AppState>,
 ) -> Result<ProactiveSnapshot, String> {
     let _lease = state.operation_gate.shared().await?;
-    let store = state
-        .store
-        .lock()
-        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
+    let store = lock_store(&state)?;
     store.proactive_clear_history()?;
     snapshot(&store, state.proactive.take_activation()?)
 }

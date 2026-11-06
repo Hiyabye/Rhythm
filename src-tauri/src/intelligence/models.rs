@@ -202,9 +202,6 @@ impl Controller {
             }
         }
     }
-    pub fn stop(&self) {
-        self.cancel();
-    }
     pub async fn wait(&self) {
         while self.busy() {
             tokio::time::sleep(Duration::from_millis(50)).await;
