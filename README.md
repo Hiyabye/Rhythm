@@ -4,7 +4,7 @@
 
 Rhythm은 학교 공지를 내 Mac에 모아 보관하고, AI로 핵심을 정리하고, 나에게 중요한 소식부터 보여 주는 한국어 데스크톱 앱입니다. 계정이나 클라우드 없이 동작하며, 한 번 보관한 공지는 인터넷 없이도 읽고 검색할 수 있습니다. AI는 기본적으로 이 기기에서 실행하고, 원하면 직접 설정한 OpenAI 호환 API를 쓸 수 있습니다.
 
-현재 버전: **1.4.0**
+현재 버전: **1.5.0**
 
 ## 원칙
 
@@ -27,7 +27,7 @@ Rhythm은 학교 공지를 내 Mac에 모아 보관하고, AI로 핵심을 정�
 
 ## 지원 범위
 
-| 항목 | v1.4.0 |
+| 항목 | v1.5.0 |
 | --- | --- |
 | 플랫폼 | **macOS Apple Silicon(arm64)과 Windows 11 x64.** macOS는 27.2(M1 Pro, 16 GiB)에서 시험했습니다. 앱이 선언한 최소 버전은 macOS 11.0이지만 27.2 이외의 버전은 시험하지 않았습니다. Windows는 기여자의 Windows 11 기기 한 대에서 시험했으며, 시험 범위는 [Windows 검증 기록](docs/WINDOWS_VALIDATION.md)에 있습니다. |
 | 지원하지 않음 | Linux, Intel Mac, ARM Windows. |
@@ -107,13 +107,13 @@ AI 요약과 추출은 구조와 원문 근거를 검사하지만, 의미를 잘
 
 ## 설치
 
-1. 공식 저장소 [github.com/Hiyabye/Rhythm](https://github.com/Hiyabye/Rhythm)의 **Releases**에서 `Rhythm_1.4.0_aarch64.dmg`와 `Rhythm_1.4.0_aarch64.dmg.sha256`을 내려받습니다. 다른 곳에서 받은 파일은 사용하지 마세요.
+1. 공식 저장소 [github.com/Hiyabye/Rhythm](https://github.com/Hiyabye/Rhythm)의 **Releases**에서 `Rhythm_1.5.0_aarch64.dmg`와 `Rhythm_1.5.0_aarch64.dmg.sha256`을 내려받습니다. 다른 곳에서 받은 파일은 사용하지 마세요.
 2. 터미널에서 체크섬을 확인합니다.
 
    ```sh
    cd ~/Downloads
-   shasum -a 256 Rhythm_1.4.0_aarch64.dmg
-   cat Rhythm_1.4.0_aarch64.dmg.sha256
+   shasum -a 256 Rhythm_1.5.0_aarch64.dmg
+   cat Rhythm_1.5.0_aarch64.dmg.sha256
    ```
 
    두 값이 정확히 같아야 합니다. 다르면 파일을 열지 말고 삭제하세요. 체크섬은 받은 파일이 게시된 파일과 같은지만 확인하며, 코드 서명이나 Apple 검사를 대신하지 않습니다.
