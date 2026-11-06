@@ -326,6 +326,10 @@ export interface ArchivePage {
   items: DocumentItem[];
   total: number;
   categories: string[];
+  /** Relevance search only: notices found by meaning that match no search term. */
+  meaning_only?: number[];
+  /** Relevance search only: whether the local embedding model took part. */
+  semantic?: boolean;
 }
 export interface ArchiveSummary {
   documents: number;

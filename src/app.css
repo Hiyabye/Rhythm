@@ -1693,7 +1693,8 @@ select:focus-visible {
   overflow-wrap: anywhere;
 }
 .notice-resource-warning,
-.notice-duplicate-note {
+.notice-duplicate-note,
+.notice-meaning-note {
   font-size: 11px;
   color: var(--secondary);
 }

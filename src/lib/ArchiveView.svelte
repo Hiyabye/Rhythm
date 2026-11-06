@@ -33,7 +33,8 @@
   let source = $state('');
   let category = $state('');
   let unread = $state(false);
-  let ascending = $state(false);
+  // Relevance is offered only on the search page; it needs a query.
+  let sort = $state<'newest' | 'oldest' | 'relevance'>('newest');
   let offset = $state(0);
   let loading = $state(false);
   let error = $state('');
@@ -65,7 +66,7 @@
     source = request.id;
     category = '';
     unread = false;
-    ascending = false;
+    sort = currentPage === 'search' ? 'relevance' : 'newest';
     offset = 0;
   });
 
@@ -81,9 +82,10 @@
   });
   $effect(() => {
     const filters = { query, source_id: source || null, category: category || null,
-      saved_only: page === 'bookmark', unread_only: unread, ascending, offset, limit: pageSize };
+      saved_only: page === 'bookmark', unread_only: unread, ascending: sort === 'oldest', offset, limit: pageSize };
+    const ranked = page === 'search' && sort === 'relevance' && query !== '';
     void revision;
-    if (desktop) void fetchPage(filters);
+    if (desktop) void fetchPage(filters, ranked);
   });
 
   // The week agenda is a trailing window pane, so the shell reserves its width while it is shown.
@@ -234,13 +236,15 @@
     return [...new Set((duplicates[item.id] ?? []).map((notice) => notice.source_name))].join(', ');
   }
 
-  async function fetchPage(filters: { query: string; source_id: string | null; category: string | null; saved_only: boolean; unread_only: boolean; ascending: boolean; offset: number; limit: number }) {
+  async function fetchPage(filters: { query: string; source_id: string | null; category: string | null; saved_only: boolean; unread_only: boolean; ascending: boolean; offset: number; limit: number }, ranked: boolean) {
     const current = ++requestId;
     loading = true;
     error = '';
     let clamped = false;
     try {
-      const next = await invoke<ArchivePage>('archive_query', { query: filters });
+      // The ranked query adds notices similar in meaning when the local
+      // embedding model is available, and is text-only otherwise.
+      const next = await invoke<ArchivePage>(ranked ? 'archive_ranked_query' : 'archive_query', { query: filters });
       if (!active || current !== requestId) return;
       // Saving or marking read can remove the final item of a filtered page.
       // Re-query the last valid page rather than presenting a false empty archive.
@@ -493,13 +497,13 @@
     {:else}
     {#if page === 'search'}
       <form class="search-form archive-search" onsubmit={search} role="search"><Icon name="search" size={21} /><label class="sr-only" for="local-query">보관된 공지 검색</label><input id="local-query" type="search" bind:value={draft} maxlength="512" placeholder="제목과 본문에서 검색" autocomplete="off" disabled={!desktop} /><button class="text-button" type="submit" disabled={!desktop || loading}>검색</button></form>
-      <p class="footnote">한국어 일부 단어, 영문, 숫자를 검색할 수 있습니다. 띄어 쓴 검색어는 모두 포함된 공지를 찾습니다. 검색어는 외부로 보내지 않습니다.</p>
+      <p class="footnote">한국어 일부 단어, 영문, 숫자를 검색할 수 있습니다. 띄어 쓴 검색어는 모두 포함된 공지를 찾습니다. 검색어는 외부로 보내지 않습니다.{#if result.semantic && sort === 'relevance'} 관련도순에서는 이 기기의 분류 모델로 뜻이 비슷한 공지도 함께 찾습니다.{/if}</p>
     {/if}
     <div class="archive-toolbar">
       <div class="archive-filters">
         <label>정보원<select bind:value={source} onchange={() => { category = ''; offset = 0; onsourcechange(source); }} disabled={!desktop}><option value="">모든 정보원</option>{#each sources as item}<option value={item.id}>{item.organization} · {item.name}</option>{/each}</select></label>
         <label>분류<select bind:value={category} onchange={() => offset = 0} disabled={!desktop}><option value="">모든 분류</option>{#each result.categories as value}<option value={value}>{value}</option>{/each}</select></label>
-        <label>정렬<select bind:value={ascending} onchange={() => offset = 0} disabled={!desktop}><option value={false}>게시일 최신순</option><option value={true}>게시일 오래된순</option></select></label>
+        <label>정렬<select bind:value={sort} onchange={() => offset = 0} disabled={!desktop}>{#if page === 'search'}<option value="relevance">관련도순</option>{/if}<option value="newest">게시일 최신순</option><option value="oldest">게시일 오래된순</option></select></label>
       </div>
       {#if page === 'inbox'}<label class="archive-checkbox"><input type="checkbox" bind:checked={unread} onchange={() => offset = 0} disabled={!desktop} /> 읽지 않은 공지만</label>{/if}
     </div>
@@ -517,6 +521,7 @@
               <span class="notice-title"><span class="notice-read-dot" aria-hidden="true"></span><Highlighted text={item.title} {query} /><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}</span></span>
               <span class="notice-meta"><span>{item.source_name}</span><time datetime={item.published_at}>{archiveDate(item.published_at)}</time>{#if item.category}<span>{item.category}</span>{/if}</span>
               {#if (analysis || classifications[item.id]) && page !== 'search'}<span class="notice-ai-preview">{#if classifications[item.id]}<span class="ai-tag">분류 · {classifications[item.id].category}{classifications[item.id].low_confidence ? ' · 확신 낮음' : ''}</span>{/if}{#if analysis}{#if classifications[item.id]}{' · '}{/if}<span class="ai-tag">AI 요약</span> {analysis.result.short_summary}{/if}</span>{/if}
+              {#if result.meaning_only?.includes(item.id)}<span class="notice-meaning-note">검색어는 없지만 뜻이 비슷한 공지</span>{/if}
               {#if duplicates[item.id]?.length}<span class="notice-duplicate-note">같은 공지 {duplicates[item.id].length}건 · {duplicateBoards(item)}</span>{/if}
               {#if page === 'search' && item.snippet}<span class="notice-snippet"><Highlighted text={item.snippet} {query} /></span>{/if}
               {#if item.content_status === 'missing_resources'}<span class="notice-resource-warning">일부 첨부 자료 미저장</span>{/if}

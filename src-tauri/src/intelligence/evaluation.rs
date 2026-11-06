@@ -40,7 +40,7 @@ impl Case {
             self.suffix
         )
     }
-    fn article(&self) -> ArticleInput {
+    pub(super) fn article(&self) -> ArticleInput {
         let body = self.body();
         ArticleInput {
             external_id: self.id.clone(),
@@ -63,7 +63,7 @@ impl Case {
 pub(super) fn cases() -> Vec<Case> {
     serde_json::from_str(include_str!("evaluation.json")).expect("valid evaluation fixtures")
 }
-fn seed(store: &Store) {
+pub(super) fn seed(store: &Store) {
     store
         .catalog(&[SourceDefinition {
             id: "ai-evaluation".into(),

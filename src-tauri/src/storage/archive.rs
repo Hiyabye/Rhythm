@@ -114,6 +114,61 @@ fn meaningful_hash(article: &ArticleInput) -> Result<String, String> {
     .map_err(|e| e.to_string())?;
     Ok(format!("{:x}", Sha256::digest(encoded)))
 }
+/// Reciprocal rank fusion constant; 60 is the value from the original paper.
+const RRF_K: f64 = 60.0;
+/// Text matches fused with semantic hits; later text matches keep text order.
+const RANKED_TEXT_HEAD: usize = 200;
+/// Semantic hits per search. Measured on the 18 synthetic fixtures with
+/// Qwen3-Embedding 0.6B (docs/AI_EVALUATION.md): keeping hits within 0.08 of
+/// the best score and above 0.20 kept a relevant notice for every query.
+const SEARCH_LIMIT: usize = 20;
+const SEARCH_MIN_SCORE: f32 = 0.20;
+const SEARCH_MARGIN: f32 = 0.08;
+
+/// Validated whitespace-separated search terms.
+pub(crate) fn search_terms(query: &str) -> Result<Vec<&str>, String> {
+    // SQLite LIKE/FTS treat NUL as a terminator even in bound values.
+    if query.contains('\0') {
+        return Err("검색어에 사용할 수 없는 문자가 포함되어 있습니다.".into());
+    }
+    if query.chars().count() > 512 {
+        return Err("검색어는 512자 이내로 입력해 주세요.".into());
+    }
+    let terms: Vec<&str> = query.split_whitespace().collect();
+    if terms.len() > 32 {
+        return Err("검색 단어는 32개 이내로 입력해 주세요.".into());
+    }
+    Ok(terms)
+}
+/// Trigram FTS needs three characters; shorter terms rely on LIKE alone.
+fn fts_expression(terms: &[&str]) -> Option<String> {
+    let indexed: Vec<String> = terms
+        .iter()
+        .filter(|term| term.chars().count() >= 3)
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect();
+    (!indexed.is_empty()).then(|| indexed.join(" AND "))
+}
+fn like_pattern(term: &str) -> String {
+    format!(
+        "%{}%",
+        term.replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    )
+}
+/// LIKE is an exact literal-substring check and handles one/two-character Korean queries.
+fn push_like_filters(terms: &[&str], filters: &mut Vec<String>, values: &mut Vec<Value>) {
+    for term in terms {
+        filters.push("(d.title LIKE ? ESCAPE '\\' OR d.body_text LIKE ? ESCAPE '\\')".into());
+        let escaped = like_pattern(term);
+        values.push(escaped.clone().into());
+        values.push(escaped.into());
+    }
+}
+fn id_list(ids: &[i64]) -> String {
+    ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
+}
 fn excerpt(text: &str, terms: &[&str]) -> String {
     let folded = text.to_lowercase();
     let at = terms
@@ -524,18 +579,8 @@ impl Store {
         transaction.commit().map_err(|e| e.to_string())?;
         Ok((id, true))
     }
-    pub(crate) fn archive_query(&self, query: &ArchiveQuery) -> Result<ArchivePage, String> {
-        // SQLite LIKE/FTS treat NUL as a terminator even in bound values.
-        if query.query.contains('\0') {
-            return Err("검색어에 사용할 수 없는 문자가 포함되어 있습니다.".into());
-        }
-        if query.query.chars().count() > 512 {
-            return Err("검색어는 512자 이내로 입력해 주세요.".into());
-        }
-        let terms: Vec<&str> = query.query.split_whitespace().collect();
-        if terms.len() > 32 {
-            return Err("검색 단어는 32개 이내로 입력해 주세요.".into());
-        }
+    /// Source, category and state filters; text conditions are added separately.
+    fn archive_filters(&self, query: &ArchiveQuery) -> Result<(Vec<String>, Vec<Value>), String> {
         let mut filters = vec!["1=1".to_string()];
         let mut values: Vec<Value> = Vec::new();
         if let Some(source) = &query.source_id {
@@ -553,29 +598,18 @@ impl Store {
         if query.unread_only {
             filters.push("COALESCE(u.is_read,0)=0".into());
         }
-        let indexed: Vec<String> = terms
-            .iter()
-            .filter(|term| term.chars().count() >= 3)
-            .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
-            .collect();
-        if !indexed.is_empty() {
+        Ok((filters, values))
+    }
+    pub(crate) fn archive_query(&self, query: &ArchiveQuery) -> Result<ArchivePage, String> {
+        let terms = search_terms(&query.query)?;
+        let (mut filters, mut values) = self.archive_filters(query)?;
+        if let Some(expression) = fts_expression(&terms) {
             filters.push(
                 "d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH ?)".into(),
             );
-            values.push(indexed.join(" AND ").into());
+            values.push(expression.into());
         }
-        // LIKE is an exact literal-substring check and handles one/two-character Korean queries.
-        for term in &terms {
-            filters.push("(d.title LIKE ? ESCAPE '\\' OR d.body_text LIKE ? ESCAPE '\\')".into());
-            let escaped = format!(
-                "%{}%",
-                term.replace('\\', "\\\\")
-                    .replace('%', "\\%")
-                    .replace('_', "\\_")
-            );
-            values.push(escaped.clone().into());
-            values.push(escaped.into());
-        }
+        push_like_filters(&terms, &mut filters, &mut values);
         let condition = filters.join(" AND ");
         let total: u64 = self
             .connection
@@ -599,16 +633,250 @@ impl Store {
         for item in &mut items {
             item.snippet = excerpt(&item.snippet, &terms);
         }
-        let mut categories_statement=self.connection.prepare("SELECT DISTINCT category FROM documents WHERE category IS NOT NULL AND category<>'' AND (?1 IS NULL OR source_id=?1) ORDER BY category").map_err(|e|e.to_string())?;
-        let categories = categories_statement
-            .query_map([query.source_id.as_deref()], |r| r.get(0))
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
         Ok(ArchivePage {
             items,
             total,
-            categories,
+            categories: self.archive_categories(query.source_id.as_deref())?,
+            meaning_only: Vec::new(),
+            semantic: false,
+        })
+    }
+    fn archive_categories(&self, source_id: Option<&str>) -> Result<Vec<String>, String> {
+        let mut categories_statement=self.connection.prepare("SELECT DISTINCT category FROM documents WHERE category IS NOT NULL AND category<>'' AND (?1 IS NULL OR source_id=?1) ORDER BY category").map_err(|e|e.to_string())?;
+        let categories = categories_statement
+            .query_map([source_id], |r| r.get(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(categories)
+    }
+    /// Text matches in relevance order: title hits first, then FTS bm25 when an
+    /// indexed term exists, then newest. `extra` is a trusted SQL condition
+    /// built from integer IDs only.
+    fn ranked_text_sql(
+        &self,
+        query: &ArchiveQuery,
+        terms: &[&str],
+        extra: &str,
+    ) -> Result<(String, Vec<Value>, String, Vec<Value>), String> {
+        let mut from = ITEM_FROM.to_string();
+        let mut values = Vec::new();
+        let fts = fts_expression(terms);
+        if let Some(expression) = &fts {
+            from.push_str(" JOIN (SELECT rowid AS fts_id,bm25(documents_fts) AS fts_rank FROM documents_fts WHERE documents_fts MATCH ?) f ON f.fts_id=d.id");
+            values.push(expression.clone().into());
+        }
+        let (mut filters, filter_values) = self.archive_filters(query)?;
+        values.extend(filter_values);
+        push_like_filters(terms, &mut filters, &mut values);
+        filters.push(extra.to_owned());
+        let mut order_values = Vec::new();
+        let title_hits = terms
+            .iter()
+            .map(|term| {
+                order_values.push(like_pattern(term).into());
+                "(d.title LIKE ? ESCAPE '\\')"
+            })
+            .collect::<Vec<_>>()
+            .join("+");
+        let order = format!(
+            "{title_hits} DESC,{}d.published_at DESC,d.id DESC",
+            if fts.is_some() { "f.fts_rank," } else { "" }
+        );
+        Ok((
+            format!("{from} WHERE {}", filters.join(" AND ")),
+            values,
+            order,
+            order_values,
+        ))
+    }
+    fn ranked_text_ids(
+        &self,
+        query: &ArchiveQuery,
+        terms: &[&str],
+        extra: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<i64>, String> {
+        let (source, mut values, order, order_values) =
+            self.ranked_text_sql(query, terms, extra)?;
+        values.extend(order_values);
+        values.push((limit as i64).into());
+        values.push((offset as i64).into());
+        let mut statement = self
+            .connection
+            .prepare(&format!(
+                "SELECT d.id FROM {source} ORDER BY {order} LIMIT ? OFFSET ?"
+            ))
+            .map_err(|e| e.to_string())?;
+        let ids = statement
+            .query_map(params_from_iter(values.iter()), |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(ids)
+    }
+    /// Latest-revision vectors of one embedding model that pass the
+    /// non-text filters, newest `SIMILARITY_WINDOW` first, ranked by cosine
+    /// to the query. A hit is kept only near the best one (see the constants).
+    fn semantic_ids(
+        &self,
+        query: &ArchiveQuery,
+        model_sha256: &str,
+        vector: &[f32],
+    ) -> Result<Vec<i64>, String> {
+        if !super::intelligence::valid_hash(model_sha256) {
+            return Err("검색 모델 식별자가 올바르지 않습니다.".into());
+        }
+        let (filters, filter_values) = self.archive_filters(query)?;
+        let mut values: Vec<Value> = vec![model_sha256.to_owned().into()];
+        values.extend(filter_values);
+        values.push((super::intelligence::SIMILARITY_WINDOW as i64).into());
+        let mut statement = self
+            .connection
+            .prepare(&format!(
+                "SELECT d.id,e.dim,e.vector FROM {ITEM_FROM}
+                 JOIN notice_embeddings e ON e.document_id=d.id AND e.model_sha256=?
+                   AND e.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id)
+                 WHERE {} ORDER BY d.published_at DESC,d.id DESC LIMIT ?",
+                filters.join(" AND ")
+            ))
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map(params_from_iter(values.iter()), |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        // A damaged stored vector only drops that notice from the semantic side.
+        let mut scored = rows
+            .into_iter()
+            .filter_map(|(id, dim, bytes)| {
+                let stored = super::intelligence::decode_embedding(dim, &bytes).ok()?;
+                let score = super::intelligence::cosine(vector, &stored)?;
+                score.is_finite().then_some((id, score))
+            })
+            .collect::<Vec<_>>();
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1).then(b.0.cmp(&a.0)));
+        let Some(best) = scored.first().map(|(_, score)| *score) else {
+            return Ok(Vec::new());
+        };
+        let floor = SEARCH_MIN_SCORE.max(best - SEARCH_MARGIN);
+        Ok(scored
+            .into_iter()
+            .take_while(|(_, score)| *score >= floor)
+            .take(SEARCH_LIMIT)
+            .map(|(id, _)| id)
+            .collect())
+    }
+    /// Search results in relevance order. Reciprocal rank fusion merges the
+    /// first `RANKED_TEXT_HEAD` text matches with semantic hits when a query
+    /// vector is given; later text matches follow in text order, so no text
+    /// match is ever dropped. Without a query this is the date-ordered list.
+    pub(crate) fn archive_ranked_query(
+        &self,
+        query: &ArchiveQuery,
+        semantic: Option<(&str, &[f32])>,
+    ) -> Result<ArchivePage, String> {
+        let terms = search_terms(&query.query)?;
+        if terms.is_empty() {
+            return self.archive_query(query);
+        }
+        let text_head = self.ranked_text_ids(query, &terms, "1=1", RANKED_TEXT_HEAD, 0)?;
+        let text_total: u64 = {
+            let (source, values, _, _) = self.ranked_text_sql(query, &terms, "1=1")?;
+            self.connection
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {source}"),
+                    params_from_iter(values.iter()),
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| e.to_string())? as u64
+        };
+        let semantic_hits = match semantic {
+            Some((model_sha256, vector)) => self.semantic_ids(query, model_sha256, vector)?,
+            None => Vec::new(),
+        };
+        let semantic_text = if semantic_hits.is_empty() {
+            Vec::new()
+        } else {
+            self.ranked_text_ids(
+                query,
+                &terms,
+                &format!("d.id IN ({})", id_list(&semantic_hits)),
+                semantic_hits.len(),
+                0,
+            )?
+        };
+        let mut fused = std::collections::HashMap::<i64, f64>::new();
+        for list in [&text_head, &semantic_hits] {
+            for (rank, id) in list.iter().enumerate() {
+                *fused.entry(*id).or_default() += 1.0 / (RRF_K + rank as f64 + 1.0);
+            }
+        }
+        let mut head = fused.into_iter().collect::<Vec<_>>();
+        head.sort_by(|a, b| b.1.total_cmp(&a.1).then(b.0.cmp(&a.0)));
+        let head = head.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+        let text_in_head = text_head
+            .iter()
+            .chain(&semantic_text)
+            .collect::<std::collections::HashSet<_>>()
+            .len() as u64;
+        let total = head.len() as u64 + text_total.saturating_sub(text_in_head);
+        let limit = query.limit.unwrap_or(30).clamp(1, 100) as usize;
+        let offset = query.offset as usize;
+        let mut ids = head
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .copied()
+            .collect::<Vec<_>>();
+        if !head.is_empty() && ids.len() < limit && offset + ids.len() >= head.len() {
+            ids.extend(self.ranked_text_ids(
+                query,
+                &terms,
+                &format!("d.id NOT IN ({})", id_list(&head)),
+                limit - ids.len(),
+                offset + ids.len() - head.len(),
+            )?);
+        }
+        let mut items = if ids.is_empty() {
+            Vec::new()
+        } else {
+            let mut statement = self
+                .connection
+                .prepare(&format!(
+                    "SELECT {ITEM_COLUMNS} FROM {ITEM_FROM} WHERE d.id IN ({})",
+                    id_list(&ids)
+                ))
+                .map_err(|e| e.to_string())?;
+            let mut found = statement
+                .query_map([], item_row)
+                .map_err(|e| e.to_string())?
+                .map(|item| item.map(|item| (item.id, item)))
+                .collect::<Result<std::collections::HashMap<_, _>, _>>()
+                .map_err(|e| e.to_string())?;
+            ids.iter()
+                .filter_map(|id| found.remove(id))
+                .collect::<Vec<_>>()
+        };
+        for item in &mut items {
+            item.snippet = excerpt(&item.snippet, &terms);
+        }
+        Ok(ArchivePage {
+            items,
+            total,
+            categories: self.archive_categories(query.source_id.as_deref())?,
+            meaning_only: semantic_hits
+                .into_iter()
+                .filter(|id| !semantic_text.contains(id))
+                .collect(),
+            semantic: semantic.is_some(),
         })
     }
     pub(crate) fn archive_summary(&self) -> Result<ArchiveSummary, String> {

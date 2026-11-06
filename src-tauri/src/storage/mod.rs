@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 mod archive;
+pub(crate) use archive::search_terms;
 #[cfg(test)]
 mod archive_tests;
 pub mod intelligence;
