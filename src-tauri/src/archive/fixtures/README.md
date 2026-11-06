@@ -149,6 +149,38 @@ are LF.
   external `youtu.be` link) that the sanitizer must drop; 2425 has one inline image
   and no attachments. View counts and dates are the capture values.
 
+
+The following bounded captures were obtained during the semiconductor source
+addition (2026-11-06), using public GETs only. Nothing was executed; only the page
+chrome outside `#inner_wrap` was removed, and line endings are LF.
+
+- `semiconductor-notice-list.html`, `semiconductor-notice-page2.html`,
+  `semiconductor-notice-last.html`: pages 1-3 of
+  `https://se.sogang.ac.kr/board/board_list.php?board_id=notice`. Page 1 has seven
+  repeated pins and ten regular rows (ordinals 25-16); page 2 has the same seven
+  pins and ten regular rows (15-6); page 3 has the pins and five regular rows
+  (5-1). The pager shows first/last links only where they exist.
+- `semiconductor-graduate-list.html`: the single page of `?board_id=notice_master`
+  with five pins and seven regular rows. `semiconductor-news-list.html` and
+  `semiconductor-news-last.html`: the two pages of `?board_id=news` (ten rows then
+  three, no pins). `semiconductor-careers-list.html`: the single page of
+  `?board_id=recruit` (ten rows). `semiconductor-industry-list.html`: the single
+  page of `?board_id=notice_industry` with one pin and six regular rows.
+- `semiconductor-notice-detail-36.html`: `?board_id=notice&no=36`; one
+  `/board/filedown.php` attachment (`출입권한신청서 TE605 ... .xlsx`).
+  `semiconductor-notice-detail-39.html`: `no=39`; text body and no attachments.
+- `semiconductor-news-detail-10.html`: `?board_id=news&no=10`; one same-host
+  `/smart_editor/upload/...png` editor image. `semiconductor-news-detail-14.html`:
+  `no=14`; three inline images on `ee.sogang.ac.kr/se2/`, which that host's
+  robots.txt disallows, so they stay recorded-but-unsupported references.
+- `semiconductor-graduate-detail-7.html`, `semiconductor-industry-detail-7.html`:
+  text bodies with no attachments for their board labels.
+- `semiconductor-careers-detail-11.html`: `?board_id=recruit&no=11`; four
+  `.docx` attachments and a large table-formatted body. The editor `data:` URI
+  image in some notices (for example `notice` 34) is not a fetchable resource; the
+  parser test injects one into a fixture to prove it is dropped while the text and
+  original response stay archived.
+
 ## Vision fixture
 
 - `vision/poster.png`: wholly synthetic Korean notice poster drawn locally with

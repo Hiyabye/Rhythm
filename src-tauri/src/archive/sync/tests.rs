@@ -454,6 +454,189 @@ async fn sitemap_listing_skips_an_unchanged_article_until_its_change_time_moves(
     .unwrap());
 }
 
+const SE_NOTICE_LIST_1: &str = include_str!("../fixtures/semiconductor-notice-list.html");
+const SE_NOTICE_LIST_2: &str = include_str!("../fixtures/semiconductor-notice-page2.html");
+const SE_NOTICE_LIST_3: &str = include_str!("../fixtures/semiconductor-notice-last.html");
+const SE_IMAGE: &str = "https://se.sogang.ac.kr/smart_editor/upload/1-2.png";
+const SE_ATTACHMENT: &str =
+    "https://se.sogang.ac.kr/board/filedown.php?filepath=abc&filename=%EC%95%88%EB%82%B4.pdf";
+
+fn semiconductor_detail(no: &str, revision: u64) -> String {
+    let (files, image) = if no == "39" {
+        (
+            "<div class=\"view_file\"><dl class=\"attachments\"><dt>첨부파일</dt><dd><ul>\
+             <li><a href=\"/board/filedown.php?filepath=abc&filename=안내.pdf\">안내.pdf</a></li>\
+             </ul></dd></dl></div>",
+            "<p><img src=\"/smart_editor/upload/1-2.png\" alt=\"안내\"></p>",
+        )
+    } else {
+        (
+            "<div class=\"view_file\"><dl class=\"attachments\"><dt>첨부파일</dt><dd><ul></ul></dd></dl></div>",
+            "",
+        )
+    };
+    format!(
+        "<!doctype html><html lang=\"ko\"><body>\
+         <h2 id=\"title\" class=\"pageName2\">학과 공지사항</h2>\
+         <div class=\"view_tit\"><h3 class=\"v_tit\">공지 {no} rev {revision}</h3>\
+         <p class=\"v_list\"><span>2026-10-12</span></p></div>\
+         {files}\
+         <div class=\"view_con\"><p>본문 {no} rev {revision}</p>{image}</div>\
+         <p class=\"btn_list\"><a href=\"/board/board_list.php?board_id=notice&page=1\">목록으로</a></p>\
+         </body></html>"
+    )
+}
+
+struct SemiconductorFake {
+    revision: AtomicU64,
+}
+impl Transport for SemiconductorFake {
+    async fn fetch<'a>(
+        &'a self,
+        url: &'a Url,
+        _validators: Option<(Option<String>, Option<String>)>,
+        _limit: usize,
+        _cancel: &AtomicBool,
+        _access: network::Access,
+    ) -> Result<network::Fetch, String> {
+        let body = |bytes: Vec<u8>, mime: &str| {
+            Ok(network::Fetch::Body {
+                bytes,
+                mime: Some(mime.into()),
+                etag: None,
+                last_modified: None,
+            })
+        };
+        if url.path() == "/robots.txt" {
+            return body(b"User-agent: *\nAllow: /\n".to_vec(), "text/plain");
+        }
+        let query = |key: &str| {
+            url.query_pairs()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value.into_owned())
+        };
+        if url.path() == "/board/board_list.php" {
+            let fixture = match (query("board_id").as_deref(), query("page").as_deref()) {
+                (Some("notice"), Some("1")) => SE_NOTICE_LIST_1,
+                (Some("notice"), Some("2")) => SE_NOTICE_LIST_2,
+                (Some("notice"), Some("3")) => SE_NOTICE_LIST_3,
+                _ => return Err(format!("예상하지 않은 모의 목록: {url}")),
+            };
+            return body(fixture.as_bytes().to_vec(), "text/html");
+        }
+        if url.path() == "/board/board_view.php" {
+            if query("board_id").as_deref() != Some("notice") {
+                return Err(format!("예상하지 않은 모의 원문: {url}"));
+            }
+            let no = query("no").ok_or("모의 원문 번호 없음")?;
+            return body(
+                semiconductor_detail(&no, self.revision.load(Ordering::Acquire)).into_bytes(),
+                "text/html",
+            );
+        }
+        if url.as_str() == SE_IMAGE {
+            return body(png(), "image/png");
+        }
+        if url.as_str() == SE_ATTACHMENT {
+            return body(PDF.to_vec(), "application/pdf");
+        }
+        Err(format!("예상하지 않은 모의 요청: {url}"))
+    }
+}
+
+#[tokio::test]
+async fn semiconductor_paging_pins_revisions_and_resources_survive_reopen() {
+    let (dir, store) = setup(&["se-notices"]);
+    let database = dir.path().join("rhythm.sqlite3");
+    let fake = SemiconductorFake {
+        revision: AtomicU64::new(1),
+    };
+    let controller = Controller::new();
+    let run_once = |mode: &'static str| {
+        controller.execute(
+            &store,
+            dir.path(),
+            &fake,
+            sources(&store, &["se-notices"]),
+            mode,
+            Budget::default(),
+        )
+    };
+    assert!(run_once("historical").await.is_ok());
+    assert_eq!(items(&store).len(), 32);
+    let source = with_store(&store, |s| s.source("se-notices")).unwrap();
+    assert!(source.history_complete);
+    assert_eq!(source.next_page, 4);
+    assert_eq!(source.archived, 32);
+    assert_eq!(source.failed, 0);
+
+    let id = with_store(&store, |s| s.document_id("se-notices", "39"))
+        .unwrap()
+        .unwrap();
+    let detail = with_store(&store, |s| s.document(id, None)).unwrap();
+    assert_eq!(detail.revisions.len(), 1);
+    assert!(detail.body_text.contains("rev 1"));
+    let attachments: Vec<_> = detail
+        .resources
+        .iter()
+        .filter(|resource| resource.kind == "attachment")
+        .collect();
+    let images: Vec<_> = detail
+        .resources
+        .iter()
+        .filter(|resource| resource.kind == "image")
+        .collect();
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(images.len(), 1);
+    assert_eq!(attachments[0].status, "downloaded");
+    assert_eq!(images[0].status, "downloaded");
+    assert_eq!(
+        local_resource(&store, dir.path(), attachments[0].id)
+            .await
+            .unwrap()
+            .1,
+        PDF
+    );
+    assert_eq!(
+        local_resource(&store, dir.path(), images[0].id)
+            .await
+            .unwrap()
+            .1,
+        png()
+    );
+
+    // The repeated pins were fetched once, not once per page.
+    assert!(with_store(&store, |s| s.document_id("se-notices", "34"))
+        .unwrap()
+        .is_some());
+
+    // An unchanged incremental pass adds no revision.
+    assert!(run_once("incremental").await.is_ok());
+    assert_eq!(items(&store).len(), 32);
+    let detail = with_store(&store, |s| s.document(id, None)).unwrap();
+    assert_eq!(detail.revisions.len(), 1);
+
+    // A changed article body becomes a new revision.
+    fake.revision.store(2, Ordering::Release);
+    assert!(run_once("incremental").await.is_ok());
+    let detail = with_store(&store, |s| s.document(id, None)).unwrap();
+    assert_eq!(detail.revisions.len(), 2);
+    assert!(detail.body_text.contains("rev 2"));
+    assert_eq!(detail.resources.len(), 2);
+
+    drop(store);
+    let offline = Arc::new(Mutex::new(Store::open(&database).unwrap()));
+    let detail = with_store(&offline, |s| s.document(id, None)).unwrap();
+    assert!(detail.body_text.contains("rev 2"));
+    assert_eq!(detail.revisions.len(), 2);
+    for resource in &detail.resources {
+        assert_eq!(resource.status, "downloaded");
+        assert!(local_resource(&offline, dir.path(), resource.id)
+            .await
+            .is_ok());
+    }
+}
+
 #[tokio::test]
 async fn refresh_checks_new_notices_then_continues_the_unfinished_backlog() {
     let (dir, store) = setup(&[MAIN]);

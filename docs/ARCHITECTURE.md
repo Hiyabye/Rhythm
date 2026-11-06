@@ -136,7 +136,7 @@ Results have deterministic publication-date/ID order, source/category and saved/
 
 ## Sources and parsers
 
-`archive/catalog.rs` has 35 stable source identities. **Catalog presence is not support.** Twenty-nine have verified list and detail extraction, resource handling and offline reopen:
+`archive/catalog.rs` has 35 stable source identities. **Catalog presence is not support.** Thirty-four have verified list and detail extraction, resource handling and offline reopen:
 
 | Source ID | Board |
 | --- | --- |
@@ -169,8 +169,13 @@ Results have deterministic publication-date/ID order, source/category and saved/
 | `me-careers` | 기계공학과 장학·취업정보 (`/ko/board/scholarship`) |
 | `me-events` | 기계공학과 외부 행사 (`/ko/board/events`) |
 | `me-alumni` | 기계공학과 동문·구성원 소식 (`/ko/board/alumni_news`) |
+| `se-notices` | 반도체공학과 학과 공지사항 (`/board/board_list.php?board_id=notice`) |
+| `se-graduate` | 반도체공학과 대학원 공지사항 (`?board_id=notice_master`) |
+| `se-news` | 반도체공학과 학과소식 (`?board_id=news`) |
+| `se-careers` | 반도체공학과 채용/홍보 (`?board_id=recruit`) |
+| `se-industry` | 반도체공학과 산학연 공지사항 (`?board_id=notice_industry`) |
 
-The other 6 (Engineering newsletter and the five Semiconductor boards) are shown as unsupported and cannot be subscribed. Support needs verified article and resource extraction plus fixtures, not just a working list URL.
+The other source (the Engineering newsletter) is shown as unsupported and cannot be subscribed. Support needs verified article and resource extraction plus fixtures, not just a working list URL.
 
 `parser.rs` validates board/article identity, metadata, dates, pagination and response structure. The main board uses public paginated JSON list/detail endpoints; HTML error pages are not accepted as JSON, and listings must agree on size, total, page, pins and duplicates. Computing uses desktop `.board-list table` rows (so mobile pin copies don't distort pagination), extracts `article.board-detail`, and reads attachment metadata from a restricted subset of serialized Nuxt data without running JavaScript; its public route ID, internal `DETAIL.SN` and file path must all agree, and inline image roles win when an attachment shares the URL. `engineering.rs` validates the current SSR canonical/form/board/pagination identity, ordinals, full title and body, attachment names and visible Korean time against machine UTC. Unexpected structure is an explicit source failure, never an empty success. Fixture provenance is in `archive/fixtures/README.md`.
 
@@ -243,7 +248,7 @@ A click restores the existing window and emits `proactive://notification-clicked
 
 ## Transport, resources and safe rendering
 
-`archive/network.rs` uses native Reqwest/Rustls. Automatic requests need exact approved HTTPS hosts and routes on port 443 (main, Computing, Engineering, the Electronic/System Semiconductor community boards, the dormitory CMS and the Mechanical sitemap/article routes). URLs with credentials, fragments or unsafe encoded separators are rejected. DNS answers must be public and are pinned per connection; proxies and automatic redirects are off. The sync policy layer follows at most three same-origin redirects, re-running URL/DNS/TLS checks and robots authorization before each hop; transport only returns redirect targets. HTTP(S) resource references are kept as metadata so an old HTTP image doesn't discard the article, but only approved HTTPS routes are downloaded. Main images under `/dataview/board/<id>/<file>.(png|jpg|jpeg|gif|webp)` are an approved route. The community hosts approve only their `/kor/community` (and ee `/kor/recruit`) article pages plus ee `/aseoul_bbs/down.php`; their robots-disallowed `/se2/`, `/data/` and sse `/bbs/` routes are never requested, so those resources are recorded as unsupported. Requests carry an access mode: `Source` allows only those routes; `EmbeddedImage`, used for image resources only, also allows any other public HTTPS host name on port 443 (no IP literals, no other `*.sogang.ac.kr` route). Each such origin's robots.txt is loaded once per job and cached (including a failure); a 4xx robots.txt from such a host means no rules (RFC 9309), while a school host's error stays fatal. Third-party attachments are not downloaded.
+`archive/network.rs` uses native Reqwest/Rustls. Automatic requests need exact approved HTTPS hosts and routes on port 443 (main, Computing, Engineering, the Electronic/System Semiconductor community boards, the dormitory CMS, the Mechanical sitemap/article routes and the Semiconductor board list/detail, filedown and editor-image routes). URLs with credentials, fragments or unsafe encoded separators are rejected. DNS answers must be public and are pinned per connection; proxies and automatic redirects are off. The sync policy layer follows at most three same-origin redirects, re-running URL/DNS/TLS checks and robots authorization before each hop; transport only returns redirect targets. HTTP(S) resource references are kept as metadata so an old HTTP image doesn't discard the article, but only approved HTTPS routes are downloaded. Main images under `/dataview/board/<id>/<file>.(png|jpg|jpeg|gif|webp)` are an approved route. The community hosts approve only their `/kor/community` (and ee `/kor/recruit`) article pages plus ee `/aseoul_bbs/down.php`; their robots-disallowed `/se2/`, `/data/` and sse `/bbs/` routes are never requested, so those resources are recorded as unsupported. Requests carry an access mode: `Source` allows only those routes; `EmbeddedImage`, used for image resources only, also allows any other public HTTPS host name on port 443 (no IP literals, no other `*.sogang.ac.kr` route). Each such origin's robots.txt is loaded once per job and cached (including a failure); a 4xx robots.txt from such a host means no rules (RFC 9309), while a school host's error stays fatal. Third-party attachments are not downloaded.
 
 Requests are paced at least 650 ms apart. `robots.txt` is checked before collection (plain-text Accept header; Computing returns 406 otherwise); allow/disallow rules with wildcard and end-anchor matching and crawl delays up to 60 seconds apply, and malformed delays or HTML error pages fail closed. Transient errors get at most three attempts with short backoff, connect/request/attempt deadlines and cancellable waits. HTTP 429 stops with a message. No login, access restriction or anti-bot bypass is used.
 

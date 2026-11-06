@@ -12,6 +12,8 @@ mod dormitory;
 mod engineering;
 #[path = "mechanical.rs"]
 mod mechanical;
+#[path = "semiconductor.rs"]
+mod semiconductor;
 
 const PARSER_ERROR: &str = "학교 페이지 형식이 예상과 다릅니다. 기존 보관 자료는 유지됩니다.";
 fn invalid<T>() -> Result<T, String> {
@@ -137,6 +139,9 @@ pub fn list_url(source: &SourceDefinition, page: u32) -> Result<Url, String> {
     if source.family == "mechanical" {
         return mechanical::list_url(source, page);
     }
+    if source.family == "semiconductor" {
+        return semiconductor::list_url(source, page);
+    }
     if source.id == "sogang-academic" {
         let mut url =
             Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData/boardList").unwrap();
@@ -177,6 +182,9 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
     if source.family == "mechanical" {
         return mechanical::detail_url(source, entry);
     }
+    if source.family == "semiconductor" {
+        return semiconductor::detail_url(source, entry);
+    }
     if source.id == "sogang-academic" {
         let mut url = Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData").unwrap();
         url.query_pairs_mut()
@@ -209,6 +217,8 @@ pub fn listing(source: &SourceDefinition, page: u32, body: &str) -> Result<Listi
         dormitory::listing(source, page, body)
     } else if source.family == "mechanical" {
         mechanical::listing(source, page, body)
+    } else if source.family == "semiconductor" {
+        semiconductor::listing(source, page, body)
     } else if source.id == "sogang-academic" {
         main_listing(page, body)
     } else {
@@ -435,6 +445,9 @@ pub fn article(
     }
     if source.family == "mechanical" {
         return mechanical::article(source, entry, body);
+    }
+    if source.family == "semiconductor" {
+        return semiconductor::article(source, entry, body);
     }
     let (title, author, category, published_at, modified_at, content, mut resources) =
         if source.id == "sogang-academic" {

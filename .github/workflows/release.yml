@@ -83,11 +83,11 @@ jobs:
   desktop:
     name: macOS Apple Silicon DMG
     needs: validate
-    runs-on: macos-14
+    runs-on: macos-15
     environment: release
     env:
       CARGO_TERM_COLOR: always
-      # macos-14 has 3 vCPUs and 7 GB; a cold build with 3 jobs never swapped.
+      # macos-15 (arm64) has 3 vCPUs and 7 GB; a cold build with 3 jobs never swapped.
       CARGO_BUILD_JOBS: 3
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0

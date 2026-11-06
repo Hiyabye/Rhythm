@@ -404,6 +404,35 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
                 && positive_id(parts[3]);
             path == "/sitemap.xml" || article || path == "/robots.txt"
         }
+        "se.sogang.ac.kr" => {
+            let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+            // robots.txt allows every path, but only these exact routes are
+            // requested: the board list/detail query routes, the filedown
+            // attachment route and same-host editor images. Query keys and values
+            // are bound so an arbitrary query never reaches another PHP route.
+            let list = parts.len() == 2
+                && parts[..2] == ["board", "board_list.php"]
+                && exact_query(
+                    url,
+                    &[("board_id", semiconductor_board), ("page", positive_id)],
+                );
+            let article = parts.len() == 2
+                && parts[..2] == ["board", "board_view.php"]
+                && exact_query(
+                    url,
+                    &[("board_id", semiconductor_board), ("no", positive_id)],
+                );
+            let attachment = parts.len() == 2
+                && parts[..2] == ["board", "filedown.php"]
+                && exact_query(
+                    url,
+                    &[("filepath", bounded_value), ("filename", downloadable_name)],
+                );
+            let image = parts.len() == 3
+                && parts[..2] == ["smart_editor", "upload"]
+                && editor_image(parts[2]);
+            list || article || attachment || image || path == "/robots.txt"
+        }
         "sse.sogang.ac.kr" => {
             let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
             // robots.txt disallows /se2/, /data/ and /bbs/, so attachments and
@@ -457,6 +486,64 @@ fn positive_id(value: &str) -> bool {
     !value.is_empty()
         && value.bytes().all(|b| b.is_ascii_digit())
         && value.parse::<u64>().is_ok_and(|id| id > 0)
+}
+fn semiconductor_board(value: &str) -> bool {
+    [
+        "notice",
+        "notice_master",
+        "news",
+        "recruit",
+        "notice_industry",
+    ]
+    .contains(&value)
+}
+fn bounded_value(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 2048 && !value.chars().any(char::is_control)
+}
+fn downloadable_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 512
+        && !value.contains(['/', '\\'])
+        && !value.chars().any(char::is_control)
+        && {
+            let lower = value.to_ascii_lowercase();
+            [
+                ".pdf", ".hwp", ".hwpx", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip",
+                ".txt", ".png", ".jpg", ".jpeg", ".gif", ".webp",
+            ]
+            .iter()
+            .any(|extension| lower.ends_with(extension))
+        }
+}
+fn editor_image(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 512
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+        && raster_name(name)
+}
+type QueryRule = (&'static str, fn(&str) -> bool);
+/// Requires exactly the listed query keys once each, with a validating predicate
+/// per key. The order is not significant.
+fn exact_query(url: &Url, allowed: &[QueryRule]) -> bool {
+    let pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    if pairs.len() != allowed.len() {
+        return false;
+    }
+    for (name, check) in allowed {
+        let mut matches = pairs.iter().filter(|(key, _)| key.as_str() == *name);
+        let Some((_, value)) = matches.next() else {
+            return false;
+        };
+        if matches.next().is_some() || !check(value) {
+            return false;
+        }
+    }
+    true
 }
 fn public_ip(address: IpAddr) -> bool {
     match address {
@@ -695,6 +782,71 @@ mod tests {
             assert!(validate_url(&url).is_err(), "{path}");
             assert!(validate(&url, Access::EmbeddedImage).is_err(), "{path}");
         }
+    }
+
+    #[test]
+    fn semiconductor_policy_is_limited_to_exact_board_routes_and_resources() {
+        for path in [
+            "/robots.txt",
+            "/board/board_list.php?board_id=notice&page=1",
+            "/board/board_list.php?board_id=notice_master&page=3",
+            "/board/board_list.php?board_id=news&page=2",
+            "/board/board_list.php?board_id=recruit&page=1",
+            "/board/board_list.php?board_id=notice_industry&page=1",
+            "/board/board_view.php?board_id=notice&no=39",
+            "/board/board_view.php?board_id=notice_master&no=7",
+            "/board/board_view.php?board_id=news&no=10",
+            "/board/board_view.php?board_id=recruit&no=11",
+            "/board/board_view.php?board_id=notice_industry&no=7",
+            "/board/filedown.php?filepath=wXJClutf9n%2FgtLi2zZE7x&filename=a.pdf",
+            "/board/filedown.php?filepath=abc&filename=출입권한신청서.xlsx",
+            "/smart_editor/upload/1781851902-601781851902268.png",
+        ] {
+            assert!(
+                validate_url(&Url::parse(&format!("https://se.sogang.ac.kr{path}")).unwrap())
+                    .is_ok(),
+                "{path}"
+            );
+        }
+        for path in [
+            // Only the five catalogued boards and the exact list/detail queries.
+            "/board/board_list.php?board_id=unknown&page=1",
+            "/board/board_list.php?board_id=notice",
+            "/board/board_list.php?board_id=notice&page=0",
+            "/board/board_list.php?board_id=notice&page=x",
+            "/board/board_list.php?board_id=notice&page=1&extra=1",
+            "/board/board_view.php?board_id=notice",
+            "/board/board_view.php?board_id=notice&no=0",
+            "/board/board_view.php?board_id=notice&no=39&page=1",
+            "/board/board_view.php?board_id=unknown&no=39",
+            "/board/board_view.php?board_id=notice&no=39&no=40",
+            "/board/board_view.php?board_id=notice&no=39&extra=1",
+            // Attachment names must be bounded and use a supported extension.
+            "/board/filedown.php?filepath=abc",
+            "/board/filedown.php?filepath=&filename=a.pdf",
+            "/board/filedown.php?filepath=abc&filename=a.exe",
+            "/board/filedown.php?filepath=abc&filename=dir/a.pdf",
+            "/board/filedown.php?filepath=abc&filename=a.pdf&extra=1",
+            // Editor images stay inside the upload directory and are rasters.
+            "/smart_editor/upload/nested/a.png",
+            "/smart_editor/upload/a.svg",
+            "/smart_editor/upload/../a.png",
+            "/smart_editor/binary/a.png",
+            // This host serves board pages only; /se2/ and /data/ are not routes
+            // here and other school hosts' inline images remain blocked.
+            "/se2/photo_uploader/upload/1792979823.png",
+            "/data/bbsData/0635011001792981167.png",
+            "/board/board_view.php/extra?board_id=notice&no=39",
+        ] {
+            let url = Url::parse(&format!("https://se.sogang.ac.kr{path}")).unwrap();
+            assert!(validate_url(&url).is_err(), "{path}");
+            assert!(validate(&url, Access::EmbeddedImage).is_err(), "{path}");
+        }
+        let insecure =
+            Url::parse("http://se.sogang.ac.kr/board/board_list.php?board_id=notice&page=1")
+                .unwrap();
+        assert!(validate_url(&insecure).is_err());
+        assert!(validate(&insecure, Access::EmbeddedImage).is_err());
     }
 
     #[test]
