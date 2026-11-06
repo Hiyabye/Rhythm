@@ -577,3 +577,25 @@ test('switching the remote API address clears consent and key presence', async (
   await expect(page.getByRole('group', { name: '원격 AI 사용 동의' })).toBeVisible();
   await expect(page.getByText('키가 저장되어 있지 않습니다', { exact: false })).toBeVisible();
 });
+
+test('the remote engine does not demand local AI setup', async ({ page }) => {
+  await mockDesktop(page, {
+    aiSetupNeeded: true,
+    aiEngine: 'openai-compatible',
+    aiRemoteBase: 'https://api.example.com',
+    aiRemoteModel: 'test-model',
+  });
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: '로컬 AI 설정하기' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '받은 소식', exact: true })).toBeVisible();
+});
+
+test('choosing the remote engine removes the local setup banner', async ({ page }) => {
+  await mockDesktop(page, { aiSetupNeeded: true });
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: '로컬 AI 설정하기' })).toBeVisible();
+  await openSettings(page, 'AI');
+  await page.locator('#ai-engine').selectOption('openai-compatible');
+  await page.getByRole('button', { name: '오늘', exact: true }).click();
+  await expect(page.getByRole('button', { name: '로컬 AI 설정하기' })).toHaveCount(0);
+});

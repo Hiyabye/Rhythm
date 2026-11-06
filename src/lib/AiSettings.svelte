@@ -86,7 +86,7 @@
       if (!disposed) {
         data = next; fetchError = '';
         executionMode = next.preferences.execution_mode ?? 'auto';
-        if (next.preferences.setup_completed && !setupReported) { setupReported = true; onsetup?.(); }
+        if ((next.preferences.setup_completed || next.preferences.engine === 'openai-compatible') && !setupReported) { setupReported = true; onsetup?.(); }
       }
     }
     catch (reason) { if (!disposed) fetchError = archiveError(reason); }
