@@ -20,6 +20,14 @@
   let removal = $state<string | null>(null);
   let projectorRemoval = $state<string | null>(null);
   let executionMode = $state<AiPreferences['execution_mode']>('auto');
+  let remoteBaseUrl = $state('');
+  let remoteModel = $state('');
+  let remoteEmbeddingModel = $state('');
+  let remoteKey = $state('');
+  let keyPresent = $state<boolean | null>(null);
+  let keyChecked = false;
+  let remoteInitialized = false;
+  let testing = $state(false);
   let advancedOpen = $state(false);
   let disposed = false;
   let refreshing = false;
@@ -49,6 +57,20 @@
   const classificationLabel: Record<string, string> = { idle: '대기 중', classifying: '공지를 분류하는 중', waiting: '분류할 공지를 기다리는 중', disabled: '꺼짐', failed: '분류 모델을 확인하지 못했습니다' };
 
   $effect(() => { if (data?.model_storage.error) advancedOpen = true; });
+  $effect(() => {
+    if (data && !remoteInitialized) {
+      remoteInitialized = true;
+      remoteBaseUrl = data.preferences.remote_base_url ?? '';
+      remoteModel = data.preferences.remote_model ?? '';
+      remoteEmbeddingModel = data.preferences.remote_embedding_model ?? '';
+    }
+  });
+  $effect(() => {
+    if (desktop && data?.preferences.engine === 'openai-compatible' && !keyChecked) {
+      keyChecked = true;
+      void checkKey();
+    }
+  });
 
   onMount(() => {
     if (desktop) void refresh();
@@ -88,6 +110,48 @@
     } catch (reason) { if (!disposed) error = archiveError(reason); }
     finally { if (!disposed) cancelling = false; }
   }
+  async function checkKey() {
+    if (!desktop || disposed) return;
+    try {
+      const value = await invoke<boolean>('ai_remote_status');
+      if (!disposed) keyPresent = value;
+    } catch { if (!disposed) keyPresent = null; }
+  }
+  async function saveRemoteKey() {
+    if (controlsBusy || !remoteKey.trim()) return;
+    busy = true; error = ''; feedback = '';
+    try {
+      await invoke('ai_remote_key', { key: remoteKey });
+      if (!disposed) { remoteKey = ''; keyPresent = true; feedback = 'API 키를 운영체제 보안 저장소에 저장했습니다.'; await refresh(); }
+    } catch (reason) { if (!disposed) { error = archiveError(reason); await refresh(); } }
+    finally { if (!disposed) busy = false; }
+  }
+  async function clearRemoteKey() {
+    if (controlsBusy) return;
+    busy = true; error = ''; feedback = '';
+    try {
+      await invoke('ai_remote_key_clear');
+      if (!disposed) { keyPresent = false; feedback = '저장된 API 키를 삭제했습니다.'; await refresh(); }
+    } catch (reason) { if (!disposed) { error = archiveError(reason); await refresh(); } }
+    finally { if (!disposed) busy = false; }
+  }
+  async function testRemote() {
+    if (controlsBusy || testing) return;
+    testing = true; error = ''; feedback = '';
+    try {
+      const message = await invoke<string>('ai_remote_test');
+      if (!disposed) { feedback = message; keyPresent = true; }
+    } catch (reason) { if (!disposed) error = archiveError(reason); }
+    finally { if (!disposed) testing = false; }
+  }
+  async function saveRemoteBase() {
+    await preference({ remote_base_url: remoteBaseUrl.trim() || null }, 'API 주소를 저장했습니다. 주소가 바뀌면 다시 동의해야 합니다.');
+    if (!disposed) {
+      remoteBaseUrl = data?.preferences.remote_base_url ?? remoteBaseUrl.trim();
+      keyPresent = data?.remote_key_present ?? null;
+      keyChecked = false;
+    }
+  }
   async function chooseModelDirectory() {
     if (controlsBusy || data?.busy) return;
     busy = true; error = ''; feedback = '';
@@ -100,9 +164,9 @@
     } catch (reason) { if (!disposed) { error = archiveError(reason); await refresh(); } }
     finally { if (!disposed) busy = false; }
   }
-  async function preference(patch: Partial<Omit<AiPreferences, 'model_directory'>>) {
+  async function preference(patch: Partial<Omit<AiPreferences, 'model_directory'>>, success = 'AI 설정을 저장했습니다.') {
     if (!data) return;
-    await action('ai_preferences', { preferences: { ...data.preferences, ...patch } }, 'AI 설정을 저장했습니다.');
+    await action('ai_preferences', { preferences: { ...data.preferences, ...patch } }, success);
   }
   function engineLabel(snapshot: AiSnapshot) {
     const state = snapshot.runtime.state;
@@ -120,7 +184,70 @@
   {#if fetchError}<p class="archive-error" role="alert">{fetchError}</p><button class="text-button" onclick={refresh}>모델 정보 다시 확인</button>{/if}
   <p class="archive-feedback" role="status">{feedback}</p>
   {#if data}
-    {#if !data.preferences.setup_completed}
+    <h3 class="settings-group-title">AI 엔진 선택</h3>
+    <div class="settings-group" role="group" aria-label="AI 엔진 선택">
+      <div class="settings-row">
+        <span class="row-label"><label for="ai-engine">추론 엔진</label><Hint label="추론 엔진">로컬은 앱에 포함된 llama.cpp를 이 기기에서 실행합니다. OpenAI 호환 API는 사용자가 지정한 외부 주소로 공지 제목과 본문을 보내 분석합니다. 로컬이 기본이며 언제든 되돌릴 수 있습니다.</Hint><span class="row-detail">{data.preferences.engine === 'openai-compatible' ? `원격 · ${data.remote_host ?? '주소 미설정'}` : '이 기기에서 실행'}</span></span>
+        <select id="ai-engine" value={data.preferences.engine} disabled={controlsBusy} onchange={(event) => preference({ engine: event.currentTarget.value as AiPreferences['engine'] }, event.currentTarget.value === 'openai-compatible' ? '원격 AI 엔진을 선택했습니다. 주소와 모델을 설정하고 동의해 주세요.' : '로컬 AI 엔진으로 되돌렸습니다.')}>
+          <option value="local">로컬 (기본)</option>
+          <option value="openai-compatible">OpenAI 호환 API</option>
+        </select>
+      </div>
+      {#if data.preferences.engine === 'openai-compatible'}
+        <div class="settings-row stacked">
+          <span class="row-label"><label for="ai-remote-base">API 주소</label><Hint label="API 주소">OpenAI, OpenRouter, Groq, Ollama, LM Studio, vLLM처럼 OpenAI 호환 API를 제공하는 주소입니다. HTTPS만 사용하며, 로컬 서버는 http://127.0.0.1, http://[::1], http://localhost만 허용합니다. 리디렉션과 프록시는 따르지 않습니다.</Hint></span>
+          <div class="field-with-button"><input id="ai-remote-base" type="text" bind:value={remoteBaseUrl} placeholder="https://api.example.com/v1" spellcheck="false" disabled={controlsBusy} /><button class="button secondary small" disabled={controlsBusy} onclick={saveRemoteBase}>주소 저장</button></div>
+          {#if data.remote_host}<p class="row-detail">현재 연결 대상: {data.remote_host}</p>{/if}
+        </div>
+        <div class="settings-row">
+          <span class="row-label"><label for="ai-remote-model">모델 이름</label><Hint label="모델 이름">제공자 콘솔에 표시되는 모델 ID를 입력합니다. 기본값을 미리 채우지 않습니다.</Hint></span>
+          <div class="field-with-button"><input id="ai-remote-model" type="text" bind:value={remoteModel} placeholder="모델 ID" spellcheck="false" disabled={controlsBusy} onchange={() => preference({ remote_model: remoteModel.trim() || null }, '원격 모델 이름을 저장했습니다.')} /></div>
+        </div>
+        <div class="settings-row">
+          <span class="row-label"><label for="ai-remote-timeout">요청 제한 시간(초)</label><Hint label="요청 제한 시간">10초에서 600초 사이입니다. 시간 초과 시 요청을 중단하며 자동으로 다시 보내지 않습니다.</Hint></span>
+          <input id="ai-remote-timeout" class="number-field" type="number" min="10" max="600" value={data.preferences.remote_timeout_seconds} disabled={controlsBusy} onchange={(event) => preference({ remote_timeout_seconds: Number(event.currentTarget.value) }, '요청 제한 시간을 저장했습니다.')} />
+        </div>
+        <div class="settings-row stacked">
+          <span class="row-label">API 키<Hint label="API 키">운영체제 보안 저장소(Keychain 또는 Credential Manager)에만 저장합니다. Rhythm 데이터베이스, 백업, 진단에 포함되지 않으며 화면에 다시 표시하지 않습니다.</Hint><span class="row-detail">{keyPresent === true ? '저장된 키 사용 중' : keyPresent === false ? '키가 저장되어 있지 않습니다' : '키 상태 확인 필요'}</span></span>
+          <div class="field-with-button"><input id="ai-remote-key" aria-label="API 키" type="password" bind:value={remoteKey} placeholder={keyPresent ? '새 키를 입력해 교체' : 'API 키 입력'} spellcheck="false" autocomplete="off" disabled={controlsBusy} /><button class="button secondary small" disabled={controlsBusy || !remoteKey.trim()} onclick={saveRemoteKey}>키 저장</button></div>
+          <div class="popover-actions">
+            <button class="text-button" disabled={controlsBusy || keyPresent !== true} onclick={clearRemoteKey}>저장된 키 삭제</button>
+            <button class="text-button" disabled={controlsBusy || testing || !data.preferences.remote_consent || !data.preferences.remote_model} onclick={testRemote}>{testing ? '확인하는 중…' : '연결 확인'}</button>
+          </div>
+          <p class="row-detail">연결 확인은 공지 내용을 보내지 않고 짧은 시험 요청 한 번만 보냅니다.</p>
+        </div>
+        {#if !data.preferences.remote_consent}
+          <div class="ai-confirm" role="group" aria-label="원격 AI 사용 동의">
+            <p><strong>{data.remote_host ?? '입력한 API 주소'}</strong>로 공지 제목·본문과 분석 지시문을 보냅니다. 관심사, 프로필, 피드백, 저장·읽음 상태, 보관함 식별자, 기기 정보는 보내지 않습니다. 보낸 내용에는 제공자의 데이터 정책이 적용됩니다.</p>
+            <p class="footnote">주소를 바꾸면 동의가 초기화됩니다. 원격 전송을 원하지 않으면 로컬 엔진을 사용하세요.</p>
+            <div class="popover-actions"><button class="button secondary small" disabled={controlsBusy || !data.preferences.remote_base_url || !data.preferences.remote_model} onclick={() => preference({ remote_consent: true }, '원격 AI 사용에 동의했습니다.')}>동의하고 사용</button></div>
+          </div>
+        {:else}
+          <div class="settings-row"><span class="row-label">원격 전송에 동의함<span class="row-detail">API 주소를 바꾸면 다시 동의해야 합니다.</span></span></div>
+        {/if}
+        <div class="settings-row">
+          <span class="row-label"><label for="ai-remote-automatic">자동 원격 분석</label><Hint label="자동 원격 분석">최근 공지 소량 분석이나 쉬는 동안 전체 분석이 원격 API를 호출하면 비용이 발생할 수 있습니다. 그래서 별도로 켜야 하며 하루 한도가 있습니다. 직접 요청한 분석은 한도에 포함되지 않습니다.</Hint></span>
+          <input id="ai-remote-automatic" type="checkbox" checked={data.preferences.remote_automatic} disabled={controlsBusy || !data.preferences.remote_consent || keyPresent !== true || !data.preferences.remote_model} onchange={(event) => preference({ remote_automatic: event.currentTarget.checked }, event.currentTarget.checked ? '자동 원격 분석을 켰습니다. 하루 한도까지 실행합니다.' : '자동 원격 분석을 껐습니다. 직접 요청만 원격으로 실행합니다.')} />
+        </div>
+        {#if data.preferences.remote_automatic}
+          <div class="settings-row"><label class="row-label" for="ai-remote-limit">하루 자동 분석 한도</label><input id="ai-remote-limit" class="number-field" type="number" min="1" max="200" value={data.preferences.remote_daily_limit} disabled={controlsBusy} onchange={(event) => preference({ remote_daily_limit: Number(event.currentTarget.value) }, '하루 자동 분석 한도를 저장했습니다.')} /></div>
+          <p class="row-detail">오늘 자동 시도 {data.remote_usage_today ?? 0}회 / 최대 {data.preferences.remote_daily_limit}회. 직접 요청은 포함되지 않습니다.</p>
+        {/if}
+        <div class="settings-row">
+          <span class="row-label"><label for="ai-remote-embeddings">원격 공지 분류</label><Hint label="원격 공지 분류">공지 제목과 본문 앞부분을 원격 임베딩 API로 보내 분류합니다. 자동으로 실행되며, 끄면 설치한 로컬 분류 모델을 사용합니다. 분류 결과는 추천 순위나 알림에 사용하지 않습니다.</Hint></span>
+          <input id="ai-remote-embeddings" type="checkbox" checked={data.preferences.remote_embeddings} disabled={controlsBusy || !data.preferences.remote_consent || keyPresent !== true} onchange={(event) => preference({ remote_embeddings: event.currentTarget.checked }, event.currentTarget.checked ? '원격 공지 분류를 켰습니다.' : '원격 공지 분류를 껐습니다. 로컬 분류 모델을 사용합니다.')} />
+        </div>
+        {#if data.preferences.remote_embeddings}
+          <div class="settings-row stacked">
+            <span class="row-label"><label for="ai-remote-embedding-model">원격 분류 모델 이름</label><Hint label="원격 분류 모델">임베딩 API의 모델 ID입니다. 요약 모델과 다를 수 있습니다.</Hint></span>
+            <input id="ai-remote-embedding-model" type="text" bind:value={remoteEmbeddingModel} placeholder="임베딩 모델 ID" spellcheck="false" disabled={controlsBusy} onchange={() => preference({ remote_embedding_model: remoteEmbeddingModel.trim() || null }, '원격 분류 모델 이름을 저장했습니다.')} />
+          </div>
+          <p class="row-detail">원격 분류는 새 공지와 아직 분류하지 않은 공지를 자동으로 처리합니다. 원격 전송을 원하지 않으면 이 스위치를 끄세요.</p>
+        {/if}
+      {/if}
+    </div>
+
+    {#if data.preferences.engine === 'local' && !data.preferences.setup_completed}
       <div class="ai-setup">
         <div class="setup-title"><h3>로컬 AI 시작하기</h3><Hint label="로컬 AI 시작하기">모델 설치는 직접 누를 때만 시작합니다. 마지막 단계에서 짧은 로컬 추론으로 실제 동작을 확인합니다. 준비하지 않아도 보관한 공지는 읽고 검색할 수 있습니다.</Hint></div>
         <ol class="setup-steps">
@@ -209,7 +336,9 @@
 
     <h3 class="settings-group-title" id="ai-classification">공지 분류</h3>
     <div class="settings-group" role="group" aria-label="공지 분류">
-      {#if !embeddingEntry && !embeddingModel}
+      {#if data.preferences.engine === 'openai-compatible' && data.preferences.remote_embeddings}
+        <div class="settings-row stacked"><span class="row-label">원격 분류 사용 중<Hint label="원격 분류">공지 제목과 본문 앞부분을 원격 임베딩 API로 보냅니다. 아래 로컬 분류 모델은 사용하지 않으며, 위 AI 엔진 선택에서 원격 분류를 끄면 다시 사용합니다.</Hint><span class="row-detail">{data.preferences.remote_embedding_model ?? '분류 모델 이름을 입력해 주세요.'}{#if data.classification.detail} · {data.classification.detail}{/if}</span></span></div>
+      {:else if !embeddingEntry && !embeddingModel}
         <div class="settings-row"><span class="row-label">분류 모델을 제공하지 않는 빌드입니다.</span></div>
       {:else}
         <div class="settings-row stacked">

@@ -14,6 +14,7 @@ pub mod maintenance;
 pub(crate) mod model_storage;
 pub mod models;
 pub mod operations;
+pub mod remote;
 mod server;
 #[cfg(test)]
 mod test_worker;

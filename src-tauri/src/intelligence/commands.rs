@@ -1,4 +1,4 @@
-use super::{analysis, classification, models, operations, WorkerStatus};
+use super::{analysis, classification, models, operations, remote, WorkerStatus};
 use crate::{
     storage::intelligence::{
         AiClassification, AiJob, AiModel, AiPreferences, AiProjector, AiResult,
@@ -90,6 +90,10 @@ pub struct Snapshot {
     progress: Option<analysis::Diagnostics>,
     analysis_contract: AnalysisContract,
     classification: classification::Status,
+    /// Cached credential-store presence. `None` until `ai_remote_status` reads it.
+    remote_key_present: Option<bool>,
+    remote_usage_today: u32,
+    remote_host: Option<String>,
 }
 #[derive(Serialize)]
 pub struct AnalysisContract {
@@ -274,21 +278,39 @@ pub async fn ai_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, 
             jobs,
         ))
     })?;
-    let configuration_hash = preferences
-        .active_model_id
-        .as_ref()
-        .and_then(|id| models.iter().find(|model| &model.id == id))
-        .and_then(|model| {
-            analysis::key_for_mode(
-                0,
-                0,
-                model,
-                preferences.max_tokens,
-                &preferences.execution_mode,
-            )
+    let configuration_hash = if preferences.engine == "openai-compatible" {
+        remote::GenerationConfig::from_preferences(&preferences)
             .ok()
-        })
-        .map(|key| key.configuration_hash);
+            .and_then(|config| analysis::key_for_remote(0, 0, &config, preferences.max_tokens).ok())
+            .map(|key| key.configuration_hash)
+    } else {
+        preferences
+            .active_model_id
+            .as_ref()
+            .and_then(|id| models.iter().find(|model| &model.id == id))
+            .and_then(|model| {
+                analysis::key_for_mode(
+                    0,
+                    0,
+                    model,
+                    preferences.max_tokens,
+                    &preferences.execution_mode,
+                )
+                .ok()
+            })
+            .map(|key| key.configuration_hash)
+    };
+    let remote_host = preferences
+        .remote_base_url
+        .as_deref()
+        .and_then(|value| remote::Endpoint::parse(value).ok())
+        .map(|endpoint| endpoint.host().to_owned());
+    let remote_key_present = preferences
+        .remote_base_url
+        .as_deref()
+        .and_then(|value| remote::Endpoint::parse(value).ok())
+        .and_then(|endpoint| state.remote.cached_present(endpoint.origin()));
+    let remote_usage_today = with_store(&state, |store| store.ai_remote_usage_today())?;
     let initial_hardware = state.hardware.clone();
     let root = state.data_root.clone();
     let directory = preferences.model_directory.clone();
@@ -319,7 +341,84 @@ pub async fn ai_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, 
             configuration_hash,
         },
         classification: state.classifier.status(),
+        remote_key_present,
+        remote_usage_today,
+        remote_host,
     })
+}
+
+fn remote_origin(state: &AppState) -> Result<remote::Endpoint, String> {
+    let preferences = with_store(state, |store| store.ai_preferences())?;
+    remote::Endpoint::parse(
+        preferences
+            .remote_base_url
+            .as_deref()
+            .ok_or("원격 API 주소를 먼저 입력해 주세요.")?,
+    )
+}
+
+/// Reads credential-store presence once per Settings mount. The key itself
+/// never crosses the command boundary.
+#[tauri::command]
+pub async fn ai_remote_status(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    check_open(&state)?;
+    let endpoint = remote_origin(&state)?;
+    let remote = state.remote.clone();
+    let origin = endpoint.origin().to_owned();
+    tokio::task::spawn_blocking(move || remote.present(&origin))
+        .await
+        .map_err(|_| "API 키 상태를 확인하지 못했습니다.".to_string())?
+}
+
+#[tauri::command]
+pub async fn ai_remote_key(state: tauri::State<'_, AppState>, key: String) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
+    let _gate = state.ai_gate.lock().await;
+    check_open(&state)?;
+    let endpoint = remote_origin(&state)?;
+    let remote = state.remote.clone();
+    let origin = endpoint.origin().to_owned();
+    let result = tokio::task::spawn_blocking(move || remote.set_key(&origin, &key))
+        .await
+        .map_err(|_| "API 키를 저장하지 못했습니다.".to_string())?;
+    state.classifier.invalidate();
+    result
+}
+
+#[tauri::command]
+pub async fn ai_remote_key_clear(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
+    let _gate = state.ai_gate.lock().await;
+    check_open(&state)?;
+    let endpoint = remote_origin(&state)?;
+    let remote = state.remote.clone();
+    let origin = endpoint.origin().to_owned();
+    let result = tokio::task::spawn_blocking(move || remote.clear_key(&origin))
+        .await
+        .map_err(|_| "API 키를 삭제하지 못했습니다.".to_string())?;
+    state.classifier.invalidate();
+    result
+}
+
+/// One tiny explicit request. It contains no notice text or personal data.
+#[tauri::command]
+pub async fn ai_remote_test(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let _lease = state.operation_gate.shared().await?;
+    let _gate = state.ai_gate.lock().await;
+    check_open(&state)?;
+    let preferences = with_store(&state, |store| store.ai_preferences())?;
+    if !preferences.remote_consent {
+        return Err("원격 AI 사용에 먼저 동의해 주세요.".into());
+    }
+    let config = remote::GenerationConfig::from_preferences(&preferences)?;
+    let remote = state.remote.clone();
+    let origin = config.endpoint.origin().to_owned();
+    let key = tokio::task::spawn_blocking(move || remote.key(&origin))
+        .await
+        .map_err(|_| "API 키를 확인하지 못했습니다.".to_string())??
+        .ok_or("원격 AI API 키를 저장해 주세요.".to_string())?;
+    let cancellation = analysis::Cancellation::default();
+    state.remote.test(&config, &key, &cancellation).await
 }
 async fn check_storage_change(state: &AppState) -> Result<(), String> {
     check_open(state)?;
@@ -571,12 +670,51 @@ pub async fn ai_remove(
 #[tauri::command]
 pub async fn ai_preferences(
     state: tauri::State<'_, AppState>,
-    preferences: AiPreferences,
+    mut preferences: AiPreferences,
 ) -> Result<(), String> {
     let _lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
     check_open(&state)?;
     let old = with_store(&state, |s| s.ai_preferences())?;
+    if preferences
+        .remote_base_url
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        preferences.remote_base_url = None;
+    }
+    if let Some(value) = preferences.remote_base_url.as_deref() {
+        preferences.remote_base_url = Some(remote::Endpoint::parse(value)?.base().to_owned());
+    }
+    let old_base = old
+        .remote_base_url
+        .as_deref()
+        .and_then(|value| remote::Endpoint::parse(value).ok())
+        .map(|endpoint| endpoint.base().to_owned());
+    if old_base != preferences.remote_base_url {
+        // Consent and automatic work are bound to the address that was shown
+        // to the user; an address change requires a fresh explicit decision.
+        preferences.remote_consent = false;
+        preferences.remote_automatic = false;
+        preferences.remote_embeddings = false;
+    }
+    if preferences.engine != "openai-compatible" {
+        // These only authorize network/cost work for the remote engine. Require
+        // an explicit re-opt-in when the remote engine is selected again.
+        preferences.remote_automatic = false;
+        preferences.remote_embeddings = false;
+    } else if preferences.remote_consent {
+        remote::GenerationConfig::from_preferences(&preferences)?;
+        if preferences.remote_automatic && preferences.remote_daily_limit == 0 {
+            return Err("자동 원격 분석의 하루 한도를 1 이상으로 설정해 주세요.".into());
+        }
+        if preferences.remote_embeddings {
+            remote::EmbeddingConfig::from_preferences(&preferences)?;
+        }
+    }
+    if old.engine != preferences.engine && state.analysis.running() {
+        return Err("분석을 취소하거나 완료한 뒤 AI 엔진을 변경해 주세요.".into());
+    }
     if old.model_directory != preferences.model_directory {
         return Err("모델 설치 폴더는 폴더 선택 기능으로 변경해 주세요.".into());
     }
@@ -613,6 +751,7 @@ pub async fn ai_preferences(
             worker.set_execution_mode(&old.execution_mode)?;
             return Err(error);
         }
+        state.classifier.invalidate();
         return Ok(());
     }
     if preferences.setup_completed && !old.setup_completed {
@@ -632,9 +771,17 @@ pub async fn ai_preferences(
         .await?;
         operation.check(&state.maintenance_shutdown)?;
         // Persist completion while the operation still owns admission/status.
-        return with_store(&state, |s| s.ai_save_preferences(&preferences));
+        let result = with_store(&state, |s| s.ai_save_preferences(&preferences));
+        if result.is_ok() {
+            state.classifier.invalidate();
+        }
+        return result;
     }
-    with_store(&state, |s| s.ai_save_preferences(&preferences))
+    let result = with_store(&state, |s| s.ai_save_preferences(&preferences));
+    if result.is_ok() {
+        state.classifier.invalidate();
+    }
+    result
 }
 /// The only command that changes automatic classification. It quiesces the
 /// running batch so the saved preference and the worker cannot disagree.
@@ -666,6 +813,21 @@ pub async fn ai_analyze(
     let lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
     check_open(&state)?;
+    let preferences = with_store(&state, |store| store.ai_preferences())?;
+    if preferences.engine == "openai-compatible" {
+        if !preferences.remote_consent {
+            return Err("원격 AI 사용에 먼저 동의해 주세요.".into());
+        }
+        let config = remote::GenerationConfig::from_preferences(&preferences)?;
+        let remote = state.remote.clone();
+        let origin = config.endpoint.origin().to_owned();
+        let present = tokio::task::spawn_blocking(move || remote.present(&origin))
+            .await
+            .map_err(|_| "API 키 상태를 확인하지 못했습니다.".to_string())??;
+        if !present {
+            return Err("원격 AI API 키를 저장해 주세요.".into());
+        }
+    }
     state.analysis.start_admitted(
         state.store.clone(),
         state.worker.clone(),
@@ -675,6 +837,7 @@ pub async fn ai_analyze(
         regenerate,
         analysis::DIRECT_PRIORITY,
         lease,
+        Some(state.remote.clone()),
     )
 }
 #[tauri::command]

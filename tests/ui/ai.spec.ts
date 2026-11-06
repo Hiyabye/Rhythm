@@ -479,3 +479,101 @@ test('macOS hides the Windows execution device and keeps a chosen model folder f
   await expect(page.getByRole('dialog', { name: 'Qwen3.5 2B 정보' }).getByText('/Volumes/로컬 모델/Rhythm/qwen35-2b.gguf', { exact: true })).toBeVisible();
   expect(await callCount(page, 'ai_preferences')).toBe(0);
 });
+
+test('remote engine consent, key storage and connection test stay outside preferences', async ({ page }) => {
+  await mockDesktop(page, {
+    aiInstalled: true,
+    aiEngine: 'openai-compatible',
+    aiRemoteBase: 'https://api.example.com',
+    aiRemoteModel: 'test-model',
+  });
+  await page.goto('/');
+  await openSettings(page, 'AI');
+  await expect(page.locator('#ai-engine')).toHaveValue('openai-compatible');
+  const consent = page.getByRole('group', { name: '원격 AI 사용 동의' });
+  await expect(consent).toBeVisible();
+  await expect(consent).toContainText('api.example.com');
+  await expect(consent).toContainText('관심사');
+  await expect(consent).toContainText('제공자의 데이터 정책');
+  // Remote analysis does not require the local model setup flow.
+  await expect(page.getByRole('heading', { name: '로컬 AI 시작하기' })).toHaveCount(0);
+  await consent.getByRole('button', { name: '동의하고 사용' }).click();
+  await expect(page.getByRole('group', { name: '원격 AI 사용 동의' })).toHaveCount(0);
+  await page.locator('#ai-remote-key').fill('sk-test-secret');
+  await page.getByRole('button', { name: '키 저장', exact: true }).click();
+  await expect(page.getByText('API 키를 운영체제 보안 저장소에 저장했습니다.')).toBeVisible();
+  await expect(page.getByRole('button', { name: '연결 확인' })).toBeEnabled();
+  await page.getByRole('button', { name: '연결 확인' }).click();
+  await expect(page.getByText('연결되었습니다', { exact: false })).toBeVisible();
+  const preferenceCalls = await page.evaluate(() => (window as any).__fixture.calls
+    .filter((call: any) => call.command === 'ai_preferences')
+    .map((call: any) => call.args.preferences));
+  expect(JSON.stringify(preferenceCalls)).not.toContain('sk-test-secret');
+  expect(await callCount(page, 'ai_remote_key')).toBe(1);
+  expect(await callCount(page, 'ai_remote_test')).toBe(1);
+});
+
+test('automatic remote analysis is a separate opt-in with a visible daily cap', async ({ page }) => {
+  await mockDesktop(page, {
+    aiInstalled: true,
+    aiEngine: 'openai-compatible',
+    aiRemoteBase: 'https://api.example.com',
+    aiRemoteModel: 'test-model',
+    aiRemoteConsent: true,
+    aiRemoteKey: true,
+  });
+  await page.goto('/');
+  await openSettings(page, 'AI');
+  const automatic = page.locator('#ai-remote-automatic');
+  await expect(automatic).not.toBeChecked();
+  await expect(page.locator('#ai-remote-limit')).toHaveCount(0);
+  await automatic.check();
+  await expect(page.locator('#ai-remote-limit')).toHaveValue('20');
+  await expect(page.getByText('오늘 자동 시도 0회 / 최대 20회', { exact: false })).toBeVisible();
+  await page.locator('#ai-remote-limit').fill('5');
+  await page.locator('#ai-remote-limit').blur();
+  await expect.poll(() => page.evaluate(() => (window as any).__fixture.calls
+    .filter((call: any) => call.command === 'ai_preferences')
+    .map((call: any) => call.args.preferences.remote_daily_limit))).toContain(5);
+});
+
+test('remote analysis labels its engine and never claims on-device processing', async ({ page }) => {
+  await mockDesktop(page, {
+    aiInstalled: true,
+    aiEngine: 'openai-compatible',
+    aiRemoteBase: 'https://api.example.com',
+    aiRemoteModel: 'test-model',
+    aiRemoteConsent: true,
+    aiRemoteKey: true,
+    aiRemoteResult: true,
+  });
+  await page.goto('/');
+  await reader(page);
+  const panel = page.getByRole('region', { name: '공지 AI 분석' });
+  await expect(panel.getByText('원격 API 분석', { exact: true })).toBeVisible();
+  await expect(panel).toContainText('선택한 원격 API');
+  await expect(panel).toContainText('api.example.com');
+  await expect(panel).not.toContainText('원문을 외부로 보내지 않고');
+  await panel.getByRole('button', { name: '이 공지 분석하기', exact: true }).click();
+  await expect(panel).toContainText('장학금 신청 일정과 제출 서류를 확인하세요.');
+  await expect(panel).toContainText('원격 test-model @ api.example.com');
+  await expect(panel).toContainText('지정한 원격 API가 만들었습니다');
+});
+
+test('switching the remote API address clears consent and key presence', async ({ page }) => {
+  await mockDesktop(page, {
+    aiInstalled: true,
+    aiEngine: 'openai-compatible',
+    aiRemoteBase: 'https://api.example.com',
+    aiRemoteModel: 'test-model',
+    aiRemoteConsent: true,
+    aiRemoteKey: true,
+  });
+  await page.goto('/');
+  await openSettings(page, 'AI');
+  await expect(page.getByRole('group', { name: '원격 AI 사용 동의' })).toHaveCount(0);
+  await page.locator('#ai-remote-base').fill('https://other.example.com');
+  await page.getByRole('button', { name: '주소 저장', exact: true }).click();
+  await expect(page.getByRole('group', { name: '원격 AI 사용 동의' })).toBeVisible();
+  await expect(page.getByText('키가 저장되어 있지 않습니다', { exact: false })).toBeVisible();
+});

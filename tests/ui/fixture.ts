@@ -35,6 +35,15 @@ export interface FixtureOptions {
   initialNotificationsEnabled?: boolean;
   capabilitiesError?: boolean;
   aiExecutionMode?: 'auto' | 'cpu' | 'gpu';
+  aiEngine?: 'local' | 'openai-compatible';
+  aiRemoteBase?: string | null;
+  aiRemoteModel?: string | null;
+  aiRemoteEmbeddingModel?: string | null;
+  aiRemoteConsent?: boolean;
+  aiRemoteAutomatic?: boolean;
+  aiRemoteEmbeddings?: boolean;
+  aiRemoteKey?: boolean;
+  aiRemoteResult?: boolean;
   aiExecutionError?: boolean;
   aiModelDirectory?: string;
   aiModelDirectoryChoice?: string | null;
@@ -149,7 +158,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       prompt_version: options.analysisContract === 'prompt-v2' ? 2 : contract.prompt_version,
       schema_version: contract.schema_version,
       configuration_hash: 'b'.repeat(64),
-      model_identity: { name: 'Qwen3.5 4B', ...(options.aiImageResult ? { images_used: 1, images_available: 2 } : {}) },
+      model_identity: options.aiRemoteResult
+        ? { engine: 'openai-compatible' as const, name: options.aiRemoteModel ?? 'test-model', host: 'api.example.com', origin: 'https://api.example.com', ...(options.aiImageResult ? { images_used: 1, images_available: 2 } : {}) }
+        : { engine: 'local' as const, name: 'Qwen3.5 4B', ...(options.aiImageResult ? { images_used: 1, images_available: 2 } : {}) },
       result: {
         short_summary: options.aiText ?? '장학금 신청 일정과 제출 서류를 확인하세요.',
         summary: '대상 학생은 안내된 기간에 신청서를 제출해야 합니다.',
@@ -170,7 +181,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       created_at: '2026-10-24 12:00:00',
     });
     const embeddingCatalog = { id: 'qwen3-embedding-0-6b', kind: 'embedding', name: 'Qwen3-Embedding 0.6B', parameters: '0.6B', quantization: 'Q8_0', bytes: 639150592, memory_bytes: 2147483648, description: '공지 분류용 임베딩 모델', use_case: '공지 주제 분류', repository: 'Qwen/Qwen3-Embedding-0.6B-GGUF', revision: 'pinned-revision', filename: 'Qwen3-Embedding-0.6B-Q8_0.gguf', sha256: 'd'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null, pooling: 'last', embedding_dim: 1024, projector: null };
-    const ai = { model_storage: modelStorage, catalog: [...['qwen35-4b', 'qwen35-2b'].map((id) => ({ id, kind: 'generation' as const, name: modelNames[id], parameters: modelNames[id].split(' ')[1], quantization: 'Q4_K_M', bytes: 2740937888, memory_bytes: 6000000000, description: '한국어 공지 분석용 로컬 모델', use_case: '균형 잡힌 공지 분석', repository: 'unsloth/Qwen3.5-4B-GGUF', revision: 'pinned-revision', filename: `${id}.gguf`, sha256: 'a'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null, projector: id === 'qwen35-4b' ? projectorSpec : null })), embeddingCatalog], models: [...(options.aiInstalled ? [model()] : []), ...(options.aiRetiredModel ? [model('qwen35-9b')] : []), ...(options.aiEmbeddingInstalled ? [model('qwen3-embedding-0-6b', 'embedding')] : [])], projectors: options.aiInstalled && options.aiProjectorState ? [projectorRow(options.aiProjectorState, options.aiProjectorState === 'downloading' ? 600000 : 0)] : [], preferences: { active_model_id: options.aiInstalled ? 'qwen35-4b' : null as string | null, setup_completed: !options.aiSetupNeeded, processing_mode: 'explicit', automatic_limit: 3, max_tokens: 1024, execution_mode: options.aiExecutionMode ?? 'auto', model_directory: options.aiModelDirectory ?? null as string | null, embedding_model_id: options.aiEmbeddingInstalled ? 'qwen3-embedding-0-6b' : null as string | null, classification_enabled: true }, jobs: [] as any[], runtime: { state: 'ready', runtime_available: true, model: null as string | null, detail: options.aiRuntimeDetail ?? null }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, operation: null as AiOperation | null, progress: null as any, analysis_contract: { prompt_version: contract.prompt_version, schema_version: contract.schema_version, configuration_hash: 'b'.repeat(64) }, classification: { state: options.aiEmbeddingInstalled ? 'idle' : 'disabled', processed: 0 } };
+    const ai = { model_storage: modelStorage, catalog: [...['qwen35-4b', 'qwen35-2b'].map((id) => ({ id, kind: 'generation' as const, name: modelNames[id], parameters: modelNames[id].split(' ')[1], quantization: 'Q4_K_M', bytes: 2740937888, memory_bytes: 6000000000, description: '한국어 공지 분석용 로컬 모델', use_case: '균형 잡힌 공지 분석', repository: 'unsloth/Qwen3.5-4B-GGUF', revision: 'pinned-revision', filename: `${id}.gguf`, sha256: 'a'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null, projector: id === 'qwen35-4b' ? projectorSpec : null })), embeddingCatalog], models: [...(options.aiInstalled ? [model()] : []), ...(options.aiRetiredModel ? [model('qwen35-9b')] : []), ...(options.aiEmbeddingInstalled ? [model('qwen3-embedding-0-6b', 'embedding')] : [])], projectors: options.aiInstalled && options.aiProjectorState ? [projectorRow(options.aiProjectorState, options.aiProjectorState === 'downloading' ? 600000 : 0)] : [], preferences: { active_model_id: options.aiInstalled ? 'qwen35-4b' : null as string | null, setup_completed: !options.aiSetupNeeded, processing_mode: 'explicit', automatic_limit: 3, max_tokens: 1024, execution_mode: options.aiExecutionMode ?? 'auto', model_directory: options.aiModelDirectory ?? null as string | null, embedding_model_id: options.aiEmbeddingInstalled ? 'qwen3-embedding-0-6b' : null as string | null, classification_enabled: true, engine: (options.aiEngine ?? 'local') as 'local' | 'openai-compatible', remote_base_url: options.aiRemoteBase ?? null as string | null, remote_model: options.aiRemoteModel ?? null as string | null, remote_embedding_model: options.aiRemoteEmbeddingModel ?? null as string | null, remote_timeout_seconds: 120, remote_consent: options.aiRemoteConsent ?? false, remote_automatic: options.aiRemoteAutomatic ?? false, remote_daily_limit: 20, remote_embeddings: options.aiRemoteEmbeddings ?? false }, remote_key_present: options.aiRemoteKey ?? false, remote_usage_today: 0, remote_host: options.aiRemoteBase ? (options.aiRemoteBase.includes('://') ? options.aiRemoteBase.replace(/^https?:\/\//, '').split('/')[0] : options.aiRemoteBase) : null as string | null, jobs: [] as any[], runtime: { state: 'ready', runtime_available: true, model: null as string | null, detail: options.aiRuntimeDetail ?? null }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, operation: null as AiOperation | null, progress: null as any, analysis_contract: { prompt_version: contract.prompt_version, schema_version: contract.schema_version, configuration_hash: 'b'.repeat(64) }, classification: { state: options.aiEmbeddingInstalled ? 'idle' : 'disabled', processed: 0 } };
     const analyses = options.aiResult ? [analysis(1, 1, 1)] : [];
     const classifications = entries.map((item) => ({
       document_id: item.id, revision_id: 1, category: '장학',
@@ -400,6 +411,10 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (fixture.resultsFailures > 0) { fixture.resultsFailures -= 1; throw '분석 정보를 일시적으로 확인하지 못했습니다.'; }
             if (options.aiResultLag && !resultLagUsed && ai.jobs.some((job) => job.status === 'completed')) { resultLagUsed = true; return []; }
             return copy(analyses.filter((result) => result.document_id === args.documentId && result.revision_id === args.revisionId).sort((a, b) => b.id - a.id));
+          case 'ai_remote_status': return Boolean(ai.remote_key_present);
+          case 'ai_remote_key': if (!args.key || String(args.key).trim() === '') throw 'API 키를 확인해 주세요.'; ai.remote_key_present = true; return null;
+          case 'ai_remote_key_clear': ai.remote_key_present = false; return null;
+          case 'ai_remote_test': if (!ai.remote_key_present) throw '원격 AI API 키를 저장해 주세요.'; return `연결되었습니다 · ${ai.preferences.remote_model ?? '모델'} · ${ai.remote_host ?? 'API'}`;
           case 'ai_install': {
             const entry = ai.catalog.find((value) => value.id === args.catalogId);
             let installed = ai.models.find((value) => value.id === args.catalogId);
@@ -455,6 +470,18 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             return null;
           case 'ai_preferences':
             if (args.preferences.model_directory !== ai.preferences.model_directory) throw '모델 설치 폴더는 폴더 선택 명령으로 변경해 주세요.';
+            if (args.preferences.remote_base_url !== ai.preferences.remote_base_url) {
+              ai.preferences.remote_consent = false;
+              ai.preferences.remote_automatic = false;
+              ai.preferences.remote_embeddings = false;
+              ai.remote_key_present = null;
+              args.preferences.remote_consent = false;
+              args.preferences.remote_automatic = false;
+              args.preferences.remote_embeddings = false;
+              ai.remote_host = args.preferences.remote_base_url ? String(args.preferences.remote_base_url).replace(/^https?:\/\//, '').split('/')[0] : null;
+            }
+            if (args.preferences.engine === 'openai-compatible' && args.preferences.remote_consent && !args.preferences.remote_base_url) throw 'API 주소를 먼저 입력해 주세요.';
+            if (args.preferences.engine === 'openai-compatible' && args.preferences.remote_consent && !args.preferences.remote_model) throw '원격 모델 이름을 입력해 주세요.';
             if (args.preferences.execution_mode !== ai.preferences.execution_mode) {
               if (options.aiExecutionError) throw '실행 장치를 저장하지 못했습니다. 다시 시도해 주세요.';
               ai.runtime.model = null;
@@ -468,7 +495,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             const cached = analyses.find((result) => result.document_id === args.documentId && result.revision_id === args.revisionId);
             if (cached && !args.regenerate) return { cached: copy(cached), job: null };
             const generated = analysis(analyses.length + ai.jobs.length + 1, args.documentId, args.revisionId);
-            const job = { ...generated, model_identity: { name: 'Qwen3.5 4B' }, priority: 100, status: 'running', error: null as string | null, updated_at: '2026-10-24 12:00:00' };
+            const job = { ...generated, model_identity: options.aiRemoteResult ? { engine: 'openai-compatible', name: options.aiRemoteModel ?? 'test-model', host: 'api.example.com' } : { engine: 'local', name: 'Qwen3.5 4B' }, priority: 100, status: 'running', error: null as string | null, updated_at: '2026-10-24 12:00:00' };
             ai.jobs.unshift(job);
             analysisStarted = Date.now();
             ai.progress = { job_id: job.id, phase: 'inference', elapsed_ms: 0, stages_ms: {}, attempts: [{}] };

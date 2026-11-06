@@ -241,6 +241,15 @@ export interface AiPreferences {
   model_directory: string | null;
   embedding_model_id: string | null;
   classification_enabled: boolean;
+  engine: 'local' | 'openai-compatible';
+  remote_base_url: string | null;
+  remote_model: string | null;
+  remote_embedding_model: string | null;
+  remote_timeout_seconds: number;
+  remote_consent: boolean;
+  remote_automatic: boolean;
+  remote_daily_limit: number;
+  remote_embeddings: boolean;
 }
 export interface AnalysisKey {
   document_id: number; revision_id: number; task: string; model_sha256: string;
@@ -261,7 +270,7 @@ export interface Analysis {
   uncertainty: 'clear' | 'ambiguous' | 'unknown'; facts: AnalysisFact[];
 }
 export interface AiResult extends AnalysisKey {
-  id: number; job_id: number; model_identity: { name?: string; sha256?: string; max_tokens?: number; execution_mode?: string; runtime_policy?: string; loaded_backend?: string; images_used?: number; images_available?: number }; result: Analysis;
+  id: number; job_id: number; model_identity: { engine?: 'local' | 'openai-compatible'; name?: string; sha256?: string; max_tokens?: number; execution_mode?: string; runtime_policy?: string; loaded_backend?: string; images_used?: number; images_available?: number; origin?: string; host?: string; base?: string; timeout_seconds?: number }; result: Analysis;
   partial: boolean; processed_chars: number; total_chars: number; duration_ms: number; created_at: string;
 }
 export interface AiOperation {
@@ -287,13 +296,16 @@ export interface AiClassification {
 }
 export interface AiSnapshot {
   catalog: CatalogEntry[]; models: AiModel[]; projectors: AiProjector[]; preferences: AiPreferences; jobs: AiJob[]; runtime: WorkerStatus;
-  classification: { state: 'idle' | 'classifying' | 'waiting' | 'disabled' | 'failed' | string; processed: number };
+  classification: { state: 'idle' | 'classifying' | 'waiting' | 'disabled' | 'failed' | string; processed: number; detail?: string | null };
   hardware: { os: string; arch: string; ram_bytes: number; disk_available_bytes: number; backend: string };
   model_storage: { directory: string; custom: boolean; available_bytes: number | null; error: string | null };
   busy: boolean;
   operation?: AiOperation | null;
   progress?: AiDiagnostics | null;
   analysis_contract?: { prompt_version: number; schema_version: number; configuration_hash: string | null };
+  remote_key_present?: boolean | null;
+  remote_usage_today?: number;
+  remote_host?: string | null;
 }
 export interface ArchiveQuery {
   query: string;
