@@ -93,7 +93,8 @@ pub fn fake_engine(directory: &Path, mode: &str) -> (PathBuf, PathBuf) {
 /// `mmproj-fails` (never logs the multimodal encoder as loaded),
 /// `crash-on-chat`. Control files: `load-delay`/`chat-delay` hang only the
 /// first load/request; `delay` hangs every request while it exists; each
-/// request writes `entered` and appends a line to `requests`; `response`
+/// request writes `entered` and appends a line to `requests` (embedding
+/// bodies also to `embedding-bodies`; `embed-one` returns one vector); `response`
 /// replaces the generated text; `malformed` returns unstructured text
 /// (`repair-once` clears it after one request).
 const FAKE_SERVER: &str = r####"
@@ -171,11 +172,17 @@ fn main() {
         let _ = write!(stream, "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{response}", response.len());
     }
 }
-fn embeddings(dir: &std::path::Path, _body: &str) -> (u16, String) {
+fn embeddings(dir: &std::path::Path, body: &str) -> (u16, String) {
     let mut requests = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("requests")).unwrap();
     writeln!(requests, "embedding").unwrap();
-    // Two deterministic vectors, normalized by the parent. The fixture is
-    // compiled without third-party crates, so it does not parse the input.
+    let mut bodies = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("embedding-bodies")).unwrap();
+    writeln!(bodies, "{body}").unwrap();
+    // Deterministic vectors, normalized by the parent. The fixture is compiled
+    // without third-party crates, so it does not parse the input; `embed-one`
+    // answers a single-input request.
+    if dir.join("embed-one").exists() {
+        return (200, r#"{"data":[{"index":0,"embedding":[3.0,4.0]}]}"#.to_string());
+    }
     (200, r#"{"data":[{"index":0,"embedding":[3.0,4.0]},{"index":1,"embedding":[0.0,5.0]}]}"#.to_string())
 }
 fn chat(dir: &std::path::Path, mode: &str, gpu: bool, body: &str) -> (u16, String) {

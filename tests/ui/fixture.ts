@@ -19,6 +19,8 @@ export interface FixtureOptions {
   aiClassificationLow?: boolean;
   // Notice 2 is a cross-post of notice 1 and notice 3 is only similar; needs count >= 3.
   aiSimilar?: boolean;
+  // With aiEmbeddingInstalled, relevance search adds one meaning-only notice.
+  aiSemanticSearch?: boolean;
   aiRetiredModel?: boolean;
   aiResult?: boolean;
   aiImageResult?: boolean;
@@ -513,18 +515,27 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'archive_summary': return { documents: entries.length, unread: entries.filter((x) => !x.is_read).length,
             saved: entries.filter((x) => x.saved).length, new_since_sync: 0, resource_bytes: 0 };
           case 'archive_status': return copy(sync);
-          case 'archive_query': {
+          case 'archive_query':
+          case 'archive_ranked_query': {
             const query = args.query;
             if (options.queryError) throw '로컬 검색을 완료하지 못했습니다.';
-            const filtered = copy(entries.filter((entry) => (!query.saved_only || entry.saved) && (!query.unread_only || !entry.is_read)
-              && (!query.source_id || entry.source_id === query.source_id) && (!query.category || entry.category === query.category)
-              && query.query.trim().split(/\s+/).filter(Boolean).every((term: string) => `${entry.title} ${entry.snippet}`.toLowerCase().includes(term.toLowerCase()))));
+            const terms = query.query.trim().split(/\s+/).filter(Boolean);
+            const passes = (entry: DocumentItem) => (!query.saved_only || entry.saved) && (!query.unread_only || !entry.is_read)
+              && (!query.source_id || entry.source_id === query.source_id) && (!query.category || entry.category === query.category);
+            const filtered = copy(entries.filter((entry) => passes(entry)
+              && terms.every((term: string) => `${entry.title} ${entry.snippet}`.toLowerCase().includes(term.toLowerCase()))));
+            // The ranked query adds the first notice without the terms as a
+            // meaning-only hit when the embedding model can embed the query.
+            const semantic = command === 'archive_ranked_query' && Boolean(options.aiSemanticSearch && options.aiEmbeddingInstalled);
+            const meaning = semantic ? copy(entries.filter((entry) => passes(entry) && !filtered.some((item) => item.id === entry.id)).slice(0, 1)) : [];
+            const ranked = [...meaning, ...filtered];
             if (options.queryGate) {
               const { promise, resolve } = Promise.withResolvers<void>();
               fixture.queryResolvers.push(resolve);
               await promise;
             } else await wait(options.queryDelay ?? 0);
-            return { items: filtered.slice(query.offset, query.offset + query.limit), total: filtered.length, categories: ['장학', '학사'] };
+            return { items: ranked.slice(query.offset, query.offset + query.limit), total: ranked.length, categories: ['장학', '학사'],
+              meaning_only: meaning.map((item) => item.id), semantic };
           }
           case 'archive_document': {
             const item = entries.find((entry) => entry.id === args.id);

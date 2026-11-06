@@ -1668,3 +1668,192 @@ fn similar_notice_candidates_are_bounded_to_the_newest_window() {
         .1
         .is_empty());
 }
+
+fn ranked(query: &str) -> crate::archive::model::ArchiveQuery {
+    crate::archive::model::ArchiveQuery {
+        query: query.into(),
+        limit: Some(30),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn ranked_search_fuses_text_and_meaning_and_respects_filters_and_model() {
+    let (_directory, store) = database();
+    store
+        .connection
+        .execute(
+            "INSERT INTO sources(id,name,organization,description,url,family,supported,subscribed,next_page) VALUES('test2','공과대학','서강','공지','https://www.sogang.ac.kr/','main',1,1,12)",
+            [],
+        )
+        .unwrap();
+    let model = "a".repeat(64);
+    let other_model = "b".repeat(64);
+    // The term only in the body, then the term in the title.
+    let (body_only, _) = embedded_notice(
+        &store,
+        "test",
+        "a",
+        "오픈소스 안내",
+        "기술 세미나 개최",
+        &[0.0, 1.0, 0.0],
+        &model,
+    );
+    let (title_hit, _) = embedded_notice(
+        &store,
+        "test",
+        "b",
+        "기술 세미나 개최",
+        "발표자 모집",
+        &[0.0, 0.0, 1.0],
+        &model,
+    );
+    // No search term, but close in meaning to the query vector.
+    let (meaning, _) = embedded_notice(
+        &store,
+        "test",
+        "c",
+        "개발자 발표회",
+        "발표 일정",
+        &[1.0, 0.05, 0.0],
+        &model,
+    );
+    // Both a text match and the closest meaning: fused first.
+    let (both, _) = embedded_notice(
+        &store,
+        "test",
+        "d",
+        "학술 행사",
+        "세미나 안내",
+        &[1.0, 0.0, 0.0],
+        &model,
+    );
+    // Close in meaning, but only on another board or under another model.
+    let (other_board, _) = embedded_notice(
+        &store,
+        "test2",
+        "e",
+        "공학 발표회",
+        "발표 일정",
+        &[1.0, 0.02, 0.0],
+        &model,
+    );
+    let (other_hash, _) = embedded_notice(
+        &store,
+        "test",
+        "f",
+        "발표 행사",
+        "행사 일정",
+        &[1.0, 0.0, 0.0],
+        &other_model,
+    );
+    // Far from the best hit: outside the semantic margin.
+    let (far, _) = embedded_notice(
+        &store,
+        "test",
+        "g",
+        "도서관 휴관",
+        "휴관 안내",
+        &[0.5, 0.9, 0.0],
+        &model,
+    );
+
+    let query_vector = [1.0, 0.0, 0.0];
+    // Text-only relevance: title hits before body-only hits.
+    let text = store.archive_ranked_query(&ranked("세미나"), None).unwrap();
+    let ids = text.items.iter().map(|item| item.id).collect::<Vec<_>>();
+    assert_eq!(ids, vec![title_hit, both, body_only]);
+    assert_eq!(text.total, 3);
+    assert!(!text.semantic && text.meaning_only.is_empty());
+
+    let fused = store
+        .archive_ranked_query(&ranked("세미나"), Some((&model, &query_vector)))
+        .unwrap();
+    let ids = fused.items.iter().map(|item| item.id).collect::<Vec<_>>();
+    assert!(fused.semantic);
+    assert_eq!(ids[0], both, "{ids:?}");
+    assert_eq!(fused.total, ids.len() as u64);
+    assert!(ids.contains(&meaning) && ids.contains(&other_board));
+    assert!(!ids.contains(&other_hash) && !ids.contains(&far));
+    assert_eq!(
+        ids.iter()
+            .filter(|id| [title_hit, body_only].contains(id))
+            .count(),
+        2,
+        "every text match stays"
+    );
+    let mut meaning_only = fused.meaning_only.clone();
+    meaning_only.sort();
+    let mut expected = vec![meaning, other_board];
+    expected.sort();
+    assert_eq!(meaning_only, expected);
+
+    let mut board = ranked("세미나");
+    board.source_id = Some("test".into());
+    let filtered = store
+        .archive_ranked_query(&board, Some((&model, &query_vector)))
+        .unwrap();
+    assert!(filtered.items.iter().all(|item| item.source_id == "test"));
+    assert_eq!(filtered.meaning_only, vec![meaning]);
+
+    // A vector of another dimension matches nothing instead of failing.
+    let mismatched = store
+        .archive_ranked_query(&ranked("세미나"), Some((&model, &[1.0, 0.0])))
+        .unwrap();
+    assert_eq!(mismatched.total, 3);
+    assert!(mismatched.meaning_only.is_empty());
+    // Without a query the order is the ordinary date order.
+    assert_eq!(
+        store
+            .archive_ranked_query(&ranked(""), Some((&model, &query_vector)))
+            .unwrap()
+            .total,
+        store.archive_query(&ranked("")).unwrap().total
+    );
+    assert!(store
+        .archive_ranked_query(&ranked("세미나"), Some(("bad", &query_vector)))
+        .is_err());
+}
+
+#[test]
+fn ranked_search_pages_cover_every_match_once_beyond_the_fused_head() {
+    let (_directory, store) = database();
+    let model = "a".repeat(64);
+    for index in 0..205 {
+        embedded_notice(
+            &store,
+            "test",
+            &format!("t{index}"),
+            &format!("행사 {index}"),
+            "세미나 안내",
+            &[0.0, 1.0],
+            &model,
+        );
+    }
+    let (meaning, _) = embedded_notice(
+        &store,
+        "test",
+        "m",
+        "발표회",
+        "발표 일정",
+        &[1.0, 0.0],
+        &model,
+    );
+    let mut seen = Vec::new();
+    let mut total = 0;
+    for page in 0..8 {
+        let mut query = ranked("세미나");
+        query.offset = page * 30;
+        let result = store
+            .archive_ranked_query(&query, Some((&model, &[1.0, 0.0])))
+            .unwrap();
+        total = result.total;
+        seen.extend(result.items.iter().map(|item| item.id));
+    }
+    assert_eq!(total, 206);
+    assert_eq!(seen.len(), 206);
+    let unique = seen.iter().collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 206);
+    // The best semantic hit is fused near the top, not appended after the tail.
+    assert!(seen.iter().position(|id| *id == meaning).unwrap() < 30);
+}

@@ -752,6 +752,7 @@ fn main() {
             archive::archive_subscribe,
             archive::archive_summary,
             archive::archive_query,
+            archive::archive_ranked_query,
             archive::archive_document,
             archive::archive_state,
             archive::archive_start,

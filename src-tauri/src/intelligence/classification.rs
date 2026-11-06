@@ -42,7 +42,12 @@ const BATCH: u32 = 8;
 /// cheap, but the process still reserves model memory.
 const IDLE_UNLOAD: Duration = Duration::from_secs(60);
 
-const INSTRUCTION: &str = "Instruct: Classify the given Korean university notice into exactly one category: 학사, 장학, 수업·교육, 연구, 공모전·대회, 인턴·채용, 행사·활동, 기타.\nQuery: ";
+pub(super) const INSTRUCTION: &str = "Instruct: Classify the given Korean university notice into exactly one category: 학사, 장학, 수업·교육, 연구, 공모전·대회, 인턴·채용, 행사·활동, 기타.\nQuery: ";
+/// Search queries are compared with the stored classifier vectors above. Of
+/// the instructions tried on the synthetic search fixtures, Qwen3's own web
+/// search instruction ranked relevant notices highest (docs/AI_EVALUATION.md).
+pub(super) const SEARCH_INSTRUCTION: &str =
+    "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ";
 
 /// Authored Korean prototypes. They encode the same category definitions the
 /// generation prompt used and are deliberately separate from the evaluation
@@ -221,8 +226,13 @@ pub struct Controller {
     prototypes_sha: Mutex<Option<String>>,
     /// Cancels the remote embedding request on quiesce/shutdown.
     active_embedding: Mutex<Option<Arc<analysis::Cancellation>>>,
+    /// Last search query vector (model identity, query, vector), so paging
+    /// through results does not embed the same query again.
+    last_query: Mutex<Option<(String, String, Vec<f32>)>>,
     wake: Notify,
 }
+
+type LocalEngine<'a> = (tokio::sync::MutexGuard<'a, Worker>, std::path::PathBuf);
 
 enum Source {
     Local(AiModel),
@@ -261,10 +271,14 @@ impl Controller {
             .find(|entry| entry.kind == "embedding")
             .and_then(|entry| entry.pooling)
             .unwrap_or_else(|| "last".into());
+        Self::with_worker(Worker::embedding_configured(
+            llama, runtime, "auto", &pooling,
+        ))
+    }
+
+    fn with_worker(worker: Worker) -> Self {
         Self {
-            worker: AsyncMutex::new(Worker::embedding_configured(
-                llama, runtime, "auto", &pooling,
-            )),
+            worker: AsyncMutex::new(worker),
             batch: Arc::new(AsyncMutex::new(())),
             paused: AtomicBool::new(false),
             processed: AtomicU64::new(0),
@@ -276,6 +290,7 @@ impl Controller {
             prototypes: AsyncMutex::new(None),
             prototypes_sha: Mutex::new(None),
             active_embedding: Mutex::new(None),
+            last_query: Mutex::new(None),
             wake: Notify::new(),
         }
     }
@@ -303,6 +318,9 @@ impl Controller {
         }
         if let Ok(mut detail) = self.detail.lock() {
             *detail = None;
+        }
+        if let Ok(mut last_query) = self.last_query.lock() {
+            *last_query = None;
         }
         self.wake();
     }
@@ -514,36 +532,12 @@ impl Controller {
         }
         let mut engine = match source {
             Source::Local(model) => {
-                let Ok(path) = resolve_model_path(&app.data_root, &model) else {
-                    self.fail(&identity);
+                let Some((worker, path)) =
+                    self.local_engine(&app.data_root, &model, &identity).await
+                else {
                     self.clear_active_embedding();
                     return;
                 };
-                let bytes = model.bytes;
-                let needs_verify = self
-                    .verified
-                    .lock()
-                    .map(|value| value.as_deref() != Some(&identity))
-                    .unwrap_or(true);
-                let mut worker = self.worker.lock().await;
-                if needs_verify {
-                    let copy = path.clone();
-                    let expected = identity.clone();
-                    let verified = tokio::task::spawn_blocking(move || {
-                        verify_file(&copy, Some((&expected, bytes)), &AtomicBool::new(false))
-                            .map_err(|_| "분류 모델의 무결성을 확인하지 못했습니다.".to_owned())
-                    })
-                    .await;
-                    if !matches!(verified, Ok(Ok(_))) {
-                        worker.shutdown().await;
-                        self.fail(&identity);
-                        self.clear_active_embedding();
-                        return;
-                    }
-                    if let Ok(mut value) = self.verified.lock() {
-                        *value = Some(identity.clone());
-                    }
-                }
                 Engine::Local { worker, path }
             }
             Source::Remote(config) => {
@@ -743,6 +737,131 @@ impl Controller {
             *active = None;
         }
     }
+
+    /// The local worker and model path, verifying the file once per identity.
+    /// A failed check marks the identity failed until invalidated.
+    async fn local_engine(
+        &self,
+        data_root: &Path,
+        model: &AiModel,
+        identity: &str,
+    ) -> Option<LocalEngine<'_>> {
+        let Ok(path) = resolve_model_path(data_root, model) else {
+            self.fail(identity);
+            return None;
+        };
+        let bytes = model.bytes;
+        let needs_verify = self
+            .verified
+            .lock()
+            .map(|value| value.as_deref() != Some(identity))
+            .unwrap_or(true);
+        let mut worker = self.worker.lock().await;
+        if needs_verify {
+            let copy = path.clone();
+            let expected = identity.to_owned();
+            let verified = tokio::task::spawn_blocking(move || {
+                verify_file(&copy, Some((&expected, bytes)), &AtomicBool::new(false))
+                    .map_err(|_| "분류 모델의 무결성을 확인하지 못했습니다.".to_owned())
+            })
+            .await;
+            if !matches!(verified, Ok(Ok(_))) {
+                worker.shutdown().await;
+                self.fail(identity);
+                return None;
+            }
+            if let Ok(mut value) = self.verified.lock() {
+                *value = Some(identity.to_owned());
+            }
+        }
+        Some((worker, path))
+    }
+
+    /// Embeds a search query with the selected local embedding model, for
+    /// comparison with stored notice vectors of the same model identity.
+    /// `None` means search stays text-only (see [`search_model`]), or the
+    /// engine is busy with an inventory or backend operation.
+    pub async fn query_vector(&self, app: &AppState, query: &str) -> Option<(String, Vec<f32>)> {
+        let (preferences, model) = {
+            let store = app.store.lock().ok()?;
+            let preferences = store.ai_preferences().ok()?;
+            let model = preferences
+                .embedding_model_id
+                .as_ref()
+                .and_then(|id| store.ai_model(id).ok().flatten());
+            (preferences, model)
+        };
+        let (model, identity) = search_model(&preferences, model)?;
+        if app.models.busy() || app.ai_operation.status().is_some() {
+            return None;
+        }
+        let vector = self
+            .embed_query(&app.data_root, &model, &identity, query)
+            .await?;
+        Some((identity, vector))
+    }
+
+    /// The query vector, from the last search or one embedding request. The
+    /// batch guard keeps it from overlapping a classification batch, and a
+    /// paused or failed engine is not started.
+    async fn embed_query(
+        &self,
+        data_root: &Path,
+        model: &AiModel,
+        identity: &str,
+        query: &str,
+    ) -> Option<Vec<f32>> {
+        let query = query.split_whitespace().collect::<Vec<_>>().join(" ");
+        if query.is_empty() {
+            return None;
+        }
+        if let Some((_, _, vector)) = self.last_query.lock().ok().and_then(|last| {
+            last.clone()
+                .filter(|(cached, text, _)| cached == identity && *text == query)
+        }) {
+            return Some(vector);
+        }
+        if self.is_failed(identity) || self.paused.load(Ordering::Acquire) {
+            return None;
+        }
+        let _batch = self.batch.lock().await;
+        if self.paused.load(Ordering::Acquire) {
+            return None;
+        }
+        let (mut worker, path) = self.local_engine(data_root, model, identity).await?;
+        let vector = match worker
+            .embed(&path, &[format!("{SEARCH_INSTRUCTION}{query}")])
+            .await
+        {
+            Ok(mut vectors) if vectors.len() == 1 => vectors.pop()?,
+            Ok(_) => return None,
+            Err(error) => {
+                eprintln!("Search embedding: {error}");
+                return None;
+            }
+        };
+        drop(worker);
+        if let Ok(mut last) = self.last_work.lock() {
+            *last = Some(Instant::now());
+        }
+        if let Ok(mut last_query) = self.last_query.lock() {
+            *last_query = Some((identity.to_owned(), query, vector.clone()));
+        }
+        Some(vector)
+    }
+}
+
+/// The local model whose stored vectors a search query is compared with.
+/// Semantic search follows the classification switch and never uses remote
+/// embeddings: search queries are typed by the user and stay on the device.
+fn search_model(preferences: &AiPreferences, model: Option<AiModel>) -> Option<(AiModel, String)> {
+    if preferences.engine == "openai-compatible" && preferences.remote_embeddings {
+        return None;
+    }
+    match select_source(preferences, model) {
+        Ok(Some((Source::Local(model), identity))) => Some((model, identity)),
+        _ => None,
+    }
 }
 
 pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
@@ -855,6 +974,99 @@ mod tests {
         remote.remote_consent = true;
         remote.remote_embedding_model = None;
         assert!(select_source(&remote, None).is_err());
+    }
+
+    #[test]
+    fn search_uses_only_the_local_model_under_the_classification_switch() {
+        let (model, identity) = search_model(&preferences(), Some(embedding_model())).unwrap();
+        assert_eq!(model.id, "embed");
+        assert_eq!(identity, "c".repeat(64));
+        let mut disabled = preferences();
+        disabled.classification_enabled = false;
+        assert!(search_model(&disabled, Some(embedding_model())).is_none());
+        assert!(search_model(&preferences(), None).is_none());
+        // Queries never go to the remote endpoint, even with a local model.
+        let mut remote = preferences();
+        remote.engine = "openai-compatible".into();
+        remote.remote_embeddings = true;
+        remote.remote_consent = true;
+        remote.remote_base_url = Some("https://api.example.com".into());
+        remote.remote_embedding_model = Some("embed".into());
+        assert!(search_model(&remote, Some(embedding_model())).is_none());
+        // Remote analysis alone keeps local search vectors.
+        remote.remote_embeddings = false;
+        assert!(search_model(&remote, Some(embedding_model())).is_some());
+    }
+
+    fn fake_controller() -> (tempfile::TempDir, Controller, AiModel) {
+        let directory = tempfile::tempdir().unwrap();
+        let (executable, path) = super::super::test_worker::fake_engine(directory.path(), "ok");
+        std::fs::write(directory.path().join("embed-one"), b"").unwrap();
+        let controller = Controller::with_worker(Worker::embedding(&executable));
+        let mut model = embedding_model();
+        model.path = path.to_string_lossy().into_owned();
+        (directory, controller, model)
+    }
+
+    #[tokio::test]
+    async fn query_vector_uses_the_search_instruction_and_reuses_the_last_query() {
+        let (directory, controller, model) = fake_controller();
+        let identity = model.sha256.clone().unwrap();
+        // File integrity has its own tests; the fake GGUF cannot pass it.
+        *controller.verified.lock().unwrap() = Some(identity.clone());
+        let vector = controller
+            .embed_query(directory.path(), &model, &identity, "  생활비   지원 ")
+            .await
+            .unwrap();
+        assert!((vector[0] - 0.6).abs() < 1e-6 && (vector[1] - 0.8).abs() < 1e-6);
+        let bodies = std::fs::read_to_string(directory.path().join("embedding-bodies")).unwrap();
+        assert!(bodies.contains("Given a web search query"), "{bodies}");
+        assert!(bodies.contains("Query: 생활비 지원"), "{bodies}");
+        // Paging repeats the query: no second request.
+        assert!(controller
+            .embed_query(directory.path(), &model, &identity, "생활비 지원")
+            .await
+            .is_some());
+        let requests = || {
+            std::fs::read_to_string(directory.path().join("requests"))
+                .unwrap()
+                .lines()
+                .filter(|line| *line == "embedding")
+                .count()
+        };
+        assert_eq!(requests(), 1);
+        assert!(controller
+            .embed_query(directory.path(), &model, &identity, "장학")
+            .await
+            .is_some());
+        assert_eq!(requests(), 2);
+        assert!(controller
+            .embed_query(directory.path(), &model, &identity, "   ")
+            .await
+            .is_none());
+        controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn query_vector_never_starts_a_paused_or_failed_engine() {
+        let (directory, controller, model) = fake_controller();
+        let identity = model.sha256.clone().unwrap();
+        let controller = Arc::new(controller);
+        {
+            let _pause = controller.quiesce().await;
+            assert!(controller
+                .embed_query(directory.path(), &model, &identity, "장학")
+                .await
+                .is_none());
+        }
+        // The fake GGUF fails verification: no request, and the model is marked failed.
+        assert!(controller
+            .embed_query(directory.path(), &model, &identity, "장학")
+            .await
+            .is_none());
+        assert!(controller.is_failed(&identity));
+        assert!(!directory.path().join("requests").exists());
+        controller.shutdown().await;
     }
 
     #[test]

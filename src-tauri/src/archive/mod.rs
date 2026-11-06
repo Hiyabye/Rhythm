@@ -61,6 +61,31 @@ pub async fn archive_query(
         .await
         .map_err(|_| "로컬 검색 작업을 완료하지 못했습니다.")?
 }
+/// Relevance-ordered search. When the local embedding model can embed the
+/// query, notices with a similar meaning join the text matches; otherwise the
+/// ranking is text-only. The query never leaves the device.
+#[tauri::command]
+pub async fn archive_ranked_query(
+    state: State<'_, AppState>,
+    query: ArchiveQuery,
+) -> Result<ArchivePage, String> {
+    let _lease = state.operation_gate.shared().await?;
+    crate::storage::search_terms(&query.query)?;
+    let semantic = state.classifier.query_vector(&state, &query.query).await;
+    let store = state.store.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_store(&store, |s| {
+            s.archive_ranked_query(
+                &query,
+                semantic
+                    .as_ref()
+                    .map(|(identity, vector)| (identity.as_str(), vector.as_slice())),
+            )
+        })
+    })
+    .await
+    .map_err(|_| "로컬 검색 작업을 완료하지 못했습니다.")?
+}
 #[tauri::command]
 pub async fn archive_document(
     state: State<'_, AppState>,

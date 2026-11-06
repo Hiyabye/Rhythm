@@ -218,7 +218,7 @@ const SIMILAR_MIN_SCORE: f32 = 0.75;
 /// digit runs in the body, so a notice with other dates, times or amounts is
 /// never treated as a copy.
 const DUPLICATE_MIN_SCORE: f32 = 0.97;
-fn decode_embedding(dim: i64, bytes: &[u8]) -> Result<Vec<f32>, String> {
+pub(super) fn decode_embedding(dim: i64, bytes: &[u8]) -> Result<Vec<f32>, String> {
     let dim =
         usize::try_from(dim).map_err(|_| "저장된 임베딩 크기가 올바르지 않습니다.".to_string())?;
     if dim == 0 || dim > MAX_EMBEDDING_DIM || bytes.len() != dim * 4 {
@@ -236,7 +236,7 @@ fn decode_embedding(dim: i64, bytes: &[u8]) -> Result<Vec<f32>, String> {
     Ok(vector)
 }
 /// Stored vectors are unit length, so the dot product is the cosine.
-fn cosine(a: &[f32], b: &[f32]) -> Option<f32> {
+pub(super) fn cosine(a: &[f32], b: &[f32]) -> Option<f32> {
     (a.len() == b.len()).then(|| a.iter().zip(b).map(|(x, y)| x * y).sum())
 }
 fn normalized_title(title: &str) -> String {
@@ -357,7 +357,7 @@ fn result_row(row: &Row<'_>) -> rusqlite::Result<AiResult> {
         created_at: row.get(15)?,
     })
 }
-fn valid_hash(value: &str) -> bool {
+pub(super) fn valid_hash(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()

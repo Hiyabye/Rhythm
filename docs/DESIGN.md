@@ -203,7 +203,7 @@ Navigation is a macOS source list. The four primary views **오늘 · 받은 소
 | --- | --- |
 | 오늘 | Recent ranked notices with grounded reasons; cold-start recent items are explicitly not personalized. Stored current AI summaries are optional and do not influence ranking. |
 | 받은 소식 | Full paginated chronological archive with unread/source/date/original-category filters and save controls. Recommendations never silently replace the inbox. |
-| 탐색 | Explicit local title/body search, mixed Korean/English/numeric terms, plain-text snippets and highlighted matches. |
+| 탐색 | Explicit local title/body search, mixed Korean/English/numeric terms, plain-text snippets and highlighted matches. Defaults to 관련도순; with the local classifier, notices similar in meaning join the results with a quiet `검색어는 없지만 뜻이 비슷한 공지` note. |
 | 보관함 | User-saved notices, independent of extension enablement. Saving contributes only bounded local evidence and does not make attachments available automatically. |
 | 설정 | Six panes, one at a time: 일반 (theme, power mode, start/close, automatic sync), 게시판 (extension switch, board tiles, collection), AI (engine, model tiles, analysis mode, 고급), 개인화 (profile, interest chips, learning, reset), 알림 (switch, OS permission, sensitivity, quiet hours, history) and 데이터 및 정보 (local data, backup/restore, about and updates). |
 
@@ -242,7 +242,7 @@ All profile, preference, feedback and evidence data remain in local SQLite. The 
 
 Notices use restrained list rows rather than a dashboard of colored cards. Titles lead, followed by source, publication date and category. Unread state uses both a dot and accessible text; the save and read buttons name the action they perform ("저장 해제", "읽지 않음으로 표시") and expose no pressed state that could contradict that label. Constant-label toggles (interest feedback, theme, energy profile) use `aria-pressed`. Missing resources receive a visible note without implying the text is unavailable.
 
-Source/category selectors and publication-date order apply to actual local records. Inbox adds an unread-only control. Search runs on explicit submission, not a remote suggestion service; its explanatory text says that whitespace-separated terms must all occur and queries stay local. Highlighting renders escaped text and `mark` elements, never arbitrary search-result HTML. Lists use 30-row pages, guard pending save writes and announce loading/result/empty status without dialogs. Removing the final item from a later page never implies the entire archive is empty.
+Source/category selectors and publication-date order apply to actual local records. The search page adds 관련도순 as its default order; meaning-only rows reuse the secondary 11px note style, and the footnote mentions meaning matches only while they took part. Inbox adds an unread-only control. Search runs on explicit submission, not a remote suggestion service; its explanatory text says that whitespace-separated terms must all occur and queries stay local. Highlighting renders escaped text and `mark` elements, never arbitrary search-result HTML. Lists use 30-row pages, guard pending save writes and announce loading/result/empty status without dialogs. Removing the final item from a later page never implies the entire archive is empty.
 
 Empty states distinguish: no archive yet, no saved notices, no matching filters and load/search failure. They offer source settings or a clear retry when appropriate. A loading indicator is not a success count; a failed response does not fabricate an empty completed import.
 

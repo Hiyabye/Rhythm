@@ -133,6 +133,38 @@ test('navigation, local searches, filters, safe highlighting and empty-result an
   await expect(page.locator('.archive-view script')).toHaveCount(0);
 });
 
+test('relevance search stays text-only without an embedding model', async ({ page }) => {
+  await mockDesktop(page, { count: 3, aiSemanticSearch: true });
+  await page.goto('/');
+  await navigate(page, '탐색');
+  await expect(page.getByRole('combobox', { name: '정렬', exact: true })).toHaveValue('relevance');
+  await page.getByLabel('보관된 공지 검색').fill('공지 01');
+  await page.getByRole('button', { name: '검색', exact: true }).click();
+  await expect(page.locator('.notice-list > li')).toHaveCount(1);
+  await expect.poll(() => callCount(page, 'archive_ranked_query')).toBe(1);
+  await expect(page.locator('.notice-meaning-note')).toHaveCount(0);
+  await expect(page.locator('.archive-search + .footnote')).not.toContainText('뜻이 비슷한');
+});
+
+test('relevance search marks notices found only by meaning, and date order is text-only', async ({ page }) => {
+  await mockDesktop(page, { count: 3, aiSemanticSearch: true, aiEmbeddingInstalled: true });
+  await page.goto('/');
+  await navigate(page, '탐색');
+  await page.getByLabel('보관된 공지 검색').fill('공지 03');
+  await page.getByRole('button', { name: '검색', exact: true }).click();
+  await expect(page.locator('.notice-list > li')).toHaveCount(2);
+  const meaning = page.locator('.notice-list > li').filter({ has: page.locator('.notice-meaning-note') });
+  await expect(meaning).toHaveCount(1);
+  await expect(meaning).toContainText('한국어 공지 01');
+  await expect(meaning.locator('.notice-meaning-note')).toHaveText('검색어는 없지만 뜻이 비슷한 공지');
+  await expect(page.locator('.archive-search + .footnote')).toContainText('뜻이 비슷한 공지도 함께 찾습니다');
+  await page.getByRole('combobox', { name: '정렬', exact: true }).selectOption('newest');
+  await expect(page.locator('.notice-list > li')).toHaveCount(1);
+  await expect(page.locator('.notice-meaning-note')).toHaveCount(0);
+  await expect.poll(() => callCount(page, 'archive_query')).toBeGreaterThan(0);
+  await expect(page.locator('.archive-search + .footnote')).not.toContainText('뜻이 비슷한');
+});
+
 test('successful empty archive is distinct from loading and errors', async ({ page }) => {
   await mockDesktop(page, { count: 0, queryGate: true });
   await page.goto('/');

@@ -129,6 +129,12 @@ pub struct ArchivePage {
     pub items: Vec<DocumentItem>,
     pub total: u64,
     pub categories: Vec<String>,
+    /// Relevance search only: notices found by meaning that match no search term.
+    #[serde(default)]
+    pub meaning_only: Vec<i64>,
+    /// Relevance search only: whether a query vector took part in the ranking.
+    #[serde(default)]
+    pub semantic: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ArchiveSummary {

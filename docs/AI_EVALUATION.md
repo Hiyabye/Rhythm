@@ -112,6 +112,24 @@ cargo test --locked --release -p rhythm actual_embedding_classification_evaluati
 
 Set `RHYTHM_EMBEDDING_EVAL_FORCE_CPU=1` for the CPU launch. The report includes every case's expected/predicted category, score, margin and elapsed time. The generation-model category figures above predate prompt 5; category is no longer generated, so the LLM harness no longer scores it.
 
+## Semantic search
+
+Search queries are compared with the stored classifier vectors, so the query instruction and cut-off were chosen on real output (#127). The ignored `actual_semantic_search_evaluation` embeds the 18 fixtures exactly as the classifier stores them (`classification::input`) and 12 authored paraphrase queries (for example `생활비 지원` → the scholarship fixtures, `학교를 잠시 쉬고 싶어요` → `academic`) that mostly avoid the fixtures' own words. Measured on the same Mac with the pinned Qwen3-Embedding 0.6B Q8_0 (verified size/SHA-256, isolated directory) on Metal:
+
+| Query instruction | MRR | Relevant in top 3 |
+| --- | ---: | ---: |
+| **Qwen3 web search (shipped `SEARCH_INSTRUCTION`)** | **0.882** | 11/12 |
+| Korean notice retrieval | 0.826 | 11/12 |
+| The classifier instruction | 0.826 | 11/12 |
+| None | 0.764 | 9/12 |
+
+Relevant and irrelevant scores overlap (shipped instruction: relevant median 0.31, irrelevant 90th percentile 0.37), so no absolute threshold separates them. Keeping hits within 0.08 of the best score and at least 0.20 kept a relevant notice for all 12 queries, 20 of 23 relevant pairs and 30 irrelevant ones (about 2.5 per query). Through the store's fused ranking (`archive_ranked_query`), a relevant fixture was in the top five for 12/12 queries, against 1/12 for text-only ranking, where 11 queries matched no text. Broad queries still bring in loosely related notices (up to eight hits within the margin). These are synthetic notices and queries; ranking quality on the real archive, on Windows and with other embedding models is unverified.
+
+```sh
+RHYTHM_EMBEDDING_EVAL_MODEL=/tmp/qwen3-embedding-0.6b.gguf RHYTHM_EMBEDDING_EVAL_REPORT=/tmp/search.json \
+cargo test --locked --release -p rhythm actual_semantic_search_evaluation -- --ignored --nocapture
+```
+
 ## Remote OpenAI-compatible engine
 
 No remote provider or model has been evaluated. `intelligence/remote.rs` is covered by deterministic fake-endpoint tests only: URL policy (HTTPS, loopback HTTP), request-body shape (the fixed instruction and the analysis prompt only; no personalization, profile, feedback, archive or device fields), `json_schema` → `json_object` → plain fallback, bounded provider errors without key echo, cancellation, redirect refusal, embedding order/unit length, local/remote cache-identity separation, the automatic daily reservation and settings migration/reopen. Settings and reader flows are covered by mocked-IPC UI tests.

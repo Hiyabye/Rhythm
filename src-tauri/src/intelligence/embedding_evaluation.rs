@@ -260,3 +260,209 @@ async fn actual_embedding_classification_evaluation() {
         "variants": variants,
     }));
 }
+
+/// Paraphrased Korean queries and the fixtures they should find. They avoid the
+/// fixture titles' own words where Korean allows, so they measure what full-text
+/// search misses. Authored for this evaluation, not taken from real searches.
+const SEARCH_QUERIES: [(&str, &[&str]); 12] = [
+    (
+        "생활비 지원",
+        &[
+            "scholarship",
+            "complex_eligibility",
+            "incomplete_source",
+            "eligibility_exclusions",
+        ],
+    ),
+    (
+        "등록금 부담 줄이는 방법",
+        &[
+            "scholarship",
+            "complex_eligibility",
+            "incomplete_source",
+            "eligibility_exclusions",
+        ],
+    ),
+    ("학교를 잠시 쉬고 싶어요", &["academic"]),
+    ("방학 동안 회사 실무 경험", &["internship", "time_purposes"]),
+    ("빅데이터 시합", &["competition", "formatted_table"]),
+    (
+        "교수님 연구실에서 일해 보기",
+        &["research", "relative_date"],
+    ),
+    ("취업 진로 강연", &["multiple_dates"]),
+    ("논문 자료 찾는 법", &["no_deadline"]),
+    ("책 읽는 모임", &["yearless_deadline"]),
+    ("개발자 발표회", &["event_only"]),
+    ("코딩 일자리", &["internship", "time_purposes"]),
+    ("아이디어 제안 공모", &["formatted_table", "competition"]),
+];
+
+/// Run like `actual_embedding_classification_evaluation`:
+/// `RHYTHM_EMBEDDING_EVAL_MODEL=/tmp/...gguf RHYTHM_EMBEDDING_EVAL_REPORT=/tmp/search.json`
+/// `cargo test --locked --release -p rhythm actual_semantic_search_evaluation -- --ignored --nocapture`
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires an explicit embedding GGUF and the staged llama-server"]
+async fn actual_semantic_search_evaluation() {
+    let Some(llama) = super::staged_llama() else {
+        eprintln!("SKIPPED: run `node scripts/stage-llama.mjs` first");
+        return;
+    };
+    let model = PathBuf::from(
+        std::env::var_os("RHYTHM_EMBEDDING_EVAL_MODEL").expect("embedding model path"),
+    );
+    assert!(model.is_file(), "missing model: {}", model.display());
+    let cases = cases();
+    let runtime = std::env::temp_dir().join(format!("rhythm-search-eval-{}", std::process::id()));
+    let worker = AsyncMutex::new(Worker::embedding_configured(
+        &llama, &runtime, "auto", "last",
+    ));
+    // Notices are embedded exactly as the production classifier stores them.
+    let notices = cases
+        .iter()
+        .map(|case| super::classification::input(&case.title, &case.body()))
+        .collect::<Vec<_>>();
+    let notice_vectors = embed_batch(&worker, &model, &notices)
+        .await
+        .expect("notice embeddings");
+    let instructions = [
+        ("retrieval", "Instruct: Given a Korean search query, retrieve relevant Korean university notices\nQuery: "),
+        // The shipped instruction; the others are the alternatives it was chosen over.
+        ("production", super::classification::SEARCH_INSTRUCTION),
+        ("classify", super::classification::INSTRUCTION),
+        ("plain", ""),
+    ];
+    let mut variants = Vec::new();
+    for (name, instruction) in instructions {
+        let inputs = SEARCH_QUERIES
+            .iter()
+            .map(|(query, _)| format!("{instruction}{query}"))
+            .collect::<Vec<_>>();
+        let started = Instant::now();
+        let vectors = embed_batch(&worker, &model, &inputs)
+            .await
+            .expect("query embeddings");
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        let mut reciprocal = 0.0;
+        let mut hits_at_3 = 0;
+        let mut relevant_scores = Vec::new();
+        let mut other_scores = Vec::new();
+        let mut queries = Vec::new();
+        for ((query, relevant), vector) in SEARCH_QUERIES.iter().zip(&vectors) {
+            let mut ranked = cases
+                .iter()
+                .zip(&notice_vectors)
+                .map(|(case, notice)| {
+                    let score = notice.iter().zip(vector).map(|(a, b)| a * b).sum::<f32>();
+                    (case.id.as_str(), score)
+                })
+                .collect::<Vec<_>>();
+            ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+            let first = ranked
+                .iter()
+                .position(|(id, _)| relevant.contains(id))
+                .map(|rank| rank + 1)
+                .unwrap_or(ranked.len() + 1);
+            reciprocal += 1.0 / first as f64;
+            if first <= 3 {
+                hits_at_3 += 1;
+            }
+            for (id, score) in &ranked {
+                if relevant.contains(id) {
+                    relevant_scores.push(*score);
+                } else {
+                    other_scores.push(*score);
+                }
+            }
+            queries.push(json!({
+                "query": query,
+                "first_relevant_rank": first,
+                "ranked": ranked.iter().map(|(id, score)| json!({"id": id, "score": score, "relevant": relevant.contains(id)})).collect::<Vec<_>>(),
+            }));
+        }
+        let stats = |scores: &mut Vec<f32>| {
+            scores.sort_by(|a, b| a.total_cmp(b));
+            json!({
+                "min": scores.first(),
+                "median": scores.get(scores.len() / 2),
+                "p90": scores.get(scores.len() * 9 / 10),
+                "max": scores.last(),
+            })
+        };
+        variants.push(json!({
+            "instruction": name,
+            "mrr": reciprocal / SEARCH_QUERIES.len() as f64,
+            "hits_at_3": hits_at_3,
+            "queries_total": SEARCH_QUERIES.len(),
+            "mean_ms_per_query": elapsed_ms as f64 / SEARCH_QUERIES.len() as f64,
+            "relevant_scores": stats(&mut relevant_scores),
+            "other_scores": stats(&mut other_scores),
+            "queries": queries,
+        }));
+    }
+    // The shipped path end to end: stored vectors, the production query
+    // instruction and the store's fused ranking, against text-only ranking.
+    let directory = tempfile::tempdir().unwrap();
+    let store = crate::storage::Store::open(&directory.path().join("search.sqlite3")).unwrap();
+    super::evaluation::seed(&store);
+    let sha = "e".repeat(64);
+    let mut ids = std::collections::HashMap::new();
+    for (case, vector) in cases.iter().zip(&notice_vectors) {
+        let (id, _) = store
+            .upsert_article("ai-evaluation", &case.article(), false)
+            .unwrap();
+        let revision = store.document(id, None).unwrap().revision_id;
+        store.ai_save_embedding(id, revision, &sha, vector).unwrap();
+        ids.insert(id, case.id.clone());
+    }
+    let inputs = SEARCH_QUERIES
+        .iter()
+        .map(|(query, _)| format!("{}{query}", super::classification::SEARCH_INSTRUCTION))
+        .collect::<Vec<_>>();
+    let query_vectors = embed_batch(&worker, &model, &inputs)
+        .await
+        .expect("query embeddings");
+    let mut fused_queries = Vec::new();
+    let (mut fused_hits, mut text_hits) = (0, 0);
+    for ((query, relevant), vector) in SEARCH_QUERIES.iter().zip(&query_vectors) {
+        let request = crate::archive::model::ArchiveQuery {
+            query: (*query).into(),
+            limit: Some(5),
+            ..Default::default()
+        };
+        let named = |page: &crate::archive::model::ArchivePage| {
+            page.items
+                .iter()
+                .map(|item| ids[&item.id].clone())
+                .collect::<Vec<_>>()
+        };
+        let text = store.archive_ranked_query(&request, None).unwrap();
+        let fused = store
+            .archive_ranked_query(&request, Some((&sha, vector)))
+            .unwrap();
+        let hit = |names: &[String]| names.iter().any(|name| relevant.contains(&name.as_str()));
+        let (text_names, fused_names) = (named(&text), named(&fused));
+        text_hits += usize::from(hit(&text_names));
+        fused_hits += usize::from(hit(&fused_names));
+        fused_queries.push(json!({
+            "query": query,
+            "text_total": text.total,
+            "text_top5": text_names,
+            "fused_total": fused.total,
+            "fused_top5": fused_names,
+            "meaning_only": fused.meaning_only.iter().map(|id| ids[id].clone()).collect::<Vec<_>>(),
+        }));
+    }
+    worker.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(&runtime);
+    report(&json!({
+        "model": model.to_string_lossy(),
+        "variants": variants,
+        "store": {
+            "text_queries_with_relevant_in_top5": text_hits,
+            "fused_queries_with_relevant_in_top5": fused_hits,
+            "queries_total": SEARCH_QUERIES.len(),
+            "queries": fused_queries,
+        },
+    }));
+}
