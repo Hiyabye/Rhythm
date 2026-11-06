@@ -123,6 +123,18 @@ pub struct AiClassification {
     pub created_at: String,
 }
 
+/// A notice whose latest-revision embedding is close to another notice's. The
+/// cosine score stays local; `duplicate` marks a likely cross-post.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SimilarNotice {
+    pub document_id: i64,
+    pub source_id: String,
+    pub source_name: String,
+    pub title: String,
+    pub published_at: String,
+    pub duplicate: bool,
+}
+
 /// One validated classification write. A struct keeps the persistence
 /// boundary readable without loosening argument validation.
 pub struct ClassificationWrite<'a> {
@@ -197,6 +209,57 @@ const MAX_LIST_LIMIT: u32 = 100;
 const MAX_FIELD_BYTES: usize = 8192;
 /// Largest stored embedding dimension.
 const MAX_EMBEDDING_DIM: usize = 8192;
+/// Newest latest-revision vectors compared per similarity request, so cost
+/// stays bounded as the archive grows. Older notices are not matched.
+pub const SIMILARITY_WINDOW: usize = 2000;
+/// Lowest cosine score shown as a similar notice.
+const SIMILAR_MIN_SCORE: f32 = 0.75;
+/// Duplicates need this score plus an identical normalized title and the same
+/// digit runs in the body, so a notice with other dates, times or amounts is
+/// never treated as a copy.
+const DUPLICATE_MIN_SCORE: f32 = 0.97;
+fn decode_embedding(dim: i64, bytes: &[u8]) -> Result<Vec<f32>, String> {
+    let dim =
+        usize::try_from(dim).map_err(|_| "저장된 임베딩 크기가 올바르지 않습니다.".to_string())?;
+    if dim == 0 || dim > MAX_EMBEDDING_DIM || bytes.len() != dim * 4 {
+        return Err("저장된 임베딩이 완전하지 않습니다.".into());
+    }
+    let vector = bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| f32::from_le_bytes(*chunk))
+        .collect::<Vec<_>>();
+    if vector.iter().any(|value| !value.is_finite()) {
+        return Err("저장된 임베딩 값이 올바르지 않습니다.".into());
+    }
+    Ok(vector)
+}
+/// Stored vectors are unit length, so the dot product is the cosine.
+fn cosine(a: &[f32], b: &[f32]) -> Option<f32> {
+    (a.len() == b.len()).then(|| a.iter().zip(b).map(|(x, y)| x * y).sum())
+}
+fn normalized_title(title: &str) -> String {
+    title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+fn digit_runs(text: &str) -> Vec<&str> {
+    text.split(|c: char| !c.is_ascii_digit())
+        .filter(|run| !run.is_empty())
+        .collect()
+}
+struct WindowNotice {
+    document_id: i64,
+    revision_id: i64,
+    source_id: String,
+    source_name: String,
+    title: String,
+    published_at: String,
+    vector: Vec<f32>,
+}
 fn id_pair(row: &Row<'_>) -> rusqlite::Result<(i64, i64)> {
     Ok((row.get(0)?, row.get(1)?))
 }
@@ -798,21 +861,11 @@ impl Store {
             .optional()
             .map_err(|e| e.to_string())?;
         row.map(|(dim, bytes)| {
-            let dim = u32::try_from(dim)
-                .map_err(|_| "저장된 임베딩 크기가 올바르지 않습니다.".to_string())?;
-            if dim == 0 || dim as usize > MAX_EMBEDDING_DIM || bytes.len() != dim as usize * 4 {
-                return Err("저장된 임베딩이 완전하지 않습니다.".into());
-            }
-            let vector = bytes
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|chunk| f32::from_le_bytes(*chunk))
-                .collect::<Vec<_>>();
-            if vector.iter().any(|value| !value.is_finite()) {
-                return Err("저장된 임베딩 값이 올바르지 않습니다.".into());
-            }
-            Ok(StoredEmbedding { dim, vector })
+            let vector = decode_embedding(dim, &bytes)?;
+            Ok(StoredEmbedding {
+                dim: vector.len() as u32,
+                vector,
+            })
         })
         .transpose()
     }
@@ -937,6 +990,131 @@ impl Store {
             )
             .optional()
             .map_err(|e| e.to_string())
+    }
+    /// Similar notices for each requested document, compared by the cosine of
+    /// latest-revision vectors from one embedding model. Only the newest
+    /// `SIMILARITY_WINDOW` embedded notices are candidates, and a document
+    /// without a vector for this model gets an empty list. Each list holds every
+    /// duplicate first, then up to `limit` matches in total.
+    pub fn ai_similar_notices(
+        &self,
+        document_ids: &[i64],
+        model_sha256: &str,
+        limit: usize,
+    ) -> Result<Vec<(i64, Vec<SimilarNotice>)>, String> {
+        if document_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if document_ids.len() > 200 || !valid_hash(model_sha256) || limit == 0 || limit > 50 {
+            return Err("비슷한 공지 조회 범위를 확인해 주세요.".into());
+        }
+        let window = self
+            .connection
+            .prepare(
+                "SELECT d.id,e.revision_id,d.source_id,s.name,d.title,d.published_at,e.dim,e.vector
+                 FROM documents d
+                 JOIN sources s ON s.id=d.source_id
+                 JOIN notice_embeddings e ON e.document_id=d.id AND e.model_sha256=?1
+                   AND e.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id)
+                 ORDER BY d.published_at DESC,d.id DESC
+                 LIMIT ?2",
+            )
+            .map_err(|e| e.to_string())?
+            .query_map(params![model_sha256, SIMILARITY_WINDOW as i64], |row| {
+                Ok((
+                    WindowNotice {
+                        document_id: row.get(0)?,
+                        revision_id: row.get(1)?,
+                        source_id: row.get(2)?,
+                        source_name: row.get(3)?,
+                        title: row.get(4)?,
+                        published_at: row.get(5)?,
+                        vector: Vec::new(),
+                    },
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, Vec<u8>>(7)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .map(|row| {
+                let (mut notice, dim, bytes) = row.map_err(|e| e.to_string())?;
+                notice.vector = decode_embedding(dim, &bytes)?;
+                Ok(notice)
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let mut bodies = std::collections::HashMap::<i64, Option<(String, String)>>::new();
+        let mut text = |notice: &WindowNotice| -> Result<Option<(String, String)>, String> {
+            if let Some(value) = bodies.get(&notice.document_id) {
+                return Ok(value.clone());
+            }
+            let value = self.classification_text(notice.document_id, notice.revision_id)?;
+            bodies.insert(notice.document_id, value.clone());
+            Ok(value)
+        };
+        let mut results = Vec::with_capacity(document_ids.len());
+        for &document_id in document_ids {
+            let target = match window.iter().find(|n| n.document_id == document_id) {
+                Some(notice) => Some((notice.revision_id, notice.vector.clone())),
+                None => {
+                    let revision: Option<i64> = self
+                        .connection
+                        .query_row(
+                            "SELECT MAX(id) FROM document_revisions WHERE document_id=?1",
+                            [document_id],
+                            |row| row.get(0),
+                        )
+                        .map_err(|e| e.to_string())?;
+                    match revision {
+                        Some(revision) => self
+                            .ai_embedding(document_id, revision, model_sha256)?
+                            .map(|stored| (revision, stored.vector)),
+                        None => None,
+                    }
+                }
+            };
+            let Some((revision_id, vector)) = target else {
+                results.push((document_id, Vec::new()));
+                continue;
+            };
+            let target_text = self.classification_text(document_id, revision_id)?;
+            let mut scored = Vec::new();
+            for (notice, score) in window
+                .iter()
+                .filter(|n| n.document_id != document_id)
+                .filter_map(|n| cosine(&vector, &n.vector).map(|score| (n, score)))
+                .filter(|(_, score)| *score >= SIMILAR_MIN_SCORE)
+            {
+                let duplicate = score >= DUPLICATE_MIN_SCORE
+                    && match (&target_text, text(notice)?) {
+                        (Some((title, body)), Some((other_title, other_body))) => {
+                            normalized_title(title) == normalized_title(&other_title)
+                                && digit_runs(body) == digit_runs(&other_body)
+                        }
+                        _ => false,
+                    };
+                scored.push((notice, score, duplicate));
+            }
+            scored.sort_by(|a, b| {
+                b.2.cmp(&a.2)
+                    .then(b.1.total_cmp(&a.1))
+                    .then(b.0.document_id.cmp(&a.0.document_id))
+            });
+            let duplicates = scored.iter().filter(|(_, _, duplicate)| *duplicate).count();
+            let similar = scored
+                .into_iter()
+                .take(duplicates.max(limit))
+                .map(|(notice, _, duplicate)| SimilarNotice {
+                    document_id: notice.document_id,
+                    source_id: notice.source_id.clone(),
+                    source_name: notice.source_name.clone(),
+                    title: notice.title.clone(),
+                    published_at: notice.published_at.clone(),
+                    duplicate,
+                })
+                .collect();
+            results.push((document_id, similar));
+        }
+        Ok(results)
     }
     pub fn ai_has_model_jobs(&self, model_sha256: &str) -> Result<bool, String> {
         self.connection

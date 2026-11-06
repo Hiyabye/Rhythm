@@ -1,16 +1,17 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { AiClassification, DocumentDetail, SyncStatus } from './types';
+  import type { AiClassification, DocumentDetail, SimilarNotice, SyncStatus } from './types';
   import { archiveDate, archiveError, archiveSize, resourceStatus } from './archive-format';
   import Icon from './Icon.svelte';
   import AnalysisPanel from './AnalysisPanel.svelte';
 
-  let { id, initialRevisionId = null, enabled, onclose, onchange, onaisettings }: {
-    id: number; initialRevisionId?: number | null; enabled: boolean; onclose: () => void; onchange: () => void; onaisettings: () => void;
+  let { id, initialRevisionId = null, enabled, onclose, onchange, onaisettings, onopen }: {
+    id: number; initialRevisionId?: number | null; enabled: boolean; onclose: () => void; onchange: () => void; onaisettings: () => void; onopen: (id: number) => void;
   } = $props();
   let detail = $state<DocumentDetail | null>(null);
   let classification = $state<AiClassification | null>(null);
+  let similar = $state<SimilarNotice[]>([]);
   let loading = $state(true);
   let busy = $state(false);
   let resourceBusy = $state(false);
@@ -30,6 +31,11 @@
 
   onMount(() => {
     void load(initialRevisionId, true);
+    // Similar notices come from the latest revision's stored vector, so they
+    // do not change with the selected revision and are optional.
+    void invoke<SimilarNotice[]>('ai_similar_notices', { documentId: id })
+      .then((value) => { if (!disposed) similar = value; })
+      .catch(() => {});
     const key = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !(event.target instanceof HTMLSelectElement)) onclose();
     };
@@ -337,6 +343,18 @@
           </div>
         {/each}
         {#if !enabled}<p class="footnote">자료를 추가로 받으려면 설정에서 서강대학교 공지 확장 기능을 켜 주세요.</p>{/if}
+      </section>
+    {/if}
+    {#if similar.length}
+      <section class="reader-resources" aria-labelledby="similar-heading">
+        <h3 id="similar-heading">비슷한 공지 <span class="muted">{similar.length}</span></h3>
+        <p class="footnote">분류용으로 저장한 임베딩을 최근 공지와 비교했습니다. 제목과 본문의 날짜·시간·숫자가 모두 같을 때만 같은 공지로 표시합니다.</p>
+        {#each similar as notice (notice.document_id)}
+          <div class="resource-row">
+            <div><strong>{notice.title}</strong><p>{notice.source_name} · {archiveDate(notice.published_at)}{#if notice.duplicate} · <span class="ai-tag">같은 공지</span>{/if}</p></div>
+            <button class="text-button" aria-label={`${notice.title} 읽기`} onclick={() => onopen(notice.document_id)}>읽기</button>
+          </div>
+        {/each}
       </section>
     {/if}
     <footer class="reader-archive-meta"><span>처음 수집: {archiveDate(detail.item.collected_at, true)}</span><span>이 버전 보관: {archiveDate(detail.revisions.find((revision) => revision.id === detail?.revision_id)?.collected_at ?? null, true)}</span></footer>

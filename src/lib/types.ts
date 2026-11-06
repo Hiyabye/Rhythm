@@ -294,6 +294,11 @@ export interface AiClassification {
   document_id: number; revision_id: number; category: string;
   low_confidence: boolean; created_at: string;
 }
+export interface SimilarNotice {
+  document_id: number; source_id: string; source_name: string; title: string;
+  published_at: string; duplicate: boolean;
+}
+export interface DuplicateNotices { document_id: number; duplicates: SimilarNotice[] }
 export interface AiSnapshot {
   catalog: CatalogEntry[]; models: AiModel[]; projectors: AiProjector[]; preferences: AiPreferences; jobs: AiJob[]; runtime: WorkerStatus;
   classification: { state: 'idle' | 'classifying' | 'waiting' | 'disabled' | 'failed' | string; processed: number; detail?: string | null };

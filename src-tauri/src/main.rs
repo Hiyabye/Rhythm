@@ -745,6 +745,8 @@ fn main() {
             intelligence::commands::ai_recent,
             intelligence::commands::ai_classifications,
             intelligence::commands::ai_classification,
+            intelligence::commands::ai_similar_notices,
+            intelligence::commands::ai_duplicate_notices,
             intelligence::commands::ai_classification_preferences,
             archive::archive_sources,
             archive::archive_subscribe,

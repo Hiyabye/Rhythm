@@ -1692,9 +1692,20 @@ select:focus-visible {
   line-height: 1.85;
   overflow-wrap: anywhere;
 }
-.notice-resource-warning {
+.notice-resource-warning,
+.notice-duplicate-note {
   font-size: 11px;
   color: var(--secondary);
+}
+.notice-list li.has-duplicates {
+  flex-wrap: wrap;
+}
+.notice-duplicate-toggle {
+  margin: -6px 0 8px 22px;
+  font-size: 12px;
+}
+.notice-duplicate-member .notice-open {
+  padding-left: 40px;
 }
 .notice-save {
   position: absolute;
