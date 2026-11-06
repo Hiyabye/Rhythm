@@ -1677,6 +1677,50 @@ fn similar_notices_flag_only_exact_cross_posts_and_isolate_model_hashes() {
 }
 
 #[test]
+fn duplicate_check_reads_full_width_digits() {
+    let (_directory, store) = database();
+    let model = "a".repeat(64);
+    let title = "장학금 신청 안내";
+    let (target, _) = embedded_notice(
+        &store,
+        "test",
+        "a",
+        title,
+        "신청 기한 ３월 １０일 17시",
+        &[1.0, 0.0],
+        &model,
+    );
+    // The same date in ASCII digits is a copy.
+    let (ascii, _) = embedded_notice(
+        &store,
+        "test",
+        "b",
+        title,
+        "신청 기한 3월 10일 17시",
+        &[1.0, 0.01],
+        &model,
+    );
+    // Another date written only in full-width digits is not.
+    let (other_date, _) = embedded_notice(
+        &store,
+        "test",
+        "c",
+        title,
+        "신청 기한 ４월 １１일 17시",
+        &[1.0, 0.02],
+        &model,
+    );
+    let similar = &store.ai_similar_notices(&[target], &model, 5).unwrap()[0].1;
+    assert_eq!(
+        similar
+            .iter()
+            .map(|n| (n.document_id, n.duplicate))
+            .collect::<Vec<_>>(),
+        vec![(ascii, true), (other_date, false)]
+    );
+}
+
+#[test]
 fn similar_notice_candidates_are_bounded_to_the_newest_window() {
     let (_directory, store) = database();
     let model = "a".repeat(64);
