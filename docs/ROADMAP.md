@@ -1,6 +1,6 @@
 # Roadmap
 
-Rhythm stays local-first and Korean-first. The current release is **v1.3.0**. Support targets macOS Apple Silicon and Windows 11 x64; Linux and Intel Macs are not supported. Planned work is tracked in [GitHub issues](https://github.com/Hiyabye/Rhythm/issues); this page records the current state and what has actually been verified.
+Rhythm stays local-first and Korean-first. The current release is **v1.4.0**. Support targets macOS Apple Silicon and Windows 11 x64; Linux and Intel Macs are not supported. Planned work is tracked in [GitHub issues](https://github.com/Hiyabye/Rhythm/issues); this page records the current state and what has actually been verified.
 
 ## Current state
 
@@ -29,6 +29,12 @@ v1.3.0 adds:
 - Optional vision projector (#111): an installed `mmproj` adds up to two already-downloaded images of a notice to its analysis; image facts are marked as read from an image and ambiguous dates stay unknown.
 - Notice images may be downloaded from any public HTTPS host (that host's robots.txt applies), and 자료 모두 내려받기 fetches every missing file of a board (#104).
 - The login item is named after the bundle identifier, so a validation build no longer shares the production entry (#67). A failed analysis shows a Korean user-facing error instead of the model's repair instruction (#98).
+
+v1.4.0 adds:
+
+- An opt-in OpenAI-compatible engine (#77). The local engine stays the default and fully supported; remote analysis requires a normalized base URL and model plus consent bound to that origin, keeps the API key in the OS credential store, sends only notice title and body text (no personalization, archive identities or images), falls back from `json_schema` to `json_object` and plain text, and has a separate automatic-work switch with a per-day cap. Remote embedding classification is a separate switch.
+- New source families, each verified for full article and local-resource extraction: 전자공학과·시스템반도체공학과 community boards (9, #94), 생활관 dormitory boards (3, #116), 기계공학과 boards discovered through the site's sitemap (7, #95) and 반도체공학과 boards (5, #96). The catalog lists 35 boards; 34 are subscribable and the 공과대학 뉴스레터 stays listed as unsupported.
+- The notice preview separates the classification label from the AI summary (#119). The unsigned Windows distribution decision is recorded (#85).
 
 ## Verification status
 
