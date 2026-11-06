@@ -182,7 +182,11 @@
       } catch { /* The archive remains usable if proactive state is unavailable. */ }
       try { restoreOutcome = await invoke<RestoreOutcome | null>('backup_restore_outcome'); }
       catch { /* A missing report must not block the restored archive. */ }
-      try { setupNeeded = !(await invoke<AiSnapshot>('ai_snapshot')).preferences.setup_completed; }
+      try {
+        const ai = await invoke<AiSnapshot>('ai_snapshot');
+        // The remote engine needs no local model install or setup check.
+        setupNeeded = !ai.preferences.setup_completed && ai.preferences.engine !== 'openai-compatible';
+      }
       catch { /* AI availability must not prevent archive access. Settings exposes recovery. */ }
     } catch (reason) {
       error = message(reason);

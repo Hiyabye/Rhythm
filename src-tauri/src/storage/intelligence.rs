@@ -67,6 +67,29 @@ pub struct AiPreferences {
     /// Automatic classification runs only when an embedding model is installed.
     #[serde(default = "default_enabled")]
     pub classification_enabled: bool,
+    /// `local` (default) or `openai-compatible`. The local engine stays fully supported.
+    #[serde(default = "default_engine")]
+    pub engine: String,
+    /// Normalized base URL of the user-chosen OpenAI-compatible endpoint.
+    #[serde(default)]
+    pub remote_base_url: Option<String>,
+    #[serde(default)]
+    pub remote_model: Option<String>,
+    /// Separate embedding model; classification stays local unless remote embeddings are on.
+    #[serde(default)]
+    pub remote_embedding_model: Option<String>,
+    #[serde(default = "default_remote_timeout")]
+    pub remote_timeout_seconds: u32,
+    /// Explicit consent for sending notice text to the configured origin.
+    #[serde(default)]
+    pub remote_consent: bool,
+    /// Automatic (recent/backlog) remote analysis is a separate, cost-bearing opt-in.
+    #[serde(default)]
+    pub remote_automatic: bool,
+    #[serde(default = "default_remote_daily_limit")]
+    pub remote_daily_limit: u32,
+    #[serde(default)]
+    pub remote_embeddings: bool,
 }
 
 fn default_model_kind() -> String {
@@ -75,6 +98,18 @@ fn default_model_kind() -> String {
 
 fn default_enabled() -> bool {
     true
+}
+
+fn default_engine() -> String {
+    "local".into()
+}
+
+fn default_remote_timeout() -> u32 {
+    120
+}
+
+fn default_remote_daily_limit() -> u32 {
+    20
 }
 
 /// One revision-scoped embedding classification. The raw score and margin stay
@@ -460,7 +495,7 @@ impl Store {
         Ok(())
     }
     pub fn ai_preferences(&self) -> Result<AiPreferences, String> {
-        self.connection.query_row("SELECT active_model_id,setup_completed,processing_mode,automatic_limit,max_tokens,execution_mode,model_directory,embedding_model_id,classification_enabled FROM ai_preferences WHERE id=1",[],|r|Ok(AiPreferences { active_model_id:r.get(0)?,setup_completed:r.get(1)?,processing_mode:r.get(2)?,automatic_limit:r.get(3)?,max_tokens:r.get(4)?,execution_mode:r.get(5)?,model_directory:r.get(6)?,embedding_model_id:r.get(7)?,classification_enabled:r.get(8)? })).map_err(|e|e.to_string())
+        self.connection.query_row("SELECT active_model_id,setup_completed,processing_mode,automatic_limit,max_tokens,execution_mode,model_directory,embedding_model_id,classification_enabled,engine,remote_base_url,remote_model,remote_embedding_model,remote_timeout_seconds,remote_consent,remote_automatic,remote_daily_limit,remote_embeddings FROM ai_preferences WHERE id=1",[],|r|Ok(AiPreferences { active_model_id:r.get(0)?,setup_completed:r.get(1)?,processing_mode:r.get(2)?,automatic_limit:r.get(3)?,max_tokens:r.get(4)?,execution_mode:r.get(5)?,model_directory:r.get(6)?,embedding_model_id:r.get(7)?,classification_enabled:r.get(8)?,engine:r.get(9)?,remote_base_url:r.get(10)?,remote_model:r.get(11)?,remote_embedding_model:r.get(12)?,remote_timeout_seconds:r.get(13)?,remote_consent:r.get(14)?,remote_automatic:r.get(15)?,remote_daily_limit:r.get(16)?,remote_embeddings:r.get(17)? })).map_err(|e|e.to_string())
     }
     pub fn ai_save_preferences(&self, preferences: &AiPreferences) -> Result<(), String> {
         validate_model_directory(preferences.model_directory.as_deref())?;
@@ -480,15 +515,86 @@ impl Store {
                 return Err("설치가 완료된 분류 모델을 선택해 주세요.".into());
             }
         }
+        let bounded_field = |value: &Option<String>| {
+            value.as_deref().is_some_and(|value| {
+                value.len() > 2048 || value.contains('\0') || value.chars().any(char::is_control)
+            })
+        };
         if !["explicit", "recent", "backlog"].contains(&preferences.processing_mode.as_str())
             || !["auto", "cpu", "gpu"].contains(&preferences.execution_mode.as_str())
+            || !["local", "openai-compatible"].contains(&preferences.engine.as_str())
             || preferences.automatic_limit > 20
             || !(128..=4096).contains(&preferences.max_tokens)
+            || !(10..=600).contains(&preferences.remote_timeout_seconds)
+            || preferences.remote_daily_limit > 200
+            || bounded_field(&preferences.remote_base_url)
+            || bounded_field(&preferences.remote_model)
+            || bounded_field(&preferences.remote_embedding_model)
+            || preferences
+                .remote_model
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty())
+            || preferences
+                .remote_embedding_model
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty())
         {
             return Err("AI 처리 설정을 확인해 주세요.".into());
         }
-        self.connection.execute("UPDATE ai_preferences SET active_model_id=?1,setup_completed=?2,processing_mode=?3,automatic_limit=?4,max_tokens=?5,execution_mode=?6,model_directory=?7,embedding_model_id=?8,classification_enabled=?9 WHERE id=1", params![preferences.active_model_id,preferences.setup_completed,preferences.processing_mode,preferences.automatic_limit,preferences.max_tokens,preferences.execution_mode,preferences.model_directory,preferences.embedding_model_id,preferences.classification_enabled]).map_err(|e|e.to_string())?;
+        self.connection.execute("UPDATE ai_preferences SET active_model_id=?1,setup_completed=?2,processing_mode=?3,automatic_limit=?4,max_tokens=?5,execution_mode=?6,model_directory=?7,embedding_model_id=?8,classification_enabled=?9,engine=?10,remote_base_url=?11,remote_model=?12,remote_embedding_model=?13,remote_timeout_seconds=?14,remote_consent=?15,remote_automatic=?16,remote_daily_limit=?17,remote_embeddings=?18 WHERE id=1", params![preferences.active_model_id,preferences.setup_completed,preferences.processing_mode,preferences.automatic_limit,preferences.max_tokens,preferences.execution_mode,preferences.model_directory,preferences.embedding_model_id,preferences.classification_enabled,preferences.engine,preferences.remote_base_url,preferences.remote_model,preferences.remote_embedding_model,preferences.remote_timeout_seconds,preferences.remote_consent,preferences.remote_automatic,preferences.remote_daily_limit,preferences.remote_embeddings]).map_err(|e|e.to_string())?;
         Ok(())
+    }
+    /// A restored backup may contain remote engine preferences. They stay
+    /// disabled until the user consents again; the key itself is never in the
+    /// backup and remains in the OS credential store.
+    pub fn reset_remote_after_restore(&self) -> Result<(), String> {
+        self.connection
+            .execute(
+                "UPDATE ai_preferences SET engine='local',remote_consent=0,remote_automatic=0,remote_embeddings=0 WHERE id=1",
+                [],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+    /// Reserves one automatic remote attempt for the current local date.
+    /// Direct user requests do not call this. `false` means the daily cap is reached.
+    pub fn ai_reserve_remote_automatic(&self, limit: u32) -> Result<bool, String> {
+        if limit == 0 {
+            return Ok(false);
+        }
+        self.connection
+            .execute(
+                "DELETE FROM ai_remote_usage WHERE day<strftime('%Y-%m-%d','now','localtime','-7 days')",
+                [],
+            )
+            .map_err(|error| error.to_string())?;
+        let changed = self
+            .connection
+            .execute(
+                "INSERT INTO ai_remote_usage(day,attempts) VALUES(strftime('%Y-%m-%d','now','localtime'),1) ON CONFLICT(day) DO UPDATE SET attempts=attempts+1 WHERE attempts<?1",
+                [limit],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(changed == 1)
+    }
+    /// Returns a reservation when no job was actually admitted.
+    pub fn ai_release_remote_automatic(&self) -> Result<(), String> {
+        self.connection
+            .execute(
+                "UPDATE ai_remote_usage SET attempts=attempts-1 WHERE day=strftime('%Y-%m-%d','now','localtime') AND attempts>0",
+                [],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+    pub fn ai_remote_usage_today(&self) -> Result<u32, String> {
+        self.connection
+            .query_row(
+                "SELECT COALESCE((SELECT attempts FROM ai_remote_usage WHERE day=strftime('%Y-%m-%d','now','localtime')),0)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
     }
     /// Changes only the destination for future downloads, never model inventory.
     pub fn ai_save_model_directory(&self, directory: Option<&str>) -> Result<(), String> {

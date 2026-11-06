@@ -1,6 +1,6 @@
 # AI evaluation
 
-What local AI has been verified to do, the pinned artifacts, and how to run the opt-in evaluations. The analysis contract (prompt, grounding, repair, cache identity) is in [architecture](ARCHITECTURE.md#analysis-validation-and-cache). Installation integrity, runtime generation, source grounding, semantic usefulness and native behavior are separate claims.
+What local AI has been verified to do, the remote engine's evidence boundary, the pinned artifacts, and how to run the opt-in evaluations. The analysis contract (prompt, grounding, repair, cache identity) is in [architecture](ARCHITECTURE.md#analysis-validation-and-cache). Installation integrity, runtime generation, source grounding, semantic usefulness and native behavior are separate claims.
 
 ## Runtime
 
@@ -111,6 +111,12 @@ cargo test --locked --release -p rhythm actual_embedding_classification_evaluati
 ```
 
 Set `RHYTHM_EMBEDDING_EVAL_FORCE_CPU=1` for the CPU launch. The report includes every case's expected/predicted category, score, margin and elapsed time. The generation-model category figures above predate prompt 5; category is no longer generated, so the LLM harness no longer scores it.
+
+## Remote OpenAI-compatible engine
+
+No remote provider or model has been evaluated. `intelligence/remote.rs` is covered by deterministic fake-endpoint tests only: URL policy (HTTPS, loopback HTTP), request-body shape (the fixed instruction and the analysis prompt only; no personalization, profile, feedback, archive or device fields), `json_schema` → `json_object` → plain fallback, bounded provider errors without key echo, cancellation, redirect refusal, embedding order/unit length, local/remote cache-identity separation, the automatic daily reservation and settings migration/reopen. Settings and reader flows are covered by mocked-IPC UI tests.
+
+Real-provider structured-output adherence, Korean analysis quality, grounding and repair behavior, latency, rate limits and cost are unverified for every provider and model. Remote embeddings use the same local prototype/threshold contract, but their accuracy on any provider model is unverified. Remote analysis is text-only; every image/vision result in this document applies to the local engine. Do not mark a remote provider or model as verified from protocol tests or a single manual run.
 
 ## Known quality limits
 

@@ -63,7 +63,7 @@ const MAX_IMAGE_FACTS: usize = 4;
 const IMAGE_EVIDENCE: &str = "[이미지]";
 const SOURCE_BYTES: usize = 18 * 1024;
 const MAX_OUTPUT_BYTES: usize = 32 * 1024;
-const CANCELLED: &str = "AI 분석을 취소했습니다.";
+pub(crate) const CANCELLED: &str = "AI 분석을 취소했습니다.";
 const VALIDATION_FAILED: &str =
     "AI 결과가 공지 원문과 맞지 않아 저장하지 않았습니다. 다시 요청해 주세요.";
 type SharedStore = Arc<Mutex<Store>>;
@@ -165,16 +165,16 @@ fn stage<'a>(
 }
 
 #[derive(Default)]
-struct Cancellation {
+pub(crate) struct Cancellation {
     flag: AtomicBool,
     notify: Notify,
 }
 impl Cancellation {
-    fn cancel(&self) {
+    pub(crate) fn cancel(&self) {
         self.flag.store(true, Ordering::SeqCst);
         self.notify.notify_one();
     }
-    async fn cancelled(&self) {
+    pub(crate) async fn cancelled(&self) {
         loop {
             let notified = self.notify.notified();
             if self.flag.load(Ordering::SeqCst) {
@@ -183,7 +183,7 @@ impl Cancellation {
             notified.await;
         }
     }
-    fn check(&self) -> Result<(), String> {
+    pub(crate) fn check(&self) -> Result<(), String> {
         if self.flag.load(Ordering::SeqCst) {
             Err(CANCELLED.into())
         } else {
@@ -247,6 +247,7 @@ impl Controller {
             regenerate,
             DIRECT_PRIORITY,
             None,
+            None,
         )
     }
     /// `priority` separates direct requests from opt-in idle backlog work.
@@ -261,6 +262,7 @@ impl Controller {
         regenerate: bool,
         priority: i32,
         lease: crate::operation_gate::AdmissionLease,
+        remote: Option<std::sync::Arc<super::remote::Remote>>,
     ) -> Result<StartResponse, String> {
         self.start_with_lease(
             store,
@@ -271,6 +273,7 @@ impl Controller {
             regenerate,
             priority,
             Some(lease),
+            remote,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -284,6 +287,7 @@ impl Controller {
         regenerate: bool,
         priority: i32,
         lease: Option<crate::operation_gate::AdmissionLease>,
+        remote: Option<std::sync::Arc<super::remote::Remote>>,
     ) -> Result<StartResponse, String> {
         let admission_started = Instant::now();
         // Admission and the queue's empty-to-idle transition use this same lock.
@@ -299,20 +303,49 @@ impl Controller {
         let mut response = with_store(&store, |store| {
             store.document(document_id, Some(revision_id))?;
             let preferences = store.ai_preferences()?;
-            let id = preferences
-                .active_model_id
-                .ok_or("AI 설정에서 사용할 모델을 선택해 주세요.")?;
-            let model = store
-                .ai_model(&id)?
-                .filter(|model| model.status == "installed")
-                .ok_or("설치가 완료된 AI 모델이 없습니다.")?;
-            let key = key_for_mode(
-                document_id,
-                revision_id,
-                &model,
-                preferences.max_tokens,
-                &preferences.execution_mode,
-            )?;
+            // Both engines share the queue and the semantic cache. Their keys
+            // differ, so switching engines never overwrites the other's results.
+            let (key, identity) = if preferences.engine == "openai-compatible" {
+                if !preferences.remote_consent {
+                    return Err("원격 AI 사용에 먼저 동의해 주세요.".into());
+                }
+                let config = super::remote::GenerationConfig::from_preferences(&preferences)?;
+                let key =
+                    key_for_remote(document_id, revision_id, &config, preferences.max_tokens)?;
+                let identity = json!({
+                    "engine": "openai-compatible",
+                    "name": config.model,
+                    "origin": config.endpoint.origin(),
+                    "host": config.endpoint.host(),
+                    "base": config.endpoint.base(),
+                    "max_tokens": preferences.max_tokens,
+                    "timeout_seconds": config.timeout_seconds,
+                    "runtime_policy": super::remote::ENGINE_ID,
+                    "images_used": 0,
+                    "images_available": 0
+                });
+                (key, identity)
+            } else {
+                let id = preferences
+                    .active_model_id
+                    .ok_or("AI 설정에서 사용할 모델을 선택해 주세요.")?;
+                let model = store
+                    .ai_model(&id)?
+                    .filter(|model| model.status == "installed")
+                    .ok_or("설치가 완료된 AI 모델이 없습니다.")?;
+                let key = key_for_mode(
+                    document_id,
+                    revision_id,
+                    &model,
+                    preferences.max_tokens,
+                    &preferences.execution_mode,
+                )?;
+                let identity = json!({"engine":"local","id":model.id,"name":model.name,"sha256":model.sha256,
+                    "catalog_id":model.catalog_id,"source_revision":model.source_revision,
+                    "source_filename":model.source_filename,"max_tokens":preferences.max_tokens,
+                    "execution_mode":preferences.execution_mode,"runtime_policy":"llama-server-v1"});
+                (key, identity)
+            };
             let mut cache_lookup_ms = None;
             if !regenerate {
                 let cache_started = Instant::now();
@@ -327,10 +360,6 @@ impl Controller {
                     });
                 }
             }
-            let identity = json!({"id":model.id,"name":model.name,"sha256":model.sha256,
-                "catalog_id":model.catalog_id,"source_revision":model.source_revision,
-                "source_filename":model.source_filename,"max_tokens":preferences.max_tokens,
-                "execution_mode":preferences.execution_mode,"runtime_policy":"llama-server-v1"});
             let job = store.ai_enqueue(&key, &identity, priority)?;
             Ok(StartResponse {
                 cached: None,
@@ -344,7 +373,7 @@ impl Controller {
             let controller = self.clone();
             tokio::spawn(async move {
                 let _lease = lease;
-                controller.run(store, worker, data_dir).await;
+                controller.run(store, worker, data_dir, remote).await;
             });
         }
         response.admission_ms = millis(admission_started);
@@ -530,7 +559,13 @@ impl Controller {
         }
     }
 
-    async fn run(&self, store: SharedStore, worker: SharedWorker, data_dir: PathBuf) {
+    async fn run(
+        &self,
+        store: SharedStore,
+        worker: SharedWorker,
+        data_dir: PathBuf,
+        remote: Option<std::sync::Arc<super::remote::Remote>>,
+    ) {
         loop {
             let next = {
                 let mut state = match self.inner.state.lock() {
@@ -568,8 +603,16 @@ impl Controller {
                 return;
             };
             let started = Instant::now();
-            let outcome =
-                execute(&store, &worker, &data_dir, &job, &cancellation, Some(self)).await;
+            let outcome = execute(
+                &store,
+                &worker,
+                &data_dir,
+                &job,
+                &cancellation,
+                Some(self),
+                remote.clone(),
+            )
+            .await;
             let duration = millis(started);
             // Serialize final commit with cancellation/admission. SQLite also rejects
             // completion of an already-cancelled attempt within its own transaction.
@@ -670,6 +713,41 @@ pub fn key_for_mode(
         configuration_hash: configuration_hash(max_tokens, decoding_mode(), execution_mode),
     })
 }
+/// Remote generation has no artifact hash. Its identity is derived from the
+/// normalized origin and model name, and the configuration hash records the
+/// engine, base URL and timeout so local and remote results never collide.
+pub fn key_for_remote(
+    document_id: i64,
+    revision_id: i64,
+    config: &super::remote::GenerationConfig,
+    max_tokens: u32,
+) -> Result<AnalysisKey, String> {
+    Ok(AnalysisKey {
+        document_id,
+        revision_id,
+        task: "notice_analysis".into(),
+        model_sha256: super::remote::identity_hash(config.endpoint.origin(), &config.model),
+        prompt_version: PROMPT_VERSION,
+        schema_version: SCHEMA_VERSION,
+        configuration_hash: remote_configuration_hash(
+            config.endpoint.origin(),
+            &config.model,
+            config.timeout_seconds,
+            max_tokens,
+        ),
+    })
+}
+
+fn remote_configuration_hash(
+    origin: &str,
+    model: &str,
+    timeout_seconds: u32,
+    max_tokens: u32,
+) -> String {
+    let configuration = format!("analysis-v5;selector=head-tail-keywords-v4;evidence_encoding=explicit-id-plus-image-v1;clock_rules=meridiem-v2;decoding=analysis_json_v1;max_tokens={max_tokens};source_bytes={SOURCE_BYTES};thinking=false;sampler=deterministic;repair_attempts=1;engine=openai-compatible-v1;vision=none;image_source=none;base={origin};model={model};timeout_seconds={timeout_seconds}");
+    format!("{:x}", Sha256::digest(configuration.as_bytes()))
+}
+
 /// `engine=llama-server-v1` separates results of the supervised llama-server
 /// from earlier mistral.rs/worker results, which stay readable as outdated.
 /// Windows also keys each execution mode: its Vulkan and CPU builds use
@@ -703,58 +781,78 @@ async fn execute(
     job: &AiJob,
     cancellation: &Arc<Cancellation>,
     controller: Option<&Controller>,
+    remote: Option<Arc<super::remote::Remote>>,
 ) -> Result<Output, String> {
     cancellation.check()?;
-    let document_stage = stage(controller, job.id, "preparing", "document_model_read");
-    let (model, document, current_execution_mode) = with_store(store, |store| {
-        let id = job.model_identity["id"]
-            .as_str()
-            .ok_or("작업의 모델 정보가 없습니다.")?;
-        let model = store
-            .ai_model(id)?
-            .filter(|model| model.status == "installed")
-            .ok_or("분석에 필요한 모델이 설치되어 있지 않습니다.")?;
-        if model.sha256.as_deref() != Some(job.key.model_sha256.as_str()) {
-            return Err("모델 파일이 변경되었습니다. 다시 분석해 주세요.".into());
-        }
-        Ok((
-            model,
-            store.document(job.key.document_id, Some(job.key.revision_id))?,
-            store.ai_preferences()?.execution_mode,
-        ))
-    })?;
-    drop(document_stage);
+    let remote_job = job.model_identity["engine"].as_str() == Some("openai-compatible");
     let max_tokens = job.model_identity["max_tokens"]
         .as_u64()
         .filter(|value| (128..=4096).contains(value))
         .ok_or("작업의 출력 설정이 올바르지 않습니다.")? as u32;
+    let document_stage = stage(controller, job.id, "preparing", "document_model_read");
+    let (document, model, preferences) = with_store(store, |store| {
+        let document = store.document(job.key.document_id, Some(job.key.revision_id))?;
+        let preferences = store.ai_preferences()?;
+        let model = if remote_job {
+            None
+        } else {
+            let id = job.model_identity["id"]
+                .as_str()
+                .ok_or("작업의 모델 정보가 없습니다.")?;
+            let model = store
+                .ai_model(id)?
+                .filter(|model| model.status == "installed")
+                .ok_or("분석에 필요한 모델이 설치되어 있지 않습니다.")?;
+            if model.sha256.as_deref() != Some(job.key.model_sha256.as_str()) {
+                return Err("모델 파일이 변경되었습니다. 다시 분석해 주세요.".into());
+            }
+            Some(model)
+        };
+        Ok((document, model, preferences))
+    })?;
+    drop(document_stage);
     // Pending attempts can outlive an application upgrade. Never run the current
     // prompt/configuration while recording an older semantic cache identity.
-    let execution_mode = job.model_identity["execution_mode"]
-        .as_str()
-        .unwrap_or("auto");
-    if execution_mode != current_execution_mode
-        || job.key
-            != key_for_mode(
+    let remote_config = if remote_job {
+        let config =
+            super::remote::GenerationConfig::from_preferences(&preferences).map_err(|_| {
+                "이전 버전의 분석 설정입니다. 현재 설정으로 다시 요청해 주세요.".to_string()
+            })?;
+        if !preferences.remote_consent {
+            return Err("원격 AI 사용에 먼저 동의해 주세요.".into());
+        }
+        if job.key
+            != key_for_remote(
                 job.key.document_id,
                 job.key.revision_id,
-                &model,
+                &config,
                 max_tokens,
-                execution_mode,
             )?
-    {
-        return Err("이전 버전의 분석 설정입니다. 현재 설정으로 다시 요청해 주세요.".into());
-    }
-    let root = data_dir.to_owned();
-    let token = cancellation.clone();
-    let integrity_model = model.clone();
-    let path = {
-        let _stage = stage(controller, job.id, "integrity", "integrity");
-        tokio::task::spawn_blocking(move || verified_path(&root, &integrity_model, &token))
-            .await
-            .map_err(|_| "모델 무결성 검사 작업이 중단되었습니다.")??
+        {
+            return Err("이전 버전의 분석 설정입니다. 현재 설정으로 다시 요청해 주세요.".into());
+        }
+        Some(config)
+    } else {
+        let execution_mode = job.model_identity["execution_mode"]
+            .as_str()
+            .unwrap_or("auto");
+        let model = model
+            .as_ref()
+            .ok_or("분석에 필요한 모델 정보가 없습니다.")?;
+        if execution_mode != preferences.execution_mode
+            || job.key
+                != key_for_mode(
+                    job.key.document_id,
+                    job.key.revision_id,
+                    model,
+                    max_tokens,
+                    execution_mode,
+                )?
+        {
+            return Err("이전 버전의 분석 설정입니다. 현재 설정으로 다시 요청해 주세요.".into());
+        }
+        None
     };
-    cancellation.check()?;
     let source = {
         let _stage = stage(controller, job.id, "preparing", "source_selection");
         bounded_source(&document.item.title, &document.body_text)
@@ -762,37 +860,53 @@ async fn execute(
     let processed_chars = source.processed_chars;
     let total_chars = source.total_chars;
     let passages = source.passages();
-    // Vision is opt-in per model: without an installed projector the archived
-    // images stay unused and the result reports that count.
-    let projector = with_store(store, |store| store.ai_projector(&model.id))?
-        .filter(|projector| projector.status == "installed");
-    let projector_path = match &projector {
-        Some(projector) => {
-            let root = data_dir.to_owned();
-            let record = projector.clone();
-            let token = cancellation.clone();
-            let owner = model.clone();
-            let path = tokio::task::spawn_blocking(move || {
-                verified_projector_path(&root, &owner, &record, &token)
-            })
-            .await
-            .map_err(|_| "이미지 인식 모듈 무결성 검사 작업이 중단되었습니다.")??;
-            Some(path)
-        }
-        None => None,
+    let (path, projector_path, images, images_available) = if let Some(model) = &model {
+        let root = data_dir.to_owned();
+        let token = cancellation.clone();
+        let integrity_model = model.clone();
+        let path = {
+            let _stage = stage(controller, job.id, "integrity", "integrity");
+            tokio::task::spawn_blocking(move || verified_path(&root, &integrity_model, &token))
+                .await
+                .map_err(|_| "모델 무결성 검사 작업이 중단되었습니다.")??
+        };
+        cancellation.check()?;
+        // Vision is opt-in per model: without an installed projector the archived
+        // images stay unused and the result reports that count.
+        let projector = with_store(store, |store| store.ai_projector(&model.id))?
+            .filter(|projector| projector.status == "installed");
+        let projector_path = match &projector {
+            Some(projector) => {
+                let root = data_dir.to_owned();
+                let record = projector.clone();
+                let token = cancellation.clone();
+                let owner = model.clone();
+                let path = tokio::task::spawn_blocking(move || {
+                    verified_projector_path(&root, &owner, &record, &token)
+                })
+                .await
+                .map_err(|_| "이미지 인식 모듈 무결성 검사 작업이 중단되었습니다.")??;
+                Some(path)
+            }
+            None => None,
+        };
+        let (images, images_available) = {
+            let _stage = stage(controller, job.id, "preparing", "image_selection");
+            archived_images(
+                store,
+                data_dir,
+                &document.resources,
+                projector_path.is_some(),
+                cancellation,
+            )
+            .await?
+        };
+        (path, projector_path, images, images_available)
+    } else {
+        // Remote analysis is text-only: the user-entered provider receives the
+        // same text prompt, never archived image bytes.
+        (PathBuf::new(), None, Vec::new(), 0)
     };
-    let (images, images_available) = {
-        let _stage = stage(controller, job.id, "preparing", "image_selection");
-        archived_images(
-            store,
-            data_dir,
-            &document.resources,
-            projector_path.is_some(),
-            cancellation,
-        )
-        .await?
-    };
-    let images_used = images.len().min(u32::MAX as usize) as u32;
     let vision = images
         .iter()
         .map(|image| super::VisionImage {
@@ -800,6 +914,7 @@ async fn execute(
             bytes: &image.bytes,
         })
         .collect::<Vec<_>>();
+    let images_used = images.len().min(u32::MAX as usize) as u32;
     let prompt = {
         let _stage = stage(controller, job.id, "preparing", "prompt_construction");
         prompt(&passages, &images, processed_chars != total_chars)
@@ -807,88 +922,142 @@ async fn execute(
     if prompt.len() > INPUT_BYTES {
         return Err("분석 입력이 허용 범위를 벗어났습니다.".into());
     }
-    let worker_wait = stage(controller, job.id, "waiting", "worker_lock_wait");
-    let mut engine = tokio::select! {
-        guard = worker.lock() => guard,
-        _ = cancellation.cancelled() => return Err(CANCELLED.into()),
-    };
-    drop(worker_wait);
-    cancellation.check()?;
     let mut request = prompt;
     #[cfg(test)]
     trace_request(job.id, &request);
     let mut validated = None;
     let mut loaded_backend = None;
-    for attempt in 1..=2 {
-        if let Some(controller) = controller {
-            controller.begin_attempt(job.id);
-        }
-        let inference_stage = stage(controller, job.id, "inference", "inference");
-        let generated = tokio::select! {
-            response = async {
-                if decoding_mode() == "analysis_json_v1" {
-                    engine
-                        .infer_analysis(
-                            &path,
-                            projector_path.as_deref(),
-                            &request,
-                            &vision,
-                            max_tokens,
-                        )
+    if let Some(config) = &remote_config {
+        let remote = remote
+            .as_ref()
+            .ok_or("원격 AI 설정을 불러오지 못했습니다.")?;
+        let origin = config.endpoint.origin().to_owned();
+        let key_owner = remote.clone();
+        let key = tokio::task::spawn_blocking(move || key_owner.key(&origin))
+            .await
+            .map_err(|_| "API 키를 확인하지 못했습니다.".to_string())??
+            .ok_or("원격 AI API 키를 저장해 주세요.".to_string())?;
+        for attempt in 1..=2 {
+            if let Some(controller) = controller {
+                controller.begin_attempt(job.id);
+            }
+            let inference_stage = stage(controller, job.id, "inference", "inference");
+            let generated = tokio::select! {
+                response = async {
+                    let started = Instant::now();
+                    remote
+                        .complete(config, &key, &request, max_tokens, cancellation)
                         .await
-                } else {
-                    engine.infer_detailed(&path, &request, max_tokens).await
+                        .map(|completion| super::InferenceResponse {
+                            text: completion.text,
+                            metrics: super::InferenceMetrics {
+                                generation_ms: Some(started.elapsed().as_millis() as u64),
+                                usage: completion.usage,
+                                ..Default::default()
+                            },
+                        })
+                } => Some(response),
+                _ = cancellation.cancelled() => None,
+            };
+            drop(inference_stage);
+            let Some(generated) = generated else {
+                return Err(CANCELLED.into());
+            };
+            cancellation.check()?;
+            let generated = generated?;
+            if let Some(controller) = controller {
+                controller.record_attempt(job.id, generated.metrics);
+            }
+            #[cfg(test)]
+            trace_generation(job.id, attempt, &generated.text);
+            match validate_attempt(
+                controller,
+                job.id,
+                attempt,
+                &generated.text,
+                &source,
+                &passages,
+                &images,
+            )? {
+                Attempt::Validated(analysis) => {
+                    validated = Some(analysis);
+                    break;
                 }
-            } => Some(response),
-            _ = cancellation.cancelled() => None,
+                Attempt::Repair(error) => {
+                    request = repair_request(&request, &error)?;
+                }
+            }
+        }
+    } else {
+        let worker_wait = stage(controller, job.id, "waiting", "worker_lock_wait");
+        let mut engine = tokio::select! {
+            guard = worker.lock() => guard,
+            _ = cancellation.cancelled() => return Err(CANCELLED.into()),
         };
-        drop(inference_stage);
-        let Some(generated) = generated else {
-            // A dropped future leaves an outstanding response on serial stdout.
-            // Reap before anybody can use the worker again.
-            let _stage = stage(controller, job.id, "cancelling", "worker_stop");
-            engine.stop().await;
-            return Err(CANCELLED.into());
-        };
+        drop(worker_wait);
         cancellation.check()?;
-        let generated = generated?;
-        loaded_backend = generated
-            .metrics
-            .loaded_backend
-            .clone()
-            .filter(|backend| ["cpu", "vulkan", "cuda", "metal"].contains(&backend.as_str()));
-        if let Some(controller) = controller {
-            controller.record_attempt(job.id, generated.metrics);
-        }
-        #[cfg(test)]
-        trace_generation(job.id, attempt, &generated.text);
-        let validation = {
-            let _stage = stage(controller, job.id, "validating", "validation");
-            validate_generation(&generated.text, &source.text, &passages, &images)
-        };
-        match validation {
-            Ok(analysis) => {
-                validated = Some(analysis);
-                break;
+        for attempt in 1..=2 {
+            if let Some(controller) = controller {
+                controller.begin_attempt(job.id);
             }
-            Err(error) => {
-                // Validator messages are instructions to the model; they stay in
-                // diagnostics and never become the job error.
-                if let Some(controller) = controller {
-                    controller.record_validation_error(job.id, &error);
+            let inference_stage = stage(controller, job.id, "inference", "inference");
+            let generated = tokio::select! {
+                response = async {
+                    if decoding_mode() == "analysis_json_v1" {
+                        engine
+                            .infer_analysis(
+                                &path,
+                                projector_path.as_deref(),
+                                &request,
+                                &vision,
+                                max_tokens,
+                            )
+                            .await
+                    } else {
+                        engine.infer_detailed(&path, &request, max_tokens).await
+                    }
+                } => Some(response),
+                _ = cancellation.cancelled() => None,
+            };
+            drop(inference_stage);
+            let Some(generated) = generated else {
+                // A dropped future leaves an outstanding response on serial stdout.
+                // Reap before anybody can use the worker again.
+                let _stage = stage(controller, job.id, "cancelling", "worker_stop");
+                engine.stop().await;
+                return Err(CANCELLED.into());
+            };
+            cancellation.check()?;
+            let generated = generated?;
+            loaded_backend =
+                generated.metrics.loaded_backend.clone().filter(|backend| {
+                    ["cpu", "vulkan", "cuda", "metal"].contains(&backend.as_str())
+                });
+            if let Some(controller) = controller {
+                controller.record_attempt(job.id, generated.metrics);
+            }
+            #[cfg(test)]
+            trace_generation(job.id, attempt, &generated.text);
+            match validate_attempt(
+                controller,
+                job.id,
+                attempt,
+                &generated.text,
+                &source,
+                &passages,
+                &images,
+            )? {
+                Attempt::Validated(analysis) => {
+                    validated = Some(analysis);
+                    break;
                 }
-                if attempt == 2 {
-                    return Err(VALIDATION_FAILED.into());
-                }
-                // One repair only; unchanged model/data bounds, no tool capabilities.
-                request = format!("{request}\n이전 출력의 검증 오류: {error}\nJSON을 처음부터 다시 작성하세요. evidence_id에는 해당 사실을 뒷받침하는 원문 객체에 적힌 id를 그대로 쓰세요. 다른 객체의 날짜·시간을 가져오지 마세요. evidence 필드는 쓰지 마세요. 뒷받침되는 사실만 포함하고 불확실한 사실은 빼세요.");
-                if request.len() > INPUT_BYTES {
-                    return Err(VALIDATION_FAILED.into());
+                Attempt::Repair(error) => {
+                    request = repair_request(&request, &error)?;
                 }
             }
         }
+        drop(engine);
     }
-    drop(engine);
     let analysis = validated.ok_or("AI 결과를 검증하지 못했습니다.")?;
     Ok(Output {
         analysis,
@@ -899,6 +1068,51 @@ async fn execute(
         images_used,
         images_available,
     })
+}
+
+enum Attempt {
+    Validated(Analysis),
+    /// The validator message is a repair instruction for the next request.
+    Repair(String),
+}
+
+fn validate_attempt(
+    controller: Option<&Controller>,
+    job_id: i64,
+    attempt: usize,
+    text: &str,
+    source: &SelectedSource,
+    passages: &[&str],
+    images: &[SourceImage],
+) -> Result<Attempt, String> {
+    let validation = {
+        let _stage = stage(controller, job_id, "validating", "validation");
+        validate_generation(text, &source.text, passages, images)
+    };
+    match validation {
+        Ok(analysis) => Ok(Attempt::Validated(analysis)),
+        Err(error) => {
+            // Validator messages are instructions to the model; they stay in
+            // diagnostics and never become the job error.
+            if let Some(controller) = controller {
+                controller.record_validation_error(job_id, &error);
+            }
+            if attempt == 2 {
+                Err(VALIDATION_FAILED.into())
+            } else {
+                Ok(Attempt::Repair(error))
+            }
+        }
+    }
+}
+
+/// One repair only; unchanged model/data bounds, no tool capabilities.
+fn repair_request(request: &str, error: &str) -> Result<String, String> {
+    let request = format!("{request}\n이전 출력의 검증 오류: {error}\nJSON을 처음부터 다시 작성하세요. evidence_id에는 해당 사실을 뒷받침하는 원문 객체에 적힌 id를 그대로 쓰세요. 다른 객체의 날짜·시간을 가져오지 마세요. evidence 필드는 쓰지 마세요. 뒷받침되는 사실만 포함하고 불확실한 사실은 빼세요.");
+    if request.len() > INPUT_BYTES {
+        return Err(VALIDATION_FAILED.into());
+    }
+    Ok(request)
 }
 
 #[cfg(test)]
@@ -2008,6 +2222,10 @@ fn validate_times(value: &str, evidence: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
     const SOURCE: &str =
         "장학금 신청 안내\n2026년 4월 30일까지 신청서를 제출하세요. 재학생만 지원할 수 있습니다.";
     fn valid() -> serde_json::Value {
@@ -2650,6 +2868,72 @@ mod tests {
         std::fs::write(directory.join("response"), generated().to_string()).unwrap();
         Arc::new(AsyncMutex::new(Worker::launch(&executable)))
     }
+    /// Minimal OpenAI-compatible endpoint. It records request bodies in order.
+    async fn fake_openai(
+        replies: Vec<serde_json::Value>,
+    ) -> (String, tokio::task::JoinHandle<Vec<serde_json::Value>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let handle = tokio::spawn(async move {
+            let mut bodies = Vec::new();
+            for reply in replies {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = Vec::new();
+                let header_end = loop {
+                    let mut chunk = [0u8; 4096];
+                    let read = socket.read(&mut chunk).await.unwrap();
+                    if read == 0 {
+                        break 0;
+                    }
+                    buffer.extend_from_slice(&chunk[..read]);
+                    if let Some(position) = buffer.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break position + 4;
+                    }
+                };
+                let headers = String::from_utf8_lossy(&buffer[..header_end]).into_owned();
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|value| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                while buffer.len() < header_end + length {
+                    let mut chunk = vec![0u8; header_end + length - buffer.len()];
+                    let read = socket.read(&mut chunk).await.unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    buffer.extend_from_slice(&chunk[..read]);
+                }
+                bodies.push(
+                    serde_json::from_slice::<serde_json::Value>(
+                        &buffer[header_end..header_end + length],
+                    )
+                    .unwrap(),
+                );
+                let body = reply.to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+                socket.shutdown().await.unwrap();
+            }
+            bodies
+        });
+        (origin, handle)
+    }
+
+    fn openai_reply(content: &str) -> serde_json::Value {
+        json!({
+            "choices": [{"message": {"content": content}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 30, "total_tokens": 50}
+        })
+    }
+
     async fn settle(controller: &Controller) {
         // Bound controlled children without treating loaded parallel test runners
         // as model latency failures. Production IPC deadlines are unchanged.
@@ -2686,6 +2970,7 @@ mod tests {
                 directory.path(),
                 &job,
                 &Arc::new(Cancellation::default()),
+                None,
                 None,
             )
             .await;
@@ -2759,6 +3044,224 @@ mod tests {
             worker.lock().await.stop().await;
         }
     }
+    #[test]
+    fn remote_and_local_analysis_identities_stay_separate() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("model.gguf");
+        std::fs::write(&path, b"GGUF").unwrap();
+        let model = AiModel {
+            id: "test".into(),
+            catalog_id: None,
+            name: "fixture".into(),
+            ownership: "external".into(),
+            kind: "generation".into(),
+            path: path.to_string_lossy().into_owned(),
+            storage_directory: None,
+            sha256: Some("a".repeat(64)),
+            expected_sha256: None,
+            expected_bytes: None,
+            bytes: 4,
+            source_revision: None,
+            source_filename: None,
+            status: "installed".into(),
+            downloaded_bytes: 0,
+            resume_etag: None,
+            error: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let local = key_for_mode(1, 1, &model, 1024, "auto").unwrap();
+        let remote_config = |base: &str, model: &str| super::super::remote::GenerationConfig {
+            endpoint: super::super::remote::Endpoint::parse(base).unwrap(),
+            model: model.into(),
+            timeout_seconds: 60,
+        };
+        let remote =
+            key_for_remote(1, 1, &remote_config("https://api.example.com", "m"), 1024).unwrap();
+        assert_ne!(local.model_sha256, remote.model_sha256);
+        assert_ne!(local.configuration_hash, remote.configuration_hash);
+        // Origin, model and timeout are all part of the remote identity.
+        assert_ne!(
+            remote,
+            key_for_remote(1, 1, &remote_config("https://other.example.com", "m"), 1024).unwrap()
+        );
+        assert_ne!(
+            remote,
+            key_for_remote(1, 1, &remote_config("https://api.example.com", "n"), 1024).unwrap()
+        );
+        assert_ne!(
+            remote,
+            key_for_remote(1, 1, &remote_config("https://api.example.com", "m"), 2048).unwrap()
+        );
+        // The local pinned identity is unchanged by adding the remote engine.
+        assert_eq!(
+            local.configuration_hash,
+            configuration_hash(1024, "analysis_json_v1", "auto")
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_analysis_persists_without_a_local_model_and_never_adds_personal_data() {
+        let (directory, store, id, revision) = fixture();
+        let (origin, server) = fake_openai(vec![openai_reply(&generated().to_string())]).await;
+        let remote = Arc::new(super::super::remote::Remote::memory());
+        remote.set_key(&origin, "sk-test-secret").unwrap();
+        with_store(&store, |store| {
+            let mut preferences = store.ai_preferences()?;
+            preferences.engine = "openai-compatible".into();
+            preferences.remote_base_url = Some(origin.clone());
+            preferences.remote_model = Some("test-model".into());
+            preferences.remote_consent = true;
+            preferences.remote_timeout_seconds = 10;
+            preferences.max_tokens = 1024;
+            store.ai_save_preferences(&preferences)
+        })
+        .unwrap();
+        let worker = fake_engine(directory.path());
+        let controller = Controller::default();
+        let gate = Arc::new(crate::operation_gate::AdmissionGate::default());
+        let lease = gate.shared().await.unwrap();
+        let response = controller
+            .start_admitted(
+                store.clone(),
+                worker.clone(),
+                directory.path().into(),
+                id,
+                revision,
+                false,
+                DIRECT_PRIORITY,
+                lease,
+                Some(remote.clone()),
+            )
+            .unwrap();
+        let job_id = response.job.as_ref().unwrap().id;
+        settle(&controller).await;
+        let diagnostics = controller.diagnostics(job_id).unwrap();
+        assert_eq!(diagnostics.phase, "completed");
+        assert_eq!(diagnostics.attempts.len(), 1);
+        // Remote results cannot claim a local backend.
+        assert!(diagnostics.attempts[0].loaded_backend.is_none());
+        assert!(diagnostics.attempts[0].usage.is_some());
+        let results = with_store(&store, |store| {
+            store.ai_document_results(id, Some(revision), 10)
+        })
+        .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].model_identity["engine"], "openai-compatible");
+        assert_eq!(results[0].model_identity["name"], "test-model");
+        assert_eq!(
+            results[0].key.model_sha256,
+            super::super::remote::identity_hash(&origin, "test-model")
+        );
+
+        // Switch back to local: both engines keep their own cache entry.
+        with_store(&store, |store| {
+            let mut preferences = store.ai_preferences()?;
+            preferences.engine = "local".into();
+            store.ai_save_preferences(&preferences)
+        })
+        .unwrap();
+        controller
+            .start(
+                store.clone(),
+                worker.clone(),
+                directory.path().into(),
+                id,
+                revision,
+                false,
+            )
+            .unwrap();
+        settle(&controller).await;
+        let results = with_store(&store, |store| {
+            store.ai_document_results(id, Some(revision), 10)
+        })
+        .unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results
+            .iter()
+            .any(|result| result.model_identity["engine"] == "openai-compatible"));
+        assert!(results
+            .iter()
+            .any(|result| result.model_identity["engine"] == "local"));
+
+        let bodies = server.await.unwrap();
+        assert_eq!(bodies.len(), 1);
+        let body = &bodies[0];
+        assert_eq!(body["model"], "test-model");
+        assert_eq!(body["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(body["messages"][0]["role"], "system");
+        assert_eq!(body["messages"][1]["role"], "user");
+        let user = body["messages"][1]["content"].as_str().unwrap();
+        assert!(user.contains("장학금 신청 안내"));
+        // The exact serialized request carries no personalization fields.
+        let serialized = body.to_string();
+        for forbidden in [
+            "personalization",
+            "interests",
+            "profile",
+            "feedback",
+            "saved",
+            "document_id",
+        ] {
+            assert!(!serialized.contains(forbidden), "{forbidden}");
+        }
+        worker.lock().await.stop().await;
+    }
+
+    #[tokio::test]
+    async fn remote_validation_failure_is_repaired_once() {
+        let (directory, store, id, revision) = fixture();
+        let (origin, server) = fake_openai(vec![
+            openai_reply(r#"{"short_summary":"x"}"#),
+            openai_reply(&generated().to_string()),
+        ])
+        .await;
+        let remote = Arc::new(super::super::remote::Remote::memory());
+        remote.set_key(&origin, "sk-test").unwrap();
+        with_store(&store, |store| {
+            let mut preferences = store.ai_preferences()?;
+            preferences.engine = "openai-compatible".into();
+            preferences.remote_base_url = Some(origin.clone());
+            preferences.remote_model = Some("test-model".into());
+            preferences.remote_consent = true;
+            preferences.remote_timeout_seconds = 10;
+            store.ai_save_preferences(&preferences)
+        })
+        .unwrap();
+        let worker = fake_engine(directory.path());
+        let controller = Controller::default();
+        let gate = Arc::new(crate::operation_gate::AdmissionGate::default());
+        let lease = gate.shared().await.unwrap();
+        let job_id = controller
+            .start_admitted(
+                store.clone(),
+                worker.clone(),
+                directory.path().into(),
+                id,
+                revision,
+                false,
+                DIRECT_PRIORITY,
+                lease,
+                Some(remote),
+            )
+            .unwrap()
+            .job
+            .unwrap()
+            .id;
+        settle(&controller).await;
+        let diagnostics = controller.diagnostics(job_id).unwrap();
+        assert_eq!(diagnostics.phase, "completed");
+        assert_eq!(diagnostics.attempts.len(), 2);
+        assert_eq!(diagnostics.validation_errors.len(), 1);
+        let bodies = server.await.unwrap();
+        assert_eq!(bodies.len(), 2);
+        assert!(bodies[1]["messages"][1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("이전 출력의 검증 오류"));
+        worker.lock().await.stop().await;
+    }
+
     #[tokio::test]
     async fn controller_runs_persists_and_reuses_cache_without_touching_worker_or_weights() {
         let (directory, store, id, revision) = fixture();
@@ -3042,6 +3545,7 @@ mod tests {
                 false,
                 BACKLOG_PRIORITY,
                 lease,
+                None,
             )
             .unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(15), async {

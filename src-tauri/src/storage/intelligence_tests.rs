@@ -63,6 +63,165 @@ fn execution_preference_old_payload_defaults_to_auto() {
     .unwrap();
     assert_eq!(preferences.execution_mode, "auto");
     assert_eq!(preferences.model_directory, None);
+    assert_eq!(preferences.engine, "local");
+    assert_eq!(preferences.remote_base_url, None);
+    assert_eq!(preferences.remote_model, None);
+    assert_eq!(preferences.remote_embedding_model, None);
+    assert_eq!(preferences.remote_timeout_seconds, 120);
+    assert!(!preferences.remote_consent);
+    assert!(!preferences.remote_automatic);
+    assert_eq!(preferences.remote_daily_limit, 20);
+    assert!(!preferences.remote_embeddings);
+}
+
+#[test]
+fn remote_engine_migrates_schema_fifteen_and_persists_disabled() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    populated_schema_two(&path);
+    let connection = Connection::open(&path).unwrap();
+    for migration in [
+        include_str!("../../migrations/003_intelligence.sql"),
+        include_str!("../../migrations/004_personalization.sql"),
+        include_str!("../../migrations/005_proactive.sql"),
+        include_str!("../../migrations/006_notification_attempts.sql"),
+        include_str!("../../migrations/007_notification_activation.sql"),
+        include_str!("../../migrations/008_ai_execution_mode.sql"),
+        include_str!("../../migrations/009_ai_model_directory.sql"),
+        include_str!("../../migrations/010_update_check.sql"),
+        include_str!("../../migrations/011_skipped_articles.sql"),
+        include_str!("../../migrations/012_resource_retry.sql"),
+        include_str!("../../migrations/013_ai_projector.sql"),
+        include_str!("../../migrations/014_ai_backlog_mode.sql"),
+        include_str!("../../migrations/015_ai_embedding.sql"),
+    ] {
+        connection.execute_batch(migration).unwrap();
+    }
+    drop(connection);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
+    let mut preferences = store.ai_preferences().unwrap();
+    // Upgrading never opts into remote inference or its cost-bearing modes.
+    assert_eq!(preferences.engine, "local");
+    assert!(!preferences.remote_consent);
+    assert!(!preferences.remote_automatic);
+    assert!(!preferences.remote_embeddings);
+    assert_eq!(preferences.remote_timeout_seconds, 120);
+    assert_eq!(preferences.remote_daily_limit, 20);
+
+    preferences.engine = "openai-compatible".into();
+    preferences.remote_base_url = Some("https://api.example.com/v1".into());
+    preferences.remote_model = Some("test-model".into());
+    preferences.remote_embedding_model = Some("test-embedding".into());
+    preferences.remote_timeout_seconds = 45;
+    preferences.remote_consent = true;
+    preferences.remote_automatic = true;
+    preferences.remote_daily_limit = 7;
+    preferences.remote_embeddings = true;
+    store.ai_save_preferences(&preferences).unwrap();
+    drop(store);
+
+    let reopened = Store::open(&path).unwrap();
+    let stored = reopened.ai_preferences().unwrap();
+    assert_eq!(stored.engine, "openai-compatible");
+    assert_eq!(
+        stored.remote_base_url.as_deref(),
+        Some("https://api.example.com/v1")
+    );
+    assert_eq!(stored.remote_model.as_deref(), Some("test-model"));
+    assert_eq!(
+        stored.remote_embedding_model.as_deref(),
+        Some("test-embedding")
+    );
+    assert_eq!(stored.remote_timeout_seconds, 45);
+    assert!(stored.remote_consent);
+    assert!(stored.remote_automatic);
+    assert_eq!(stored.remote_daily_limit, 7);
+    assert!(stored.remote_embeddings);
+}
+
+#[test]
+fn api_key_is_not_a_persisted_preference_or_backup_field() {
+    let (directory, store) = database();
+    let mut preferences = store.ai_preferences().unwrap();
+    preferences.engine = "openai-compatible".into();
+    preferences.remote_base_url = Some("https://api.example.com".into());
+    preferences.remote_model = Some("model".into());
+    preferences.remote_consent = true;
+    store.ai_save_preferences(&preferences).unwrap();
+    // The credential-store value is never passed to SQLite. A distinctive
+    // marker verifies the database and its WAL contain no key material.
+    let marker = "sk-rhythm-must-not-persist-7f4a";
+    let raw = std::fs::read(directory.path().join("db")).unwrap();
+    assert!(!raw
+        .windows(marker.len())
+        .any(|window| window == marker.as_bytes()));
+    let wal = std::fs::read(directory.path().join("db-wal")).unwrap_or_default();
+    assert!(!wal
+        .windows(marker.len())
+        .any(|window| window == marker.as_bytes()));
+}
+
+#[test]
+fn remote_automatic_usage_is_bounded_and_releasable() {
+    let (_directory, store) = database();
+    assert_eq!(store.ai_remote_usage_today().unwrap(), 0);
+    assert!(store.ai_reserve_remote_automatic(2).unwrap());
+    assert!(store.ai_reserve_remote_automatic(2).unwrap());
+    assert!(!store.ai_reserve_remote_automatic(2).unwrap());
+    assert_eq!(store.ai_remote_usage_today().unwrap(), 2);
+    store.ai_release_remote_automatic().unwrap();
+    assert_eq!(store.ai_remote_usage_today().unwrap(), 1);
+    assert!(store.ai_reserve_remote_automatic(2).unwrap());
+    assert!(!store.ai_reserve_remote_automatic(0).unwrap());
+}
+
+#[test]
+fn invalid_remote_preferences_are_rejected_without_persisting() {
+    let (_directory, store) = database();
+    let initial = store.ai_preferences().unwrap();
+    let mut preferences = initial.clone();
+    preferences.engine = "cloud".into();
+    assert!(store.ai_save_preferences(&preferences).is_err());
+    preferences = initial.clone();
+    preferences.remote_timeout_seconds = 5;
+    assert!(store.ai_save_preferences(&preferences).is_err());
+    preferences = initial.clone();
+    preferences.remote_daily_limit = 201;
+    assert!(store.ai_save_preferences(&preferences).is_err());
+    preferences = initial.clone();
+    preferences.remote_base_url = Some("https://api.example.com\n".into());
+    assert!(store.ai_save_preferences(&preferences).is_err());
+    preferences = initial.clone();
+    preferences.remote_model = Some("   ".into());
+    assert!(store.ai_save_preferences(&preferences).is_err());
+    assert_eq!(store.ai_preferences().unwrap(), initial);
+}
+
+#[test]
+fn restore_disables_remote_preferences_until_a_new_consent() {
+    let (_directory, store) = database();
+    let mut preferences = store.ai_preferences().unwrap();
+    preferences.engine = "openai-compatible".into();
+    preferences.remote_base_url = Some("https://api.example.com".into());
+    preferences.remote_model = Some("model".into());
+    preferences.remote_consent = true;
+    preferences.remote_automatic = true;
+    preferences.remote_embeddings = true;
+    store.ai_save_preferences(&preferences).unwrap();
+    store.reset_remote_after_restore().unwrap();
+    let restored = store.ai_preferences().unwrap();
+    assert_eq!(restored.engine, "local");
+    assert!(!restored.remote_consent);
+    assert!(!restored.remote_automatic);
+    assert!(!restored.remote_embeddings);
+    // The address and model remain as inert configuration; only authorization
+    // is revoked, so the user can review what will be re-enabled.
+    assert_eq!(
+        restored.remote_base_url.as_deref(),
+        Some("https://api.example.com")
+    );
+    assert_eq!(restored.remote_model.as_deref(), Some("model"));
 }
 
 #[test]

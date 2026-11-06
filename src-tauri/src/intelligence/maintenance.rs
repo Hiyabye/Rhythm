@@ -20,12 +20,41 @@ const BACKLOG_IDLE_MINIMUM: Duration = Duration::from_secs(5 * 60);
 const BACKLOG_HOURLY_LIMIT: usize = 20;
 const BACKLOG_WINDOW: Duration = Duration::from_secs(60 * 60);
 
-fn automatic_budget(energy: &str, preferences: &AiPreferences, focused: bool) -> u32 {
-    if !focused
-        || !preferences.setup_completed
-        || preferences.active_model_id.is_none()
-        || preferences.processing_mode != "recent"
-    {
+/// Remote automatic work is a separate, cost-bearing opt-in. `key_ready` is
+/// the cached credential-store presence, never the key itself.
+fn remote_ready(preferences: &AiPreferences, key_ready: bool) -> bool {
+    preferences.engine == "openai-compatible"
+        && key_ready
+        && preferences.remote_consent
+        && preferences.remote_automatic
+        && preferences.remote_daily_limit > 0
+        && preferences
+            .remote_base_url
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && preferences
+            .remote_model
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn automatic_budget(
+    energy: &str,
+    preferences: &AiPreferences,
+    focused: bool,
+    key_ready: bool,
+) -> u32 {
+    if !focused || preferences.processing_mode != "recent" {
+        return 0;
+    }
+    if preferences.engine == "openai-compatible" {
+        if energy == "eco" || !remote_ready(preferences, key_ready) {
+            return 0;
+        }
+        // The exact cap is reserved per attempt; this only bounds the loop.
+        return preferences.remote_daily_limit.min(20);
+    }
+    if !preferences.setup_completed || preferences.active_model_id.is_none() {
         return 0;
     }
     match energy {
@@ -38,12 +67,20 @@ fn automatic_budget(energy: &str, preferences: &AiPreferences, focused: bool) ->
 
 /// Backlog is opt-in, idle-only and never runs in Eco. Both platform probes are
 /// required; an unknown observation (None) never admits work.
-fn backlog_allowed(energy: &str, preferences: &AiPreferences, ready: bool) -> bool {
+fn backlog_allowed(
+    energy: &str,
+    preferences: &AiPreferences,
+    ready: bool,
+    key_ready: bool,
+) -> bool {
     ready
         && preferences.processing_mode == "backlog"
-        && preferences.setup_completed
-        && preferences.active_model_id.is_some()
         && energy != "eco"
+        && if preferences.engine == "openai-compatible" {
+            remote_ready(preferences, key_ready)
+        } else {
+            preferences.setup_completed && preferences.active_model_id.is_some()
+        }
 }
 
 /// Drops timestamps older than the rolling hour and reports whether one more
@@ -199,7 +236,30 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
                 last_activity = Instant::now();
             }
         }
-        if admitted < automatic_budget(&energy, &preferences, focused) {
+        // Remote work needs a cached credential-store presence check. It is
+        // only consulted when the mode and consent already allow automatic work.
+        let key_ready = if preferences.engine == "openai-compatible"
+            && preferences.remote_consent
+            && preferences.remote_automatic
+            && preferences.remote_daily_limit > 0
+        {
+            match super::remote::GenerationConfig::from_preferences(&preferences) {
+                Ok(config) => {
+                    let origin = config.endpoint.origin().to_owned();
+                    let remote = state.remote.clone();
+                    tokio::task::spawn_blocking(move || remote.present(&origin))
+                        .await
+                        .ok()
+                        .and_then(Result::ok)
+                        .unwrap_or(false)
+                }
+                Err(_) => false,
+            }
+        } else {
+            // The local engine has no credential-store prerequisite.
+            true
+        };
+        if admitted < automatic_budget(&energy, &preferences, focused, key_ready) {
             let Some(boundary) = boundary.as_deref() else {
                 continue;
             };
@@ -208,6 +268,14 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
             let candidate = recent_candidates(&state, &preferences, boundary, &attempted);
             let Some((document, revision)) = candidate else {
                 continue;
+            };
+            let reserved = if preferences.engine == "openai-compatible" {
+                if reserve_remote(&state, &preferences) != Some(true) {
+                    continue;
+                }
+                true
+            } else {
+                false
             };
             attempted.insert((document, revision));
             if shutdown.load(Ordering::Acquire) {
@@ -222,13 +290,23 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
                 false,
                 analysis::DIRECT_PRIORITY,
                 lease,
+                Some(state.remote.clone()),
             ) {
                 Ok(response) if response.job.is_some() => {
                     admitted += 1;
                     last_activity = Instant::now();
                 }
-                Ok(_) => (),
-                Err(error) => eprintln!("AI opportunistic admission: {error}"),
+                Ok(_) => {
+                    if reserved {
+                        release_remote(&state);
+                    }
+                }
+                Err(error) => {
+                    if reserved {
+                        release_remote(&state);
+                    }
+                    eprintln!("AI opportunistic admission: {error}");
+                }
             }
             continue;
         }
@@ -238,6 +316,7 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
                 &energy,
                 &preferences,
                 idle::user_is_idle(BACKLOG_IDLE_MINIMUM) && idle::on_external_power(),
+                key_ready,
             );
         if !backlog_ready || !backlog_window_allows(&mut backlog_window, Instant::now()) {
             continue;
@@ -245,6 +324,14 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
         let candidate = backlog_candidate(&state, &preferences, &attempted);
         let Some((document, revision)) = candidate else {
             continue;
+        };
+        let reserved = if preferences.engine == "openai-compatible" {
+            if reserve_remote(&state, &preferences) != Some(true) {
+                continue;
+            }
+            true
+        } else {
+            false
         };
         attempted.insert((document, revision));
         if shutdown.load(Ordering::Acquire) {
@@ -259,14 +346,43 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
             false,
             analysis::BACKLOG_PRIORITY,
             lease,
+            Some(state.remote.clone()),
         ) {
             Ok(response) if response.job.is_some() => {
                 backlog_window.push_back(Instant::now());
                 last_activity = Instant::now();
             }
-            Ok(_) => (),
-            Err(error) => eprintln!("AI backlog admission: {error}"),
+            Ok(_) => {
+                if reserved {
+                    release_remote(&state);
+                }
+            }
+            Err(error) => {
+                if reserved {
+                    release_remote(&state);
+                }
+                eprintln!("AI backlog admission: {error}");
+            }
         }
+    }
+}
+
+/// Reserves one automatic remote attempt. `None` means the local engine or a
+/// store lock that could not be taken; `Some(false)` means the daily cap.
+fn reserve_remote(state: &AppState, preferences: &AiPreferences) -> Option<bool> {
+    if preferences.engine != "openai-compatible" {
+        return None;
+    }
+    state.store.try_lock().ok().and_then(|store| {
+        store
+            .ai_reserve_remote_automatic(preferences.remote_daily_limit)
+            .ok()
+    })
+}
+
+fn release_remote(state: &AppState) {
+    if let Ok(store) = state.store.try_lock() {
+        let _ = store.ai_release_remote_automatic();
     }
 }
 
@@ -277,6 +393,10 @@ fn candidate_store<'a>(
     preferences: &AiPreferences,
 ) -> Option<std::sync::MutexGuard<'a, crate::Store>> {
     let store = state.store.try_lock().ok()?;
+    // Remote analysis does not need a local generation model.
+    if preferences.engine == "openai-compatible" {
+        return Some(store);
+    }
     let model = store
         .ai_model(preferences.active_model_id.as_deref()?)
         .ok()??;
@@ -324,6 +444,15 @@ mod tests {
             model_directory: None,
             embedding_model_id: None,
             classification_enabled: true,
+            engine: "local".into(),
+            remote_base_url: None,
+            remote_model: None,
+            remote_embedding_model: None,
+            remote_timeout_seconds: 120,
+            remote_consent: false,
+            remote_automatic: false,
+            remote_daily_limit: 20,
+            remote_embeddings: false,
         }
     }
     #[test]
@@ -337,46 +466,75 @@ mod tests {
     #[test]
     fn automatic_policy_requires_focus_setup_opt_in_and_non_eco() {
         let mut p = preferences();
-        assert_eq!(automatic_budget("eco", &p, true), 0);
-        assert_eq!(automatic_budget("balanced", &p, true), 3);
-        assert_eq!(automatic_budget("performance", &p, true), 20);
-        assert_eq!(automatic_budget("performance", &p, false), 0);
+        assert_eq!(automatic_budget("eco", &p, true, true), 0);
+        assert_eq!(automatic_budget("balanced", &p, true, true), 3);
+        assert_eq!(automatic_budget("performance", &p, true, true), 20);
+        assert_eq!(automatic_budget("performance", &p, false, true), 0);
         p.processing_mode = "explicit".into();
-        assert_eq!(automatic_budget("performance", &p, true), 0);
+        assert_eq!(automatic_budget("performance", &p, true, true), 0);
         p.processing_mode = "backlog".into();
-        assert_eq!(automatic_budget("performance", &p, true), 0);
+        assert_eq!(automatic_budget("performance", &p, true, true), 0);
         p.processing_mode = "recent".into();
         p.setup_completed = false;
-        assert_eq!(automatic_budget("balanced", &p, true), 0);
+        assert_eq!(automatic_budget("balanced", &p, true, true), 0);
         p.setup_completed = true;
         p.active_model_id = None;
-        assert_eq!(automatic_budget("balanced", &p, true), 0);
+        assert_eq!(automatic_budget("balanced", &p, true, true), 0);
     }
+    #[test]
+    fn remote_automatic_work_requires_separate_consent_key_and_cap() {
+        let mut p = preferences();
+        p.engine = "openai-compatible".into();
+        p.remote_base_url = Some("https://api.example.com".into());
+        p.remote_model = Some("model".into());
+        p.remote_consent = true;
+        p.remote_automatic = true;
+        p.remote_daily_limit = 5;
+        // A missing credential-store entry never admits automatic remote work.
+        assert_eq!(automatic_budget("performance", &p, true, false), 0);
+        assert_eq!(automatic_budget("performance", &p, true, true), 5);
+        p.remote_automatic = false;
+        assert_eq!(automatic_budget("performance", &p, true, true), 0);
+        p.remote_automatic = true;
+        p.remote_consent = false;
+        assert_eq!(automatic_budget("performance", &p, true, true), 0);
+        p.remote_consent = true;
+        p.remote_daily_limit = 0;
+        assert_eq!(automatic_budget("performance", &p, true, true), 0);
+        p.remote_daily_limit = 5;
+        // Eco still suppresses opportunistic work.
+        assert_eq!(automatic_budget("eco", &p, true, true), 0);
+        p.processing_mode = "backlog".into();
+        assert!(backlog_allowed("balanced", &p, true, true));
+        assert!(!backlog_allowed("balanced", &p, true, false));
+        assert!(!backlog_allowed("eco", &p, true, true));
+    }
+
     #[test]
     fn automatic_work_is_session_bounded() {
         let mut p = preferences();
         p.automatic_limit = 1;
-        assert_eq!(automatic_budget("balanced", &p, true), 1);
+        assert_eq!(automatic_budget("balanced", &p, true, true), 1);
         p.automatic_limit = 0;
-        assert_eq!(automatic_budget("performance", &p, true), 0);
+        assert_eq!(automatic_budget("performance", &p, true, true), 0);
         p.automatic_limit = u32::MAX;
-        assert_eq!(automatic_budget("performance", &p, true), 20);
+        assert_eq!(automatic_budget("performance", &p, true, true), 20);
     }
     #[test]
     fn backlog_requires_opt_in_idle_power_and_non_eco() {
         let mut p = preferences();
         p.processing_mode = "backlog".into();
-        assert!(backlog_allowed("balanced", &p, true));
-        assert!(!backlog_allowed("eco", &p, true));
-        assert!(!backlog_allowed("balanced", &p, false));
+        assert!(backlog_allowed("balanced", &p, true, true));
+        assert!(!backlog_allowed("eco", &p, true, true));
+        assert!(!backlog_allowed("balanced", &p, false, true));
         p.processing_mode = "recent".into();
-        assert!(!backlog_allowed("performance", &p, true));
+        assert!(!backlog_allowed("performance", &p, true, true));
         p.processing_mode = "backlog".into();
         p.setup_completed = false;
-        assert!(!backlog_allowed("balanced", &p, true));
+        assert!(!backlog_allowed("balanced", &p, true, true));
         p.setup_completed = true;
         p.active_model_id = None;
-        assert!(!backlog_allowed("balanced", &p, true));
+        assert!(!backlog_allowed("balanced", &p, true, true));
     }
     #[test]
     fn backlog_hourly_window_prunes_and_caps() {

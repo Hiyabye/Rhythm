@@ -35,6 +35,7 @@ pub(crate) struct AppState {
     pub(crate) worker: Arc<tokio::sync::Mutex<Worker>>,
     pub(crate) classifier: Arc<intelligence::classification::Controller>,
     pub(crate) analysis: Arc<intelligence::analysis::Controller>,
+    pub(crate) remote: Arc<intelligence::remote::Remote>,
     pub(crate) models: intelligence::models::Controller,
     hardware: intelligence::models::Hardware,
     ai_gate: tokio::sync::Mutex<()>,
@@ -572,6 +573,11 @@ fn main() {
             backup::remove_stale_backup_snapshots(&data_root);
             let store =
                 Store::open(&data_root.join("rhythm.sqlite3")).map_err(std::io::Error::other)?;
+            if restore_outcome.is_some() {
+                store
+                    .reset_remote_after_restore()
+                    .map_err(std::io::Error::other)?;
+            }
             store
                 .catalog(&archive::definitions())
                 .map_err(std::io::Error::other)?;
@@ -644,6 +650,7 @@ fn main() {
                 worker: Arc::new(tokio::sync::Mutex::new(worker)),
                 classifier,
                 analysis: Arc::new(intelligence::analysis::Controller::default()),
+                remote: Arc::new(intelligence::remote::Remote::native()),
                 models: intelligence::models::Controller::default(),
                 hardware,
                 ai_gate: tokio::sync::Mutex::new(()),
@@ -727,6 +734,10 @@ fn main() {
             intelligence::commands::ai_restart,
             intelligence::commands::ai_remove,
             intelligence::commands::ai_preferences,
+            intelligence::commands::ai_remote_status,
+            intelligence::commands::ai_remote_key,
+            intelligence::commands::ai_remote_key_clear,
+            intelligence::commands::ai_remote_test,
             intelligence::commands::ai_analyze,
             intelligence::commands::ai_cancel,
             intelligence::commands::ai_results,
