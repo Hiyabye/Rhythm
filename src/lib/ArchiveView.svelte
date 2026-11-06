@@ -214,6 +214,7 @@
 
   // Cross-posts on the same page fold under their first row. They are never
   // dropped: the leader names the other boards and expands to show the copies.
+  // A collapsed leader also carries the unread state of its folded copies.
   const listRows = $derived.by(() => {
     const byId = new Map(result.items.map((item) => [item.id, item]));
     const placed = new Set<number>();
@@ -516,9 +517,10 @@
       <ul class="notice-list" aria-label="공지 목록">
         {#each listRows as { item, folded, member } (item.id)}
           {@const analysis = recentAnalyses.find((value) => value.document_id === item.id)}
-          <li class:notice-unread={!item.is_read} class:notice-duplicate-member={member} class:has-duplicates={folded.length > 0}>
+          {@const hiddenUnread = expandedDuplicates[item.id] ? 0 : folded.filter((copy) => !copy.is_read).length}
+          <li class:notice-unread={!item.is_read || hiddenUnread > 0} class:notice-duplicate-member={member} class:has-duplicates={folded.length > 0}>
             <button class="notice-open" id={`notice-${item.id}`} onclick={() => open(item)}>
-              <span class="notice-title"><span class="notice-read-dot" aria-hidden="true"></span><Highlighted text={item.title} {query} /><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}</span></span>
+              <span class="notice-title"><span class="notice-read-dot" aria-hidden="true"></span><Highlighted text={item.title} {query} /><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}{hiddenUnread ? `, 접힌 같은 공지 ${hiddenUnread}건 읽지 않음` : ''}</span></span>
               <span class="notice-meta"><span>{item.source_name}</span><time datetime={item.published_at}>{archiveDate(item.published_at)}</time>{#if item.category}<span>{item.category}</span>{/if}</span>
               {#if (analysis || classifications[item.id]) && page !== 'search'}<span class="notice-ai-preview">{#if classifications[item.id]}<span class="ai-tag">분류 · {classifications[item.id].category}{classifications[item.id].low_confidence ? ' · 확신 낮음' : ''}</span>{/if}{#if analysis}{#if classifications[item.id]}{' · '}{/if}<span class="ai-tag">AI 요약</span> {analysis.result.short_summary}{/if}</span>{/if}
               {#if result.meaning_only?.includes(item.id)}<span class="notice-meaning-note">검색어는 없지만 뜻이 비슷한 공지</span>{/if}
@@ -527,7 +529,7 @@
               {#if item.content_status === 'missing_resources'}<span class="notice-resource-warning">일부 첨부 자료 미저장</span>{/if}
             </button>
             <button class="notice-save icon-button" aria-label={`${item.title} ${item.saved ? '저장 해제' : '보관함에 저장'}`} class:is-saved={item.saved} disabled={pendingSaves[item.id]} onclick={() => save(item)}><Icon name="bookmark" size={19} /></button>
-            {#if folded.length}<button class="text-button notice-duplicate-toggle" aria-expanded={Boolean(expandedDuplicates[item.id])} onclick={() => expandedDuplicates = { ...expandedDuplicates, [item.id]: !expandedDuplicates[item.id] }}>{expandedDuplicates[item.id] ? `같은 공지 ${folded.length}건 접기` : `같은 공지 ${folded.length}건 펼치기`}</button>{/if}
+            {#if folded.length}<button class="text-button notice-duplicate-toggle" aria-expanded={Boolean(expandedDuplicates[item.id])} onclick={() => expandedDuplicates = { ...expandedDuplicates, [item.id]: !expandedDuplicates[item.id] }}>{expandedDuplicates[item.id] ? `같은 공지 ${folded.length}건 접기` : `같은 공지 ${folded.length}건 펼치기${hiddenUnread ? ` · 읽지 않음 ${hiddenUnread}건` : ''}`}</button>{/if}
           </li>
         {/each}
       </ul>
