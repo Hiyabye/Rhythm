@@ -17,6 +17,8 @@ export interface FixtureOptions {
   aiInstalled?: boolean;
   aiEmbeddingInstalled?: boolean;
   aiClassificationLow?: boolean;
+  // Notice 2 is a cross-post of notice 1 and notice 3 is only similar; needs count >= 3.
+  aiSimilar?: boolean;
   aiRetiredModel?: boolean;
   aiResult?: boolean;
   aiImageResult?: boolean;
@@ -187,6 +189,8 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       document_id: item.id, revision_id: 1, category: '장학',
       low_confidence: Boolean(options.aiClassificationLow), created_at: '2026-10-24 12:00:00',
     }));
+    const similarNotice = (id: number, duplicate: boolean) => ({ document_id: id, source_id: entries[id - 1].source_id, source_name: id === 2 ? '공과대학 공지' : entries[id - 1].source_name, title: entries[id - 1].title, published_at: entries[id - 1].published_at, duplicate });
+    const similar: Record<number, ReturnType<typeof similarNotice>[]> = options.aiSimilar && options.aiEmbeddingInstalled ? { 1: [similarNotice(2, true), similarNotice(3, false)], 2: [similarNotice(1, true)], 3: [similarNotice(1, false)] } : {};
     let personalization = { profile: { university: '', department: '', study_level: '' }, interests: copy(options.initialInterests ?? []), learning_enabled: true };
     const documentFeedback = new Map<number, string>();
     let resultLagUsed = false;
@@ -405,6 +409,8 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'ai_diagnostics': return copy(ai.progress?.job_id === args.jobId ? ai.progress : null);
           case 'ai_classifications': return copy(classifications.filter((row) => args.documentIds.includes(row.document_id)));
           case 'ai_classification': return copy(classifications.find((row) => row.document_id === args.documentId && row.revision_id === args.revisionId) ?? null);
+          case 'ai_similar_notices': return copy(similar[args.documentId] ?? []);
+          case 'ai_duplicate_notices': return copy(args.documentIds.flatMap((id: number) => { const duplicates = (similar[id] ?? []).filter((row) => row.duplicate); return duplicates.length ? [{ document_id: id, duplicates }] : []; }));
           case 'ai_classification_preferences': ai.preferences.classification_enabled = Boolean(args.enabled); ai.classification = { state: args.enabled ? 'idle' : 'disabled', processed: ai.classification.processed }; return null;
           case 'ai_recent': return copy(analyses.filter((result) => result.revision_id === 1));
           case 'ai_results':

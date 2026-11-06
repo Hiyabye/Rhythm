@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { AiSnapshot, ArchivePage, ArchiveSummary, AiResult, AiClassification, DocumentItem, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
+  import type { AiSnapshot, ArchivePage, ArchiveSummary, AiResult, AiClassification, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
   import analysisContract from './analysis-contract.json' with { type: 'json' };
   import { archiveDate, archiveDay, archiveError, localDayKey } from './archive-format';
   import DocumentReader from './DocumentReader.svelte';
@@ -20,6 +20,8 @@
   let sources = $state<SourceInfo[]>([]);
   let recentAnalyses = $state<AiResult[]>([]);
   let classifications = $state<Record<number, AiClassification>>({});
+  let duplicates = $state<Record<number, SimilarNotice[]>>({});
+  let expandedDuplicates = $state<Record<number, boolean>>({});
   let aiError = $state('');
   let aiSnapshot = $state<AiSnapshot | null>(null);
   let recommendations = $state<PersonalizedRecommendation[]>([]);
@@ -54,6 +56,7 @@
     void currentPage;
     void request.token;
     readerId = null;
+    expandedDuplicates = {};
     readerRevisionId = null;
     lastOpened = 0;
     restoreListFocus = false;
@@ -100,7 +103,7 @@
     const processed = aiSnapshot?.classification?.processed ?? 0;
     if (processed !== lastClassificationProcessed) {
       lastClassificationProcessed = processed;
-      if (result.items.length) void loadClassifications(result.items.map((item) => item.id));
+      if (result.items.length) void loadEmbeddingLabels(result.items.map((item) => item.id));
     }
   });
 
@@ -195,12 +198,40 @@
     }
   }
 
-  async function loadClassifications(ids: number[]) {
-    if (!ids.length) { classifications = {}; return; }
+  async function loadEmbeddingLabels(ids: number[]) {
+    if (!ids.length) { classifications = {}; duplicates = {}; return; }
     try {
       const rows = await invoke<AiClassification[]>('ai_classifications', { documentIds: ids });
       classifications = Object.fromEntries(rows.map((row) => [row.document_id, row]));
     } catch { classifications = {}; }
+    try {
+      const rows = await invoke<DuplicateNotices[]>('ai_duplicate_notices', { documentIds: ids });
+      duplicates = Object.fromEntries(rows.map((row) => [row.document_id, row.duplicates]));
+    } catch { duplicates = {}; }
+  }
+
+  // Cross-posts on the same page fold under their first row. They are never
+  // dropped: the leader names the other boards and expands to show the copies.
+  const listRows = $derived.by(() => {
+    const byId = new Map(result.items.map((item) => [item.id, item]));
+    const placed = new Set<number>();
+    const rows: { item: DocumentItem; folded: DocumentItem[]; member: boolean }[] = [];
+    for (const item of result.items) {
+      if (placed.has(item.id)) continue;
+      placed.add(item.id);
+      const folded = (duplicates[item.id] ?? []).flatMap((notice) => {
+        const copy = byId.get(notice.document_id);
+        if (!copy || placed.has(copy.id)) return [];
+        placed.add(copy.id);
+        return [copy];
+      });
+      rows.push({ item, folded, member: false });
+      if (expandedDuplicates[item.id]) for (const copy of folded) rows.push({ item: copy, folded: [], member: true });
+    }
+    return rows;
+  });
+  function duplicateBoards(item: DocumentItem) {
+    return [...new Set((duplicates[item.id] ?? []).map((notice) => notice.source_name))].join(', ');
   }
 
   async function fetchPage(filters: { query: string; source_id: string | null; category: string | null; saved_only: boolean; unread_only: boolean; ascending: boolean; offset: number; limit: number }) {
@@ -221,7 +252,7 @@
       }
       result = next;
       if (category && !next.categories.includes(category)) category = '';
-      await loadClassifications(next.items.map((item) => item.id));
+      await loadEmbeddingLabels(next.items.map((item) => item.id));
     } catch (reason) { if (active && current === requestId) error = archiveError(reason); }
     finally {
       if (active && current === requestId && !clamped) {
@@ -333,7 +364,7 @@
 </script>
 
 {#if readerId !== null}
-  {#key `${readerId}:${readerRevisionId ?? ''}`}<DocumentReader id={readerId} initialRevisionId={readerRevisionId} {enabled} onclose={closeReader} onchange={changed} {onaisettings} />{/key}
+  {#key `${readerId}:${readerRevisionId ?? ''}`}<DocumentReader id={readerId} initialRevisionId={readerRevisionId} {enabled} onclose={closeReader} onchange={changed} {onaisettings} onopen={(id) => void openDocument(id, `notice-${id}`)} />{/key}
 {:else}
   <section class="archive-view" aria-busy={loading}>
     {#if page === 'today'}
@@ -479,17 +510,19 @@
     {#if loading}<p class="loading" role="status">로컬 공지를 불러오는 중입니다…</p>{/if}
     {#if result.items.length}
       <ul class="notice-list" aria-label="공지 목록">
-        {#each result.items as item (item.id)}
+        {#each listRows as { item, folded, member } (item.id)}
           {@const analysis = recentAnalyses.find((value) => value.document_id === item.id)}
-          <li class:notice-unread={!item.is_read}>
+          <li class:notice-unread={!item.is_read} class:notice-duplicate-member={member} class:has-duplicates={folded.length > 0}>
             <button class="notice-open" id={`notice-${item.id}`} onclick={() => open(item)}>
               <span class="notice-title"><span class="notice-read-dot" aria-hidden="true"></span><Highlighted text={item.title} {query} /><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}</span></span>
               <span class="notice-meta"><span>{item.source_name}</span><time datetime={item.published_at}>{archiveDate(item.published_at)}</time>{#if item.category}<span>{item.category}</span>{/if}</span>
               {#if (analysis || classifications[item.id]) && page !== 'search'}<span class="notice-ai-preview">{#if classifications[item.id]}<span class="ai-tag">분류 · {classifications[item.id].category}{classifications[item.id].low_confidence ? ' · 확신 낮음' : ''}</span>{/if}{#if analysis}{#if classifications[item.id]}{' · '}{/if}<span class="ai-tag">AI 요약</span> {analysis.result.short_summary}{/if}</span>{/if}
+              {#if duplicates[item.id]?.length}<span class="notice-duplicate-note">같은 공지 {duplicates[item.id].length}건 · {duplicateBoards(item)}</span>{/if}
               {#if page === 'search' && item.snippet}<span class="notice-snippet"><Highlighted text={item.snippet} {query} /></span>{/if}
               {#if item.content_status === 'missing_resources'}<span class="notice-resource-warning">일부 첨부 자료 미저장</span>{/if}
             </button>
             <button class="notice-save icon-button" aria-label={`${item.title} ${item.saved ? '저장 해제' : '보관함에 저장'}`} class:is-saved={item.saved} disabled={pendingSaves[item.id]} onclick={() => save(item)}><Icon name="bookmark" size={19} /></button>
+            {#if folded.length}<button class="text-button notice-duplicate-toggle" aria-expanded={Boolean(expandedDuplicates[item.id])} onclick={() => expandedDuplicates = { ...expandedDuplicates, [item.id]: !expandedDuplicates[item.id] }}>{expandedDuplicates[item.id] ? `같은 공지 ${folded.length}건 접기` : `같은 공지 ${folded.length}건 펼치기`}</button>{/if}
           </li>
         {/each}
       </ul>

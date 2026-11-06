@@ -1457,3 +1457,214 @@ fn classification_roundtrip_is_model_and_config_scoped() {
         .unwrap()
         .is_none());
 }
+
+fn embedded_notice(
+    store: &Store,
+    source_id: &str,
+    external_id: &str,
+    title: &str,
+    body: &str,
+    vector: &[f32],
+    model_sha256: &str,
+) -> (i64, i64) {
+    let mut article = recent_article(external_id, "2026-03-01", body);
+    article.title = title.into();
+    let (id, _) = store.upsert_article(source_id, &article, true).unwrap();
+    let revision = store.document(id, None).unwrap().revision_id;
+    let length = vector.iter().map(|value| value * value).sum::<f32>().sqrt();
+    let unit = vector
+        .iter()
+        .map(|value| value / length)
+        .collect::<Vec<_>>();
+    store
+        .ai_save_embedding(id, revision, model_sha256, &unit)
+        .unwrap();
+    (id, revision)
+}
+
+#[test]
+fn similar_notices_flag_only_exact_cross_posts_and_isolate_model_hashes() {
+    let (_directory, store) = database();
+    store
+        .connection
+        .execute(
+            "INSERT INTO sources(id,name,organization,description,url,family,supported,subscribed,next_page) VALUES('test2','공과대학','서강','공지','https://www.sogang.ac.kr/','main',1,1,12)",
+            [],
+        )
+        .unwrap();
+    let model_a = "a".repeat(64);
+    let model_b = "b".repeat(64);
+    let title = "2026학년도 장학금 신청 안내";
+    let body = "신청 기한 3월 10일 17시";
+    let (target, _) = embedded_notice(&store, "test", "a", title, body, &[1.0, 0.0, 0.0], &model_a);
+    // The same notice reposted on another board, with spacing differences.
+    let (copy, _) = embedded_notice(
+        &store,
+        "test2",
+        "b",
+        " 2026학년도  장학금 신청 안내",
+        body,
+        &[1.0, 0.1, 0.0],
+        &model_a,
+    );
+    // Near-identical text but another date: similar, never a duplicate.
+    let (other_date, _) = embedded_notice(
+        &store,
+        "test2",
+        "c",
+        title,
+        "신청 기한 3월 17일 17시",
+        &[1.0, 0.12, 0.0],
+        &model_a,
+    );
+    let (related, _) = embedded_notice(
+        &store,
+        "test",
+        "d",
+        "교내 장학 설명회",
+        "설명회 안내",
+        &[0.8, 0.6, 0.0],
+        &model_a,
+    );
+    let (unrelated, _) = embedded_notice(
+        &store,
+        "test",
+        "e",
+        "도서관 휴관",
+        "휴관 안내",
+        &[0.0, 1.0, 0.0],
+        &model_a,
+    );
+    // Same direction, but only under another model hash.
+    let (other_model, _) =
+        embedded_notice(&store, "test", "f", title, body, &[1.0, 0.0, 0.0], &model_b);
+    // An embedding of an outdated revision is not compared.
+    let (revised, _) =
+        embedded_notice(&store, "test", "g", title, body, &[1.0, 0.0, 0.0], &model_a);
+    let mut changed = recent_article("g", "2026-03-01", "변경된 본문 3월 10일 17시");
+    changed.title = title.into();
+    assert!(store.upsert_article("test", &changed, true).unwrap().1);
+
+    let results = store.ai_similar_notices(&[target], &model_a, 5).unwrap();
+    assert_eq!(results.len(), 1);
+    let (id, similar) = &results[0];
+    assert_eq!(*id, target);
+    let ids = similar
+        .iter()
+        .map(|notice| notice.document_id)
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec![copy, other_date, related]);
+    assert!(!ids.contains(&unrelated) && !ids.contains(&other_model) && !ids.contains(&revised));
+    assert_eq!(
+        similar
+            .iter()
+            .map(|notice| notice.duplicate)
+            .collect::<Vec<_>>(),
+        vec![true, false, false]
+    );
+    assert_eq!(similar[0].source_name, "공과대학");
+    assert_eq!(similar[0].title, " 2026학년도  장학금 신청 안내");
+
+    // Duplicates are symmetric and come first even when a non-duplicate scores
+    // higher (`other_date` is closer to `copy` than `target` is).
+    let results = store
+        .ai_similar_notices(&[copy, related], &model_a, 1)
+        .unwrap();
+    assert_eq!(
+        results[0]
+            .1
+            .iter()
+            .map(|n| (n.document_id, n.duplicate))
+            .collect::<Vec<_>>(),
+        vec![(target, true)]
+    );
+    assert_eq!(
+        results[1]
+            .1
+            .iter()
+            .map(|n| (n.document_id, n.duplicate))
+            .collect::<Vec<_>>(),
+        vec![(other_date, false)]
+    );
+    // The other model only sees its own vectors, and a document without a
+    // vector for the model gets nothing.
+    assert!(store
+        .ai_similar_notices(&[other_model], &model_b, 5)
+        .unwrap()[0]
+        .1
+        .is_empty());
+    assert!(store.ai_similar_notices(&[target], &model_b, 5).unwrap()[0]
+        .1
+        .is_empty());
+    assert!(
+        store.ai_similar_notices(&[revised], &model_a, 5).unwrap()[0]
+            .1
+            .is_empty()
+    );
+    assert!(store.ai_similar_notices(&[target], "bad", 5).is_err());
+    assert!(store.ai_similar_notices(&[target], &model_a, 0).is_err());
+    assert!(store
+        .ai_similar_notices(&vec![1; 201], &model_a, 5)
+        .is_err());
+}
+
+#[test]
+fn similar_notice_candidates_are_bounded_to_the_newest_window() {
+    let (_directory, store) = database();
+    let model = "a".repeat(64);
+    let body = "신청 기한 3월 10일";
+    let (target, _) = embedded_notice(
+        &store,
+        "test",
+        "old-a",
+        "장학 공지",
+        body,
+        &[1.0, 0.0],
+        &model,
+    );
+    let (copy, _) = embedded_notice(
+        &store,
+        "test",
+        "old-b",
+        "장학 공지",
+        body,
+        &[1.0, 0.0],
+        &model,
+    );
+    assert_eq!(
+        store.ai_similar_notices(&[target], &model, 5).unwrap()[0].1[0].document_id,
+        copy
+    );
+    // Fill the window with newer, orthogonal notices; the old copy falls out.
+    let unit = [0.0f32, 1.0]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect::<Vec<_>>();
+    let transaction = store.connection.unchecked_transaction().unwrap();
+    for index in 0..SIMILARITY_WINDOW as i64 {
+        let id = 10_000 + index;
+        transaction
+            .execute(
+                "INSERT INTO documents(id,source_id,external_id,canonical_url,title,published_at,body_html,body_text,content_hash,historical) VALUES(?1,'test',?2,'https://www.sogang.ac.kr/n','새 공지','2026-06-01','<p>x</p>','x','h',1)",
+                params![id, format!("new-{index}")],
+            )
+            .unwrap();
+        transaction
+            .execute(
+                "INSERT INTO document_revisions(id,document_id,canonical_url,title,published_at,original,body_html,body_text,content_hash) VALUES(?1,?1,'https://www.sogang.ac.kr/n','새 공지','2026-06-01','o','<p>x</p>','x','h')",
+                [id],
+            )
+            .unwrap();
+        transaction
+            .execute(
+                "INSERT INTO notice_embeddings(document_id,revision_id,model_sha256,dim,vector) VALUES(?1,?1,?2,2,?3)",
+                params![id, model, unit],
+            )
+            .unwrap();
+    }
+    transaction.commit().unwrap();
+    // The target itself is outside the window but still has its vector.
+    assert!(store.ai_similar_notices(&[target], &model, 5).unwrap()[0]
+        .1
+        .is_empty());
+}

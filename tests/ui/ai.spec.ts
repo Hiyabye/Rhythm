@@ -599,3 +599,45 @@ test('choosing the remote engine removes the local setup banner', async ({ page 
   await page.getByRole('button', { name: '오늘', exact: true }).click();
   await expect(page.getByRole('button', { name: '로컬 AI 설정하기' })).toHaveCount(0);
 });
+
+test('reader lists similar notices and opens one', async ({ page }) => {
+  await mockDesktop(page, { count: 3, aiEmbeddingInstalled: true, aiSimilar: true }); await page.goto('/');
+  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
+  await page.locator('.notice-list #notice-1').click();
+  const reader = page.getByRole('region', { name: '보관된 공지 읽기' });
+  const section = reader.getByRole('region', { name: /비슷한 공지/ });
+  await expect(section).toContainText('공과대학 공지');
+  await expect(section).toContainText('같은 공지');
+  await expect(section).toContainText('한국어 공지 03');
+  await section.getByRole('button', { name: '한국어 공지 03 읽기' }).click();
+  await expect(reader.getByRole('heading', { level: 2 })).toHaveText('한국어 공지 03');
+  await page.getByRole('button', { name: '목록으로 돌아가기' }).click();
+  await expect(page.locator('.notice-list #notice-3')).toBeFocused();
+});
+
+test('reader shows no similar section without an embedding model', async ({ page }) => {
+  await mockDesktop(page, { count: 3, aiSimilar: true }); await page.goto('/');
+  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
+  await page.locator('.notice-list #notice-1').click();
+  const reader = page.getByRole('region', { name: '보관된 공지 읽기' });
+  await expect(reader.getByRole('heading', { level: 2 })).toHaveText('한국어 공지 01');
+  await expect(reader.getByRole('region', { name: /비슷한 공지/ })).toHaveCount(0);
+});
+
+test('cross-posted notices fold under one row and expand on request', async ({ page }) => {
+  await mockDesktop(page, { count: 3, aiEmbeddingInstalled: true, aiSimilar: true }); await page.goto('/');
+  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
+  const list = page.locator('.notice-list');
+  await expect(list.locator('#notice-1')).toContainText('같은 공지 1건 · 공과대학 공지');
+  // The copy is folded, the merely similar notice is not.
+  await expect(list.locator('#notice-2')).toHaveCount(0);
+  await expect(list.locator('#notice-3')).toBeVisible();
+  await expect(list.locator('#notice-3')).not.toContainText('같은 공지');
+  const toggle = list.getByRole('button', { name: '같은 공지 1건 펼치기' });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await toggle.click();
+  await expect(list.locator('#notice-2')).toBeVisible();
+  await expect(list.locator('li').nth(1)).toHaveClass(/notice-duplicate-member/);
+  await list.getByRole('button', { name: '같은 공지 1건 접기' }).click();
+  await expect(list.locator('#notice-2')).toHaveCount(0);
+});

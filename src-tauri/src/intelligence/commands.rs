@@ -1,7 +1,7 @@
 use super::{analysis, classification, models, operations, remote, WorkerStatus};
 use crate::{
     storage::intelligence::{
-        AiClassification, AiJob, AiModel, AiPreferences, AiProjector, AiResult,
+        AiClassification, AiJob, AiModel, AiPreferences, AiProjector, AiResult, SimilarNotice,
     },
     AppState,
 };
@@ -934,6 +934,65 @@ pub async fn ai_classification(
             classification::config_hash(),
         )
     })
+}
+
+/// Similar notices for the reader, from stored vectors only (no model call).
+/// Returns nothing without a selected, installed embedding model.
+#[tauri::command]
+pub async fn ai_similar_notices(
+    state: tauri::State<'_, AppState>,
+    document_id: i64,
+) -> Result<Vec<SimilarNotice>, String> {
+    if document_id <= 0 {
+        return Err("비슷한 공지 조회 식별자가 올바르지 않습니다.".into());
+    }
+    let Some(sha) = embedding_model_sha(&state)? else {
+        return Ok(Vec::new());
+    };
+    with_store(&state, |store| {
+        Ok(store
+            .ai_similar_notices(&[document_id], &sha, 5)?
+            .pop()
+            .map(|(_, similar)| similar)
+            .unwrap_or_default())
+    })
+}
+
+/// Likely cross-posts of each visible notice, for grouping list rows. Only
+/// documents with at least one duplicate are returned.
+#[tauri::command]
+pub async fn ai_duplicate_notices(
+    state: tauri::State<'_, AppState>,
+    document_ids: Vec<i64>,
+) -> Result<Vec<DuplicateNotices>, String> {
+    if document_ids.len() > 200 || document_ids.iter().any(|id| *id <= 0) {
+        return Err("비슷한 공지 조회 범위를 확인해 주세요.".into());
+    }
+    let Some(sha) = embedding_model_sha(&state)? else {
+        return Ok(Vec::new());
+    };
+    with_store(&state, |store| {
+        Ok(store
+            .ai_similar_notices(&document_ids, &sha, 1)?
+            .into_iter()
+            .filter_map(|(document_id, similar)| {
+                let duplicates = similar
+                    .into_iter()
+                    .filter(|notice| notice.duplicate)
+                    .collect::<Vec<_>>();
+                (!duplicates.is_empty()).then_some(DuplicateNotices {
+                    document_id,
+                    duplicates,
+                })
+            })
+            .collect())
+    })
+}
+
+#[derive(Serialize)]
+pub struct DuplicateNotices {
+    document_id: i64,
+    duplicates: Vec<SimilarNotice>,
 }
 
 #[tauri::command]
