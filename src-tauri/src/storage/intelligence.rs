@@ -246,23 +246,121 @@ fn normalized_title(title: &str) -> String {
         .join(" ")
         .to_lowercase()
 }
-/// Full-width digits (U+FF10–U+FF19) read as ASCII, so `３월` and `3월` match
-/// and two full-width dates still differ. Dates written in words are not read.
+/// Splits leading board tags such as `[공지]` or `(학부)` from a title.
+fn title_tags(title: &str) -> (Vec<String>, String) {
+    const BRACKETS: [(char, char); 7] = [
+        ('[', ']'),
+        ('(', ')'),
+        ('<', '>'),
+        ('【', '】'),
+        ('［', '］'),
+        ('（', '）'),
+        ('〈', '〉'),
+    ];
+    let mut tags = Vec::new();
+    let mut rest = title.trim_start();
+    while let Some(&(open, close)) = BRACKETS.iter().find(|(open, _)| rest.starts_with(*open)) {
+        let Some(end) = rest.find(close) else {
+            break;
+        };
+        tags.push(normalized_title(&rest[open.len_utf8()..end]));
+        rest = rest[end + close.len_utf8()..].trim_start();
+    }
+    (tags, normalized_title(rest))
+}
+/// Board reposts add or drop tags; a conflicting tag can name another
+/// audience (`[학부]` vs `[대학원]`), so one side's tags must contain the
+/// other's. Digits anywhere in the title, tags included, must still agree.
+fn same_title(a: &str, b: &str) -> bool {
+    let ((a_tags, a_rest), (b_tags, b_rest)) = (title_tags(a), title_tags(b));
+    let subset = |x: &[String], y: &[String]| x.iter().all(|tag| y.contains(tag));
+    !a_rest.is_empty()
+        && a_rest == b_rest
+        && (subset(&a_tags, &b_tags) || subset(&b_tags, &a_tags))
+        && digit_runs(a) == digit_runs(b)
+}
+/// Digit runs that are not contact numbers, so an appended contact line does
+/// not split a cross-post. Full-width digits (U+FF10–U+FF19) read as ASCII,
+/// so `３월` and `3월` match and two full-width dates still differ. Dates
+/// written in words are not read.
 fn digit_runs(text: &str) -> Vec<String> {
+    let chars = text
+        .chars()
+        .map(|c| match c {
+            '０'..='９' => char::from(b'0' + (c as u32 - '０' as u32) as u8),
+            _ => c,
+        })
+        .collect::<Vec<_>>();
     let mut runs = Vec::new();
-    let mut run = String::new();
-    for c in text.chars() {
-        match c {
-            '0'..='9' => run.push(c),
-            '０'..='９' => run.push(char::from(b'0' + (c as u32 - '０' as u32) as u8)),
-            _ if !run.is_empty() => runs.push(std::mem::take(&mut run)),
-            _ => {}
+    let mut index = 0;
+    while index < chars.len() {
+        let start = index;
+        while index < chars.len() && chars[index].is_ascii_digit() {
+            index += 1;
+        }
+        if index > start {
+            runs.push(start..index);
+        } else {
+            index += 1;
         }
     }
-    if !run.is_empty() {
-        runs.push(run);
+    // One separator, optionally followed by a space, joins two runs.
+    let joined = |a: &std::ops::Range<usize>, b: &std::ops::Range<usize>, separators: &str| matches!(&chars[a.end..b.start], [s] | [s, ' '] if separators.contains(*s));
+    let mut contact = vec![false; runs.len()];
+    for k in 0..runs.len() {
+        let run = &runs[k];
+        // Area code: 02-705-8123, 02)705-8123, 010.1234.5678.
+        if k + 2 < runs.len() {
+            let (b, c) = (&runs[k + 1], &runs[k + 2]);
+            if chars[run.start] == '0'
+                && (2..=3).contains(&run.len())
+                && joined(run, b, "-.)")
+                && (3..=4).contains(&b.len())
+                && joined(b, c, "-.")
+                && c.len() == 4
+            {
+                contact[k..=k + 2].fill(true);
+            }
+        }
+        // Local number: 705-8123, but not inside a longer chain. A four-digit
+        // exchange is accepted only after a contact word, because `2025-2026`
+        // is a year range.
+        if k + 1 < runs.len() {
+            let next = &runs[k + 1];
+            let chained = (k > 0 && joined(&runs[k - 1], run, "-.)"))
+                || (k + 2 < runs.len() && joined(next, &runs[k + 2], "-."));
+            if !chained
+                && next.len() == 4
+                && joined(run, next, "-")
+                && (run.len() == 3 || (run.len() == 4 && after_contact_word(&chars[..run.start])))
+            {
+                contact[k..=k + 1].fill(true);
+            }
+        }
+        // Extension: 내선 8123, ☎ 8123, Tel. 8123.
+        if (3..=4).contains(&run.len()) && after_contact_word(&chars[..run.start]) {
+            contact[k] = true;
+        }
     }
-    runs
+    runs.into_iter()
+        .zip(contact)
+        .filter(|(_, contact)| !contact)
+        .map(|(run, _)| chars[run].iter().collect())
+        .collect()
+}
+/// True when `prefix` ends with a contact word, ignoring spaces and `.:()`.
+fn after_contact_word(prefix: &[char]) -> bool {
+    let end = prefix
+        .iter()
+        .rposition(|c| !(c.is_whitespace() || ".:()".contains(*c)))
+        .map_or(0, |i| i + 1);
+    let tail = prefix[end.saturating_sub(3)..end]
+        .iter()
+        .collect::<String>()
+        .to_lowercase();
+    ["내선", "☎", "tel", "전화", "연락처"]
+        .iter()
+        .any(|word| tail.ends_with(word))
 }
 struct WindowNotice {
     document_id: i64,
@@ -1113,7 +1211,7 @@ impl Store {
                 let duplicate = score >= DUPLICATE_MIN_SCORE
                     && match (&target_text, text(notice)?) {
                         (Some((title, body)), Some((other_title, other_body))) => {
-                            normalized_title(title) == normalized_title(&other_title)
+                            same_title(title, &other_title)
                                 && digit_runs(body) == digit_runs(&other_body)
                         }
                         _ => false,
