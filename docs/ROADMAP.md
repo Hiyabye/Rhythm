@@ -1,6 +1,6 @@
 # Roadmap
 
-Rhythm stays local-first and Korean-first. The current release is **v1.4.0**. Support targets macOS Apple Silicon and Windows 11 x64; Linux and Intel Macs are not supported. Planned work is tracked in [GitHub issues](https://github.com/Hiyabye/Rhythm/issues); this page records the current state and what has actually been verified.
+Rhythm stays local-first and Korean-first. The current release is **v1.5.0**. Support targets macOS Apple Silicon and Windows 11 x64; Linux and Intel Macs are not supported. Planned work is tracked in [GitHub issues](https://github.com/Hiyabye/Rhythm/issues); this page records the current state and what has actually been verified.
 
 ## Current state
 
@@ -36,9 +36,11 @@ v1.4.0 adds:
 - New source families, each verified for full article and local-resource extraction: 전자공학과·시스템반도체공학과 community boards (9, #94), 벨라르미노 학사 dormitory boards (3, #116), 기계공학과 boards discovered through the site's sitemap (7, #95) and 반도체공학과 boards (5, #96). The catalog lists 34 boards, all subscribable; the unsupported 공과대학 뉴스레터 was retired (#93).
 - The notice preview separates the classification label from the AI summary (#119). The unsigned Windows distribution decision is recorded (#85).
 
-Unreleased (next release):
+v1.5.0 adds:
 
 - An opt-in Cybercampus (eClass) connector (#86): with a login saved in the OS credential store, the `cybercampus` source archives the current term's course notices with their attachments and images, and a 과제·마감 page lists assignments and TODO deadlines. Read-only; its documents never go to the remote AI engine (schema 18).
+- With the embedding model installed, the reader lists notices similar in meaning, and the list folds cross-posted copies under one expandable row that keeps their unread state (#126, #133, #134, #135). Search ranks by relevance and adds meaning-based matches from a local query embedding; without the model it stays text-only (#127).
+- The dormitory source family is named 벨라르미노 학사 instead of 생활관.
 
 ## Verification status
 
