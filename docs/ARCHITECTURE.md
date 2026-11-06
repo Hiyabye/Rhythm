@@ -137,7 +137,7 @@ Results have deterministic publication-date/ID order, source/category and saved/
 
 ## Sources and parsers
 
-`archive/catalog.rs` has 35 stable source identities. **Catalog presence is not support.** Thirty-four have verified list and detail extraction, resource handling and offline reopen:
+`archive/catalog.rs` has 34 stable source identities. **Catalog presence is not support.** All 34 have verified list and detail extraction, resource handling and offline reopen:
 
 | Source ID | Board |
 | --- | --- |
@@ -176,7 +176,7 @@ Results have deterministic publication-date/ID order, source/category and saved/
 | `se-careers` | 반도체공학과 채용/홍보 (`?board_id=recruit`) |
 | `se-industry` | 반도체공학과 산학연 공지사항 (`?board_id=notice_industry`) |
 
-The other source (the Engineering newsletter) is shown as unsupported and cannot be subscribed. Support needs verified article and resource extraction plus fixtures, not just a working list URL.
+The catalog has no unsupported entries left. The 공과대학 e뉴스레터 (`eng-newsletter`) was retired (#93); migration 17 deletes its unused source row, and a row that still holds archived notices or skipped entries is kept so that stored data opens.
 
 `parser.rs` validates board/article identity, metadata, dates, pagination and response structure. The main board uses public paginated JSON list/detail endpoints; HTML error pages are not accepted as JSON, and listings must agree on size, total, page, pins and duplicates. Computing uses desktop `.board-list table` rows (so mobile pin copies don't distort pagination), extracts `article.board-detail`, and reads attachment metadata from a restricted subset of serialized Nuxt data without running JavaScript; its public route ID, internal `DETAIL.SN` and file path must all agree, and inline image roles win when an attachment shares the URL. `engineering.rs` validates the current SSR canonical/form/board/pagination identity, ordinals, full title and body, attachment names and visible Korean time against machine UTC. Unexpected structure is an explicit source failure, never an empty success. Fixture provenance is in `archive/fixtures/README.md`.
 

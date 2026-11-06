@@ -1548,3 +1548,56 @@ fn schema_eleven_upgrade_retries_mislabeled_and_newly_allowed_resources() {
         ]
     );
 }
+#[test]
+fn retired_eng_newsletter_row_is_removed_but_archived_data_is_kept() {
+    fn downgrade(path: &std::path::Path) {
+        Connection::open(path)
+            .unwrap()
+            .execute_batch("PRAGMA user_version=16")
+            .unwrap();
+    }
+    let empty = tempfile::tempdir().unwrap();
+    let empty_path = empty.path().join("db");
+    {
+        let store = Store::open(&empty_path).unwrap();
+        store
+            .catalog(&[definition("eng-newsletter", false)])
+            .unwrap();
+        downgrade(&empty_path);
+    }
+    let store = Store::open(&empty_path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, super::SCHEMA_VERSION);
+    assert!(store.sources().unwrap().is_empty());
+
+    let archived = tempfile::tempdir().unwrap();
+    let archived_path = archived.path().join("db");
+    let id = {
+        let store = Store::open(&archived_path).unwrap();
+        store
+            .catalog(&[definition("eng-newsletter", true)])
+            .unwrap();
+        let (id, _) = store
+            .upsert_article(
+                "eng-newsletter",
+                &article("5", "뉴스레터", "보관 본문", "2026-01-01"),
+                true,
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE sources SET supported=0 WHERE id='eng-newsletter'",
+                [],
+            )
+            .unwrap();
+        downgrade(&archived_path);
+        id
+    };
+    let store = Store::open(&archived_path).unwrap();
+    assert_eq!(store.sources().unwrap().len(), 1);
+    assert!(store
+        .document(id, None)
+        .unwrap()
+        .body_text
+        .contains("보관 본문"));
+}
