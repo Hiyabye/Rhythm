@@ -71,7 +71,7 @@ pub fn definitions() -> Vec<SourceDefinition> {
         add(
             &format!("dorm-{id}"),
             name,
-            "서강대학교 · 생활관",
+            "서강대학교 · 벨라르미노 학사",
             "dormitory",
             format!("https://new-cms.sogang.ac.kr/sgdormitory/{menu}/subview.do"),
             true,

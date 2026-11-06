@@ -160,9 +160,9 @@ Results have deterministic publication-date/ID order, source/category and saved/
 | `sse-notices` | 시스템반도체공학과 학과공지 (`/kor/community/notice.php`) |
 | `sse-news` | 시스템반도체공학과 학과소식 (`/kor/community/news.php`, 9-row gallery) |
 | `sse-seminars` | 시스템반도체공학과 일반공지 (`/kor/community/seminar.php`) |
-| `dorm-general` | 생활관 일반공지 (`/sgdormitory/6975/subview.do`) |
-| `dorm-admission` | 생활관 입사 및 퇴사 공지 (`/sgdormitory/3947/subview.do`) |
-| `dorm-menu` | 생활관 주간 메뉴 (`/sgdormitory/3951/subview.do`) |
+| `dorm-general` | 벨라르미노 학사 일반공지 (`/sgdormitory/6975/subview.do`) |
+| `dorm-admission` | 벨라르미노 학사 입사 및 퇴사 공지 (`/sgdormitory/3947/subview.do`) |
+| `dorm-menu` | 벨라르미노 학사 주간 메뉴 (`/sgdormitory/3951/subview.do`) |
 | `me-general` | 기계공학과 일반공지 (`/ko/board/notice`) |
 | `me-academic` | 기계공학과 학사공지 (`/ko/board/academic`) |
 | `me-research` | 기계공학과 연구성과 (`/ko/board/research`) |

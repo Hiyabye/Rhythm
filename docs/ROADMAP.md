@@ -33,7 +33,7 @@ v1.3.0 adds:
 v1.4.0 adds:
 
 - An opt-in OpenAI-compatible engine (#77). The local engine stays the default and fully supported; remote analysis requires a normalized base URL and model plus consent bound to that origin, keeps the API key in the OS credential store, sends only notice title and body text (no personalization, archive identities or images), falls back from `json_schema` to `json_object` and plain text, and has a separate automatic-work switch with a per-day cap. Remote embedding classification is a separate switch.
-- New source families, each verified for full article and local-resource extraction: 전자공학과·시스템반도체공학과 community boards (9, #94), 생활관 dormitory boards (3, #116), 기계공학과 boards discovered through the site's sitemap (7, #95) and 반도체공학과 boards (5, #96). The catalog lists 34 boards, all subscribable; the unsupported 공과대학 뉴스레터 was retired (#93).
+- New source families, each verified for full article and local-resource extraction: 전자공학과·시스템반도체공학과 community boards (9, #94), 벨라르미노 학사 dormitory boards (3, #116), 기계공학과 boards discovered through the site's sitemap (7, #95) and 반도체공학과 boards (5, #96). The catalog lists 34 boards, all subscribable; the unsupported 공과대학 뉴스레터 was retired (#93).
 - The notice preview separates the classification label from the AI summary (#119). The unsigned Windows distribution decision is recorded (#85).
 
 ## Verification status
