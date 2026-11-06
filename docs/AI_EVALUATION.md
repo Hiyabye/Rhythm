@@ -89,6 +89,8 @@ Not verified with llama-server: in the installed macOS app, the in-app download,
 
 `intelligence/classification.rs` embeds the instruction, title and first 1000 body characters, then compares the unit vector against 35 authored Korean prototypes (five per non-`기타` category) using the best (max) cosine. The best match below `0.50` becomes `기타` with a low-confidence marker. The prototype set, input shape, scoring and threshold form the config hash stored with each classification; vectors are stored per revision and embedding-model SHA-256 so a prototype change reclassifies without re-embedding. The tracing/evaluation harness is the ignored `actual_embedding_classification_evaluation`, which uses the same 18 synthetic fixtures and never touches the production profile.
 
+The figures below were recorded with a private copy of the prototypes in the harness that differed from the production table in one character (`학생证` for `학생증` in one 학사 prototype). The harness now uses the production table (`classification::CATEGORY_PROTOTYPES`) and the numbers were not re-measured.
+
 Measured on one Mac (macOS 27.2, M1 Pro, 16 GiB) with the staged `llama-server`, three candidate artifacts downloaded into a temporary directory and verified against their pinned size/SHA-256. Input variants grew from title only (0 body characters) to title + 1500 characters; the table reports the best variant per model.
 
 | Model | Pinned artifact | Dim | Category | Time / notice (Metal) | Peak RSS | Load |
