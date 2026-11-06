@@ -1721,6 +1721,75 @@ fn duplicate_check_reads_full_width_digits() {
 }
 
 #[test]
+fn duplicate_check_ignores_board_tags_and_contact_numbers() {
+    let (_directory, store) = database();
+    let model = "a".repeat(64);
+    let body = "2025-2026학년도 장학금 신청 기한 3월 10일 17시";
+    let (target, _) = embedded_notice(
+        &store,
+        "test",
+        "target",
+        "[학부] 장학금 신청 안내",
+        body,
+        &[1.0, 0.0],
+        &model,
+    );
+    let cases = [
+        ("장학금 신청 안내", body.to_string(), true),
+        ("[공지][학부] 장학금 신청 안내", body.to_string(), true),
+        ("<공지> [학부]  장학금 신청 안내", body.to_string(), true),
+        (
+            "[학부] 장학금 신청 안내",
+            format!("{body}\n문의: 학생지원팀 02-705-8123 (내선 8123)"),
+            true,
+        ),
+        (
+            "【학부】 장학금 신청 안내",
+            format!("{body}\n☎ 705-8123, Tel. 3274-1234"),
+            true,
+        ),
+        // A conflicting tag can name another audience.
+        ("[대학원] 장학금 신청 안내", body.to_string(), false),
+        // Digits in a tag still count.
+        ("[2027] 장학금 신청 안내", body.to_string(), false),
+        // A changed date still blocks grouping despite the relaxed rules.
+        (
+            "[공지] 장학금 신청 안내",
+            "2025-2026학년도 장학금 신청 기한 3월 17일 17시\n문의 02-705-8123".to_string(),
+            false,
+        ),
+        // A year range is not a phone number.
+        (
+            "[학부] 장학금 신청 안내",
+            "2026-2027학년도 장학금 신청 기한 3월 10일 17시".to_string(),
+            false,
+        ),
+        // A tag alone is not a title.
+        ("[학부]", body.to_string(), false),
+    ];
+    let mut expected = Vec::new();
+    for (index, (title, body, duplicate)) in cases.iter().enumerate() {
+        let (id, _) = embedded_notice(
+            &store,
+            "test",
+            &format!("case-{index}"),
+            title,
+            body,
+            &[1.0, 0.001 * (index + 1) as f32],
+            &model,
+        );
+        expected.push((id, *duplicate));
+    }
+    let similar = &store.ai_similar_notices(&[target], &model, 20).unwrap()[0].1;
+    let mut actual = similar
+        .iter()
+        .map(|n| (n.document_id, n.duplicate))
+        .collect::<Vec<_>>();
+    actual.sort();
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn similar_notice_candidates_are_bounded_to_the_newest_window() {
     let (_directory, store) = database();
     let model = "a".repeat(64);
