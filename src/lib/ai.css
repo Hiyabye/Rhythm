@@ -15,7 +15,6 @@
 .ai-provenance code { display: block; overflow-wrap: anywhere; font-size: 11px; line-height: 1.8; color: var(--secondary); }
 .ai-feedback { min-height: 16px; margin-block: 10px; font-size: 11px; line-height: 1.7; color: var(--secondary); }
 .ai-provenance select { box-sizing: border-box; max-width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 12px; }
-.ai-recent ul,.ai-facts { list-style: none; padding: 0; margin: 0; }
 .ai-analysis { margin: 26px 0; min-width: 0; overflow-wrap: anywhere; }
 .ai-analysis-meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--secondary); margin: 18px 0; }
 .ai-analysis .ai-short-summary { font-size: 14px; font-weight: 550; }
@@ -28,11 +27,6 @@
 .ai-caution { border-left: 2px solid var(--secondary); padding-left: 12px; color: var(--secondary); }
 .ai-limits { font-size: 12px; line-height: 1.8; margin: 8px 0 12px; }
 .ai-limits strong { color: var(--text); font-weight: 600; }
-.ai-recent { margin: 28px 0; }
-.ai-recent h2 { font-size: 15px; }
-.ai-recent li { border-bottom: 1px solid var(--line); }
-.ai-recent .notice-open { width: 100%; display: grid; gap: 7px; padding: 16px 0; text-align: left; }
-.ai-recent strong { font-size: 13px; font-weight: 500; }
 .recommendation-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 0 14px; }
 .recommendation-empty { display: grid; justify-items: start; gap: 6px; padding: 14px 0; color: var(--secondary); font-size: 12px; }
 .recommendation-empty p { margin: 0; line-height: 1.8; }

@@ -1357,44 +1357,6 @@ h3 {
 .icon-button:hover:not(:disabled) {
   background: var(--hover);
 }
-.model-empty {
-  display: flex;
-  align-items: center;
-  gap: 17px;
-  padding: 24px 20px;
-  border: 1px dashed var(--line);
-  border-radius: 5px;
-  color: var(--secondary);
-  margin: 8px 0 17px;
-}
-.model-empty h3 {
-  font-size: 12px;
-  color: var(--text);
-}
-.model-empty p {
-  font-size: 11px;
-  line-height: 1.8;
-  margin-top: 5px;
-  overflow-wrap: anywhere;
-}
-.model-empty>svg {
-  flex-shrink: 0;
-}
-.planned {
-  padding-top: 4px;
-}
-.planned strong {
-  font-size: 11px;
-  font-weight: 550;
-  color: var(--secondary);
-}
-.planned p {
-  font-size: 11px;
-  line-height: 1.9;
-  color: var(--muted);
-  margin-top: 5px;
-  word-break: keep-all;
-}
 .field-label {
   display: block;
   font-size: 12px;
@@ -1414,17 +1376,6 @@ textarea {
   line-height: 1.8;
 }
 textarea::placeholder {
-  color: var(--muted);
-}
-.field-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 15px;
-  margin: 10px 0 20px;
-}
-.field-footer>span {
-  font-size: 11px;
   color: var(--muted);
 }
 .loading {
@@ -1559,16 +1510,6 @@ textarea::placeholder {
   }
   .segmented svg {
     display: block;
-  }
-  .field-footer {
-    align-items: flex-start;
-  }
-  .field-footer>span {
-    max-width: 150px;
-    line-height: 1.7;
-  }
-  .field-footer .button {
-    white-space: nowrap;
   }
 }
 @media (prefers-reduced-motion:reduce) {

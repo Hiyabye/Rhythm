@@ -145,6 +145,10 @@
     sourceRequest = { id: sourceId, token: sourceRequest.token + 1 };
     activeSource = sourceId;
     notice = '';
+    await showTop();
+  }
+
+  async function showTop() {
     history.replaceState(null, '', location.pathname + location.search);
     await tick();
     window.scrollTo({ top: 0, behavior: 'instant' });
@@ -245,10 +249,7 @@
     proactiveActivation = { document_id: documentId, revision_id: revisionId, event_id: eventId, attempt_count: attemptCount, event_ids: eventIds };
     page = 'inbox';
     notice = '';
-    history.replaceState(null, '', location.pathname + location.search);
-    await tick();
-    window.scrollTo({ top: 0, behavior: 'instant' });
-    document.getElementById('main')?.focus({ preventScroll: true });
+    await showTop();
   }
 
   function organizationLabel(organization: string): string {
