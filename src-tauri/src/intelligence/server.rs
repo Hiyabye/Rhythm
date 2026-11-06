@@ -184,11 +184,7 @@ impl Server {
                 return Err(error);
             }
         };
-        let multimodal = observed
-            .lock()
-            .map(|facts| facts.multimodal)
-            .unwrap_or(false);
-        let (loaded_backend, complete) = {
+        let (loaded_backend, complete, multimodal) = {
             let facts = observed
                 .lock()
                 .map_err(|_| "AI 엔진 상태를 읽지 못했습니다.")?;
@@ -206,6 +202,7 @@ impl Server {
                 facts
                     .offloaded
                     .is_some_and(|(done, total)| done > 0 && done == total),
+                facts.multimodal,
             )
         };
         if launch.backend == "vulkan" && !complete {
@@ -231,19 +228,9 @@ impl Server {
 
     /// Sends one chat completion (a JSON request body) and returns the parsed response.
     pub async fn chat(&mut self, body: &str, deadline: Duration) -> Result<Value, String> {
-        let (status, response) = timeout(
-            deadline,
-            request(
-                &self.endpoint,
-                "POST",
-                "/v1/chat/completions",
-                body.as_bytes(),
-            ),
-        )
-        .await
-        .map_err(|_| "AI 엔진 응답 시간이 초과되었습니다.".to_string())??;
-        let value: Value = serde_json::from_slice(&response)
-            .map_err(|_| "AI 엔진 응답 형식이 올바르지 않습니다.".to_string())?;
+        let (status, value, response) = self
+            .post_json("/v1/chat/completions", body, deadline)
+            .await?;
         if status == 200 {
             return value
                 .is_object()
@@ -265,14 +252,7 @@ impl Server {
     /// Sends one OpenAI-style embeddings request. The server returns one vector
     /// per input; `index` is honored because batching order is not guaranteed.
     pub async fn embeddings(&mut self, body: &str, deadline: Duration) -> Result<Value, String> {
-        let (status, response) = timeout(
-            deadline,
-            request(&self.endpoint, "POST", "/v1/embeddings", body.as_bytes()),
-        )
-        .await
-        .map_err(|_| "AI 엔진 응답 시간이 초과되었습니다.".to_string())??;
-        let value: Value = serde_json::from_slice(&response)
-            .map_err(|_| "AI 엔진 응답 형식이 올바르지 않습니다.".to_string())?;
+        let (status, value, response) = self.post_json("/v1/embeddings", body, deadline).await?;
         if status == 200 && value["data"].is_array() {
             return Ok(value);
         }
@@ -281,6 +261,25 @@ impl Server {
             String::from_utf8_lossy(&response)
         );
         Err("로컬 임베딩 계산에 실패했습니다. AI 엔진 로그를 확인해 주세요.".into())
+    }
+
+    /// One bounded POST whose body must parse as JSON. Returns the status, the
+    /// parsed body and the raw bytes for diagnostics.
+    async fn post_json(
+        &self,
+        path: &str,
+        body: &str,
+        deadline: Duration,
+    ) -> Result<(u16, Value, Vec<u8>), String> {
+        let (status, response) = timeout(
+            deadline,
+            request(&self.endpoint, "POST", path, body.as_bytes()),
+        )
+        .await
+        .map_err(|_| "AI 엔진 응답 시간이 초과되었습니다.".to_string())??;
+        let value: Value = serde_json::from_slice(&response)
+            .map_err(|_| "AI 엔진 응답 형식이 올바르지 않습니다.".to_string())?;
+        Ok((status, value, response))
     }
 
     pub fn exited(&mut self) -> bool {

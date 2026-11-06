@@ -88,8 +88,10 @@ pub struct VisionImage<'a> {
     pub bytes: &'a [u8],
 }
 
+/// Image and prompt bounds shared by the worker and analysis ingress.
 const MAX_IMAGES: usize = 2;
 const MAX_IMAGE_BYTES: usize = 6 * 1024 * 1024;
+const MAX_PROMPT_BYTES: usize = 24 * 1024;
 
 fn inference_response(value: Value) -> Result<InferenceResponse, String> {
     let text = value["text"]
@@ -170,6 +172,10 @@ fn parse_embeddings(value: &Value, count: usize) -> Result<Vec<Vec<f32>>, String
         .into_iter()
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| "AI 엔진의 임베딩 응답이 완전하지 않습니다.".into())
+}
+
+fn valid_execution_mode(mode: &str) -> bool {
+    matches!(mode, "auto" | "cpu" | "gpu")
 }
 
 fn backend_name(backend: Option<&str>) -> &str {
@@ -396,7 +402,7 @@ impl Worker {
     }
 
     pub fn set_execution_mode(&mut self, mode: &str) -> Result<(), String> {
-        if !matches!(mode, "auto" | "cpu" | "gpu") {
+        if !valid_execution_mode(mode) {
             return Err("AI 실행 방식이 올바르지 않습니다.".into());
         }
         if self.server.is_some() {
@@ -492,6 +498,13 @@ impl Worker {
         }
     }
 
+    /// Reaps the process, then records the failure for the status surface.
+    async fn fail(&mut self, error: &str) {
+        self.stop_server().await;
+        self.status.state = "failed".into();
+        self.status.detail = Some(error.to_owned());
+    }
+
     /// Owner contract: on cancellation, drop the future, then call `stop`.
     pub async fn infer(
         &mut self,
@@ -545,7 +558,9 @@ impl Worker {
         if !images.is_empty() && projector.is_none() {
             return Err("이미지 인식 모듈 없이 이미지를 분석할 수 없습니다.".into());
         }
-        if prompt.trim().is_empty() || prompt.len() > 24 * 1024 || !(1..=4096).contains(&max_tokens)
+        if prompt.trim().is_empty()
+            || prompt.len() > MAX_PROMPT_BYTES
+            || !(1..=4096).contains(&max_tokens)
         {
             return Err("분석 입력 또는 출력 길이가 허용 범위를 벗어났습니다.".into());
         }
@@ -581,11 +596,7 @@ impl Worker {
                 };
                 self.add_fallback_detail();
             }
-            Err(error) => {
-                self.stop_server().await;
-                self.status.state = "failed".into();
-                self.status.detail = Some(error.clone());
-            }
+            Err(error) => self.fail(error).await,
         }
         result
     }
@@ -652,11 +663,7 @@ impl Worker {
                 };
                 self.add_fallback_detail();
             }
-            Err(error) => {
-                self.stop_server().await;
-                self.status.state = "failed".into();
-                self.status.detail = Some(error.clone());
-            }
+            Err(error) => self.fail(error).await,
         }
         result
     }
@@ -679,9 +686,7 @@ impl Worker {
     pub async fn load(&mut self, path: &Path) -> Result<WorkerStatus, String> {
         self.status.state = "loading".into();
         if let Err(error) = self.ensure_server(path, None).await {
-            self.stop_server().await;
-            self.status.state = "failed".into();
-            self.status.detail = Some(error.clone());
+            self.fail(&error).await;
             return Err(error);
         }
         Ok(self.refresh().await)

@@ -16,7 +16,7 @@ async fn exiting(shutdown: &AtomicBool) {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
-const EXIT_ERROR: &str = "앱을 종료하고 있습니다.";
+const EXIT_ERROR: &str = operations::EXITING;
 /// Opt-in idle backlog work must not block an explicit user action. A
 /// user-requested analysis is never cancelled here; its error stays as before.
 async fn yield_backlog(state: &AppState) -> Result<(), String> {
@@ -480,27 +480,24 @@ pub async fn ai_load(state: tauri::State<'_, AppState>) -> Result<(), String> {
     )
     .await
 }
-#[tauri::command]
-pub async fn ai_unload(state: tauri::State<'_, AppState>) -> Result<(), String> {
+/// Unload and restart both reap the process; the next request starts a fresh one.
+async fn reap_idle_worker(state: &AppState) -> Result<(), String> {
     let _lease = state.operation_gate.shared().await?;
     let _gate = state.ai_gate.lock().await;
-    check_open(&state)?;
-    yield_backlog(&state).await?;
+    check_open(state)?;
+    yield_backlog(state).await?;
     if state.analysis.running() {
         return Err("먼저 진행 중인 분석을 취소해 주세요.".into());
     }
     reset_worker(&state.worker, &state.maintenance_shutdown).await
 }
 #[tauri::command]
+pub async fn ai_unload(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    reap_idle_worker(&state).await
+}
+#[tauri::command]
 pub async fn ai_restart(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
-    let _gate = state.ai_gate.lock().await;
-    check_open(&state)?;
-    yield_backlog(&state).await?;
-    if state.analysis.running() {
-        return Err("먼저 진행 중인 분석을 취소해 주세요.".into());
-    }
-    reset_worker(&state.worker, &state.maintenance_shutdown).await
+    reap_idle_worker(&state).await
 }
 #[tauri::command]
 pub async fn ai_remove(
@@ -592,7 +589,7 @@ pub async fn ai_preferences(
         return Err("공지 분류 설정은 분류 설정 기능으로 변경해 주세요.".into());
     }
     if old.execution_mode != preferences.execution_mode {
-        if !["auto", "cpu", "gpu"].contains(&preferences.execution_mode.as_str()) {
+        if !super::valid_execution_mode(&preferences.execution_mode) {
             return Err("AI 실행 장치를 확인해 주세요.".into());
         }
         yield_backlog(&state).await?;
@@ -719,6 +716,20 @@ pub async fn ai_diagnostics(
     let _lease = state.operation_gate.shared().await?;
     Ok(state.analysis.diagnostics(job_id))
 }
+/// SHA-256 of the selected, installed embedding model. Turning automatic
+/// classification off keeps existing rows visible, so the switch is not checked.
+fn embedding_model_sha(state: &AppState) -> Result<Option<String>, String> {
+    with_store(state, |store| {
+        let Some(id) = store.ai_preferences()?.embedding_model_id else {
+            return Ok(None);
+        };
+        Ok(store
+            .ai_model(&id)?
+            .filter(|model| model.kind == "embedding" && model.status == "installed")
+            .and_then(|model| model.sha256))
+    })
+}
+
 /// Latest-revision classifications for the visible page. Returns nothing when
 /// no embedding model is selected or classification is disabled.
 #[tauri::command]
@@ -729,18 +740,7 @@ pub async fn ai_classifications(
     if document_ids.len() > 200 || document_ids.iter().any(|id| *id <= 0) {
         return Err("분류 조회 범위를 확인해 주세요.".into());
     }
-    let target = with_store(&state, |store| {
-        let preferences = store.ai_preferences()?;
-        // Turning automatic classification off keeps existing rows visible.
-        let Some(id) = preferences.embedding_model_id else {
-            return Ok(None);
-        };
-        Ok(store
-            .ai_model(&id)?
-            .filter(|model| model.kind == "embedding" && model.status == "installed")
-            .and_then(|model| model.sha256))
-    })?;
-    let Some(sha) = target else {
+    let Some(sha) = embedding_model_sha(&state)? else {
         return Ok(Vec::new());
     };
     with_store(&state, |store| {
@@ -760,18 +760,7 @@ pub async fn ai_classification(
     if document_id <= 0 || revision_id <= 0 {
         return Err("분류 조회 식별자가 올바르지 않습니다.".into());
     }
-    let target = with_store(&state, |store| {
-        let preferences = store.ai_preferences()?;
-        // Turning automatic classification off keeps existing rows visible.
-        let Some(id) = preferences.embedding_model_id else {
-            return Ok(None);
-        };
-        Ok(store
-            .ai_model(&id)?
-            .filter(|model| model.kind == "embedding" && model.status == "installed")
-            .and_then(|model| model.sha256))
-    })?;
-    let Some(sha) = target else {
+    let Some(sha) = embedding_model_sha(&state)? else {
         return Ok(None);
     };
     with_store(&state, |store| {
@@ -796,10 +785,8 @@ mod tests {
     use std::{path::Path, sync::Arc, time::Duration};
     use tokio::{sync::Mutex, time::timeout};
 
-    #[tokio::test]
-    async fn unavailable_worker_allows_external_inventory_changes_without_deleting_file() {
-        let directory = tempfile::tempdir().unwrap();
-        let file = directory.path().join("external.gguf");
+    /// Minimal valid GGUF header declaring the `qwen3` architecture.
+    fn qwen3_header() -> Vec<u8> {
         let mut bytes = b"GGUF".to_vec();
         bytes.extend(3u32.to_le_bytes());
         bytes.extend(1u64.to_le_bytes());
@@ -809,6 +796,14 @@ mod tests {
         bytes.extend(8u32.to_le_bytes());
         bytes.extend(5u64.to_le_bytes());
         bytes.extend(b"qwen3");
+        bytes
+    }
+
+    #[tokio::test]
+    async fn unavailable_worker_allows_external_inventory_changes_without_deleting_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("external.gguf");
+        let mut bytes = qwen3_header();
         bytes.extend([0u8; 256]);
         std::fs::write(&file, &bytes).unwrap();
         let store = Arc::new(std::sync::Mutex::new(
@@ -1016,15 +1011,7 @@ mod tests {
     async fn cancelled_verification_joins_blocking_work_before_releasing_operation() {
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("model.gguf");
-        let mut bytes = b"GGUF".to_vec();
-        bytes.extend(3u32.to_le_bytes());
-        bytes.extend(1u64.to_le_bytes());
-        bytes.extend(1u64.to_le_bytes());
-        bytes.extend(20u64.to_le_bytes());
-        bytes.extend(b"general.architecture");
-        bytes.extend(8u32.to_le_bytes());
-        bytes.extend(5u64.to_le_bytes());
-        bytes.extend(b"qwen3");
+        let bytes = qwen3_header();
         std::fs::write(&file, bytes).unwrap();
         std::fs::OpenOptions::new()
             .write(true)

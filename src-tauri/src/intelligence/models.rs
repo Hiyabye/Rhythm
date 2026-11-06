@@ -96,31 +96,31 @@ pub fn refresh_disk_space(mut hardware: Hardware, root: &Path) -> Hardware {
 const BACKEND_LABEL: &str = "CPU · NVIDIA GPU (Vulkan) · 실제 실행 장치는 엔진 상태에서 확인";
 #[cfg(not(windows))]
 const BACKEND_LABEL: &str = "작업 프로세스 빌드에 따름 · 가속 사용 여부 미확인";
+#[cfg(target_os = "macos")]
 fn ram_bytes() -> u64 {
-    #[cfg(target_os = "macos")]
-    {
-        return std::process::Command::new("/usr/sbin/sysctl")
-            .args(["-n", "hw.memsize"])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(0);
-    }
-    #[cfg(windows)]
-    {
-        use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
-        let mut info = MEMORYSTATUSEX {
-            dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
-            ..Default::default()
-        };
-        // SAFETY: info has the required size and remains valid for the call.
-        return unsafe { GlobalMemoryStatusEx(&mut info) }
-            .map(|()| info.ullTotalPhys)
-            .unwrap_or(0);
-    }
-    #[allow(unreachable_code)]
+    std::process::Command::new("/usr/sbin/sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0)
+}
+#[cfg(windows)]
+fn ram_bytes() -> u64 {
+    use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut info = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: info has the required size and remains valid for the call.
+    unsafe { GlobalMemoryStatusEx(&mut info) }
+        .map(|()| info.ullTotalPhys)
+        .unwrap_or(0)
+}
+#[cfg(not(any(target_os = "macos", windows)))]
+fn ram_bytes() -> u64 {
     0
 }
 pub(crate) fn available_space(root: &Path) -> Result<u64, String> {
@@ -217,11 +217,7 @@ impl Controller {
         root: PathBuf,
         catalog_id: String,
     ) -> Result<(), String> {
-        let entry = catalog()
-            .into_iter()
-            .find(|e| e.id == catalog_id)
-            .ok_or("모델 목록에서 항목을 선택해 주세요.")?;
-        check_installable(&entry)?;
+        let entry = installable_entry(&catalog_id)?;
         self.start_entry_with_lease(store, root, entry, None)
     }
     pub fn start_admitted(
@@ -231,11 +227,7 @@ impl Controller {
         catalog_id: String,
         lease: crate::operation_gate::AdmissionLease,
     ) -> Result<(), String> {
-        let entry = catalog()
-            .into_iter()
-            .find(|e| e.id == catalog_id)
-            .ok_or("모델 목록에서 항목을 선택해 주세요.")?;
-        check_installable(&entry)?;
+        let entry = installable_entry(&catalog_id)?;
         self.start_entry_with_lease(store, root, entry, Some(lease))
     }
     #[cfg(test)]
@@ -422,6 +414,14 @@ fn inventory(entry: &CatalogEntry) -> AiModel {
         created_at: String::new(),
         updated_at: String::new(),
     }
+}
+fn installable_entry(catalog_id: &str) -> Result<CatalogEntry, String> {
+    let entry = catalog()
+        .into_iter()
+        .find(|e| e.id == catalog_id)
+        .ok_or("모델 목록에서 항목을 선택해 주세요.")?;
+    check_installable(&entry)?;
+    Ok(entry)
 }
 fn check_installable(entry: &CatalogEntry) -> Result<(), String> {
     if matches!(entry.compatibility.as_str(), "verified" | "available") {

@@ -1,5 +1,7 @@
 //! Local-only, revision-bound notice analysis. Collection never calls this module.
-use super::{InferenceMetrics, Worker};
+use super::{
+    valid_execution_mode, InferenceMetrics, Worker, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_PROMPT_BYTES,
+};
 use crate::storage::{
     intelligence::{AiJob, AiModel, AiResult, AnalysisKey},
     Store,
@@ -55,15 +57,12 @@ pub const CATEGORIES: [&str; 8] = [
 /// the model summarize before it extracts facts, as the prompt describes.
 /// A `serde_json::Value` would sort the keys.
 pub(super) const GENERATION_SCHEMA: &str = r#"{"type":"object","properties":{"short_summary":{"type":"string","minLength":4,"maxLength":180},"summary":{"type":"string","minLength":4,"maxLength":1600},"uncertainty":{"type":"string","enum":["clear","ambiguous","unknown"]},"facts":{"type":"array","maxItems":6,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["deadline","event_date","eligibility","documents","application_method","link","action"]},"label":{"type":"string","minLength":1,"maxLength":40},"value":{"type":"string","minLength":1,"maxLength":500},"evidence_id":{"type":"integer","minimum":0}},"required":["kind","label","value","evidence_id"],"additionalProperties":false}}},"required":["short_summary","summary","uncertainty","facts"],"additionalProperties":false}"#;
-const INPUT_BYTES: usize = 24 * 1024;
-/// Archived images are read and displayed but were never part of the text source.
-const MAX_IMAGES: usize = 2;
+const INPUT_BYTES: usize = MAX_PROMPT_BYTES;
 const MAX_IMAGE_FACTS: usize = 4;
 /// Evidence label for an image fact the model did not attribute to one image.
 const IMAGE_EVIDENCE: &str = "[이미지]";
-/// Same bound as the archived raster path; larger files stay unread.
-const MAX_IMAGE_BYTES: usize = 6 * 1024 * 1024;
 const SOURCE_BYTES: usize = 18 * 1024;
+const MAX_OUTPUT_BYTES: usize = 32 * 1024;
 const CANCELLED: &str = "AI 분석을 취소했습니다.";
 const VALIDATION_FAILED: &str =
     "AI 결과가 공지 원문과 맞지 않아 저장하지 않았습니다. 다시 요청해 주세요.";
@@ -229,7 +228,6 @@ pub const BACKLOG_PRIORITY: i32 = 10;
 impl Controller {
     /// Explicit admission only. A valid cache hit never starts the worker or verifies weights.
     /// `regenerate` creates a new attempt without deleting earlier successful results.
-    #[allow(clippy::too_many_arguments)]
     #[cfg(test)]
     pub fn start(
         &self,
@@ -555,14 +553,10 @@ impl Controller {
                         self.begin_profile(job.id);
                         Some((job, cancellation))
                     }
-                    Ok(None) => {
-                        state.active = None;
-                        state.running = false;
-                        self.inner.idle.notify_waiters();
-                        None
-                    }
-                    Err(error) => {
-                        eprintln!("AI queue: {error}");
+                    idle => {
+                        if let Err(error) = idle {
+                            eprintln!("AI queue: {error}");
+                        }
                         state.active = None;
                         state.running = false;
                         self.inner.idle.notify_waiters();
@@ -576,7 +570,7 @@ impl Controller {
             let started = Instant::now();
             let outcome =
                 execute(&store, &worker, &data_dir, &job, &cancellation, Some(self)).await;
-            let duration = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            let duration = millis(started);
             // Serialize final commit with cancellation/admission. SQLite also rejects
             // completion of an already-cancelled attempt within its own transaction.
             if let Ok(mut state) = self.inner.state.lock() {
@@ -659,7 +653,7 @@ pub fn key_for_mode(
     max_tokens: u32,
     execution_mode: &str,
 ) -> Result<AnalysisKey, String> {
-    if !["auto", "cpu", "gpu"].contains(&execution_mode) {
+    if !valid_execution_mode(execution_mode) {
         return Err("AI 실행 장치를 확인해 주세요.".into());
     }
     let hash = model
@@ -970,9 +964,10 @@ fn generation_schema_is_closed_bounded_and_ordered_like_the_prompt() {
     order(&["kind", "label", "value", "evidence_id"]);
 }
 
-/// Explicit opt-in debugging only; never compiled into release builds.
+/// Explicit opt-in debugging only; never compiled into release builds, and
+/// never retains source or raw generation in production storage.
 #[cfg(test)]
-fn trace_request(job_id: i64, request: &str) {
+fn trace(entry: std::fmt::Arguments) {
     if let Some(path) = std::env::var_os("RHYTHM_AI_EVAL_TRACE") {
         use std::io::Write;
         if let Ok(mut file) = std::fs::OpenOptions::new()
@@ -980,24 +975,62 @@ fn trace_request(job_id: i64, request: &str) {
             .append(true)
             .open(path)
         {
-            let _ = writeln!(file, "job={job_id} request\n{request}\n");
+            let _ = writeln!(file, "{entry}\n");
         }
     }
 }
 
 #[cfg(test)]
+fn trace_request(job_id: i64, request: &str) {
+    trace(format_args!("job={job_id} request\n{request}"));
+}
+
+#[cfg(test)]
 fn trace_generation(job_id: i64, attempt: usize, generated: &str) {
-    // Explicit opt-in debugging only; never retain source or raw generation in production storage.
-    if let Some(path) = std::env::var_os("RHYTHM_AI_EVAL_TRACE") {
-        use std::io::Write;
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
-            let _ = writeln!(file, "job={job_id} attempt={attempt}\n{generated}\n");
+    trace(format_args!("job={job_id} attempt={attempt}\n{generated}"));
+}
+
+/// User-facing messages for the artifact being hashed.
+struct HashErrors {
+    read: &'static str,
+    grew: &'static str,
+    format: &'static str,
+}
+/// Streams the complete file once, checking the GGUF magic/version of the first
+/// block, and returns the lowercase SHA-256 hex digest. `expected_bytes` bounds
+/// growth while reading.
+fn hash_gguf(
+    file: &mut std::fs::File,
+    expected_bytes: u64,
+    cancellation: &Cancellation,
+    errors: &HashErrors,
+) -> Result<String, String> {
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 1024 * 1024];
+    let mut first = true;
+    let mut received = 0u64;
+    loop {
+        cancellation.check()?;
+        let count = file.read(&mut buffer).map_err(|_| errors.read)?;
+        if count == 0 {
+            break;
         }
+        received += count as u64;
+        if received > expected_bytes {
+            return Err(errors.grew.into());
+        }
+        if first {
+            if count < 8
+                || &buffer[..4] != b"GGUF"
+                || ![2u32, 3].contains(&u32::from_le_bytes(buffer[4..8].try_into().unwrap()))
+            {
+                return Err(errors.format.into());
+            }
+            first = false;
+        }
+        hasher.update(&buffer[..count]);
     }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn verified_path(
@@ -1017,34 +1050,17 @@ fn verified_path(
             "모델 파일 크기가 변경되었습니다. 모델을 다시 설치하거나 등록해 주세요.".into(),
         );
     }
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; 1024 * 1024];
-    let mut first = true;
-    let mut received = 0u64;
-    loop {
-        cancellation.check()?;
-        let count = file
-            .read(&mut buffer)
-            .map_err(|_| "모델 파일 무결성을 검사하지 못했습니다.")?;
-        if count == 0 {
-            break;
-        }
-        received += count as u64;
-        if received > model.bytes {
-            return Err("검사 중 모델 파일 크기가 변경되었습니다.".into());
-        }
-        if first {
-            if count < 8
-                || &buffer[..4] != b"GGUF"
-                || ![2u32, 3].contains(&u32::from_le_bytes(buffer[4..8].try_into().unwrap()))
-            {
-                return Err("지원하는 GGUF 모델 파일이 아닙니다.".into());
-            }
-            first = false;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    if model.sha256.as_deref() != Some(format!("{:x}", hasher.finalize()).as_str()) {
+    let digest = hash_gguf(
+        &mut file,
+        model.bytes,
+        cancellation,
+        &HashErrors {
+            read: "모델 파일 무결성을 검사하지 못했습니다.",
+            grew: "검사 중 모델 파일 크기가 변경되었습니다.",
+            format: "지원하는 GGUF 모델 파일이 아닙니다.",
+        },
+    )?;
+    if model.sha256.as_deref() != Some(digest.as_str()) {
         return Err(
             "모델 파일의 무결성이 일치하지 않습니다. 다시 설치하거나 등록해 주세요.".into(),
         );
@@ -1076,34 +1092,17 @@ fn verified_projector_path(
     if !metadata.is_file() || metadata.len() != projector.expected_bytes {
         return Err("이미지 인식 모듈 파일 크기가 변경되었습니다. 다시 설치해 주세요.".into());
     }
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; 1024 * 1024];
-    let mut first = true;
-    let mut received = 0u64;
-    loop {
-        cancellation.check()?;
-        let count = file
-            .read(&mut buffer)
-            .map_err(|_| "이미지 인식 모듈 무결성을 검사하지 못했습니다.")?;
-        if count == 0 {
-            break;
-        }
-        received += count as u64;
-        if received > projector.expected_bytes {
-            return Err("검사 중 이미지 인식 모듈 파일 크기가 변경되었습니다.".into());
-        }
-        if first {
-            if count < 8
-                || &buffer[..4] != b"GGUF"
-                || ![2u32, 3].contains(&u32::from_le_bytes(buffer[4..8].try_into().unwrap()))
-            {
-                return Err("지원하는 이미지 인식 모듈 파일이 아닙니다.".into());
-            }
-            first = false;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    if projector.sha256.as_deref() != Some(format!("{:x}", hasher.finalize()).as_str()) {
+    let digest = hash_gguf(
+        &mut file,
+        projector.expected_bytes,
+        cancellation,
+        &HashErrors {
+            read: "이미지 인식 모듈 무결성을 검사하지 못했습니다.",
+            grew: "검사 중 이미지 인식 모듈 파일 크기가 변경되었습니다.",
+            format: "지원하는 이미지 인식 모듈 파일이 아닙니다.",
+        },
+    )?;
+    if projector.sha256.as_deref() != Some(digest.as_str()) {
         return Err("이미지 인식 모듈의 무결성이 일치하지 않습니다. 다시 설치해 주세요.".into());
     }
     Ok(path)
@@ -1176,19 +1175,18 @@ async fn archived_images(
         }
         // Containment, size bound, hash verification and the raster check all
         // come from the archive's existing local-read path.
-        let (record, bytes) =
-            match crate::archive::sync::local_resource(store, root, resource.id).await {
-                Ok(result) => result,
-                Err(error) => {
-                    // A pending/corrupt resource must not fail text analysis.
-                    eprintln!("AI image skipped: {error}");
-                    continue;
-                }
-            };
+        let (_, bytes) = match crate::archive::sync::local_resource(store, root, resource.id).await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                // A pending/corrupt resource must not fail text analysis.
+                eprintln!("AI image skipped: {error}");
+                continue;
+            }
+        };
         let Some(mime) = crate::archive::sync::image_mime(&bytes) else {
             continue;
         };
-        let _ = record;
         images.push(SourceImage {
             mime,
             bytes,
@@ -1408,7 +1406,7 @@ fn validate_generation(
     passages: &[&str],
     images: &[SourceImage],
 ) -> Result<Analysis, String> {
-    if output.len() > 32 * 1024 {
+    if output.len() > MAX_OUTPUT_BYTES {
         return Err("AI 응답이 너무 깁니다.".into());
     }
     let mut value: serde_json::Value = serde_json::from_str(output)
@@ -1463,26 +1461,14 @@ fn validate_generation(
             return Err("같은 추출 정보를 반복하지 마세요.".into());
         }
         if image {
-            image_facts += 1;
-            if image_facts > MAX_IMAGE_FACTS {
-                return Err("이미지에서 읽은 정보는 최대 4개만 포함해 주세요.".into());
-            }
+            count_image_fact(&mut image_facts)?;
             let literal_date = if matches!(kind, "deadline" | "event_date") {
                 // Only the model's own value can be checked; pixels are not text.
                 normalize_date(extracted, extracted)?
             } else {
                 None
             };
-            compact.insert(
-                "uncertainty".into(),
-                json!(if literal_date.is_some() {
-                    "ambiguous"
-                } else {
-                    "unknown"
-                }),
-            );
-            compact.insert("date".into(), json!(literal_date));
-            compact.insert("origin".into(), json!("image"));
+            mark_image_fact(compact, literal_date);
         } else {
             let grounded = normalize_date(extracted, &evidence);
             match grounded {
@@ -1505,10 +1491,7 @@ fn validate_generation(
                 // its own value, and it is capped and marked ambiguous. Without
                 // attached images the old strict rejection applies.
                 Err(error) if !images.is_empty() => {
-                    image_facts += 1;
-                    if image_facts > MAX_IMAGE_FACTS {
-                        return Err("이미지에서 읽은 정보는 최대 4개만 포함해 주세요.".into());
-                    }
+                    count_image_fact(&mut image_facts)?;
                     let literal_date = if matches!(kind, "deadline" | "event_date") {
                         normalize_date(extracted, extracted).map_err(|_| {
                             format!(
@@ -1518,16 +1501,7 @@ fn validate_generation(
                     } else {
                         None
                     };
-                    compact.insert(
-                        "uncertainty".into(),
-                        json!(if literal_date.is_some() {
-                            "ambiguous"
-                        } else {
-                            "unknown"
-                        }),
-                    );
-                    compact.insert("date".into(), json!(literal_date));
-                    compact.insert("origin".into(), json!("image"));
+                    mark_image_fact(compact, literal_date);
                     compact.insert("evidence".into(), json!(IMAGE_EVIDENCE));
                     continue;
                 }
@@ -1543,6 +1517,30 @@ fn validate_generation(
     // Stored schema-1 history has a separate validator; only generation ingress
     // requires compact source-owned references, never arbitrary generated quotes.
     validate_output(&value.to_string(), source)
+}
+/// Image-derived facts are never "clear": a date is only self-consistent with
+/// the model's own value, not verified against visible pixels.
+fn mark_image_fact(
+    compact: &mut serde_json::Map<String, serde_json::Value>,
+    literal_date: Option<String>,
+) {
+    compact.insert(
+        "uncertainty".into(),
+        json!(if literal_date.is_some() {
+            "ambiguous"
+        } else {
+            "unknown"
+        }),
+    );
+    compact.insert("date".into(), json!(literal_date));
+    compact.insert("origin".into(), json!("image"));
+}
+fn count_image_fact(count: &mut usize) -> Result<(), String> {
+    *count += 1;
+    if *count > MAX_IMAGE_FACTS {
+        return Err("이미지에서 읽은 정보는 최대 4개만 포함해 주세요.".into());
+    }
+    Ok(())
 }
 fn normalize_date(value: &str, evidence: &str) -> Result<Option<String>, String> {
     let mut dates = HashSet::new();
@@ -1661,7 +1659,7 @@ fn uncertainty(value: &str) -> bool {
 /// Parse strictly, then validate exact evidence against the actual bounded source.
 /// This is syntactic/grounding validation, not a claim of semantic model accuracy.
 pub fn validate_output(output: &str, source: &str) -> Result<Analysis, String> {
-    if output.len() > 32 * 1024 || output.trim().is_empty() {
+    if output.len() > MAX_OUTPUT_BYTES || output.trim().is_empty() {
         return Err("AI 응답이 비어 있거나 너무 깁니다. 다시 분석해 주세요.".into());
     }
     let analysis: Analysis = serde_json::from_str(output).map_err(|_| {
@@ -1957,6 +1955,16 @@ fn literal_times(text: &str) -> Vec<LiteralTime> {
     }
     times
 }
+/// A claimed time is literally supported by a valid source time; an ambiguous
+/// Korean claim (no meridiem) matches either half of the day.
+fn time_supports(claimed: &LiteralTime, source: &LiteralTime) -> bool {
+    source.valid
+        && if claimed.ambiguous {
+            claimed.minutes % 720 == source.minutes % 720
+        } else {
+            !source.ambiguous && claimed.minutes == source.minutes
+        }
+}
 fn validate_times(value: &str, evidence: &str) -> Result<(), String> {
     let claimed_dates = literal_dates(value);
     let source_dates = literal_dates(evidence);
@@ -1981,25 +1989,15 @@ fn validate_times(value: &str, evidence: &str) -> Result<(), String> {
                             .get(index + 1)
                             .map_or(evidence.len(), |next| next.span.start)]
                 };
-                literal_times(window).iter().any(|source| {
-                    source.valid
-                        && if claimed.ambiguous {
-                            claimed.minutes % 720 == source.minutes % 720
-                        } else {
-                            !source.ambiguous && claimed.minutes == source.minutes
-                        }
-                })
+                literal_times(window)
+                    .iter()
+                    .any(|source| time_supports(&claimed, source))
             });
         let supported = supported
             || subject.is_none()
-                && literal_times(evidence).iter().any(|source| {
-                    source.valid
-                        && if claimed.ambiguous {
-                            claimed.minutes % 720 == source.minutes % 720
-                        } else {
-                            !source.ambiguous && claimed.minutes == source.minutes
-                        }
-                });
+                && literal_times(evidence)
+                    .iter()
+                    .any(|source| time_supports(&claimed, source));
         if !claimed.valid || !supported {
             return Err("추출 시간이 원문의 날짜·시간과 일치하지 않습니다.".into());
         }

@@ -1,5 +1,4 @@
 //! Explicit real-weight evaluation. Fixtures are synthetic Korean notices, not university content.
-//! Register as `#[cfg(test)] mod evaluation;` in the intelligence module.
 use crate::{
     archive::model::{ArticleInput, SourceDefinition},
     intelligence::{analysis, models, Worker},
@@ -15,11 +14,11 @@ use std::{
 use tokio::sync::Mutex as AsyncMutex;
 
 #[derive(Deserialize)]
-struct Case {
-    id: String,
-    title: String,
+pub(super) struct Case {
+    pub(super) id: String,
+    pub(super) title: String,
     text: String,
-    category: String,
+    pub(super) category: String,
     deadline: Option<String>,
     required_summary_terms: Vec<String>,
     note: String,
@@ -33,7 +32,7 @@ struct Case {
     suffix: String,
 }
 impl Case {
-    fn body(&self) -> String {
+    pub(super) fn body(&self) -> String {
         format!(
             "{}{}{}",
             self.text,
@@ -61,7 +60,7 @@ impl Case {
         }
     }
 }
-fn cases() -> Vec<Case> {
+pub(super) fn cases() -> Vec<Case> {
     serde_json::from_str(include_str!("evaluation.json")).expect("valid evaluation fixtures")
 }
 fn seed(store: &Store) {
@@ -116,7 +115,7 @@ pub(super) fn installed_model(root: &Path, id: &str) -> AiModel {
         updated_at: String::new(),
     }
 }
-fn configure(store: &Store, model: &AiModel) {
+pub(super) fn configure(store: &Store, model: &AiModel) {
     store.ai_upsert_model(model).unwrap();
     let mut preferences = store.ai_preferences().unwrap();
     preferences.active_model_id = Some(model.id.clone());
@@ -384,6 +383,15 @@ async fn cancel_and_join_or_exit(
     let _ = finished.send(());
     let _ = watchdog.join();
 }
+fn job_status(store: &Arc<Mutex<Store>>, job_id: i64) -> String {
+    store
+        .lock()
+        .unwrap()
+        .ai_job(job_id)
+        .unwrap()
+        .unwrap()
+        .status
+}
 async fn exercise_recovery(
     controller: &analysis::Controller,
     store: &Arc<Mutex<Store>>,
@@ -416,13 +424,7 @@ async fn exercise_recovery(
     }
     controller.cancel(store, cancelled.id).unwrap();
     settle(controller).await;
-    let cancelled_status = store
-        .lock()
-        .unwrap()
-        .ai_job(cancelled.id)
-        .unwrap()
-        .unwrap()
-        .status;
+    let cancelled_status = job_status(store, cancelled.id);
     let after_cancel = store
         .lock()
         .unwrap()
@@ -460,13 +462,7 @@ async fn exercise_recovery(
     // Only the child copied into this test's unique directory is deliberately killed.
     let killed = terminator.terminate();
     settle(controller).await;
-    let crashed_status = store
-        .lock()
-        .unwrap()
-        .ai_job(crashed.id)
-        .unwrap()
-        .unwrap()
-        .status;
+    let crashed_status = job_status(store, crashed.id);
     let recovered = controller
         .start(
             store.clone(),
@@ -480,13 +476,7 @@ async fn exercise_recovery(
         .job
         .unwrap();
     settle(controller).await;
-    let recovered_status = store
-        .lock()
-        .unwrap()
-        .ai_job(recovered.id)
-        .unwrap()
-        .unwrap()
-        .status;
+    let recovered_status = job_status(store, recovered.id);
     // Forced reanalysis creates a new result for the same cache key. Identify
     // it by the actual recovery job rather than assuming the original ID.
     let recovered_result_id = store
@@ -1021,7 +1011,7 @@ async fn actual_vision_image_analysis_evaluation() {
         created_at: String::new(),
         updated_at: String::new(),
     };
-    store.ai_upsert_model(&model).unwrap();
+    configure(&store, &model);
     store
         .ai_upsert_projector(&crate::storage::intelligence::AiProjector {
             model_id: model.id.clone(),
@@ -1036,11 +1026,6 @@ async fn actual_vision_image_analysis_evaluation() {
             error: None,
         })
         .unwrap();
-    let mut preferences = store.ai_preferences().unwrap();
-    preferences.active_model_id = Some(model.id.clone());
-    preferences.processing_mode = "explicit".into();
-    preferences.max_tokens = 1024;
-    store.ai_save_preferences(&preferences).unwrap();
 
     // The archived body is nearly empty: the deadline exists only in the image.
     // The default is the committed synthetic poster; RHYTHM_VISION_EVAL_IMAGE
@@ -1058,7 +1043,7 @@ async fn actual_vision_image_analysis_evaluation() {
                 .expect("image file name")
                 .to_owned();
             assert!(
-                bytes.len() <= 6 * 1024 * 1024,
+                bytes.len() <= super::MAX_IMAGE_BYTES,
                 "image fixture exceeds 6 MiB"
             );
             (
