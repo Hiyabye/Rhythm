@@ -641,3 +641,21 @@ test('cross-posted notices fold under one row and expand on request', async ({ p
   await list.getByRole('button', { name: '같은 공지 1건 접기' }).click();
   await expect(list.locator('#notice-2')).toHaveCount(0);
 });
+
+test('a read leader carries the unread state of its folded copy', async ({ page }) => {
+  await mockDesktop(page, { count: 3, aiEmbeddingInstalled: true, aiSimilar: true }); await page.goto('/');
+  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
+  await page.locator('.notice-list #notice-1').click();
+  await page.getByRole('button', { name: '목록으로 돌아가기' }).click();
+  const list = page.locator('.notice-list');
+  const leader = list.locator('li').first();
+  await expect(leader).toHaveClass(/notice-unread/);
+  await expect(leader.locator('.notice-title .sr-only')).toHaveText('읽음, 접힌 같은 공지 1건 읽지 않음');
+  const toggle = list.getByRole('button', { name: '같은 공지 1건 펼치기 · 읽지 않음 1건' });
+  await toggle.click();
+  // Expanded, each row shows its own state again.
+  await expect(leader).not.toHaveClass(/notice-unread/);
+  await expect(leader.locator('.notice-title .sr-only')).toHaveText('읽음');
+  await expect(list.locator('li').nth(1)).toHaveClass(/notice-unread/);
+  await expect(list.getByRole('button', { name: '같은 공지 1건 접기' })).toBeVisible();
+});
