@@ -6,6 +6,10 @@ use std::{
     fs::{self, File},
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc, LazyLock, Mutex,
+    },
 };
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
@@ -68,11 +72,8 @@ const MAX_ENTRIES: usize = 1_000_000;
 const MAX_ENTRY: u64 = 32 * 1024 * 1024 * 1024;
 const MAX_TOTAL: u64 = 128 * 1024 * 1024 * 1024;
 const COPY_BUFFER: usize = 128 * 1024;
-use std::sync::{
-    atomic::{AtomicU8, Ordering},
-    Arc, LazyLock, Mutex,
-};
 
+const CANCELLED: &str = "백업 또는 복원을 취소했습니다.";
 const CANCELLABLE: u8 = 0;
 const CANCEL_REQUESTED: u8 = 1;
 const COMMITTING: u8 = 2;
@@ -83,7 +84,7 @@ struct BackupCancellation(AtomicU8);
 impl BackupCancellation {
     fn check(&self) -> Result<(), String> {
         if self.0.load(Ordering::Acquire) == CANCEL_REQUESTED {
-            Err("백업 또는 복원을 취소했습니다.".into())
+            Err(CANCELLED.into())
         } else {
             Ok(())
         }
@@ -103,7 +104,7 @@ impl BackupCancellation {
         self.0
             .compare_exchange(CANCELLABLE, COMMITTING, Ordering::AcqRel, Ordering::Acquire)
             .map(|_| ())
-            .map_err(|_| "백업 또는 복원을 취소했습니다.".into())
+            .map_err(|_| CANCELLED.into())
     }
 }
 struct CancellationRegistration {

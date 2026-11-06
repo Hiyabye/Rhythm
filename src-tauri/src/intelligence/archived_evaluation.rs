@@ -115,12 +115,7 @@ async fn actual_archived_notice_evaluation() {
     let directory = tempfile::tempdir().unwrap();
     let db = directory.path().join("archived-evaluation.sqlite3");
     let isolated = Store::open(&db).unwrap();
-    isolated.ai_upsert_model(&model).unwrap();
-    let mut preferences = isolated.ai_preferences().unwrap();
-    preferences.active_model_id = Some(model.id.clone());
-    preferences.processing_mode = "explicit".into();
-    preferences.max_tokens = 1024;
-    isolated.ai_save_preferences(&preferences).unwrap();
+    evaluation::configure(&isolated, &model);
     let mut imported = Vec::new();
     for sample in &samples {
         isolated

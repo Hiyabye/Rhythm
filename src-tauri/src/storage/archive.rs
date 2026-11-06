@@ -734,19 +734,16 @@ impl Store {
                         |row| Ok((row.get(0)?, row.get(1)?)),
                     )
                     .map_err(|e| e.to_string())?;
-                let topics = super::personalization::topics(&title, category.as_deref());
-                if !topics.is_empty() {
-                    let sequence = activity_sequence
-                        .ok_or_else(|| "저장 활동 순서를 확인할 수 없습니다.".to_string())?;
-                    for topic in topics {
-                        tx.execute(
-                            "INSERT OR IGNORE INTO personalization_evidence(topic,document_id,kind,activity_sequence)
-                             VALUES(?1,?2,'saved',?3)",
-                            params![topic, id, sequence],
-                        )
-                        .map_err(|e| e.to_string())?;
-                    }
-                }
+                let sequence = activity_sequence
+                    .ok_or_else(|| "저장 활동 순서를 확인할 수 없습니다.".to_string())?;
+                super::personalization::insert_evidence(
+                    &tx,
+                    id,
+                    "saved",
+                    sequence,
+                    &title,
+                    category.as_deref(),
+                )?;
             }
         }
         tx.commit().map_err(|e| e.to_string())?;

@@ -46,6 +46,27 @@ pub(super) fn eligible(
     }
 }
 
+/// Why a candidate must be suppressed instead of delivered, or `None` when it
+/// is eligible.
+pub(super) fn suppression_reason(
+    source_active: bool,
+    sensitivity: NotificationSensitivity,
+    score: Option<&crate::storage::personalization::PersonalizationNotificationScore>,
+) -> Option<String> {
+    if !source_active {
+        return Some("정보원 구독 또는 확장 기능이 꺼져 있습니다.".to_string());
+    }
+    if score.is_some_and(|score| eligible(sensitivity, score)) {
+        return None;
+    }
+    Some(
+        score
+            .map(|score| score.reasons.join(", "))
+            .filter(|reason| !reason.is_empty())
+            .unwrap_or_else(|| "현재 알림 기준에 맞지 않습니다.".into()),
+    )
+}
+
 /// Read and score revisions without claiming them. A policy or quiet-hours
 /// rejection must not consume the persistent dedupe identity.
 pub(super) fn consider_candidates(
@@ -68,18 +89,11 @@ pub(super) fn consider_candidates(
     let mut eligible_candidates = Vec::new();
     for candidate in candidates {
         let score = score_by_id.get(&candidate.document_id);
-        let reason = if !candidate.source_active {
-            Some("정보원 구독 또는 확장 기능이 꺼져 있습니다.".to_string())
-        } else if score.is_none_or(|score| !eligible(settings.notification_sensitivity, score)) {
-            Some(
-                score
-                    .map(|score| score.reasons.join(", "))
-                    .filter(|reason| !reason.is_empty())
-                    .unwrap_or_else(|| "현재 알림 기준에 맞지 않습니다.".into()),
-            )
-        } else {
-            None
-        };
+        let reason = suppression_reason(
+            candidate.source_active,
+            settings.notification_sensitivity,
+            score,
+        );
         if let Some(reason) = reason {
             if let crate::storage::proactive::ProactiveClaim::Claimed {
                 event_id,

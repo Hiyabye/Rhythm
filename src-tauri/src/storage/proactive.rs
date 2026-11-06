@@ -20,7 +20,7 @@ const MIN_TASK_INTERVAL: u32 = 5;
 const MAX_TASK_INTERVAL: u32 = 1440;
 const DEFAULT_QUIET_START: u32 = 22 * 60;
 const DEFAULT_QUIET_END: u32 = 7 * 60;
-const MAX_DELIVERY_ATTEMPTS: u32 = 3;
+pub(crate) const MAX_DELIVERY_ATTEMPTS: u32 = 3;
 const DELIVERY_CLAIM_LEASE_MINUTES: u32 = 5;
 const MAX_FAILURE_DELAY_MINUTES: i64 = 240;
 const HISTORY_LIMIT: i64 = 200;
@@ -792,6 +792,7 @@ impl Store {
             attempt_count: 0,
         })
     }
+
     #[cfg(test)]
     pub fn proactive_event(&self, id: i64) -> Result<ProactiveEvent, String> {
         event_by_id(&self.connection, id)

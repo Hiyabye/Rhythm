@@ -467,12 +467,7 @@ pub(crate) fn topics(title: &str, category: Option<&str>) -> BTreeSet<String> {
     out
 }
 
-pub(crate) fn next_activity_sequence(tx: &Transaction<'_>) -> Result<i64, String> {
-    tx.execute(
-        "UPDATE personalization_activity SET sequence=sequence+1 WHERE id=1",
-        [],
-    )
-    .map_err(|e| e.to_string())?;
+fn current_activity_sequence(tx: &Transaction<'_>) -> Result<i64, String> {
     tx.query_row(
         "SELECT sequence FROM personalization_activity WHERE id=1",
         [],
@@ -481,7 +476,16 @@ pub(crate) fn next_activity_sequence(tx: &Transaction<'_>) -> Result<i64, String
     .map_err(|e| e.to_string())
 }
 
-fn insert_evidence(
+pub(crate) fn next_activity_sequence(tx: &Transaction<'_>) -> Result<i64, String> {
+    tx.execute(
+        "UPDATE personalization_activity SET sequence=sequence+1 WHERE id=1",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    current_activity_sequence(tx)
+}
+
+pub(crate) fn insert_evidence(
     tx: &Transaction<'_>,
     document_id: i64,
     kind: &str,
@@ -588,8 +592,13 @@ fn fts_phrase(term: &str) -> String {
     format!("\"{}\"", term.replace('"', "\"\""))
 }
 
+/// Terms shorter than the FTS trigram minimum are matched with `LIKE` instead.
+fn is_fts_term(term: &str) -> bool {
+    term.chars().count() >= 3
+}
+
 fn term_parameter(term: &str) -> String {
-    if term.chars().count() >= 3 {
+    if is_fts_term(term) {
         fts_phrase(term)
     } else {
         like_contains(term)
@@ -606,7 +615,7 @@ fn matched_terms_sql(terms: &[String], first_parameter: usize) -> String {
         .enumerate()
         .map(|(offset, term)| {
             let parameter = first_parameter + offset;
-            if term.chars().count() >= 3 {
+            if is_fts_term(term) {
                 format!(
                     ",EXISTS(SELECT 1 FROM documents_fts WHERE documents_fts.rowid=d.id \
                      AND documents_fts MATCH ?{parameter})"
@@ -1089,13 +1098,7 @@ impl Store {
                 )
                 .map_err(|e| e.to_string())?;
             if old_topic != key {
-                let sequence: i64 = tx
-                    .query_row(
-                        "SELECT sequence FROM personalization_activity WHERE id=1",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .map_err(|e| e.to_string())?;
+                let sequence = current_activity_sequence(&tx)?;
                 renamed_topic = Some(old_topic.clone());
                 tx.execute(
                     "INSERT INTO personalization_suppressed(topic,baseline_sequence) VALUES(?1,?2)
@@ -1150,13 +1153,7 @@ impl Store {
             .optional()
             .map_err(|e| e.to_string())?;
         if let Some((topic, aliases_json)) = interest {
-            let sequence: i64 = tx
-                .query_row(
-                    "SELECT sequence FROM personalization_activity WHERE id=1",
-                    [],
-                    |row| row.get(0),
-                )
-                .map_err(|e| e.to_string())?;
+            let sequence = current_activity_sequence(&tx)?;
             let mut topics = HashSet::from([topic]);
             topics.extend(
                 serde_json::from_str::<Vec<String>>(&aliases_json)
@@ -1416,7 +1413,8 @@ impl Store {
         drop(statement);
         let mut active = HashSet::new();
         for (topic, count, latest_sequence) in rows {
-            // An explicit alias already represents this topic; do not create a duplicate learned row.
+            // The query above already excludes topics that are explicit interests; an explicit
+            // alias can still represent this topic, so do not create a duplicate learned row.
             if explicit_aliases.contains(&topic) {
                 continue;
             }
@@ -1438,16 +1436,6 @@ impl Store {
                     [&topic],
                 )
                 .map_err(|e| e.to_string())?;
-            }
-            let explicit: bool = tx
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM personalization_interests WHERE normalized=?1 AND origin='explicit')",
-                    [&topic],
-                    |row| row.get(0),
-                )
-                .map_err(|e| e.to_string())?;
-            if explicit {
-                continue;
             }
             let (name, aliases) = display_topic(&topic);
             let aliases_json = serde_json::to_string(aliases).map_err(|e| e.to_string())?;
@@ -1590,7 +1578,7 @@ impl Store {
         let mut term_parameters = Vec::with_capacity(context.terms.len());
         for term in &context.terms {
             let parameter = term_parameter(term);
-            if term.chars().count() >= 3 {
+            if is_fts_term(term) {
                 fts_terms.push(parameter.clone());
             }
             term_parameters.push(parameter);
@@ -1613,7 +1601,7 @@ impl Store {
             .terms
             .iter()
             .enumerate()
-            .filter(|(_, term)| term.chars().count() < 3)
+            .filter(|(_, term)| !is_fts_term(term))
             .map(|(index, _)| {
                 let parameter = index + 2;
                 format!(

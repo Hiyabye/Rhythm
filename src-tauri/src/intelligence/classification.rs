@@ -46,7 +46,7 @@ const INSTRUCTION: &str = "Instruct: Classify the given Korean university notice
 /// Authored Korean prototypes. They encode the same category definitions the
 /// generation prompt used and are deliberately separate from the evaluation
 /// fixtures in `evaluation.json`.
-const CATEGORY_PROTOTYPES: [(&str, &[&str]); 7] = [
+pub(super) const CATEGORY_PROTOTYPES: [(&str, &[&str]); 7] = [
     ("학사", &[
         "학사 운영 안내: 휴학, 복학, 졸업, 학적 변경, 성적 정정, 수강신청, 등록금 납부, 학위 수여",
         "2026학년도 학사일정과 수강신청 기간을 안내합니다.",
@@ -316,11 +316,12 @@ impl Controller {
         }
     }
 
-    fn fail(&self, sha: &str, state: &mut &'static str) {
+    /// Remembers the model that failed so it is not retried until invalidated.
+    fn fail(&self, sha: &str) {
         if let Ok(mut failed) = self.failed.lock() {
             *failed = Some(sha.to_owned());
         }
-        *state = "failed";
+        *self.state.lock().unwrap_or_else(|error| error.into_inner()) = "failed";
     }
 
     /// Reads current preferences and processes at most one bounded batch. The
@@ -345,14 +346,10 @@ impl Controller {
         let model = model.filter(|model: &AiModel| {
             model.status == "installed" && model.kind == "embedding" && model.sha256.is_some()
         });
-        let Some(model) = model else {
+        let Some(model) = model.filter(|_| preferences.classification_enabled) else {
             self.unload_if_idle(true).await;
             return;
         };
-        if !preferences.classification_enabled {
-            self.unload_if_idle(true).await;
-            return;
-        }
         let sha = model.sha256.clone().unwrap_or_default();
         if self
             .failed
@@ -396,12 +393,7 @@ impl Controller {
             return;
         }
         let Ok(path) = resolve_model_path(&app.data_root, &model) else {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            *state = "failed";
-            drop(state);
-            if let Ok(mut failed) = self.failed.lock() {
-                *failed = Some(sha);
-            }
+            self.fail(&sha);
             return;
         };
         let bytes = model.bytes;
@@ -421,8 +413,7 @@ impl Controller {
             .await;
             if !matches!(verified, Ok(Ok(_))) {
                 engine.shutdown().await;
-                let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-                self.fail(&sha, &mut state);
+                self.fail(&sha);
                 return;
             }
             if let Ok(mut value) = self.verified.lock() {
@@ -463,9 +454,7 @@ impl Controller {
                             Err(error) => {
                                 eprintln!("Classification prototypes: {error}");
                                 engine.shutdown().await;
-                                let mut state =
-                                    self.state.lock().unwrap_or_else(|error| error.into_inner());
-                                self.fail(&sha, &mut state);
+                                self.fail(&sha);
                                 return;
                             }
                         }
@@ -529,8 +518,7 @@ impl Controller {
                 Err(error) => {
                     eprintln!("Classification embedding: {error}");
                     engine.shutdown().await;
-                    let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-                    self.fail(&sha, &mut state);
+                    self.fail(&sha);
                     return;
                 }
             }

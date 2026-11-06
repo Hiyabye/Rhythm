@@ -5,6 +5,8 @@ use std::sync::{
 };
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 
+const CLOSED: &str = "백업, 복원 또는 업데이트를 진행 중입니다. 완료 후 다시 시도해 주세요.";
+
 /// App-wide gate for work that can observe or mutate the live data directory.
 /// Every accepted operation holds a shared lease for its complete lifetime.
 pub(crate) struct AdmissionGate {
@@ -27,16 +29,12 @@ impl AdmissionGate {
     /// acquiring the lock.
     pub(crate) async fn shared(self: &Arc<Self>) -> Result<AdmissionLease, String> {
         if !self.accepting.load(Ordering::Acquire) {
-            return Err(
-                "백업, 복원 또는 업데이트를 진행 중입니다. 완료 후 다시 시도해 주세요.".into(),
-            );
+            return Err(CLOSED.into());
         }
         let guard = self.lock.clone().read_owned().await;
         if !self.accepting.load(Ordering::Acquire) {
             drop(guard);
-            return Err(
-                "백업, 복원 또는 업데이트를 진행 중입니다. 완료 후 다시 시도해 주세요.".into(),
-            );
+            return Err(CLOSED.into());
         }
         Ok(AdmissionLease { _guard: guard })
     }
@@ -45,7 +43,7 @@ impl AdmissionGate {
         if self.accepting.load(Ordering::Acquire) {
             Ok(())
         } else {
-            Err("백업, 복원 또는 업데이트를 진행 중입니다. 완료 후 다시 시도해 주세요.".into())
+            Err(CLOSED.into())
         }
     }
 

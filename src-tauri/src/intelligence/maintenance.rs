@@ -270,14 +270,17 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
     }
 }
 
-fn selected_model(
-    state: &AppState,
+/// Candidate selection needs the selected model to be fully installed; every
+/// lock is a `try_lock` so the maintenance loop never waits behind a user action.
+fn candidate_store<'a>(
+    state: &'a AppState,
     preferences: &AiPreferences,
-) -> Option<crate::storage::intelligence::AiModel> {
+) -> Option<std::sync::MutexGuard<'a, crate::Store>> {
     let store = state.store.try_lock().ok()?;
-    store
+    let model = store
         .ai_model(preferences.active_model_id.as_deref()?)
-        .ok()?
+        .ok()??;
+    (model.status == "installed").then_some(store)
 }
 
 fn recent_candidates(
@@ -286,11 +289,7 @@ fn recent_candidates(
     boundary: &str,
     attempted: &HashSet<(i64, i64)>,
 ) -> Option<(i64, i64)> {
-    if selected_model(state, preferences)?.status != "installed" {
-        return None;
-    }
-    let store = state.store.try_lock().ok()?;
-    store
+    candidate_store(state, preferences)?
         .ai_recent_candidates(boundary, 20)
         .ok()?
         .into_iter()
@@ -304,11 +303,7 @@ fn backlog_candidate(
     preferences: &AiPreferences,
     attempted: &HashSet<(i64, i64)>,
 ) -> Option<(i64, i64)> {
-    if selected_model(state, preferences)?.status != "installed" {
-        return None;
-    }
-    let store = state.store.try_lock().ok()?;
-    store
+    candidate_store(state, preferences)?
         .ai_backlog_candidates(BACKLOG_HOURLY_LIMIT as u32)
         .ok()?
         .into_iter()

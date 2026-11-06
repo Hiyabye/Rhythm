@@ -48,7 +48,6 @@
   let classificationState = $derived(data?.classification?.state ?? 'idle');
   const classificationLabel: Record<string, string> = { idle: '대기 중', classifying: '공지를 분류하는 중', waiting: '분류할 공지를 기다리는 중', disabled: '꺼짐', failed: '분류 모델을 확인하지 못했습니다' };
 
-
   $effect(() => { if (data?.model_storage.error) advancedOpen = true; });
 
   onMount(() => {
