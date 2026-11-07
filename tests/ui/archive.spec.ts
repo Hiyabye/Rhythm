@@ -183,6 +183,8 @@ test('an empty archive explains first steps, local storage and optional AI on To
   await expect(start).toContainText('원문 수집을 확인한 게시판만 구독할 수 있습니다');
   await expect(start).toContainText('로컬 AI 모델은 선택 사항입니다');
   await expect(start).toContainText('처음에 모두 꺼져 있습니다');
+  await expect(start).toContainText('설정 → 게시판에서 서강대학교 공지를 켜고');
+  await expect(start).toContainText('설정 → 데이터 및 정보에서 확인할 수 있습니다');
   await start.getByRole('button', { name: '초기 설정 열기', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Rhythm에 오신 것을 환영합니다', exact: true })).toBeFocused();
 });
