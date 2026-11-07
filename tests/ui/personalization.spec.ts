@@ -185,13 +185,15 @@ test('reset disables profile and interest editing until all personalization data
   await expect(interest).toHaveValue('');
 });
 
-test('Today renders the explanation returned for an explicit interest', async ({ page }) => {
+test('Today keeps picks to one line without ranking explanations', async ({ page }) => {
   await mockDesktop(page); await page.goto('/'); await openSettings(page, '개인화');
   await addTopic(page, '장학');
   await expect(personal(page).getByRole('list', { name: '관심', exact: true })).toContainText('장학');
   await navigate(page, '오늘');
-  await expect(page.getByRole('region', { name: '오늘의 추천' })).toContainText('관심 분야 ‘장학’에 맞는 공지');
-  await expect(page.getByRole('region', { name: '오늘의 추천' })).toContainText('관심 설정과 저장·피드백을 반영한 추천');
+  const today = page.getByRole('region', { name: '오늘의 추천' });
+  await expect(today).toContainText('관심 설정과 저장·피드백을 반영한 추천');
+  await expect(today).not.toContainText('관심 분야 ‘장학’에 맞는 공지');
+  await expect(today.locator('.pick-open').first()).toContainText('소프트웨어융합대학 소식');
 });
 
 test('users can explicitly prioritize or de-emphasize a topic', async ({ page }) => {
@@ -199,8 +201,7 @@ test('users can explicitly prioritize or de-emphasize a topic', async ({ page })
   await addTopic(page, '장학', '관심 없음');
   await expect(personal(page).getByRole('list', { name: '관심 없음', exact: true })).toContainText('장학');
   await navigate(page, '오늘');
-  const recommendations = page.getByRole('region', { name: '오늘의 추천' });
-  await expect(recommendations).toContainText('덜 보고 싶은 분야 ‘장학’ 관련 공지');
+  await expect(page.getByRole('region', { name: '오늘의 추천' })).toBeVisible();
   const saved = (await fixtureCalls(page)).find((call) => call.command === 'personalization_save_interest');
   expect(saved?.args.interest).toMatchObject({ name: '장학', polarity: 'negative' });
 });
@@ -235,7 +236,7 @@ test('Today keeps a useful cold-start list and offers a direct path to personali
   await expect(page.getByRole('heading', { level: 2, name: '개인화', exact: true })).toBeFocused();
 });
 
-test('Today shows recommendation explanations while inbox remains chronological archive workflow', async ({ page }) => {
+test('Today picks open the reader while inbox remains chronological archive workflow', async ({ page }) => {
   await mockDesktop(page); await page.goto('/');
   await expect(page.getByRole('region', { name: '오늘의 추천' })).toContainText('최근 공지');
   await page.getByRole('button', { name: /한국어 공지 01/ }).first().click();
@@ -335,14 +336,12 @@ test('Today recommendation feedback can be reversed without opening the document
 
 test('current production analysis contract does not show a stale warning', async ({ page }) => {
   await mockDesktop(page, { aiResult: true, aiInstalled: true }); await page.goto('/');
-  await expect(page.getByText('저장된 AI 요약')).toBeVisible();
   await page.getByRole('button', { name: /한국어 공지 01/ }).first().click();
   await expect(page.getByText('이 결과는 현재 모델 또는 분석 방식·설정과 다릅니다.', { exact: false })).toHaveCount(0);
 });
 
 test('explicit prompt-v2 fixture warns and is not treated as a current Today summary', async ({ page }) => {
   await mockDesktop(page, { aiResult: true, aiInstalled: true, analysisContract: 'prompt-v2' }); await page.goto('/');
-  await expect(page.getByText('저장된 AI 요약')).toHaveCount(0);
   await page.getByRole('button', { name: /한국어 공지 01/ }).first().click();
   await expect(page.getByText('이 결과는 현재 모델 또는 분석 방식·설정과 다릅니다.', { exact: false })).toBeVisible();
 });

@@ -172,9 +172,6 @@
       if (!active || request !== recommendationRequest) return;
       recommendations = result.items;
       hasPreferences = result.has_preferences;
-      const rows = await invoke<AiClassification[]>('ai_classifications', { documentIds: result.items.map((item) => item.item.id) });
-      if (!active || request !== recommendationRequest) return;
-      classifications = { ...classifications, ...Object.fromEntries(rows.map((row) => [row.document_id, row])) };
     } catch (reason) {
       if (active && request === recommendationRequest) {
         recommendations = [];
@@ -327,7 +324,7 @@
     window.scrollTo({ top: 0, behavior: 'instant' });
   }
 
-  const weekdayLabels = ['월', '화', '수', '목', '금', '토', '일'];
+  const weekdayLabels = ['일', '월', '화', '수', '목', '금', '토'];
   const weekDayLimit = 5;
   const todayKey = localDayKey(new Date());
   function familyOf(sourceId: string): string {
@@ -337,28 +334,33 @@
     return result.items.find((item) => item.id === documentId)?.title
       ?? recommendations.find((item) => item.item.id === documentId)?.item.title ?? fallback;
   }
-  // Only dates from analyses that match the current contract appear, exactly as in the recent-analysis list.
+  // Only dates from analyses that match the current contract appear.
   let referenceDates = $derived(recentAnalyses.flatMap((analysis) => currentSummary(analysis.document_id)?.id !== analysis.id ? [] :
     analysis.result.facts.filter((fact) => fact.date && /^\d{4}-\d{2}-\d{2}/.test(fact.date)).map((fact, index) => ({
       key: `${analysis.id}-${index}`, day: fact.date!.slice(0, 10), label: fact.label, documentId: analysis.document_id,
       title: titleOf(analysis.document_id, analysis.result.short_summary),
     }))));
+  // A rolling window from today, so a weekend still shows the days ahead.
   let week = $derived.by(() => {
     const now = new Date();
-    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (now.getDay() + 6) % 7);
-    return weekdayLabels.map((label, index) => {
-      const day = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + index);
+    return Array.from({ length: 7 }, (_, index) => {
+      const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + index);
       const key = localDayKey(day);
-      return { key, label, month: day.getMonth() + 1, date: day.getDate(),
+      return { key, label: weekdayLabels[day.getDay()], month: day.getMonth() + 1, date: day.getDate(),
         notices: result.items.filter((item) => archiveDay(item.published_at) === key),
         dates: referenceDates.filter((entry) => entry.day === key) };
     });
   });
   let laterDates = $derived(referenceDates.filter((entry) => entry.day > week[6].key).sort((a, b) => a.day.localeCompare(b.day)).slice(0, 5));
-  // The Today query holds the newest page only; say so when this week may extend past it.
+  // The Today query holds the newest page only; say so when today's notices may extend past it.
   let weekTruncated = $derived(result.items.length === pageSize && (archiveDay(result.items[pageSize - 1].published_at) ?? '') >= week[0].key);
   function shortDay(day: string): string {
     return `${Number(day.slice(5, 7))}월 ${Number(day.slice(8, 10))}일`;
+  }
+  function pickDate(value: string | null): string {
+    const day = archiveDay(value);
+    if (!day) return archiveDate(value);
+    return day.slice(0, 4) === todayKey.slice(0, 4) ? shortDay(day) : `${day.slice(0, 4)}년 ${shortDay(day)}`;
   }
 
   async function paginate(delta: number) {
@@ -401,13 +403,10 @@
               <ul class="pick-list">
                 {#each recommendations as recommendation (recommendation.item.id)}
                   {@const item = recommendation.item}
-                  {@const analysis = currentSummary(item.id)}
                   <li class:notice-unread={!item.is_read}>
-                    <button class="pick-open" id={`notice-${item.id}`} onclick={() => void open(item)}>
+                    <button class="pick-open" id={`notice-${item.id}`} title={item.title} onclick={() => void open(item)}>
                       <span class="pick-title"><span class="notice-read-dot" aria-hidden="true"></span><strong>{item.title}</strong><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}</span></span>
-                      <span class="pick-meta"><span class={`board-swatch family-${familyOf(item.source_id)}`} aria-hidden="true"></span>{item.source_name} · {archiveDate(item.published_at)}{#if item.category}{' · '}{item.category}{/if}{#if item.saved}{' · '}보관함에 저장됨{/if}</span>
-                      {#if recommendation.reasons.length}<span class="pick-reasons">{#each recommendation.reasons as reason, index}{#if index}{' · '}{/if}<span>{reason}</span>{/each}</span>{/if}
-                      {#if classifications[item.id] || analysis}<span class="notice-ai-preview">{#if classifications[item.id]}<span class="ai-tag">분류 · {classifications[item.id].category}{classifications[item.id].low_confidence ? ' · 확신 낮음' : ''}</span>{/if}{#if analysis}{#if classifications[item.id]}{' · '}{/if}<span class="ai-tag">저장된 AI 요약{analysis.partial ? ' · 일부 분석' : ''}</span> {analysis.result.short_summary}{/if}</span>{/if}
+                      <span class="pick-meta">{#if recommendation.feedback}<span class="pick-feedback">{recommendation.feedback === 'interested' ? '관심' : '관심 없음'}</span>{/if}<span class={`board-swatch family-${familyOf(item.source_id)}`} aria-hidden="true"></span><span class="pick-source">{item.source_name}</span><time datetime={item.published_at}>{pickDate(item.published_at)}</time></span>
                     </button>
                     <div class="recommendation-actions" role="group" aria-label={`${item.title} 추천 피드백`}>
                       <button class="chip" aria-pressed={recommendation.feedback === 'interested'} disabled={pendingRecommendationFeedback[item.id]} onclick={() => void setRecommendationFeedback(recommendation, recommendation.feedback === 'interested' ? null : 'interested')}>관심 있어요</button>
@@ -424,40 +423,18 @@
               {#if !hasPreferences}<button class="text-button" onclick={() => onsettings('personalization')}>관심 분야 설정</button>{/if}
             </div>
           {/if}
-          {#if recentAnalyses.length}
-            <section class="today-analyses" aria-label="최근 분석한 소식">
-              <div class="pane-heading"><h2>최근 분석한 소식</h2><span class="pane-note">저장된 AI 결과 · 추천 순위에는 영향 없음</span></div>
-              <ul class="pick-list">
-                {#each recentAnalyses.slice(0, 5) as analysis}
-                  {@const currentContract = currentSummary(analysis.document_id)?.id === analysis.id}
-                  <li>
-                    <button class="pick-open" id={`analysis-${analysis.id}`} onclick={() => void openDocument(analysis.document_id, `analysis-${analysis.id}`)}>
-                      <strong class="pick-summary">{analysis.result.short_summary}</strong>
-                      <span class="pick-meta">저장된 AI 분석{#if !currentContract}{' · '}현재 분석 설정과 다를 수 있습니다{/if}</span>
-                      {#if analysis.partial}<span class="pick-meta">일부 내용 분석</span>{/if}
-                      {#if currentContract}
-                        {#each analysis.result.facts.filter((fact) => fact.date).slice(0, 2) as fact}
-                          <span class="pick-meta">{fact.label} · {fact.date} · 원문에서 추출한 참고 일정</span>
-                        {/each}
-                      {/if}
-                      <span class="pick-meta">{analysis.model_identity.name ?? '로컬 모델'} · 원문과 근거 확인</span>
-                    </button>
-                  </li>
-                {/each}
-              </ul>
-            </section>
-          {:else if aiError}
+          {#if aiError}
             <p class="footnote">저장된 AI 결과를 불러오지 못했습니다. 공지 목록은 계속 사용할 수 있습니다.</p>
           {/if}
         </div>
 
         <aside class="week-pane" aria-labelledby="week-heading">
-          <div class="pane-heading"><h2 id="week-heading">이번 주</h2><span class="pane-note">{shortDay(week[0].key)} – {week[6].month === week[0].month ? `${week[6].date}일` : shortDay(week[6].key)}</span></div>
-          {#if loading && !result.items.length}<p class="loading" role="status">이번 주 공지를 불러오는 중입니다…</p>{/if}
+          <div class="pane-heading"><h2 id="week-heading">앞으로 7일</h2><span class="pane-note">{shortDay(week[0].key)} – {week[6].month === week[0].month ? `${week[6].date}일` : shortDay(week[6].key)}</span></div>
+          {#if loading && !result.items.length}<p class="loading" role="status">오늘 공지를 불러오는 중입니다…</p>{/if}
           <ol class="week-days">
             {#each week as day (day.key)}
-              <li class="week-day" class:is-today={day.key === todayKey} class:is-past={day.key < todayKey}>
-                <div class="day-label"><span class="day-name">{day.label}</span><span class="day-number">{day.date}</span>{#if day.key === todayKey}<span class="sr-only">오늘</span>{/if}</div>
+              <li class="week-day" class:is-today={day.key === todayKey}>
+                <div class="day-label"><span class="day-name">{day.key === todayKey ? '오늘' : day.label}</span><span class="day-number">{day.date}</span>{#if day.key === todayKey}<span class="sr-only">{day.label}요일</span>{/if}</div>
                 <ul class="day-events">
                   {#each day.notices.slice(0, weekDayLimit) as item (item.id)}
                     <li><button class="event" class:notice-unread={!item.is_read} id={`week-${item.id}`} onclick={() => void open(item, `week-${item.id}`)}>
@@ -479,7 +456,7 @@
               </li>
             {/each}
           </ol>
-          {#if weekTruncated}<p class="pane-footnote">이번 주 공지가 많아 최근 {pageSize}건만 표시합니다. 전체 목록은 받은 소식에서 볼 수 있습니다.</p>{/if}
+          {#if weekTruncated}<p class="pane-footnote">오늘 공지가 많아 최근 {pageSize}건 중에서만 표시합니다. 전체 목록은 받은 소식에서 볼 수 있습니다.</p>{/if}
           {#if laterDates.length}
             <h3 class="later-heading">이후 AI 참고 일정</h3>
             <ul class="day-events">
@@ -492,7 +469,7 @@
               {/each}
             </ul>
           {/if}
-          <p class="pane-footnote">게시일 기준 공지와 로컬 AI가 원문에서 추출한 참고 일정입니다. 참고 일정은 추천 순위와 알림에 쓰지 않으니 원문에서 확인하세요.</p>
+          <p class="pane-footnote">오늘 게시된 공지와 로컬 AI가 원문에서 추출한 참고 일정입니다. 참고 일정은 추천 순위와 알림에 쓰지 않으니 원문에서 확인하세요.</p>
         </aside>
       </div>
     {:else}

@@ -25,7 +25,7 @@ Success: the user trusts Rhythm to bring forward what matters, at the right time
 ## Positioning
 
 - **Local-first by construction.** No account, cloud database or telemetry. Inference runs on the device in a bundled llama.cpp server that only Rhythm starts and can reach. A user-configured OpenAI-compatible API is an explicit opt-in alternative; the local engine stays the default, and only public notice text is sent, never personal data.
-- **Explainable, not oracular.** Every recommendation shows the actual score signals that ranked it. AI output is optional, labeled, and never drives ranking, urgency or notifications.
+- **Explainable, not oracular.** Recommendations are ranked by deterministic score signals, never by a model. Today keeps each pick to one line, so the signals are not shown there (user decision, 2026-11-07). AI output is optional, labeled, and never drives ranking, urgency or notifications.
 - **User decides.** Subscriptions, collection, model installs, background sync, notifications, remote inference, automatic remote analysis and remote classification are all off until the user turns them on. Learned preferences can be inspected, edited and deleted.
 - **Archive, not a feed.** Notices are preserved with meaningful revision history, local attachments and offline reading. Fetch/parse failures never erase good content.
 

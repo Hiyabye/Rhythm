@@ -91,7 +91,7 @@ spacing:
   sidebar: "232px"
   sidebar-compact: "200px"
   sidebar-icon: "60px"
-  week-pane: "340px"
+  week-pane: "clamp(360px, 34vw, 520px)"
   content-x: "32px"
   block-gap: "28px"
   settings-nav: "176px"
@@ -141,7 +141,7 @@ components:
     padding: "11px 14px"
   week-pane:
     backgroundColor: "{colors.pane}"
-    width: "340px"
+    width: "clamp(360px, 34vw, 520px)"
     padding: "30px 20px 24px"
   settings-group:
     backgroundColor: "{colors.pane}"
@@ -201,7 +201,7 @@ Navigation is a macOS source list. The four primary views **오늘 · 받은 소
 
 | View | Current behavior |
 | --- | --- |
-| 오늘 | Recent ranked notices with grounded reasons; cold-start recent items are explicitly not personalized. Stored current AI summaries are optional and do not influence ranking. |
+| 오늘 | Recent ranked notices as one-line rows; cold-start recent items are explicitly not personalized. A rolling seven-day pane from today shows today's notices and stored AI reference dates. |
 | 받은 소식 | Full paginated chronological archive with unread/source/date/original-category filters and save controls. Recommendations never silently replace the inbox. |
 | 탐색 | Explicit local title/body search, mixed Korean/English/numeric terms, plain-text snippets and highlighted matches. Defaults to 관련도순; with the local classifier, notices similar in meaning join the results with a quiet `검색어는 없지만 뜻이 비슷한 공지` note. |
 | 보관함 | User-saved notices, independent of extension enablement. Saving contributes only bounded local evidence and does not make attachments available automatically. |
@@ -224,13 +224,13 @@ The page header is the view title (26 px) alone. On Today a line below it gives 
 
 Today requests a bounded set of recommendations from Rust/SQLite. Recommendations never require an analysis and opening a notice does not start inference.
 
-Presentation. The centre column holds **나를 위한 소식** as inset list rows separated by hairlines. Each row shows the unread dot, the title (heavier when unread), a meta line with the board's family swatch, source, publication date, original category and "보관함에 저장됨" when saved, the deterministic reasons that contributed to its score, and an optional valid current AI summary labeled "저장된 AI 요약". The feedback chips **관심 있어요 / 관심 없어요** sit at the row's trailing edge. They appear when the row is hovered or contains focus, stay visible when pressed, and are always visible at 640 px and narrower, where they move below the row content. The same controls appear in the reader and can be reversed in either place.
+Presentation. The centre column holds **나를 위한 소식** as one-line inset rows separated by hairlines, like Mail. Each row shows the unread dot and the title (heavier when unread, truncated with an ellipsis and given in full as a tooltip), with the board's family swatch, the source and a short publication date ("M월 D일", with the year only when it differs) on the trailing edge. Reasons, categories, classifications, AI summaries and saved state are not shown on Today (user decision, 2026-11-07); the backend still returns the reasons. The feedback chips **관심 있어요 / 관심 없어요** take the place of the board and date while the row is hovered or contains focus; the meta keeps a minimum width so swapping never reflows the title. When feedback is set, the meta starts with an accent "관심" or "관심 없음". The same controls appear in the reader and can be reversed in either place.
 
-A trailing 340 px **이번 주** pane on the right edge of the window lists Monday to Sunday with today's date number circled in the accent fill. Past days are dimmed. Each day lists notices published that day as events: a 3 px family-colour bar plus the title and a source meta line, so the colour is never the only cue. At most five notices appear per day, followed by "외 N건 · 받은 소식에서 모두 보기". AI-extracted reference dates appear in the matching day with a dotted grey bar and an "AI 참고 일정" label; dates after Sunday appear under **이후 AI 참고 일정** (at most five, labeled "AI · M월 D일"). Only dates from analyses that match the current contract are shown. A footnote says the reference dates come from the local AI, are not used for ranking or notifications, and should be checked in the original. When the week may extend beyond the loaded page, a footnote says only the newest notices are shown.
+A trailing **앞으로 7일** pane on the right edge of the window (`clamp(360px, 34vw, 520px)`) lists today and the next six days, so a weekend still shows the coming week. Today is the first row, labeled "오늘" with its date number circled in the accent fill; other rows show the weekday. Each day lists notices published that day as events (in practice only today, since notices carry past publication dates): a 3 px family-colour bar plus the title and a source meta line, so the colour is never the only cue. At most five notices appear per day, followed by "외 N건 · 받은 소식에서 모두 보기". AI-extracted reference dates appear in the matching day with a dotted grey bar and an "AI 참고 일정" label; dates after the window appear under **이후 AI 참고 일정** (at most five, labeled "AI · M월 D일"). Only dates from analyses that match the current contract are shown. A footnote says the reference dates come from the local AI, are not used for ranking or notifications, and should be checked in the original. When today's notices may extend beyond the loaded page, a footnote says only the newest notices are shown.
 
-Below the picks, **최근 분석한 소식** lists at most five stored analyses: the short summary first, then "저장된 AI 분석", partial-analysis and contract-mismatch notes, up to two extracted dates, and the model name with a prompt to check the original. The embedding classification is shown separately in archive rows and the reader as "분류 · <category>", with "확신 낮음" when the score is below the threshold; it is never presented as the board's original category.
+The embedding classification is shown in archive rows and the reader as "분류 · <category>", with "확신 낮음" when the score is below the threshold; it is never presented as the board's original category.
 
-Below 1100 px the week pane stops being a separate pane, and the order becomes picks → week → recent analyses in one column.
+Below 1100 px the week pane stops being a separate pane and follows the picks in one column.
 
 With no profile or interactions, Today labels the list as recent notices before personalization and links directly to interest settings. Explicit interest matches, explicit negative topics, profile matches, current feedback, saves, source subscription, freshness and meaningful revision recency affect ranking. Historical initial backfill receives no freshness reward; AI-generated dates and classifications do not rank notices. A modest two-pass source cap reduces same-source repetition without changing scores. The received-news list and search continue to expose the full archive.
 
@@ -332,10 +332,10 @@ Pretendard Variable is imported locally through the `pretendard` npm package in 
 Type sits at macOS system sizes on a 13 px base (line height 1.5). Hierarchy comes from size and weight, not colour or decoration:
 
 - **Page title** (700, 26 px, line height 1.25, −0.02em): one per view, in the page header.
-- **Pane heading** (650, 15 px): 나를 위한 소식, 최근 분석한 소식, 이번 주, with a 12 px secondary note on the same baseline.
-- **Row title** (500, 14 px, line height 1.45; 650 when unread): pick titles and recent-analysis summaries.
+- **Pane heading** (650, 15 px): 나를 위한 소식, 앞으로 7일, with a 12 px secondary note on the same baseline.
+- **Row title** (500, 14 px, line height 1.45; 650 when unread): pick titles (one line, ellipsis).
 - **Body** (400, 13 px): sidebar items, banners, buttons.
-- **Meta** (400, 12 px, tabular numerals): source/date lines, reasons (in `--text-2`), chips, counts.
+- **Meta** (400, 12 px, tabular numerals): source/date lines, chips, counts.
 - **Label** (600, 11 px): sidebar group headings, weekday names, event meta and footnotes (400).
 - **Day number** (600, 15 px, tabular numerals) in a 26 px circle.
 
@@ -343,7 +343,7 @@ Type sits at macOS system sizes on a 13 px base (line height 1.5). Hierarchy com
 
 **The No-Kicker Rule.** No eyebrows, letter-spaced kickers, header notes or taglines above or around titles. The page title stands alone; context goes in the line below it.
 
-Layout is three panes on Today and two elsewhere. The sidebar is fixed at 232 px (200 px below 1100 px; a 60 px icon column below 800 px). Main content is padded 26 px top, 32 px sides and 40 px bottom (26 px sides below 1100 px; 22/20/32 px below 800 px). On Today a fixed 340 px week pane occupies the right edge and main content reserves that width. Today's blocks are separated by 28 px. Below 1100 px the week pane joins the main column (picks → week → recent analyses); at 640 px and narrower the feedback chips move below each pick. Settings uses a 176 px pane list (150 px below 1100 px; a wrapping row above the pane at 800 px and narrower) and a pane column up to 680 px; archive lists and reader share the same surfaces. Native window controls and a minimum window size are retained. The reader region is keyboard-focusable, has a Korean label/visible outline and scrolls wide content with horizontal arrows. Narrow native macOS reading and browser WebKit/Chromium 640 px/200% wide-table containment were checked. Browser results do not establish native WebView2 layout on Windows.
+Layout is three panes on Today and two elsewhere. The sidebar is fixed at 232 px (200 px below 1100 px; a 60 px icon column below 800 px). Main content is padded 26 px top, 32 px sides and 40 px bottom (26 px sides below 1100 px; 22/20/32 px below 800 px). On Today a fixed week pane (`clamp(360px, 34vw, 520px)`, the `--week-pane` variable) occupies the right edge and main content reserves that width. Today's blocks are separated by 28 px. Below 1100 px the week pane joins the main column after the picks. Settings uses a 176 px pane list (150 px below 1100 px; a wrapping row above the pane at 800 px and narrower) and a pane column up to 680 px; archive lists and reader share the same surfaces. Native window controls and a minimum window size are retained. The reader region is keyboard-focusable, has a Korean label/visible outline and scrolls wide content with horizontal arrows. Narrow native macOS reading and browser WebKit/Chromium 640 px/200% wide-table containment were checked. Browser results do not establish native WebView2 layout on Windows.
 
 Depth is flat. Panes are separated by 1 px hairlines (`--line`) and the tonal step between `--bg`, `--sidebar` and `--pane`, not by shadows. The only shadows are small control affordances: the selected segment (`0 1px 3px #0000000a`), the switch knob (`0 1px 2px #0002`), the transient save notice (`0 4px 24px #0000000c`), the lit board tile (`0 3px 12px` of the accent at 28%) and floating popovers (`0 10px 32px` black at 14%, 45% in dark). Corners are 6 px for rows, buttons, chips and events, 8 px for pick rows and banners, 10 px for AI panels, settings groups, tiles and popovers, a full pill (13 px) for interest chips, and 2 px for swatches and event bars. Motion is native-quick: hover, selection and chip-reveal fades of 140–150 ms, a spinning icon only while a sync runs, and everything disabled under `prefers-reduced-motion`.
 
@@ -356,7 +356,7 @@ Shared styles live in `src/app.css`, with AI surfaces in `src/lib/ai.css`; reusa
 One system-blue accent on neutral greys, with four calendar-style family colours for institutions. Token values are in the frontmatter (light keys, and `-dark` keys for `:root[data-theme=dark]`).
 
 - **Neutrals.** `--bg` and `--surface` are white in light mode and graphite (`#1e1e20` / `#232326`) in dark mode. `--sidebar` is a slightly darker grey than the content. `--pane` is a barely tinted surface for the week pane and banners. `--field` backs inputs.
-- **Text.** `--text` for titles and body, `--text-2` for secondary content that still needs weight (recommendation reasons, chip text on narrow screens, the brand name), `--secondary` for meta lines and notes, `--muted` for placeholders, empty days and footnotes.
+- **Text.** `--text` for titles and body, `--text-2` for secondary content that still needs weight (such as the brand name), `--secondary` for meta lines and notes, `--muted` for placeholders, empty days and footnotes.
 - **Lines.** `--line` is the hairline for separators and pane edges. `--line-strong` is for control outlines that must read as edges (secondary buttons, the "AI 참고 일정" label).
 - **Accent.** `--accent` is the accent as text or icon: sidebar icons, text buttons, the unread dot, focus rings, today's weekday name, pressed chips. `--accent-fill` is the accent as a filled background behind `--accent-text`: primary buttons and today's date circle. They are the same in light mode; in dark mode the fill is deeper (`#2368d4`) so white text on it stays legible, while the text accent is lighter (`#6aa6ff`). `--soft` is the selection tint for the active sidebar row, pressed chips and text selection.
 - **Family colours.** `--family-main` (main academic board), `--family-computing`, `--family-engineering` and `--family-other` (fallback). They appear only as 8 px swatches in the sidebar and pick meta lines and as 3 px event bars in the week pane. AI reference dates use a dotted `--muted` bar instead.

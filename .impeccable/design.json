@@ -152,7 +152,7 @@
         "role": "neutral",
         "displayName": "Soft Ink",
         "canonical": "#3a3a3e",
-        "purpose": "Recommendation reasons, brand name, narrow-screen chip text.",
+        "purpose": "Secondary content that still needs weight, such as the brand name.",
         "darkToken": "text-2-dark",
         "darkValue": "#d6d6db",
         "tonalRamp": [
@@ -490,11 +490,11 @@
       },
       "headline": {
         "displayName": "Pane heading",
-        "purpose": "나를 위한 소식, 최근 분석한 소식, 이번 주."
+        "purpose": "나를 위한 소식, 앞으로 7일."
       },
       "title": {
         "displayName": "Row title",
-        "purpose": "Pick titles (650 when unread) and recent-analysis summaries."
+        "purpose": "Pick titles on one line (650 when unread)."
       },
       "body": {
         "displayName": "Body",
@@ -502,7 +502,7 @@
       },
       "meta": {
         "displayName": "Meta",
-        "purpose": "Source/date lines, reasons, chips, counts; tabular numerals."
+        "purpose": "Source/date lines, chips, counts; tabular numerals."
       },
       "label": {
         "displayName": "Label",
@@ -576,7 +576,7 @@
       {
         "name": "narrow",
         "value": "640px",
-        "note": "max-width; chips always visible, below pick content; settings row controls wrap"
+        "note": "max-width; settings row controls wrap"
       },
       {
         "name": "small",
@@ -621,9 +621,9 @@
     {
       "name": "Pick Row",
       "kind": "custom",
-      "description": "Inset Today recommendation row: unread dot, title, family swatch meta line, reasons.",
-      "html": "<ul class=\"ds-picks\"><li><button class=\"ds-pick\"><span class=\"ds-title\"><span class=\"ds-dot\"></span><strong>장학금 신청 안내</strong></span><span class=\"ds-meta\"><span class=\"ds-sw\"></span>소프트웨어융합대학 소식 · 2026년 10월 24일 · 장학</span><span class=\"ds-reasons\">관심 분야: 장학 · 구독 중인 정보원</span></button></li></ul>",
-      "css": ".ds-picks{list-style:none;margin:0;padding:0;font-family:\"Pretendard Variable\",-apple-system,sans-serif}.ds-picks li{border-bottom:1px solid var(--line,#e4e4e7)}.ds-pick{display:grid;gap:3px;width:100%;margin:4px 0;padding:8px 10px 8px 20px;border:0;border-radius:8px;background:transparent;text-align:left;color:var(--text,#1d1d1f);cursor:pointer;transition:background .15s}.ds-pick:hover{background:var(--hover,rgb(0 0 0/.045))}.ds-pick:focus-visible{outline:2px solid var(--accent,#0a62d0);outline-offset:2px}.ds-title{position:relative;font-size:14px;line-height:1.45}.ds-title strong{font-weight:650}.ds-dot{position:absolute;left:-12px;top:.55em;width:7px;height:7px;border-radius:50%;background:var(--accent,#0a62d0)}.ds-meta{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--secondary,#5c5c61);font-variant-numeric:tabular-nums}.ds-sw{width:8px;height:8px;border-radius:2px;background:var(--family-computing,#d9730d)}.ds-reasons{font-size:12px;color:var(--text-2,#3a3a3e)}"
+      "description": "One-line Today recommendation row: unread dot, truncated title, trailing family swatch, source and short date; feedback chips replace the meta on hover or focus.",
+      "html": "<ul class=\"ds-picks\"><li><button class=\"ds-pick\"><span class=\"ds-title\"><span class=\"ds-dot\"></span><strong>장학금 신청 안내</strong></span><span class=\"ds-meta\"><span class=\"ds-sw\"></span><span>소프트웨어융합대학 소식</span><span>10월 24일</span></span></button></li></ul>",
+      "css": ".ds-picks{list-style:none;margin:0;padding:0;font-family:\"Pretendard Variable\",-apple-system,sans-serif}.ds-picks li{border-bottom:1px solid var(--line,#e4e4e7)}.ds-pick{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;width:100%;margin:2px 0;padding:6px 10px 6px 20px;border:0;border-radius:6px;background:transparent;text-align:left;color:var(--text,#1d1d1f);cursor:pointer}.ds-pick:hover{background:var(--hover,rgb(0 0 0/.045))}.ds-pick:focus-visible{outline:2px solid var(--accent,#0a62d0);outline-offset:2px}.ds-title{position:relative;min-width:0;font-size:14px;line-height:1.45;white-space:nowrap}.ds-title strong{display:block;overflow:hidden;text-overflow:ellipsis;font-weight:650}.ds-dot{position:absolute;left:-12px;top:.55em;width:7px;height:7px;border-radius:50%;background:var(--accent,#0a62d0)}.ds-meta{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-width:172px;font-size:12px;color:var(--secondary,#5c5c61);font-variant-numeric:tabular-nums;white-space:nowrap}.ds-sw{width:8px;height:8px;border-radius:2px;background:var(--family-computing,#d9730d)}"
     },
     {
       "name": "Week Day",
