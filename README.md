@@ -31,6 +31,8 @@ Rhythm은 학교 공지를 내 컴퓨터에 모아 보관하고, AI로 핵심을
 - **서명:** macOS 앱은 Ad-hoc 서명이며 **Apple Developer ID 서명과 공증이 없습니다.** Windows 설치 파일은 **코드 서명이 없습니다.** 처음 열 때 보안 경고가 나타나며, 아래 설치 안내를 따르세요.
 - **정보원:** 서강대학교 학사공지, 소프트웨어융합대학, 공과대학, 전자공학과, 시스템반도체공학과, 반도체공학과, 기계공학과, 벨라르미노 학사 게시판과 사이버캠퍼스 강의 공지(로그인 필요).
 
+측정값과 시험 범위(AI 속도·정확도, 지원 GPU, 최소 macOS 버전, 알림·예약 동기화 동작)는 [AI 평가](docs/AI_EVALUATION.md), [로드맵의 검증 현황](docs/ROADMAP.md#verification-status), [아키텍처](docs/ARCHITECTURE.md), [Windows 빌드 안내](docs/WINDOWS.md)에 있습니다.
+
 ## 설치
 
 ### macOS

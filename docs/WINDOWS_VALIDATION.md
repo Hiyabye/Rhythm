@@ -57,8 +57,6 @@ Synthetic evaluation (`actual_qwen35_analysis_evaluation`, release build, produc
 
 Screening failures were wrong categories (mostly `학사`), missing or extra deadlines and missing summary terms, as on macOS.
 
-Earlier, with the former worker, the pinned 2B file downloaded with a real cancel and HTTP 206 resume that matched the pinned hash; the downloader is unchanged.
-
 Not verified: other NVIDIA GPUs or drivers, the production-identifier install with protocol/notification registration, uninstall and upgrade, 4B in the installed app, model cancellation or crash recovery in the installed app, VRAM exhaustion, memory limits, peak RAM/VRAM, OS-enforced offline operation.
 
 ## In-app update

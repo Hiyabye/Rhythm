@@ -41,7 +41,7 @@ Catalog memory values (4/7 GiB for Qwen3.5, 6/9 GiB for Gemma 4) are estimates, 
 
 The LLM runs below predate prompt 5. They still show summary, deadline and grounding behavior; their category figures are historical measurements, because category is now produced by the embedding classifier instead of the generation schema.
 
-**llama-server b12068, Metal, 2B** (macOS 27.2, M1 Pro, 16 GiB; all 18 synthetic fixtures, production controller → validation → Store path, `llama-server` from a bundled debug `Rhythm.app`): 18/18 jobs completed with schema-valid, grounded output, 1 needing its one repair; 7/18 also passed every screening check (category, deadline set, summary terms). 8 had the wrong category and 2 the wrong deadline set. Total inference 92 s (≈65 completion tok/s, 2–10 s per notice); `offloaded 25/25 layers to GPU`. In the same harness and fixtures, the former mistral.rs Metal release worker completed 18/18 and passed 7/18 in 236 s.
+**llama-server b12068, Metal, 2B** (macOS 27.2, M1 Pro, 16 GiB; all 18 synthetic fixtures, production controller → validation → Store path, `llama-server` from a bundled debug `Rhythm.app`): 18/18 jobs completed with schema-valid, grounded output, 1 needing its one repair; 7/18 also passed every screening check (category, deadline set, summary terms). 8 had the wrong category and 2 the wrong deadline set. Total inference 92 s (≈65 completion tok/s, 2–10 s per notice); `offloaded 25/25 layers to GPU`.
 
 **llama-server b12068, CPU, 2B (#82)** (same Mac, harness and 18 fixtures; the same pinned file, size and SHA-256 matched; the evaluation worker selected the CPU path directly with `RHYTHM_AI_EVAL_FORCE_CPU=1`, the same `-ngl 0 --device none` launch the app uses for a fallback session): the server logged `offloaded 0/25 layers to GPU` and 6 CPU threads, the worker reported `실제 불러온 백엔드: CPU`, and every result recorded `loaded_backend: cpu`. 18/18 jobs completed with schema-valid, grounded output, 1 needing its one repair; 7/18 passed every screening check. 7 had the wrong category and 4 the wrong deadline set (Metal produced 8 and 2), `internship` missed the term "지원" and `long_tail_correction` "정정". The 18 requests took 172.6 s of generation wall time and 130.9 s of token time for 5,422 completion tokens (≈41 completion tok/s; Metal reported ≈65) and 185.3 s total wall (3.8–24.9 s per notice); model load 2.8 s, server RSS ≈3.0 GiB. The persisted-cache checks passed with the worker stopped.
 
@@ -74,12 +74,6 @@ All four completed successfully inside the normal one-repair policy and were sto
 - **Cancellation:** cancelling while a fresh server was starting reaped it and showed "분석을 취소했습니다"; the job was stored as cancelled and the next request started a new server and completed.
 - **Server killed mid-request:** `kill -9` during a request switched the session to CPU (`-ngl 0 --device none`) and the same job completed on CPU (9.1 s total, result `loaded_backend` cpu); Settings showed the CPU switch with a reason that describes an incomplete response rather than a crash. This is one short notice, not a CPU quality check.
 - **Quit with a model loaded:** the app's 종료 menu item exited the app and its `llama-server`; no process remained. `integrity_check` ok.
-
-Evidence from the former mistral.rs worker (same artifacts, different engine), not re-run with llama-server:
-
-- **4B on Metal** produced useful, validated Korean analysis of synthetic notices.
-- **v1.0.0 installed app**, live notice, 2B/Metal: analysis completed in 19.8 s and was cached; Settings showed the loaded backend as Metal.
-- **Native flows (2B/Metal, isolated profiles):** download cancel/resume, setup, reader analysis, OS-network-denied regeneration, cancellation and worker-crash recovery, Eco idle unload, load progress surviving a Settings remount.
 
 **llama-server b12068, Windows 11, GTX 1650:** 2B and 4B on Vulkan and 2B on CPU completed 18/18 fixtures, 4B on CPU the first 4; an isolated installed app analyzed one synthetic notice on GPU and CPU. Details in [Windows validation](WINDOWS_VALIDATION.md#ai-on-windows).
 
@@ -152,7 +146,7 @@ The UI labels every result as AI-generated and tells the user to check condition
 
 ## Constrained decoding decision
 
-Analysis sends a static closed JSON schema as the request's `response_format`; llama.cpp compiles it to a grammar. The grammar emits properties in schema order, so the schema is literal JSON with the summary fields before `facts`. Sent with alphabetically sorted keys (`category` and `facts` first), the same 2B run completed only 14/18: four jobs failed date grounding after their repair because facts were written before the summaries. With the former worker, a same-input A/B test (8 synthetic + 3 archived notices, 2B and 4B) raised completed jobs from 17/22 to 20/22 under constrained decoding. Deadline errors remain in every mode; category is no longer generated.
+Analysis sends a static closed JSON schema as the request's `response_format`; llama.cpp compiles it to a grammar. The grammar emits properties in schema order, so the schema is literal JSON with the summary fields before `facts`. Sent with alphabetically sorted keys (`category` and `facts` first), the same 2B run completed only 14/18: four jobs failed date grounding after their repair because facts were written before the summaries. Deadline errors remain in every mode; category is no longer generated.
 
 ## Running evaluations
 
