@@ -8,7 +8,8 @@
   import Popover from './Popover.svelte';
 
   type Polarity = PersonalInterest['polarity'];
-  let { desktop }: { desktop: boolean } = $props();
+  // `compact` (the setup flow) shows only the profile and explicit interests.
+  let { desktop, compact = false }: { desktop: boolean; compact?: boolean } = $props();
   let data = $state<PersonalizationSnapshot | null>(null);
   let busy = $state(false);
   let resetPending = $state(false);
@@ -208,17 +209,17 @@
           </ul>
         </div>
       {/each}
-      <div class="settings-row chip-row">
+      {#if !compact}<div class="settings-row chip-row">
         <span class="row-label">학습됨</span>
         {#if learned.length}<ul class="chip-list" aria-label="학습된 관심사">{@render chips(learned, '학습된 관심사')}</ul>
         {:else}<span class="row-detail chip-empty">아직 없음</span>{/if}
-      </div>
+      </div>{/if}
     </div>
 
-    <div class="settings-group">
+    {#if !compact}<div class="settings-group">
       <div class="settings-row"><span class="row-label">행동으로 배우기<Hint label="행동으로 배우기">관심 표시와 저장만 학습합니다. 읽기와 검색은 학습하지 않습니다. 끄면 새 행동을 학습에 쓰지 않습니다.</Hint></span><button class="switch" class:on={data.learning_enabled} role="switch" aria-checked={data.learning_enabled} aria-label="관심사 학습" disabled={busy} onclick={() => void action('personalization_set_learning', { enabled: !data!.learning_enabled })}><span></span></button></div>
       <div class="settings-row"><span class="row-label">개인화 초기화</span><button class="button secondary small danger" type="button" disabled={busy} aria-label="개인화 데이터 초기화" onclick={resetPersonalization}>초기화</button></div>
-    </div>
+    </div>{/if}
   {:else}
     <p class="loading" role="status">개인화 정보를 불러오는 중입니다…</p>
   {/if}

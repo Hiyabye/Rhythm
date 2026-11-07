@@ -18,7 +18,7 @@ mod personalization_tests;
 pub mod proactive;
 #[cfg(test)]
 mod proactive_tests;
-pub(crate) const SCHEMA_VERSION: i64 = 18;
+pub(crate) const SCHEMA_VERSION: i64 = 19;
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
     let migrations = [
@@ -40,12 +40,19 @@ fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
         include_str!("../../migrations/016_remote_engine.sql"),
         include_str!("../../migrations/017_retire_eng_newsletter.sql"),
         include_str!("../../migrations/018_cybercampus.sql"),
+        include_str!("../../migrations/019_onboarding.sql"),
     ];
-    for migration in migrations.iter().skip(version as usize) {
+    for (index, migration) in migrations.iter().enumerate().skip(version as usize) {
         let transaction = connection.transaction().map_err(|e| e.to_string())?;
         transaction
             .execute_batch(migration)
             .map_err(|e| e.to_string())?;
+        // Only a profile created by this open has never seen the setup flow.
+        if version == 0 && index == 18 {
+            transaction
+                .execute("UPDATE settings SET onboarding_completed=0 WHERE id=1", [])
+                .map_err(|e| e.to_string())?;
+        }
         transaction.commit().map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -145,6 +152,21 @@ impl Store {
     pub fn set_update_check(&self, enabled: bool) -> Result<(), String> {
         self.connection
             .execute("UPDATE settings SET update_check=?1 WHERE id=1", [enabled])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub fn onboarding_completed(&self) -> Result<bool, String> {
+        self.connection
+            .query_row(
+                "SELECT onboarding_completed FROM settings WHERE id=1",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())
+    }
+    pub fn complete_onboarding(&self) -> Result<(), String> {
+        self.connection
+            .execute("UPDATE settings SET onboarding_completed=1 WHERE id=1", [])
             .map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -318,6 +340,58 @@ mod tests {
         assert!(!db.update_check_enabled().unwrap());
         db.set_update_check(true).unwrap();
         assert!(Store::open(&path).unwrap().update_check_enabled().unwrap());
+    }
+    #[test]
+    fn a_new_profile_needs_setup_once_and_keeps_completion_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        {
+            let db = Store::open(&path).unwrap();
+            assert!(!db.onboarding_completed().unwrap());
+        }
+        let db = Store::open(&path).unwrap();
+        assert!(!db.onboarding_completed().unwrap());
+        db.complete_onboarding().unwrap();
+        db.complete_onboarding().unwrap();
+        assert!(Store::open(&path).unwrap().onboarding_completed().unwrap());
+    }
+    #[test]
+    fn schema_eighteen_upgrade_marks_setup_completed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        {
+            let connection = Connection::open(&path).unwrap();
+            for migration in [
+                include_str!("../../migrations/001_foundation.sql"),
+                include_str!("../../migrations/002_archive.sql"),
+                include_str!("../../migrations/003_intelligence.sql"),
+                include_str!("../../migrations/004_personalization.sql"),
+                include_str!("../../migrations/005_proactive.sql"),
+                include_str!("../../migrations/006_notification_attempts.sql"),
+                include_str!("../../migrations/007_notification_activation.sql"),
+                include_str!("../../migrations/008_ai_execution_mode.sql"),
+                include_str!("../../migrations/009_ai_model_directory.sql"),
+                include_str!("../../migrations/010_update_check.sql"),
+                include_str!("../../migrations/011_skipped_articles.sql"),
+                include_str!("../../migrations/012_resource_retry.sql"),
+                include_str!("../../migrations/013_ai_projector.sql"),
+                include_str!("../../migrations/014_ai_backlog_mode.sql"),
+                include_str!("../../migrations/015_ai_embedding.sql"),
+                include_str!("../../migrations/016_remote_engine.sql"),
+                include_str!("../../migrations/017_retire_eng_newsletter.sql"),
+                include_str!("../../migrations/018_cybercampus.sql"),
+            ] {
+                connection.execute_batch(migration).unwrap();
+            }
+            connection
+                .execute_batch("UPDATE settings SET theme='dark',update_check=0")
+                .unwrap();
+        }
+        let db = Store::open(&path).unwrap();
+        assert_eq!(db.info().unwrap().schema_version, SCHEMA_VERSION);
+        assert!(db.onboarding_completed().unwrap());
+        assert_eq!(db.settings().unwrap().theme, "dark");
+        assert!(!db.update_check_enabled().unwrap());
     }
     #[test]
     fn schema_nine_upgrade_keeps_settings_and_enables_update_checks() {

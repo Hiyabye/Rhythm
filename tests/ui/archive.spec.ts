@@ -185,9 +185,8 @@ test('an empty archive explains first steps, local storage and optional AI on To
   await expect(start).toContainText('처음에 모두 꺼져 있습니다');
   await expect(start).toContainText('설정 → 게시판에서 서강대학교 공지를 켜고');
   await expect(start).toContainText('설정 → 데이터 및 정보에서 확인할 수 있습니다');
-  await start.getByRole('button', { name: '설정에서 시작하기', exact: true }).click();
-  await expect(page.getByRole('heading', { level: 1, name: '설정', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { level: 2, name: '게시판', exact: true })).toBeFocused();
+  await start.getByRole('button', { name: '초기 설정 열기', exact: true }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Rhythm에 오신 것을 환영합니다', exact: true })).toBeFocused();
 });
 
 test('a populated archive does not repeat the first-run guide', async ({ page }) => {

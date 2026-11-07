@@ -8,10 +8,10 @@
   import Highlighted from './Highlighted.svelte';
   import Icon from './Icon.svelte';
 
-  let { page, desktop, enabled, sourceRequest, activation, onactivationhandled, onsettings, onaisettings, onsourcechange, oncontext, onweekpane }: {
+  let { page, desktop, enabled, sourceRequest, activation, onactivationhandled, onsettings, onaisettings, onsetup, onsourcechange, oncontext, onweekpane }: {
     page: string; desktop: boolean; enabled: boolean; sourceRequest: { id: string; token: number };
     activation: { document_id: number; revision_id: number; event_id: number } | null;
-    onactivationhandled: () => void; onsettings: (pane?: 'boards' | 'personalization') => void; onaisettings: () => void; onsourcechange: (id: string) => void;
+    onactivationhandled: () => void; onsettings: (pane?: 'boards' | 'personalization') => void; onaisettings: () => void; onsetup: () => void; onsourcechange: (id: string) => void;
     oncontext: (context: { summary: ArchiveSummary | null; sources: SourceInfo[] | null; status: SyncStatus | null }) => void;
     onweekpane: (visible: boolean) => void;
   } = $props();
@@ -386,7 +386,7 @@
                 <li>백그라운드 실행, 자동 동기화와 알림은 처음에 모두 꺼져 있습니다. 켜더라도 Rhythm이 실행 중이고 기기가 깨어 있을 때만 동작합니다.</li>
               </ol>
               <p>데이터 저장 위치는 설정 → 데이터 및 정보에서 확인할 수 있습니다.</p>
-              <button class="button" onclick={() => onsettings()}>설정에서 시작하기</button>
+              <button class="button" onclick={() => onsetup()}>초기 설정 열기</button>
             </section>
           {/if}
           {#if error}<div class="archive-error" role="alert">{error}<button class="text-button" onclick={() => { revision++; void refreshContext(); }}>다시 시도</button></div>{/if}

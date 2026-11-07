@@ -128,6 +128,7 @@ struct Snapshot {
     storage: StorageInfo,
     worker: WorkerStatus,
     proactive: ProactiveSettings,
+    onboarding_completed: bool,
 }
 fn storage_error(error: String) -> String {
     eprintln!("Storage: {error}");
@@ -180,6 +181,7 @@ async fn snapshot(state: &AppState) -> Result<Snapshot, String> {
         storage: store.info().map_err(storage_error)?,
         worker,
         proactive: store.proactive_settings().map_err(storage_error)?,
+        onboarding_completed: store.onboarding_completed().map_err(storage_error)?,
     })
 }
 #[tauri::command]
@@ -199,6 +201,21 @@ async fn save_settings(
             .lock()
             .map_err(|_| "저장소에 접근할 수 없습니다.")?
             .save(&settings)
+            .map_err(storage_error)?;
+    }
+    snapshot(&state).await
+}
+/// Ends the first-run setup flow. A rerun from Settings ends the same way, so
+/// completion is never cleared.
+#[tauri::command]
+async fn complete_onboarding(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
+    {
+        state
+            .store
+            .lock()
+            .map_err(|_| "저장소에 접근할 수 없습니다.")?
+            .complete_onboarding()
             .map_err(storage_error)?;
     }
     snapshot(&state).await
@@ -708,6 +725,7 @@ fn main() {
             notification_permission::notification_request_permission,
             get_snapshot,
             save_settings,
+            complete_onboarding,
             lifecycle_status,
             lifecycle_set_close_to_background,
             lifecycle_set_start_hidden,
