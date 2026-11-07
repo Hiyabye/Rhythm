@@ -113,7 +113,7 @@ function Assert-LocalRust {
     }
     $versionText = $versionLine[0].Substring('release: '.Length)
     try { $version = [Version]$versionText } catch { throw "안정 Rust 버전이 아닙니다: $versionText" }
-    if ($version -lt [Version]'1.94.0') { throw "Rust 1.94 이상이 필요합니다: $versionText" }
+    if ($version -lt [Version]'1.90.0') { throw "Rust 1.90 이상이 필요합니다: $versionText" }
     Write-Host "프로젝트 Rust $versionText x86_64-pc-windows-msvc 확인 완료."
     return $true
 }
