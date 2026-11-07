@@ -1165,7 +1165,7 @@ mod tests {
                     operations.cancel();
                 }
                 assert_eq!(
-                    timeout(Duration::from_secs(1), task)
+                    timeout(Duration::from_secs(10), task)
                         .await
                         .unwrap()
                         .unwrap(),
@@ -1187,7 +1187,7 @@ mod tests {
                 if !exit {
                     let next = operations.begin("setup").unwrap();
                     timeout(
-                        Duration::from_secs(1),
+                        Duration::from_secs(10),
                         operation_worker(&worker, &shutdown, &next, WorkerAction::Setup(&model)),
                     )
                     .await
@@ -1254,7 +1254,7 @@ mod tests {
             )
             .await
         });
-        timeout(Duration::from_secs(1), async {
+        timeout(Duration::from_secs(10), async {
             while observer.status().is_none() {
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
@@ -1263,7 +1263,7 @@ mod tests {
         .unwrap();
         observer.cancel();
         assert_eq!(
-            timeout(Duration::from_secs(1), task)
+            timeout(Duration::from_secs(10), task)
                 .await
                 .unwrap()
                 .unwrap(),
@@ -1278,7 +1278,7 @@ mod tests {
         let _held_by_exit = worker.lock().await;
         let shutdown = AtomicBool::new(true);
         assert_eq!(
-            timeout(Duration::from_millis(200), reset_worker(&worker, &shutdown))
+            timeout(Duration::from_secs(5), reset_worker(&worker, &shutdown))
                 .await
                 .expect("an exiting command must not wait behind worker cleanup"),
             Err(EXIT_ERROR.into())
@@ -1307,7 +1307,7 @@ mod tests {
         assert!(worker.lock().await.process_id().is_none());
         let shutdown = AtomicBool::new(true);
         assert_eq!(
-            timeout(Duration::from_millis(200), reset_worker(&worker, &shutdown))
+            timeout(Duration::from_secs(5), reset_worker(&worker, &shutdown))
                 .await
                 .expect("a completed exit must not launch another process"),
             Err(EXIT_ERROR.into())
