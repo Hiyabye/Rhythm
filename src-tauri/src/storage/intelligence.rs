@@ -1166,15 +1166,9 @@ impl Store {
                 Ok(notice)
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let mut bodies = std::collections::HashMap::<i64, Option<(String, String)>>::new();
-        let mut text = |notice: &WindowNotice| -> Result<Option<(String, String)>, String> {
-            if let Some(value) = bodies.get(&notice.document_id) {
-                return Ok(value.clone());
-            }
-            let value = self.classification_text(notice.document_id, notice.revision_id)?;
-            bodies.insert(notice.document_id, value.clone());
-            Ok(value)
-        };
+        // Candidate bodies are reduced to their digit runs once, so a cached
+        // entry holds a title and a few short strings instead of a whole body.
+        let mut bodies = std::collections::HashMap::<i64, Option<(String, Vec<String>)>>::new();
         let mut results = Vec::with_capacity(document_ids.len());
         for &document_id in document_ids {
             let target = match window.iter().find(|n| n.document_id == document_id) {
@@ -1200,7 +1194,9 @@ impl Store {
                 results.push((document_id, Vec::new()));
                 continue;
             };
-            let target_text = self.classification_text(document_id, revision_id)?;
+            let target_text = self
+                .classification_text(document_id, revision_id)?
+                .map(|(title, body)| (title, digit_runs(&body)));
             let mut scored = Vec::new();
             for (notice, score) in window
                 .iter()
@@ -1208,14 +1204,22 @@ impl Store {
                 .filter_map(|n| cosine(&vector, &n.vector).map(|score| (n, score)))
                 .filter(|(_, score)| *score >= SIMILAR_MIN_SCORE)
             {
-                let duplicate = score >= DUPLICATE_MIN_SCORE
-                    && match (&target_text, text(notice)?) {
-                        (Some((title, body)), Some((other_title, other_body))) => {
-                            same_title(title, &other_title)
-                                && digit_runs(body) == digit_runs(&other_body)
+                let duplicate = score >= DUPLICATE_MIN_SCORE && {
+                    if let std::collections::hash_map::Entry::Vacant(slot) =
+                        bodies.entry(notice.document_id)
+                    {
+                        slot.insert(
+                            self.classification_text(notice.document_id, notice.revision_id)?
+                                .map(|(title, body)| (title, digit_runs(&body))),
+                        );
+                    }
+                    match (&target_text, &bodies[&notice.document_id]) {
+                        (Some((title, digits)), Some((other_title, other_digits))) => {
+                            same_title(title, other_title) && digits == other_digits
                         }
                         _ => false,
-                    };
+                    }
+                };
                 scored.push((notice, score, duplicate));
             }
             scored.sort_by(|a, b| {
