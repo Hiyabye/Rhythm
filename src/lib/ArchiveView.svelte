@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { AiSnapshot, ArchivePage, ArchiveSummary, AiResult, AiClassification, CybercampusTask, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
+  import type { AiSnapshot, ArchivePage, ArchiveQuery, ArchiveSummary, AiResult, AiClassification, CybercampusTask, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
   import analysisContract from './analysis-contract.json' with { type: 'json' };
   import { archiveDate, archiveDay, archiveError, kstInstant, localDayKey } from './archive-format';
   import DocumentReader from './DocumentReader.svelte';
@@ -52,6 +52,7 @@
   let pendingRecommendationFeedback = $state<Record<number, boolean>>({});
   const pageSize = 30;
   let recommendationRequest = 0;
+  let contextRequest = 0;
 
   $effect(() => {
     const currentPage = page;
@@ -138,20 +139,22 @@
   });
 
   async function refreshContext() {
+    const request = ++contextRequest;
     try {
       const [counts, catalog, sync] = await Promise.all([
         invoke<ArchiveSummary>('archive_summary'), invoke<SourceInfo[]>('archive_sources'), invoke<SyncStatus>('archive_status'),
       ]);
-      if (active) { summary = counts; sources = catalog; status = sync; oncontext({ summary: counts, sources: catalog, status: sync }); }
+      // Saving, closing the reader and sync completion each refresh; an older answer must not overwrite a newer one.
+      if (active && request === contextRequest) { summary = counts; sources = catalog; status = sync; oncontext({ summary: counts, sources: catalog, status: sync }); }
     } catch (reason) { if (active) error = archiveError(reason); }
     try {
       const analyses = await invoke<AiResult[]>('ai_recent');
-      if (active) { recentAnalyses = analyses; aiError = ''; }
-    } catch (reason) { if (active) aiError = archiveError(reason); }
+      if (active && request === contextRequest) { recentAnalyses = analyses; aiError = ''; }
+    } catch (reason) { if (active && request === contextRequest) aiError = archiveError(reason); }
     try {
       const snapshot = await invoke<AiSnapshot>('ai_snapshot');
-      if (active) aiSnapshot = snapshot;
-    } catch { if (active) aiSnapshot = null; }
+      if (active && request === contextRequest) aiSnapshot = snapshot;
+    } catch { if (active && request === contextRequest) aiSnapshot = null; }
   }
   function currentSummary(documentId: number): AiResult | null {
     const analysis = recentAnalyses.find((value) => value.document_id === documentId);
@@ -247,7 +250,7 @@
     return [...new Set((duplicates[item.id] ?? []).map((notice) => notice.source_name))].join(', ');
   }
 
-  async function fetchPage(filters: { query: string; source_id: string | null; category: string | null; saved_only: boolean; unread_only: boolean; ascending: boolean; offset: number; limit: number }, ranked: boolean) {
+  async function fetchPage(filters: ArchiveQuery, ranked: boolean) {
     const current = ++requestId;
     loading = true;
     error = '';
@@ -339,7 +342,6 @@
 
   const weekdayLabels = ['일', '월', '화', '수', '목', '금', '토'];
   const weekDayLimit = 5;
-  const todayKey = localDayKey(new Date());
   function familyOf(sourceId: string): string {
     return sources.find((item) => item.id === sourceId)?.family ?? 'other';
   }
@@ -374,6 +376,8 @@
         dates: referenceDates.filter((entry) => entry.day === key) };
     });
   });
+  // The window's first day is today, so the highlight and the range cannot disagree after midnight.
+  let todayKey = $derived(week[0].key);
   let laterDates = $derived(referenceDates.filter((entry) => entry.day > week[6].key).sort((a, b) => a.day.localeCompare(b.day)).slice(0, 5));
   // The Today query holds the newest page only; say so when today's notices may extend past it.
   let weekTruncated = $derived(result.items.length === pageSize && (archiveDay(result.items[pageSize - 1].published_at) ?? '') >= week[0].key);
