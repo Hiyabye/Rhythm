@@ -11,9 +11,20 @@
   let error = $state('');
   let now = $state(Date.now());
   const submitted = (task: CybercampusTask) => Boolean(task.submitted_at);
-  let upcoming = $derived(tasks.filter((task) => !submitted(task) && (task.pending || (task.due_at !== null && instant(task.late_due_at ?? task.due_at) >= now)))
-    .sort((a, b) => (a.due_at ?? '9999').localeCompare(b.due_at ?? '9999')));
-  let rest = $derived(tasks.filter((task) => !upcoming.includes(task)).sort((a, b) => (b.due_at ?? '').localeCompare(a.due_at ?? '')));
+  // One pass splits the list, so the history is not found by scanning `upcoming` for every task.
+  let split = $derived.by(() => {
+    const open: CybercampusTask[] = [];
+    const closed: CybercampusTask[] = [];
+    for (const task of tasks) {
+      (!submitted(task) && (task.pending || (task.due_at !== null && instant(task.late_due_at ?? task.due_at) >= now)) ? open : closed).push(task);
+    }
+    return {
+      upcoming: open.sort((a, b) => (a.due_at ?? '9999').localeCompare(b.due_at ?? '9999')),
+      rest: closed.sort((a, b) => (b.due_at ?? '').localeCompare(a.due_at ?? '')),
+    };
+  });
+  let upcoming = $derived(split.upcoming);
+  let rest = $derived(split.rest);
 
   onMount(() => {
     let active = true;
