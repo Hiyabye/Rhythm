@@ -24,6 +24,7 @@ test('markdown never runs the Rust or packaging jobs', () => {
 
 test('each area selects only its own jobs', () => {
   assert.deepEqual(classify(['src/App.svelte', 'tests/ui/archive.spec.ts']), { ...none, frontend: true });
+  assert.deepEqual(classify(['playwright.screenshots.config.ts']), { ...none, frontend: true });
   assert.deepEqual(classify(['src-tauri/src/main.rs']), { ...none, rust: true });
   assert.deepEqual(classify(['Cargo.lock']), { ...none, rust: true, packaging: true });
   assert.deepEqual(classify(['scripts/desktop.mjs']), { ...none, frontend: true, packaging: true });
