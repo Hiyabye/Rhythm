@@ -11,6 +11,7 @@
   import UpdaterSettings from './lib/UpdaterSettings.svelte';
   import ProactiveSettings from './lib/ProactiveSettings.svelte';
   import CybercampusTasks from './lib/CybercampusTasks.svelte';
+  import SetupFlow from './lib/SetupFlow.svelte';
   import Hint from './lib/Hint.svelte';
   import './lib/ai.css';
   import { archiveError as message, archiveDay, localDayKey } from './lib/archive-format';
@@ -53,6 +54,8 @@
   let proactiveActivation = $state<ProactiveActivation | null>(null);
   const handledActivations = new Set<string>();
   let setupNeeded = $state(false);
+  // The first-run setup flow replaces the shell until it is finished or skipped.
+  let showSetup = $state(false);
   // Kept while the app is open, so returning to Settings shows the last pane.
   let settingsPane = $state<SettingsPane>('general');
   let paneLabel = $derived(settingsPanes.find((item) => item.id === settingsPane)!.label);
@@ -180,6 +183,7 @@
     try {
       snapshot = await invoke<Snapshot>('get_snapshot');
       theme = snapshot.settings.theme;
+      showSetup = !snapshot.onboarding_completed;
       try {
         const proactive = await invoke<ProactiveSnapshot>('proactive_snapshot');
         if (proactive.pending_activation) handleProactiveActivation(proactive.pending_activation);
@@ -215,6 +219,22 @@
     } finally {
       busy = false;
     }
+  }
+
+  function openSetup() {
+    error = '';
+    notice = '';
+    showSetup = true;
+  }
+
+  // Finishing and skipping both end the flow; a rerun ends the same way.
+  async function finishSetup() {
+    error = '';
+    try {
+      snapshot = await invoke<Snapshot>('complete_onboarding');
+      showSetup = false;
+      await navigate('today');
+    } catch (reason) { error = message(reason); }
   }
 
   async function toggleExtension(id: string, enabled: boolean) {
@@ -280,6 +300,9 @@
 <svelte:head><title>Rhythm</title><meta name="description" content="나의 하루를 정돈하는 로컬 퍼스트 개인 커맨드 센터" /></svelte:head>
 
 <a class="skip-link" href="#main">본문으로 건너뛰기</a>
+{#if showSetup && snapshot}
+<SetupFlow {snapshot} {theme} {busy} {error} onsave={save} ontoggleextension={toggleExtension} onactivation={handleProactiveActivation} onfinish={finishSetup} />
+{:else}
 <div class="app-shell">
   <aside class="sidebar" aria-label="주 메뉴">
     <div class="brand"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>Rhythm</span></div>
@@ -349,6 +372,9 @@
               <div class="settings-row"><span class="row-label">화면 테마</span><div class="segmented" role="group" aria-label="화면 테마">{#each themes as option}<button disabled={!snapshot || busy} class:selected={theme === option.id} aria-pressed={theme === option.id} onclick={() => save({ theme: option.id })}><Icon name={option.icon} size={15} />{option.label}</button>{/each}</div></div>
               <div class="settings-row"><span class="row-label">전원 모드<Hint label="전원 모드">AI 자동 분석과 자동 동기화 간격에 적용됩니다. 절전은 자동 분석을 하지 않고 60분마다, 균형은 30분, 성능은 15분마다 확인합니다. AI는 한 번에 한 공지만 분석합니다.</Hint></span><div class="segmented" role="group" aria-label="전원 모드">{#each energyProfiles as option}<button disabled={!snapshot || busy} class:selected={snapshot?.settings.energy_profile === option.id} aria-pressed={snapshot?.settings.energy_profile === option.id} onclick={() => save({ energy_profile: option.id })}>{option.label}</button>{/each}</div></div>
             </div>
+            <div class="settings-group">
+              <div class="settings-row"><span class="row-label">초기 설정<Hint label="초기 설정">처음 실행할 때 본 설정 단계를 다시 엽니다. 현재 설정을 그대로 보여 주며 아무것도 초기화하지 않습니다.</Hint></span><button class="button secondary small" disabled={!snapshot || busy} onclick={openSetup}>다시 실행</button></div>
+            </div>
             <ProactiveSettings {desktop} part="background" onopen={openProactiveDocument} onactivation={handleProactiveActivation} />
           {:else if settingsPane === 'boards'}
             {#if snapshot}
@@ -377,10 +403,11 @@
     {:else if page === 'tasks'}
       <CybercampusTasks {desktop} onsettings={() => openSettings('boards')} />
     {:else}
-      <ArchiveView {page} {desktop} enabled={noticesEnabled} {sourceRequest} activation={proactiveActivation} onactivationhandled={() => proactiveActivation = null} onsettings={(pane) => openSettings(pane ?? 'boards')} onaisettings={aiSettings}
+      <ArchiveView {page} {desktop} enabled={noticesEnabled} onsetup={openSetup} {sourceRequest} activation={proactiveActivation} onactivationhandled={() => proactiveActivation = null} onsettings={(pane) => openSettings(pane ?? 'boards')} onaisettings={aiSettings}
         onsourcechange={(id) => activeSource = id}
         onweekpane={(visible) => weekPane = visible}
         oncontext={(context) => { if (context.summary) summary = context.summary; if (context.sources) sources = context.sources; syncStatus = context.status; }} />
     {/if}
   </main>
 </div>
+{/if}

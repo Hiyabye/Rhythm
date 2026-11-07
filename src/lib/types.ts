@@ -141,6 +141,8 @@ export interface Snapshot {
   storage: { path: string; bytes: number; schema_version: number };
   worker: WorkerStatus;
   proactive: ProactiveSettings;
+  /** False only for a profile that has not finished or skipped the first-run setup flow. */
+  onboarding_completed: boolean;
 }
 export interface SourceInfo {
   id: string;

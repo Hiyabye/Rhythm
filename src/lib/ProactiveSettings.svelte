@@ -9,7 +9,8 @@
   import Hint from './Hint.svelte';
 
   // Background (lifecycle and scheduler) and notifications share one snapshot but live in separate panes.
-  let { desktop, part, onopen, onactivation }: { desktop: boolean; part: 'background' | 'notifications'; onopen: (documentId: number, revisionId: number, eventId: number, attemptCount?: number, eventIds?: number[]) => void; onactivation: (activation: ProactiveActivation) => void } = $props();
+  // `compact` (the setup flow) leaves out live status, pause and history.
+  let { desktop, part, compact = false, onopen, onactivation }: { desktop: boolean; part: 'background' | 'notifications'; compact?: boolean; onopen: (documentId: number, revisionId: number, eventId: number, attemptCount?: number, eventIds?: number[]) => void; onactivation: (activation: ProactiveActivation) => void } = $props();
   const historyPreview = 10;
   let data = $state<ProactiveSnapshot | null>(null);
   let lifecycle = $state<LifecycleStatus | null>(null);
@@ -37,7 +38,7 @@
       const [snapshot, status, history] = await Promise.all([
         invoke<ProactiveSnapshot>('proactive_snapshot'),
         invoke<LifecycleStatus>('lifecycle_status'),
-        part === 'notifications' ? invoke<ProactiveHistoryItem[]>('proactive_history', { limit: 200 }) : Promise.resolve([]),
+        part === 'notifications' && !compact ? invoke<ProactiveHistoryItem[]>('proactive_history', { limit: 200 }) : Promise.resolve([]),
       ]);
       data = { ...snapshot, history };
       lifecycle = status;
@@ -173,9 +174,9 @@
     <div class="settings-group-title"><h3>자동 동기화</h3><Hint label="자동 동기화">앱이 실행 중일 때만 새 공지를 확인합니다. 앱을 종료하면 멈추고, 잠자기 중에는 확인하지 않습니다. 전원 모드 기본값은 절전 60분, 균형 30분, 성능 15분이며, 간격을 직접 고르면 전원 모드와 관계없이 그 간격을 지킵니다.</Hint></div>
     <div class="settings-group">
       <div class="settings-row"><span class="row-label">새 공지 자동 확인</span><button class="switch" class:on={data.settings.scheduler_enabled} role="switch" aria-label="자동 동기화" aria-checked={data.settings.scheduler_enabled} disabled={busy} onclick={() => save({ scheduler_enabled: !data?.settings.scheduler_enabled, scheduler_paused: false })}><span></span></button></div>
-      <div class="settings-row"><span class="row-label">일시 중지</span><button class="switch" class:on={data.settings.scheduler_paused} role="switch" aria-label="자동 동기화 일시 중지" aria-checked={data.settings.scheduler_paused} disabled={busy || !data.settings.scheduler_enabled} onclick={() => save({ scheduler_paused: !data?.settings.scheduler_paused })}><span></span></button></div>
+      {#if !compact}<div class="settings-row"><span class="row-label">일시 중지</span><button class="switch" class:on={data.settings.scheduler_paused} role="switch" aria-label="자동 동기화 일시 중지" aria-checked={data.settings.scheduler_paused} disabled={busy || !data.settings.scheduler_enabled} onclick={() => save({ scheduler_paused: !data?.settings.scheduler_paused })}><span></span></button></div>{/if}
       <div class="settings-row"><label class="row-label" for="scheduler-interval">확인 간격</label><select id="scheduler-interval" value={String(data.settings.scheduler_interval_minutes)} disabled={busy || !data.settings.scheduler_enabled} onchange={(event) => save({ scheduler_interval_minutes: Number(event.currentTarget.value) })}><option value="0">전원 모드 기본값</option><option value="15">15분</option><option value="30">30분</option><option value="60">1시간</option><option value="120">2시간</option><option value="240">4시간</option><option value="720">12시간</option></select></div>
-      <div class="settings-row scheduler-status"><span class="row-label">상태<span class="row-detail">{data.scheduler.paused ? '일시 중지' : data.scheduler.enabled ? '사용 중' : '꺼짐'} · 최근 실행 {localTimestamp(data.scheduler.last_run_at, '없음')}{#if data.scheduler.last_outcome} ({outcomeLabel(data.scheduler.last_outcome)}){/if} · 다음 확인 {localTimestamp(data.scheduler.next_task_at, '예약 없음')} · 대기 중인 알림 {data.scheduler.pending_events}개</span>{#if data.scheduler.last_error}<span class="row-detail error-text">최근 오류: {archiveError(data.scheduler.last_error)} · 다음 확인 때 다시 시도합니다.</span>{/if}</span><button class="row-icon" type="button" aria-label="백그라운드 상태 새로고침" disabled={busy} onclick={load}><Icon name="refresh" size={15} /></button></div>
+      {#if !compact}<div class="settings-row scheduler-status"><span class="row-label">상태<span class="row-detail">{data.scheduler.paused ? '일시 중지' : data.scheduler.enabled ? '사용 중' : '꺼짐'} · 최근 실행 {localTimestamp(data.scheduler.last_run_at, '없음')}{#if data.scheduler.last_outcome} ({outcomeLabel(data.scheduler.last_outcome)}){/if} · 다음 확인 {localTimestamp(data.scheduler.next_task_at, '예약 없음')} · 대기 중인 알림 {data.scheduler.pending_events}개</span>{#if data.scheduler.last_error}<span class="row-detail error-text">최근 오류: {archiveError(data.scheduler.last_error)} · 다음 확인 때 다시 시도합니다.</span>{/if}</span><button class="row-icon" type="button" aria-label="백그라운드 상태 새로고침" disabled={busy} onclick={load}><Icon name="refresh" size={15} /></button></div>{/if}
     </div>
   {:else if data && part === 'notifications'}
     <div class="settings-group">
@@ -195,6 +196,7 @@
       <div class="settings-row quiet-hours"><span class="row-label">방해 금지 시간<Hint label="방해 금지 시간">이 시간에는 알림을 미뤘다가 끝난 뒤 보냅니다. 자정을 넘겨도 됩니다.</Hint></span><span class="time-range"><label class="sr-only" for="quiet-start">시작 시간</label><input id="quiet-start" type="time" value={data.settings.quiet_hours.start} disabled={busy} onchange={(event) => save({ quiet_hours: { ...data!.settings.quiet_hours, start: event.currentTarget.value } })} /><span aria-hidden="true">–</span><label class="sr-only" for="quiet-end">종료 시간</label><input id="quiet-end" type="time" value={data.settings.quiet_hours.end} disabled={busy} onchange={(event) => save({ quiet_hours: { ...data!.settings.quiet_hours, end: event.currentTarget.value } })} /></span><button class="switch" class:on={data.settings.quiet_hours.enabled} role="switch" aria-label="방해 금지 시간" aria-checked={data.settings.quiet_hours.enabled} disabled={busy} onclick={() => save({ quiet_hours: { ...data!.settings.quiet_hours, enabled: !data!.settings.quiet_hours.enabled } })}><span></span></button></div>
     </div>
 
+    {#if !compact}
     <div class="settings-group-title"><h3 id="notification-history-title" tabindex="-1">알림 기록</h3><Hint label="알림 기록">기록은 이 기기에만 남고 공지 본문은 복사하지 않습니다. 운영체제에 전달을 요청한 것만으로는 표시나 수신이 확인되지 않습니다.</Hint></div>
     {#if data.history.length}
       <ul class="settings-group" aria-label="알림 기록">{#each showAllHistory ? data.history : data.history.slice(0, historyPreview) as item (item.id)}<li class="settings-row"><span class="row-label history-title">{item.title}<span class="row-detail">{historyLabel(item)} · {localTimestamp(item.created_at)}</span>{#if item.error}<span class="row-detail">{item.error}</span>{/if}{#if item.reason}<span class="row-detail">{item.reason}</span>{/if}</span><button class="text-button" type="button" disabled={historyBusy} aria-label={`${item.title} 공지 열기`} onclick={() => onopen(item.document_id, item.revision_id, item.id, item.attempt_count, [item.id])}>열기</button></li>{/each}</ul>
@@ -203,6 +205,7 @@
         <button class="text-button" type="button" disabled={historyBusy} onclick={clearHistory}>{historyBusy ? '기록을 비우는 중…' : '알림 기록 비우기'}</button>
       </div>
     {:else}<p class="muted group-empty">저장된 알림 기록이 없습니다.</p>{/if}
+    {/if}
   {:else}
     <button class="text-button" type="button" onclick={load}>다시 시도</button>
   {/if}
