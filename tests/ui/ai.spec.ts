@@ -93,6 +93,7 @@ test('real reader UI submits once, shows grounded output, then reuses stored ana
 
 test('embedding classification is shown independently and can be toggled', async ({ page }) => {
   await mockDesktop(page, { aiInstalled: true, aiEmbeddingInstalled: true }); await page.goto('/');
+  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
   // The list and reader show the stored classification even without opening AI analysis.
   await expect(page.locator('#notice-1')).toContainText('분류 · 장학');
   await page.locator('#notice-1').click();
@@ -109,13 +110,13 @@ test('embedding classification is shown independently and can be toggled', async
 
 test('classification and stored summary share one preview with a separator', async ({ page }) => {
   await mockDesktop(page, { aiInstalled: true, aiResult: true, aiEmbeddingInstalled: true }); await page.goto('/');
-  await expect(page.locator('#notice-1 .notice-ai-preview')).toContainText('분류 · 장학 · 저장된 AI 요약');
   await page.getByRole('button', { name: '받은 소식', exact: true }).click();
   await expect(page.locator('.notice-list #notice-1 .notice-ai-preview')).toContainText('분류 · 장학 · AI 요약');
 });
 
 test('low-confidence classification is marked without leaking the raw score', async ({ page }) => {
   await mockDesktop(page, { aiEmbeddingInstalled: true, aiClassificationLow: true }); await page.goto('/');
+  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
   await expect(page.locator('#notice-1')).toContainText('분류 · 장학 · 확신 낮음');
   await expect(page.locator('#notice-1')).not.toContainText('0.');
 });
@@ -356,10 +357,10 @@ test('resource guidance is honest at narrow widths and operation cancellation is
   await expect(page.getByRole('button', { name: '선택한 모델 불러오기', exact: true })).toBeEnabled();
 });
 
-test('today uses existing summaries and dates without scheduling inference', async ({ page }) => {
+test('today shows stored AI dates without scheduling inference', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-10-28T10:00:00'));
   await mockDesktop(page, { aiResult: true }); await page.goto('/');
-  await expect(page.getByRole('region', { name: '최근 분석한 소식' })).toBeVisible();
-  await expect(page.getByText('신청 마감 · 2026-10-30 · 원문에서 추출한 참고 일정', { exact: true })).toBeVisible();
+  await expect(page.getByRole('complementary', { name: '앞으로 7일', exact: true }).locator('.event-ai')).toContainText('AI 참고 일정 신청 마감');
   expect(await callCount(page, 'ai_analyze')).toBe(0);
 });
 

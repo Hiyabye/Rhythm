@@ -473,24 +473,39 @@ test('disabling extension preserves local saved items and disables resource retr
   await expect(page.getByRole('button', { name: '본문.png 다시 내려받기', exact: true })).toBeDisabled();
 });
 
-test('today lays out this week by publication day and labels AI reference dates', async ({ page }) => {
-  await page.clock.setFixedTime(new Date('2026-10-25T10:00:00'));
+test('today rolls seven days forward from today and labels AI reference dates', async ({ page }) => {
+  // A Saturday: the window must reach into next week instead of ending on Sunday.
+  await page.clock.setFixedTime(new Date('2026-10-24T10:00:00'));
   await mockDesktop(page, { count: 7, aiResult: true });
   await page.goto('/');
-  const week = page.getByRole('complementary', { name: '이번 주', exact: true });
-  await expect(week).toContainText('10월 19일 – 25일');
-  const saturday = week.locator('.week-day').nth(5);
-  await expect(saturday.locator('.event:not(.event-ai)')).toHaveCount(5);
-  await expect(saturday).toContainText('외 2건');
-  await expect(week.locator('.is-today')).toContainText('오늘');
-  // The fixture's AI date (10월 30일) falls after this week and stays labeled as a reference.
-  await expect(week.getByRole('heading', { name: '이후 AI 참고 일정', exact: true })).toBeVisible();
-  await expect(week.locator('.event-ai')).toContainText('AI · 10월 30일');
+  const week = page.getByRole('complementary', { name: '앞으로 7일', exact: true });
+  await expect(week).toContainText('10월 24일 – 30일');
+  const days = week.locator('.week-day');
+  await expect(days).toHaveCount(7);
+  await expect(days.first()).toHaveClass(/is-today/);
+  await expect(days.first()).toContainText('오늘');
+  await expect(days.first().locator('.event:not(.event-ai)')).toHaveCount(5);
+  await expect(days.first()).toContainText('외 2건');
+  await expect(days.last()).toContainText('금');
+  await expect(days.last().locator('.event-ai')).toContainText('AI 참고 일정 신청 마감');
+  await expect(week.getByRole('heading', { name: '이후 AI 참고 일정', exact: true })).toHaveCount(0);
   await expect(week).toContainText('추천 순위와 알림에 쓰지 않으니');
   await week.locator('#week-3').click();
   await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 03');
   await page.keyboard.press('Escape');
   await expect(page.locator('#week-3')).toBeFocused();
+});
+
+test('today lists past notices nowhere in the week and AI dates beyond it separately', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-10-20T10:00:00'));
+  await mockDesktop(page, { count: 3, aiResult: true });
+  await page.goto('/');
+  const week = page.getByRole('complementary', { name: '앞으로 7일', exact: true });
+  await expect(week).toContainText('10월 20일 – 26일');
+  // Notices published on 10월 24일 fall inside the rolling window.
+  await expect(week.locator('.week-day').nth(4).locator('.event:not(.event-ai)')).toHaveCount(3);
+  await expect(week.getByRole('heading', { name: '이후 AI 참고 일정', exact: true })).toBeVisible();
+  await expect(week.locator('.event-ai')).toContainText('AI · 10월 30일');
 });
 
 test('sidebar boards scope the inbox and badges describe their counts', async ({ page }) => {
