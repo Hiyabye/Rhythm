@@ -2931,3 +2931,50 @@ async fn community_board_syncs_text_and_robots_allowed_attachment_then_reopens_o
         .iter()
         .any(|resource| resource.kind == "attachment" && resource.status == "downloaded"));
 }
+
+#[derive(Clone)]
+struct Offline;
+impl Transport for Offline {
+    async fn fetch(
+        &self,
+        _url: &Url,
+        _validators: Option<(Option<String>, Option<String>)>,
+        _limit: usize,
+        _cancel: &AtomicBool,
+        _access: network::Access,
+    ) -> Result<network::Fetch, String> {
+        Err("모의 연결 실패".into())
+    }
+}
+
+#[tokio::test]
+async fn only_scheduler_jobs_keep_an_outcome_entry_until_taken() {
+    let (dir, store) = setup(&["sogang-academic"]);
+    let controller = Controller::new();
+    let gate = Arc::new(crate::operation_gate::AdmissionGate::default());
+    let start = |lease| {
+        controller
+            .start_tracked_with_lease(
+                store.clone(),
+                dir.path().to_path_buf(),
+                Offline,
+                Some(vec!["sogang-academic".into()]),
+                "incremental".into(),
+                lease,
+            )
+            .unwrap()
+            .1
+    };
+    // A command-path job holds a lease and nobody takes its outcome.
+    let untracked = start(Some(gate.shared().await.unwrap()));
+    controller.wait().await;
+    assert!(controller.take_task_outcome(untracked).is_err());
+    assert!(controller.task_outcomes.lock().unwrap().is_empty());
+    assert!(controller.task_notifications.lock().unwrap().is_empty());
+    let tracked = start(None);
+    controller.wait().await;
+    let outcome = controller.take_task_outcome(tracked).unwrap().unwrap();
+    assert!(outcome.result.is_err());
+    assert!(controller.task_outcomes.lock().unwrap().is_empty());
+    assert!(controller.task_notifications.lock().unwrap().is_empty());
+}

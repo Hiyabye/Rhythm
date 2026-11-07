@@ -348,14 +348,19 @@ impl Controller {
             self.reserve_task(task_id)?;
             Ok(sources)
         })?;
-        self.task_outcomes
-            .lock()
-            .map_err(|_| "동기화 결과를 기록할 수 없습니다.")?
-            .insert(task_id, None);
-        self.task_notifications
-            .lock()
-            .map_err(|_| "동기화 완료 상태를 기록할 수 없습니다.")?
-            .insert(task_id, Arc::new(Notify::new()));
+        // The command path (holding a lease) reports through status polling and
+        // never takes its outcome, so only the scheduler path registers one;
+        // otherwise the entries would stay for the life of the process.
+        if lease.is_none() {
+            self.task_outcomes
+                .lock()
+                .map_err(|_| "동기화 결과를 기록할 수 없습니다.")?
+                .insert(task_id, None);
+            self.task_notifications
+                .lock()
+                .map_err(|_| "동기화 완료 상태를 기록할 수 없습니다.")?
+                .insert(task_id, Arc::new(Notify::new()));
+        }
         let source_ids = sources
             .iter()
             .map(|source| source.definition.id.clone())
