@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import type { CybercampusTask } from './types';
-  import { archiveError } from './archive-format';
+  import { archiveError, kstInstant as instant } from './archive-format';
   import Icon from './Icon.svelte';
 
   let { desktop, onsettings }: { desktop: boolean; onsettings: () => void } = $props();
@@ -10,8 +10,6 @@
   let loading = $state(true);
   let error = $state('');
   let now = $state(Date.now());
-  // eClass shows Korean local time without an offset; compare it as KST on any device.
-  const instant = (value: string) => new Date(value.length === 10 ? `${value}T23:59:59+09:00` : `${value}:00+09:00`).getTime();
   const submitted = (task: CybercampusTask) => Boolean(task.submitted_at);
   let upcoming = $derived(tasks.filter((task) => !submitted(task) && (task.pending || (task.due_at !== null && instant(task.late_due_at ?? task.due_at) >= now)))
     .sort((a, b) => (a.due_at ?? '9999').localeCompare(b.due_at ?? '9999')));

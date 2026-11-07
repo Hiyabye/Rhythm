@@ -1,19 +1,20 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { AiSnapshot, ArchivePage, ArchiveSummary, AiResult, AiClassification, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
+  import type { AiSnapshot, ArchivePage, ArchiveSummary, AiResult, AiClassification, CybercampusTask, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
   import analysisContract from './analysis-contract.json' with { type: 'json' };
-  import { archiveDate, archiveDay, archiveError, localDayKey } from './archive-format';
+  import { archiveDate, archiveDay, archiveError, kstInstant, localDayKey } from './archive-format';
   import DocumentReader from './DocumentReader.svelte';
   import Highlighted from './Highlighted.svelte';
   import Icon from './Icon.svelte';
 
-  let { page, desktop, enabled, sourceRequest, activation, onactivationhandled, onsettings, onaisettings, onsetup, onsourcechange, oncontext, onweekpane }: {
+  let { page, desktop, enabled, sourceRequest, activation, onactivationhandled, onsettings, onaisettings, onsetup, onsourcechange, oncontext, onweekpane, ontasks }: {
     page: string; desktop: boolean; enabled: boolean; sourceRequest: { id: string; token: number };
     activation: { document_id: number; revision_id: number; event_id: number } | null;
     onactivationhandled: () => void; onsettings: (pane?: 'boards' | 'personalization') => void; onaisettings: () => void; onsetup: () => void; onsourcechange: (id: string) => void;
     oncontext: (context: { summary: ArchiveSummary | null; sources: SourceInfo[] | null; status: SyncStatus | null }) => void;
     onweekpane: (visible: boolean) => void;
+    ontasks: () => void;
   } = $props();
   let result = $state<ArchivePage>({ items: [], total: 0, categories: [] });
   let summary = $state<ArchiveSummary | null>(null);
@@ -25,6 +26,7 @@
   let aiError = $state('');
   let aiSnapshot = $state<AiSnapshot | null>(null);
   let recommendations = $state<PersonalizedRecommendation[]>([]);
+  let tasks = $state<CybercampusTask[]>([]);
   let hasPreferences = $state(false);
   let recommendationError = $state('');
   let status = $state<SyncStatus | null>(null);
@@ -116,6 +118,7 @@
     if (currentPage === 'today' && isDesktop) {
       void archiveRevision;
       void loadRecommendations();
+      void loadTasks();
     }
   });
 
@@ -178,6 +181,16 @@
         hasPreferences = false;
         recommendationError = archiveError(reason);
       }
+    }
+  }
+
+  async function loadTasks() {
+    try {
+      const rows = await invoke<CybercampusTask[]>('cybercampus_tasks');
+      if (active) tasks = rows;
+    } catch {
+      // Deadlines are a supplement to the week; the 과제·마감 page reports load failures.
+      if (active) tasks = [];
     }
   }
 
@@ -340,6 +353,15 @@
       key: `${analysis.id}-${index}`, day: fact.date!.slice(0, 10), label: fact.label, documentId: analysis.document_id,
       title: titleOf(analysis.document_id, analysis.result.short_summary),
     }))));
+  // Stored tasks outlive an unsubscribed board; the week follows the 과제·마감 navigation and shows them only while subscribed.
+  let showTasks = $derived(sources.some((item) => item.family === 'cybercampus' && item.subscribed));
+  // Open deadlines only: a submitted task or one whose deadline (and late window) has passed is no longer something to plan for.
+  let openTasks = $derived.by(() => {
+    if (!showTasks) return [];
+    const now = Date.now();
+    return tasks.filter((task) => task.due_at !== null && !task.submitted_at && kstInstant(task.late_due_at ?? task.due_at) >= now)
+      .sort((a, b) => a.due_at!.localeCompare(b.due_at!));
+  });
   // A rolling window from today, so a weekend still shows the days ahead.
   let week = $derived.by(() => {
     const now = new Date();
@@ -348,6 +370,7 @@
       const key = localDayKey(day);
       return { key, label: weekdayLabels[day.getDay()], month: day.getMonth() + 1, date: day.getDate(),
         notices: result.items.filter((item) => archiveDay(item.published_at) === key),
+        tasks: openTasks.filter((task) => task.due_at!.slice(0, 10) === key),
         dates: referenceDates.filter((entry) => entry.day === key) };
     });
   });
@@ -436,6 +459,13 @@
               <li class="week-day" class:is-today={day.key === todayKey}>
                 <div class="day-label"><span class="day-name">{day.key === todayKey ? '오늘' : day.label}</span><span class="day-number">{day.date}</span>{#if day.key === todayKey}<span class="sr-only">{day.label}요일</span>{/if}</div>
                 <ul class="day-events">
+                  {#each day.tasks as task (`${task.course_key}-${task.category}-${task.item_id}`)}
+                    <li><button class="event event-task" id={`week-task-${task.course_key}-${task.category}-${task.item_id}`} onclick={() => ontasks()}>
+                      <span class="event-bar" aria-hidden="true"></span>
+                      <span class="event-title"><span class="ai-mark task-mark">마감{task.due_at!.length > 10 ? ` ${task.due_at!.slice(11, 16)}` : ''}</span> {task.title}</span>
+                      <span class="event-meta">{task.course_name}{#if kstInstant(task.due_at!) < Date.now()}{' · '}지각 제출 가능{/if}</span>
+                    </button></li>
+                  {/each}
                   {#each day.notices.slice(0, weekDayLimit) as item (item.id)}
                     <li><button class="event" class:notice-unread={!item.is_read} id={`week-${item.id}`} onclick={() => void open(item, `week-${item.id}`)}>
                       <span class={`event-bar family-${familyOf(item.source_id)}`} aria-hidden="true"></span>
@@ -451,7 +481,7 @@
                       <span class="event-meta">{entry.title} · 원문 확인</span>
                     </button></li>
                   {/each}
-                  {#if !day.notices.length && !day.dates.length}<li class="day-empty">공지 없음</li>{/if}
+                  {#if !day.tasks.length && !day.notices.length && !day.dates.length}<li class="day-empty">일정 없음</li>{/if}
                 </ul>
               </li>
             {/each}
@@ -469,7 +499,7 @@
               {/each}
             </ul>
           {/if}
-          <p class="pane-footnote">오늘 게시된 공지와 로컬 AI가 원문에서 추출한 참고 일정입니다. 참고 일정은 추천 순위와 알림에 쓰지 않으니 원문에서 확인하세요.</p>
+          <p class="pane-footnote">오늘 게시된 공지{#if showTasks}, 사이버캠퍼스에서 마지막으로 가져온 과제 마감{/if}과 로컬 AI가 원문에서 추출한 참고 일정입니다. 참고 일정은 추천 순위와 알림에 쓰지 않으니 원문에서 확인하세요.</p>
         </aside>
       </div>
     {:else}

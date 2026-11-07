@@ -33,6 +33,11 @@ export function archiveDay(value: string | null): string | null {
   return Number.isNaN(date.getTime()) ? null : localDayKey(date);
 }
 
+/** eClass shows Korean local time without an offset (`YYYY-MM-DDTHH:MM` or `YYYY-MM-DD`); read it as KST on any device. */
+export function kstInstant(value: string): number {
+  return new Date(value.length === 10 ? `${value}T23:59:59+09:00` : `${value}:00+09:00`).getTime();
+}
+
 export function localDayKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }

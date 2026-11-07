@@ -69,3 +69,40 @@ test('the deadline page appears only with the Cybercampus board subscribed', asy
   await expect(page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name: '받은 소식' })).toBeVisible();
   await expect(page.getByRole('button', { name: '과제·마감' })).toHaveCount(0);
 });
+
+test.describe('Today week pane', () => {
+  test.use({ timezoneId: 'Asia/Seoul' });
+  const tasks = [
+    task({ item_id: '2', title: '실습 과제 2', due_at: '2026-10-26T23:59', pending: true }),
+    task({ item_id: '3', title: '실습 과제 3', due_at: '2026-10-24T09:00', late_due_at: '2026-10-25T23:59', pending: true }),
+    task({ item_id: '4', title: '제출한 과제', due_at: '2026-10-27T23:59', submitted_at: '2026-10-23T12:00' }),
+    task({ item_id: '5', title: '다음 달 과제', due_at: '2026-11-05T23:59', pending: true }),
+    task({ item_id: '6', title: '지난 과제', due_at: '2026-10-24T08:00', pending: true }),
+  ];
+
+  test('lists open Cybercampus deadlines on their day and opens the deadline page', async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-10-24T10:00:00+09:00'));
+    await mockDesktop(page, { sourceList: [{ ...board, subscribed: true }], cybercampusId: '20990001', cybercampusTasks: tasks });
+    await page.goto('/');
+    const week = page.getByRole('complementary', { name: '앞으로 7일', exact: true });
+    const days = week.locator('.week-day');
+    await expect(days.nth(2).locator('.event-task')).toHaveText(/마감 23:59 실습 과제 2\s*자료구조실습/);
+    await expect(days.first().locator('.event-task')).toContainText('실습 과제 3');
+    await expect(days.first().locator('.event-task')).toContainText('지각 제출 가능');
+    await expect(week.locator('.event-task')).toHaveCount(2);
+    await expect(days.nth(1)).toContainText('일정 없음');
+    await expect(week).toContainText('사이버캠퍼스에서 마지막으로 가져온 과제 마감');
+    await days.nth(2).locator('.event-task').click();
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('과제·마감');
+  });
+
+  test('hides stored deadlines while the Cybercampus board is unsubscribed', async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-10-24T10:00:00+09:00'));
+    await mockDesktop(page, { sourceList: [{ ...board, subscribed: false }], cybercampusTasks: tasks });
+    await page.goto('/');
+    const week = page.getByRole('complementary', { name: '앞으로 7일', exact: true });
+    await expect(week.locator('.week-day')).toHaveCount(7);
+    await expect(week.locator('.event-task')).toHaveCount(0);
+    await expect(week).not.toContainText('사이버캠퍼스');
+  });
+});

@@ -406,6 +406,7 @@
       <ArchiveView {page} {desktop} enabled={noticesEnabled} onsetup={openSetup} {sourceRequest} activation={proactiveActivation} onactivationhandled={() => proactiveActivation = null} onsettings={(pane) => openSettings(pane ?? 'boards')} onaisettings={aiSettings}
         onsourcechange={(id) => activeSource = id}
         onweekpane={(visible) => weekPane = visible}
+        ontasks={() => void navigate('tasks')}
         oncontext={(context) => { if (context.summary) summary = context.summary; if (context.sources) sources = context.sources; syncStatus = context.status; }} />
     {/if}
   </main>

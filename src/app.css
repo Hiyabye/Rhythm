@@ -2301,6 +2301,17 @@ mark {
   background: var(--family, var(--family-other));
 }
 
+/* Deadlines are the user's own commitments, so they take the accent rather than a board colour. */
+.event-task .event-bar {
+  background: var(--accent);
+}
+
+.ai-mark.task-mark {
+  border-color: transparent;
+  background: var(--soft);
+  color: var(--accent);
+}
+
 .event-ai .event-bar {
   background: repeating-linear-gradient(var(--muted) 0 3px, transparent 3px 6px);
 }
