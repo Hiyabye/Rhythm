@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs::File,
-    io::{Read, Seek, SeekFrom},
+    io::{BufReader, Read, Seek},
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
     sync::{
@@ -1222,7 +1222,7 @@ fn verify_artifact(
     if size == 0 || size > 32 * 1024 * 1024 * 1024 || expected.is_some_and(|(_, n)| n != size) {
         return Err("모델 파일 크기가 올바르지 않습니다.".into());
     }
-    validate_gguf(&mut file, size, require_architecture)?;
+    validate_gguf(&file, size, require_architecture)?;
     file.rewind().map_err(|_| "모델 파일을 읽지 못했습니다.")?;
     let mut hash = Sha256::new();
     let mut buffer = vec![0; 1024 * 1024];
@@ -1247,19 +1247,32 @@ fn verify_artifact(
     }
     Ok((hash, size))
 }
-fn read_u32(file: &mut File) -> Result<u32, String> {
+/// Buffered header reader. It tracks its own offset because the metadata walk
+/// issues many tiny reads and skips, and `position` bounds every skip.
+struct GgufReader<'a> {
+    reader: BufReader<&'a File>,
+    position: u64,
+}
+impl GgufReader<'_> {
+    fn read_exact(&mut self, buffer: &mut [u8]) -> std::io::Result<()> {
+        self.reader.read_exact(buffer)?;
+        self.position += buffer.len() as u64;
+        Ok(())
+    }
+}
+fn read_u32(file: &mut GgufReader) -> Result<u32, String> {
     let mut b = [0; 4];
     file.read_exact(&mut b)
         .map_err(|_| "GGUF 메타데이터가 완전하지 않습니다.")?;
     Ok(u32::from_le_bytes(b))
 }
-fn read_u64(file: &mut File) -> Result<u64, String> {
+fn read_u64(file: &mut GgufReader) -> Result<u64, String> {
     let mut b = [0; 8];
     file.read_exact(&mut b)
         .map_err(|_| "GGUF 메타데이터가 완전하지 않습니다.")?;
     Ok(u64::from_le_bytes(b))
 }
-fn gguf_string(file: &mut File, max: u64) -> Result<String, String> {
+fn gguf_string(file: &mut GgufReader, max: u64) -> Result<String, String> {
     let n = read_u64(file)?;
     if n > max {
         return Err("GGUF 메타데이터 문자열이 너무 큽니다.".into());
@@ -1269,19 +1282,20 @@ fn gguf_string(file: &mut File, max: u64) -> Result<String, String> {
         .map_err(|_| "GGUF 문자열을 읽지 못했습니다.")?;
     String::from_utf8(b).map_err(|_| "GGUF 문자열이 UTF-8이 아닙니다.".into())
 }
-fn skip(file: &mut File, bytes: u64, size: u64) -> Result<(), String> {
-    let pos = file
-        .stream_position()
-        .map_err(|_| "GGUF 위치를 읽지 못했습니다.")?;
-    let next = pos
+fn skip(file: &mut GgufReader, bytes: u64, size: u64) -> Result<(), String> {
+    let next = file
+        .position
         .checked_add(bytes)
         .filter(|n| *n <= size && *n <= 64 * 1024 * 1024)
         .ok_or("GGUF 메타데이터 범위를 초과했습니다.")?;
-    file.seek(SeekFrom::Start(next))
+    // Within the buffer this costs no syscall, unlike a seek on the bare file.
+    file.reader
+        .seek_relative(bytes as i64)
         .map_err(|_| "GGUF 메타데이터를 읽지 못했습니다.")?;
+    file.position = next;
     Ok(())
 }
-fn skip_value(file: &mut File, kind: u32, size: u64, in_array: bool) -> Result<(), String> {
+fn skip_value(file: &mut GgufReader, kind: u32, size: u64, in_array: bool) -> Result<(), String> {
     match kind {
         0 | 1 | 7 => skip(file, 1, size),
         2 | 3 => skip(file, 2, size),
@@ -1305,7 +1319,11 @@ fn skip_value(file: &mut File, kind: u32, size: u64, in_array: bool) -> Result<(
         _ => Err("지원하지 않는 GGUF 메타데이터입니다.".into()),
     }
 }
-fn validate_gguf(file: &mut File, size: u64, require_architecture: bool) -> Result<(), String> {
+fn validate_gguf(file: &File, size: u64, require_architecture: bool) -> Result<(), String> {
+    let file = &mut GgufReader {
+        reader: BufReader::new(file),
+        position: 0,
+    };
     let mut magic = [0; 4];
     file.read_exact(&mut magic)
         .map_err(|_| "GGUF 파일이 완전하지 않습니다.")?;
@@ -2835,6 +2853,52 @@ mod tests {
             std::fs::write(&path, bytes).unwrap();
             assert!(verify_file(&path, None, &AtomicBool::new(false)).is_err());
         }
+    }
+
+    #[test]
+    fn gguf_architecture_is_found_after_values_that_span_the_read_buffer() {
+        let entry = |key: &str, kind: u32, value: &[u8]| {
+            let mut bytes = (key.len() as u64).to_le_bytes().to_vec();
+            bytes.extend(key.as_bytes());
+            bytes.extend(kind.to_le_bytes());
+            bytes.extend(value);
+            bytes
+        };
+        let text = |value: &[u8]| {
+            let mut bytes = (value.len() as u64).to_le_bytes().to_vec();
+            bytes.extend(value);
+            bytes
+        };
+        let mut array = 8u32.to_le_bytes().to_vec();
+        array.extend(3u64.to_le_bytes());
+        for item in [&b"a"[..], &[b'b'; 12_000][..], b"c"] {
+            array.extend(text(item));
+        }
+        let mut bytes = b"GGUF".to_vec();
+        bytes.extend(3u32.to_le_bytes());
+        bytes.extend(1u64.to_le_bytes());
+        bytes.extend(5u64.to_le_bytes());
+        bytes.extend(entry("general.alignment", 4, &32u32.to_le_bytes()));
+        bytes.extend(entry("general.description", 8, &text(&[b'x'; 20_000])));
+        bytes.extend(entry("tokenizer.ggml.tokens", 9, &array));
+        bytes.extend(entry("general.architecture", 8, &text(b"gemma4")));
+        bytes.extend(entry("after", 4, &0u32.to_le_bytes()));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("long.gguf");
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(verify_file(&path, None, &AtomicBool::new(false)).is_ok());
+        // The same metadata with an unsupported architecture is still rejected,
+        // and a skip that runs past the end of the file is a bounded error.
+        let other = bytes
+            .windows(6)
+            .position(|window| window == b"gemma4")
+            .unwrap();
+        let mut unsupported = bytes.clone();
+        unsupported[other..other + 6].copy_from_slice(b"gemma9");
+        std::fs::write(&path, &unsupported).unwrap();
+        assert!(verify_file(&path, None, &AtomicBool::new(false)).is_err());
+        std::fs::write(&path, &bytes[..30_000]).unwrap();
+        assert!(verify_file(&path, None, &AtomicBool::new(false)).is_err());
     }
 
     /// Uses the production HTTPS transport and controller, observing only HTTP
