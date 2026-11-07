@@ -74,12 +74,19 @@
   $effect(() => {
     if (step !== 3) return;
     let active = true;
-    const refresh = () => invoke<AiSnapshot>('ai_snapshot').then((next) => {
-      if (!active) return;
-      ai = next;
-      aiChoice ??= next.preferences.engine === 'openai-compatible' ? 'remote'
-        : next.models.some((model) => model.kind !== 'embedding') ? 'local' : null;
-    }).catch((reason) => { if (active) aiError = archiveError(reason); });
+    let issued = 0;
+    let applied = 0;
+    const refresh = () => {
+      const request = ++issued;
+      return invoke<AiSnapshot>('ai_snapshot').then((next) => {
+        // A slow answer must not replace a snapshot from a later request.
+        if (!active || request < applied) return;
+        applied = request;
+        ai = next;
+        aiChoice ??= next.preferences.engine === 'openai-compatible' ? 'remote'
+          : next.models.some((model) => model.kind !== 'embedding') ? 'local' : null;
+      }).catch((reason) => { if (active && request >= applied) aiError = archiveError(reason); });
+    };
     void refresh();
     const timer = window.setInterval(refresh, 1000);
     return () => { active = false; window.clearInterval(timer); };

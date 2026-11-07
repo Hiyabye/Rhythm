@@ -53,6 +53,7 @@
   const pageSize = 30;
   let recommendationRequest = 0;
   let contextRequest = 0;
+  let labelRequest = 0;
 
   $effect(() => {
     const currentPage = page;
@@ -214,15 +215,16 @@
   }
 
   async function loadEmbeddingLabels(ids: number[]) {
+    const request = ++labelRequest;
     if (!ids.length) { classifications = {}; duplicates = {}; return; }
     try {
       const rows = await invoke<AiClassification[]>('ai_classifications', { documentIds: ids });
-      classifications = Object.fromEntries(rows.map((row) => [row.document_id, row]));
-    } catch { classifications = {}; }
+      if (request === labelRequest) classifications = Object.fromEntries(rows.map((row) => [row.document_id, row]));
+    } catch { if (request === labelRequest) classifications = {}; }
     try {
       const rows = await invoke<DuplicateNotices[]>('ai_duplicate_notices', { documentIds: ids });
-      duplicates = Object.fromEntries(rows.map((row) => [row.document_id, row.duplicates]));
-    } catch { duplicates = {}; }
+      if (request === labelRequest) duplicates = Object.fromEntries(rows.map((row) => [row.document_id, row.duplicates]));
+    } catch { if (request === labelRequest) duplicates = {}; }
   }
 
   // Cross-posts on the same page fold under their first row. They are never
