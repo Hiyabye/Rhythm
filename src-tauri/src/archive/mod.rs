@@ -249,3 +249,17 @@ mod image_tests {
         assert!(image_data_uri(&vec![0; 10 * 1024 * 1024 + 1]).is_err());
     }
 }
+
+#[cfg(test)]
+mod selector_tests {
+    use super::selector;
+
+    #[test]
+    fn a_selector_is_parsed_once_and_shared() {
+        let first = selector(".board-list-title a");
+        assert!(std::ptr::eq(first, selector(".board-list-title a")));
+        assert!(!std::ptr::eq(first, selector(".board-list-date")));
+        let built = format!("input[name={}]", "idx");
+        assert!(std::ptr::eq(selector(&built), selector("input[name=idx]")));
+    }
+}
