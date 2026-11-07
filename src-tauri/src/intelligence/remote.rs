@@ -803,8 +803,9 @@ mod tests {
                     reply.body.len(),
                     reply.body
                 );
-                socket.write_all(response.as_bytes()).await.unwrap();
-                socket.shutdown().await.unwrap();
+                // A client may hang up on an oversized reply.
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
             }
             bodies
         });
@@ -1086,6 +1087,128 @@ mod tests {
         let bodies = server.await.unwrap();
         assert_eq!(bodies[0]["model"], "embed");
         assert_eq!(bodies[0]["input"], json!(["첫 번째", "두 번째"]));
+    }
+
+    async fn complete_once(base: &str, remote: &Remote) -> Result<Completion, String> {
+        remote
+            .complete(
+                &config(base, "m"),
+                "sk-secret",
+                "본문",
+                512,
+                &analysis::Cancellation::default(),
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn oversized_malformed_and_empty_responses_fail_plainly() {
+        let oversized = json!({"pad": "x".repeat(MAX_RESPONSE)}).to_string();
+        let empty = json!({"choices": [{"message": {"content": "  "}}]}).to_string();
+        let (base, server) = fake(vec![
+            Reply {
+                status: 200,
+                body: oversized,
+            },
+            Reply {
+                status: 200,
+                body: "not json".into(),
+            },
+            Reply {
+                status: 200,
+                body: empty,
+            },
+        ])
+        .await;
+        let remote = Remote::memory();
+        let errors = [
+            complete_once(&base, &remote).await.unwrap_err(),
+            complete_once(&base, &remote).await.unwrap_err(),
+            complete_once(&base, &remote).await.unwrap_err(),
+        ];
+        assert!(errors[0].contains("허용 크기"), "{}", errors[0]);
+        assert!(errors[1].contains("올바른 JSON"), "{}", errors[1]);
+        assert!(errors[2].contains("비어 있거나"), "{}", errors[2]);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn exhausted_format_fallbacks_report_a_rejected_request() {
+        let rejected = || Reply {
+            status: 400,
+            body: "{}".into(),
+        };
+        let (base, server) = fake(vec![rejected(), rejected(), rejected()]).await;
+        let remote = Remote::memory();
+        let error = complete_once(&base, &remote).await.unwrap_err();
+        assert!(error.contains("요청 형식을 거부"), "{error}");
+        // The server saw exactly one request per format and no further retry.
+        let bodies = server.await.unwrap();
+        assert_eq!(bodies.len(), 3);
+        assert!(bodies[2].get("response_format").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_negotiated_format_is_reused_by_the_next_request() {
+        let (base, server) = fake(vec![
+            Reply {
+                status: 400,
+                body: "{}".into(),
+            },
+            Reply {
+                status: 200,
+                body: valid_json("요약"),
+            },
+            Reply {
+                status: 200,
+                body: valid_json("요약"),
+            },
+        ])
+        .await;
+        let remote = Remote::memory();
+        assert_eq!(complete_once(&base, &remote).await.unwrap().attempts, 2);
+        assert_eq!(complete_once(&base, &remote).await.unwrap().attempts, 1);
+        let bodies = server.await.unwrap();
+        assert_eq!(bodies[2]["response_format"]["type"], "json_object");
+    }
+
+    #[tokio::test]
+    async fn other_provider_errors_are_redacted_and_bounded() {
+        let message = format!("한도 초과 sk-secret {}", "가".repeat(1000));
+        let (base, server) = fake(vec![Reply {
+            status: 429,
+            body: json!({"error": {"message": message}}).to_string(),
+        }])
+        .await;
+        let remote = Remote::memory();
+        let error = complete_once(&base, &remote).await.unwrap_err();
+        assert!(error.contains("요청 한도"), "{error}");
+        assert!(error.contains("[키]"));
+        assert!(!error.contains("sk-secret"));
+        assert!(error.chars().count() < 400);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn embedding_inputs_are_bounded_before_any_request() {
+        let remote = Remote::memory();
+        let config = EmbeddingConfig {
+            endpoint: Endpoint::parse("http://127.0.0.1:9").unwrap(),
+            model: "embed".into(),
+            timeout_seconds: 10,
+        };
+        let cancellation = analysis::Cancellation::default();
+        for inputs in [
+            vec![],
+            vec!["  ".to_owned()],
+            vec!["가".repeat(super::super::MAX_EMBED_INPUT_BYTES)],
+        ] {
+            let error = remote
+                .embed(&config, "sk-test", &inputs, &cancellation)
+                .await
+                .unwrap_err();
+            assert!(error.contains("입력 범위"), "{error}");
+        }
     }
 
     #[test]

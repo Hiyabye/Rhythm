@@ -110,6 +110,12 @@ impl Server {
             // read Korean poster text instead of guessing from layout alone.
             command.args(["--image-min-tokens", "1024", "--image-max-tokens", "2048"]);
         }
+        // Resolved first so a missing GPU fails before a key file exists.
+        let device = if launch.backend == "vulkan" {
+            Some(nvidia_device(&launch.executable).await?)
+        } else {
+            None
+        };
         let key = match socket_host(&socket) {
             Some(host) => {
                 command.args(["--host", &host]);
@@ -164,9 +170,8 @@ impl Server {
                 ]);
             }
         }
-        if launch.backend == "vulkan" {
-            let device = nvidia_device(&launch.executable).await?;
-            command.args(["-ngl", "99", "--device", &device]);
+        if let Some(device) = &device {
+            command.args(["-ngl", "99", "--device", device]);
         } else if launch.gpu() {
             command.args(["-ngl", "99"]);
         } else {
@@ -181,13 +186,14 @@ impl Server {
             Ok(endpoint) => endpoint,
             Err(error) => {
                 reap(&mut child).await;
+                let _ = std::fs::remove_file(&socket);
                 return Err(error);
             }
         };
         let (loaded_backend, complete, multimodal) = {
-            let facts = observed
-                .lock()
-                .map_err(|_| "AI 엔진 상태를 읽지 못했습니다.")?;
+            // The observer only records log facts, so a poisoned lock still
+            // holds usable data and must not leave the child unreaped.
+            let facts = observed.lock().unwrap_or_else(|e| e.into_inner());
             let on_gpu = facts.offloaded.is_some_and(|(done, _)| done > 0);
             let backend = match (on_gpu, facts.device.as_deref()) {
                 (true, Some(device)) if device.starts_with("MTL") => "metal",
@@ -207,6 +213,7 @@ impl Server {
         };
         if launch.backend == "vulkan" && !complete {
             reap(&mut child).await;
+            let _ = std::fs::remove_file(&socket);
             return Err("GPU 작업 프로세스의 실제 실행 장치를 확인하지 못했습니다.".into());
         }
         #[cfg(not(windows))]
@@ -705,5 +712,75 @@ mod tests {
         assert!(socket_host(Path::new("/tmp/run/llama.sock")).is_some());
         let long = format!("/{}/llama.sock", "a".repeat(MAX_SOCKET_PATH));
         assert!(socket_host(Path::new(&long)).is_none());
+    }
+
+    /// Writes an executable shell stub standing in for `llama-server`.
+    #[cfg(unix)]
+    fn stub(directory: &Path, script: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = directory.join("stub-server");
+        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// A runtime path too long for a Unix socket forces the loopback launch,
+    /// which writes a per-launch key file.
+    #[cfg(unix)]
+    fn loopback_runtime(directory: &Path) -> PathBuf {
+        let runtime = directory.join("r".repeat(MAX_SOCKET_PATH));
+        assert!(socket_host(&runtime.join("llama.sock")).is_none());
+        runtime
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_missing_gpu_fails_before_any_key_file_is_written() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = loopback_runtime(directory.path());
+        let launch = Launch {
+            executable: stub(directory.path(), "exit 0"),
+            backend: "vulkan",
+            context: 1024,
+            embedding: None,
+        };
+        let error = Server::start(
+            &launch,
+            Path::new("model.gguf"),
+            None,
+            &runtime,
+            Duration::from_secs(5),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(error.contains("NVIDIA"), "{error}");
+        assert!(!runtime.join("llama.key").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_server_that_exits_during_load_leaves_no_key_or_socket() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = loopback_runtime(directory.path());
+        let launch = Launch {
+            executable: stub(directory.path(), "exit 1"),
+            backend: "cpu",
+            context: 1024,
+            embedding: None,
+        };
+        let error = Server::start(
+            &launch,
+            Path::new("model.gguf"),
+            None,
+            &runtime,
+            Duration::from_secs(20),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(error.contains("불러오지 못했습니다"), "{error}");
+        assert!(!runtime.join("llama.key").exists());
+        assert!(!runtime.join("llama.sock").exists());
     }
 }

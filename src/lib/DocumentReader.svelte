@@ -40,15 +40,19 @@
       if (event.key === 'Escape' && !(event.target instanceof HTMLSelectElement)) onclose();
     };
     window.addEventListener('keydown', key);
+    let polling = false;
     const timer = window.setInterval(() => {
-      if (resourceBusy) void invoke<SyncStatus>('archive_status').then(async (status) => {
-        if (!status.running && !disposed) {
+      // One status read at a time, so a slow answer cannot trigger the reload twice.
+      if (!resourceBusy || polling) return;
+      polling = true;
+      void invoke<SyncStatus>('archive_status').then(async (status) => {
+        if (!status.running && !disposed && resourceBusy) {
           resourceBusy = false;
           feedback = archiveError(status.message);
           await load(detail?.revision_id ?? null);
           onchange();
         }
-      }).catch((reason) => { error = archiveError(reason); resourceBusy = false; });
+      }).catch((reason) => { if (!disposed) { error = archiveError(reason); resourceBusy = false; } }).finally(() => { polling = false; });
     }, 1000);
     return () => {
       disposed = true;
@@ -335,7 +339,7 @@
       <section class="reader-resources" aria-labelledby="resource-heading">
         <h3 id="resource-heading">첨부 자료 및 이미지 <span class="muted">{detail.resources.length}</span></h3>
         <p class="footnote">저장된 파일은 폴더에서 직접 확인할 수 있습니다. 파일은 자동으로 실행되지 않습니다.</p>
-        {#each detail.resources as resource}
+        {#each detail.resources as resource (resource.id)}
           <div class="resource-row">
             <div><strong>{resource.filename || (resource.kind === 'image' ? '본문 이미지' : '첨부 파일')}</strong><p>{localResourceErrors[resource.id] ? '로컬 자료 확인 필요' : resourceStatus(resource.status)} · {archiveSize(resource.bytes)}{#if resource.mime} · {resource.mime}{/if}</p>{#if localResourceErrors[resource.id]}<p class="archive-error" role="alert">{localResourceErrors[resource.id]}</p>{:else if resource.error}<p class="archive-error">{resource.error}</p>{/if}{#if resource.sha256}<details><summary>무결성 정보</summary><code>SHA-256 {resource.sha256}</code></details>{/if}</div>
             {#if resource.status === 'downloaded'}<button class="text-button" onclick={() => reveal(resource.id)}>{localResourceErrors[resource.id] ? '로컬 파일 다시 확인' : '저장 폴더에서 보기'}</button>{/if}

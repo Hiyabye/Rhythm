@@ -19,15 +19,27 @@ export function buildManifest({ assetsDir, version, repo, tag, now = new Date() 
   };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+const usage = 'Usage: update-manifest.mjs --assets <dir> --version <v> --repo <owner/name> --tag <tag> --output <file>';
+const required = ['assets', 'version', 'repo', 'tag', 'output'];
+
+export function parseArguments(rest) {
   const options = {};
-  const rest = process.argv.slice(2);
   for (let i = 0; i < rest.length; i += 2) {
-    if (!rest[i]?.startsWith('--') || rest[i + 1] === undefined) {
-      console.error('Usage: update-manifest.mjs --assets <dir> --version <v> --repo <owner/name> --tag <tag> --output <file>');
-      process.exit(1);
-    }
+    if (!rest[i]?.startsWith('--') || rest[i + 1] === undefined) throw new Error(usage);
     options[rest[i].slice(2)] = rest[i + 1];
+  }
+  const missing = required.filter((name) => !options[name]);
+  if (missing.length) throw new Error(`Missing ${missing.map((name) => `--${name}`).join(', ')}.\n${usage}`);
+  return options;
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  let options;
+  try {
+    options = parseArguments(process.argv.slice(2));
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
   }
   const manifest = buildManifest({ assetsDir: options.assets, version: options.version, repo: options.repo, tag: options.tag });
   writeFileSync(options.output, `${JSON.stringify(manifest, null, 2)}\n`);

@@ -66,7 +66,7 @@ pub(super) fn listing(
         .parse()
         .map_err(|_| PARSER_ERROR)?;
     let rows: Vec<_> = list
-        .select(&selector(".blist > .brow:not(.brow-head)"))
+        .select(selector(".blist > .brow:not(.brow-head)"))
         .collect();
     let pins = rows
         .iter()
@@ -137,13 +137,13 @@ pub(super) fn listing(
     if ordinals != expected {
         return invalid();
     }
-    let pagers: Vec<_> = list.select(&selector(".pager")).collect();
+    let pagers: Vec<_> = list.select(selector(".pager")).collect();
     if total_pages > 1 {
         if pagers.len() != 1 || text(one(pagers[0], "[aria-current=page]")?) != page.to_string() {
             return invalid();
         }
         let mut links = HashSet::new();
-        for link in pagers[0].select(&selector("a[href]")) {
+        for link in pagers[0].select(selector("a[href]")) {
             let url = safe_url(
                 base(source)?.as_str(),
                 link.value().attr("href").ok_or(PARSER_ERROR)?,
@@ -162,7 +162,7 @@ pub(super) fn listing(
             }
             links.insert(target);
         }
-        if let Some(last) = pagers[0].select(&selector("a[aria-label=last]")).next() {
+        if let Some(last) = pagers[0].select(selector("a[aria-label=last]")).next() {
             let url = safe_url(
                 base(source)?.as_str(),
                 last.value().attr("href").ok_or(PARSER_ERROR)?,
@@ -255,7 +255,7 @@ pub(super) fn article(
     let title = text(one(post, ".post-title")?);
     let published_at = published(one(post, ".post-meta time")?)?;
     let mut author = None;
-    for row in post.select(&selector(".post-meta li")) {
+    for row in post.select(selector(".post-meta li")) {
         let label = one(row, ".sr-only")?;
         if text(label) == "작성자" {
             let value = normalize(
@@ -274,7 +274,7 @@ pub(super) fn article(
     let content = one(post, ".post-body")?.inner_html();
     let (body_html, body_text, inline) = sanitize(&content, &entry.url)?;
     let mut resources = Vec::new();
-    let files: Vec<_> = post.select(&selector(".post-files")).collect();
+    let files: Vec<_> = post.select(selector(".post-files")).collect();
     if !files.is_empty() {
         if files.len() != 1 {
             return invalid();
@@ -282,7 +282,7 @@ pub(super) fn article(
         let count = text(one(files[0], ".post-files-t b")?)
             .parse::<usize>()
             .map_err(|_| PARSER_ERROR)?;
-        for link in files[0].select(&selector("a[download]")) {
+        for link in files[0].select(selector("a[download]")) {
             let url = safe_url(&entry.url, link.value().attr("href").ok_or(PARSER_ERROR)?)
                 .ok_or(PARSER_ERROR)?;
             let external = url

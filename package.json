@@ -8,6 +8,7 @@
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test:ui": "playwright test",
+    "screenshots": "RHYTHM_SCREENSHOTS=1 playwright test -c playwright.screenshots.config.ts",
     "test:desktop": "node --test tests/desktop.test.mjs tests/desktop-windows.test.mjs tests/stage-llama.test.mjs",
     "test:release": "node --test tests/update-signature.test.mjs tests/macos-release.test.mjs tests/release-workflow.test.mjs tests/ci-changes.test.mjs",
     "tauri": "tauri",

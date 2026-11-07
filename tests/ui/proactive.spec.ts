@@ -238,7 +238,7 @@ test('notification event and snapshot share deduplication without blocking a lat
   await page.evaluate(() => (window as any).__fixture.emitNotification({ event_id: 12, document_id: 1, revision_id: 1 }, true));
   await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 01');
   await page.keyboard.press('Escape');
-  await page.waitForTimeout(1600);
+  await expect(page.locator('.reader-header h2')).toHaveCount(0);
   await openSettings(page, '알림');
   await expect(page.getByRole('heading', { name: '알림 기록', exact: true })).toBeVisible();
   // Each mounted settings pane reads the snapshot again; none may reopen the handled activation.

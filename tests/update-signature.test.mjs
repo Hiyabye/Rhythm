@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { checkEmbeddedKey, verifyArtifact, verifyManifest } from '../scripts/verify-update.mjs';
-import { buildManifest } from '../scripts/update-manifest.mjs';
+import { buildManifest, parseArguments } from '../scripts/update-manifest.mjs';
 
 // Signatures are produced by the official Tauri signer with disposable keys that exist only in
 // a temporary directory; the verifier under test is independent of that implementation.
@@ -166,4 +166,12 @@ test('the release workflow verifies signatures cryptographically, not by presenc
   const verify = workflow.indexOf('verify-update.mjs manifest --manifest release-assets/latest.json');
   const create = workflow.indexOf('gh release create');
   assert.ok(generate > 0 && generate < verify && verify < create);
+});
+
+test('manifest generator names every missing or malformed option', () => {
+  assert.throws(() => parseArguments(['--assets', 'a', '--version', '1.0.0']), /Missing --repo, --tag, --output/);
+  assert.throws(() => parseArguments(['--assets']), /Usage: update-manifest/);
+  assert.throws(() => parseArguments(['assets', 'a']), /Usage: update-manifest/);
+  const all = ['--assets', 'a', '--version', '1.0.0', '--repo', 'o/n', '--tag', 'v1.0.0', '--output', 'f'];
+  assert.equal(parseArguments(all).tag, 'v1.0.0');
 });

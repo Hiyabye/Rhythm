@@ -68,7 +68,9 @@
   let systemDark = $state(false);
   let heading = $derived(navigation.find((item) => item.id === page)!);
   let dark = $derived(theme === 'dark' || (theme === 'system' && systemDark));
-  let date = new Intl.DateTimeFormat('ko-KR', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
+  // The header date follows the local day; the periodic timer below refreshes the key across midnight.
+  let dayKey = $state(localDayKey(new Date()));
+  let date = $derived(dayKey && new Intl.DateTimeFormat('ko-KR', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date()));
   // Archive context reported by ArchiveView; the sidebar reads it but never fetches it separately.
   let summary = $state<ArchiveSummary | null>(null);
   let sources = $state<SourceInfo[]>([]);
@@ -132,6 +134,7 @@
       });
     } else loading = false;
     const healthTimer = window.setInterval(() => {
+      dayKey = localDayKey(new Date());
       if (desktop && snapshot && page === 'settings' && !busy) {
         void invoke<WorkerStatus>('worker_status').then((status) => {
           if (snapshot) snapshot.worker = status;

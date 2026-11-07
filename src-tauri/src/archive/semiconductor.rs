@@ -110,7 +110,7 @@ pub(super) fn listing(
         return invalid();
     }
     if total == 0 {
-        if !rows.is_empty() || list.select(&selector("a")).next().is_some() {
+        if !rows.is_empty() || list.select(selector("a")).next().is_some() {
             return invalid();
         }
         return Ok(ListingPage {
@@ -155,7 +155,7 @@ pub(super) fn listing(
             return invalid();
         }
         let number = one(anchor, "p.num")?;
-        let pinned = match number.select(&selector("span.notice")).next() {
+        let pinned = match number.select(selector("span.notice")).next() {
             Some(label) => {
                 if text(label) != "공지" || normalize(&text(number)) != "공지" {
                     return invalid();
@@ -195,7 +195,7 @@ pub(super) fn listing(
         return invalid();
     }
     let paging = one(root, ".paging")?;
-    let links: Vec<_> = paging.select(&selector("a")).collect();
+    let links: Vec<_> = paging.select(selector("a")).collect();
     if links.is_empty() || links.len() > 40 {
         return invalid();
     }
@@ -302,7 +302,7 @@ pub(super) fn article(
     }
     one(root, "div.view_file")?;
     let mut resources = Vec::new();
-    for link in root.select(&selector(".view_file dl.attachments dd ul li a")) {
+    for link in root.select(selector(".view_file dl.attachments dd ul li a")) {
         if resources.len() > 100 {
             return invalid();
         }

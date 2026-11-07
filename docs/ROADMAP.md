@@ -4,47 +4,16 @@ Rhythm stays local-first and Korean-first. The current release is **v1.5.0**. Su
 
 ## Current state
 
-v1.0.0 (macOS, an ad-hoc-signed DMG) introduced the local notice archive, optional local AI analysis, deterministic personalization, opt-in background sync and notifications, and single-file backup/restore.
-
-v1.1.0 adds:
-
-- Windows 11 x64 support from contributor PR #1: per-user NSIS installer, CPU and NVIDIA Vulkan AI workers, WinRT notifications (schema 7), AI execution mode (schema 8). See [Windows](WINDOWS.md).
-- A chosen folder for new model downloads on both platforms (schema 9).
-
-v1.2.0 adds:
-
-- Local AI runs in upstream `llama-server` (llama.cpp b12068, bundled and supervised by Rhythm) instead of the AI workers, on both platforms (#8, #61). Earlier results read as outdated until they are regenerated. On Windows it was observed on one GTX 1650 PC (Vulkan and CPU).
-- Model catalog: Qwen3.5 2B/4B and Gemma 4 E2B/E4B verified on macOS Apple Silicon / Metal; 9B and 0.8B removed (existing installs keep working).
-- Native-macOS redesign of the app shell and Today, and Settings split into panes.
-- CI split by concern and gated by changed paths; a tag-triggered workflow (`release.yml`) that builds both platforms and creates a draft release. v1.1.0 is its first run.
-- Release pipeline for in-app updates on unsigned builds: signed updater packages for both platforms and a verified `latest.json` in every release. v1.2.0 is the first release with the updater key; installed v1.1.0 apps embed no key and need one manual update.
-- Automatic update checks, on by default in builds with the key (schema 10): daily while the app is open, announce-only, off switch in Settings → 데이터 및 정보.
-
-v1.3.0 adds:
-
-- **새로고침** merges the new-notice check and the earlier-notice import into one action (#73). Notices whose body cannot be archived are skipped and listed per board instead of blocking collection (#78).
-- The 과거 자료 concept is gone. Opt-in "analyze older notices while idle" (#75, schema 14) analyzes up to 20 unanalyzed notices per hour while the computer is idle on external power, newest publication first.
-- Model catalog: Qwen3.5 0.8B removed because it invented content (#74; existing installs keep working). Gemma 4 E2B/E4B verified on macOS Apple Silicon / Metal.
-- Local embedding classification (#76, schema 15): Qwen3-Embedding 0.6B Q8_0 as a separate explicit install and transient `llama-server` process. It classifies the existing archive and new revisions, with a low-confidence `기타` fallback. Category is removed from the generation schema (prompt 5 / schema 3); earlier analyses remain readable as outdated. Measured on macOS Metal and CPU with 18 synthetic fixtures; Windows and broader accuracy are unverified.
-- Optional vision projector (#111): an installed `mmproj` adds up to two already-downloaded images of a notice to its analysis; image facts are marked as read from an image and ambiguous dates stay unknown.
-- Notice images may be downloaded from any public HTTPS host (that host's robots.txt applies), and 자료 모두 내려받기 fetches every missing file of a board (#104).
-- The login item is named after the bundle identifier, so a validation build no longer shares the production entry (#67). A failed analysis shows a Korean user-facing error instead of the model's repair instruction (#98).
-
-v1.4.0 adds:
-
-- An opt-in OpenAI-compatible engine (#77). The local engine stays the default and fully supported; remote analysis requires a normalized base URL and model plus consent bound to that origin, keeps the API key in the OS credential store, sends only notice title and body text (no personalization, archive identities or images), falls back from `json_schema` to `json_object` and plain text, and has a separate automatic-work switch with a per-day cap. Remote embedding classification is a separate switch.
-- New source families, each verified for full article and local-resource extraction: 전자공학과·시스템반도체공학과 community boards (9, #94), 벨라르미노 학사 dormitory boards (3, #116), 기계공학과 boards discovered through the site's sitemap (7, #95) and 반도체공학과 boards (5, #96). The catalog lists 34 boards, all subscribable; the unsupported 공과대학 뉴스레터 was retired (#93).
-- The notice preview separates the classification label from the AI summary (#119). The unsigned Windows distribution decision is recorded (#85).
-
-v1.5.0 adds:
-
-- An opt-in Cybercampus (eClass) connector (#86): with a login saved in the OS credential store, the `cybercampus` source archives the current term's course notices with their attachments and images, and a 과제·마감 page lists assignments and TODO deadlines. Read-only; its documents never go to the remote AI engine (schema 18).
-- With the embedding model installed, the reader lists notices similar in meaning, and the list folds cross-posted copies under one expandable row that keeps their unread state (#126, #133, #134, #135). Search ranks by relevance and adds meaning-based matches from a local query embedding; without the model it stays text-only (#127).
-- The dormitory source family is named 벨라르미노 학사 instead of 생활관.
+- **Archive:** 35 sources, all supported: 34 public Sogang boards (main academic, computing, engineering, 전자공학과/시스템반도체공학과 community boards, 벨라르미노 학사 dormitory boards, 기계공학과 sitemap-backed boards, 반도체공학과 boards) and the opt-in Cybercampus (eClass) connector for the current term's course notices, assignments and TODO deadlines. **새로고침** merges the new-notice check and the earlier-notice import; notices whose body cannot be archived are skipped and listed per board.
+- **Local AI:** upstream `llama-server` (llama.cpp b12068, bundled and supervised by Rhythm) on both platforms. Catalog: Qwen3.5 2B/4B and Gemma 4 E2B/E4B plus an optional vision projector per model, and Qwen3-Embedding 0.6B for classification, similar notices and semantic search. Opt-in idle backlog analysis (up to 20 notices per hour).
+- **Remote AI:** opt-in OpenAI-compatible engine; the local engine stays the default.
+- **Personalization, lifecycle and notifications:** deterministic ranking, opt-in background sync and notifications, backup and restore (schema 19).
+- **Windows 11 x64:** per-user unsigned NSIS installer, CPU and NVIDIA Vulkan AI, WinRT notifications. See [Windows](WINDOWS.md).
+- **Distribution:** ad-hoc-signed macOS DMG and unsigned Windows installer, with signed in-app updates and a daily automatic update check (announce-only), built by the tag-triggered `release.yml` into a draft release.
 
 ## Verification status
 
-Native observations are from one Mac (macOS 27.2, M1 Pro, 16 GiB) unless noted, mostly in isolated profiles or validation bundle identifiers. Windows observations are in [Windows validation](WINDOWS_VALIDATION.md); AI in [AI evaluation](AI_EVALUATION.md). Automated tests, mocked-IPC UI tests and native observations are separate claims.
+Native observations are from one Mac (macOS 27.2, M1 Pro, 16 GiB) unless noted; the bundle declares macOS 11.0 as its minimum, but no other macOS version was tested. mostly in isolated profiles or validation bundle identifiers. Windows observations are in [Windows validation](WINDOWS_VALIDATION.md); AI in [AI evaluation](AI_EVALUATION.md). Automated tests, mocked-IPC UI tests and native observations are separate claims.
 
 | Area | Verified | Not verified |
 | --- | --- | --- |

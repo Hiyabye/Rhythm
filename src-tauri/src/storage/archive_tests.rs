@@ -593,6 +593,42 @@ fn selected_revision_snippet_uses_its_own_body() {
     assert_eq!(old.item.snippet, "이전 버전 본문");
 }
 
+#[test]
+fn list_preview_marks_only_bodies_longer_than_the_excerpt() {
+    let (_directory, store) = database();
+    let exactly: String = "가".repeat(240);
+    let longer: String = "나".repeat(241);
+    store
+        .upsert_article("one", &article("a", "경계", &exactly, "2026-10-03"), true)
+        .unwrap();
+    store
+        .upsert_article("one", &article("b", "초과", &longer, "2026-10-02"), true)
+        .unwrap();
+    store
+        .upsert_article(
+            "one",
+            &article("c", "짧음", "짧은 본문", "2026-10-01"),
+            true,
+        )
+        .unwrap();
+    let page = store
+        .archive_query(&ArchiveQuery {
+            query: String::new(),
+            source_id: None,
+            category: None,
+            saved_only: false,
+            unread_only: false,
+            ascending: false,
+            offset: 0,
+            limit: None,
+        })
+        .unwrap();
+    let snippets: Vec<_> = page.items.iter().map(|i| i.snippet.as_str()).collect();
+    assert_eq!(snippets[0], exactly);
+    assert_eq!(snippets[1], format!("{}…", "나".repeat(240)));
+    assert_eq!(snippets[2], "짧은 본문");
+}
+
 fn assert_archive_integrity(store: &Store) {
     assert_eq!(
         store

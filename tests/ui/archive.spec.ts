@@ -508,6 +508,21 @@ test('today lists past notices nowhere in the week and AI dates beyond it separa
   await expect(week.locator('.event-ai')).toContainText('AI · 10월 30일');
 });
 
+test('today moves its highlight to the new day when the window rolls past midnight', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-10-24T23:59:00'));
+  await mockDesktop(page, { count: 3 });
+  await page.goto('/');
+  const week = page.getByRole('complementary', { name: '앞으로 7일', exact: true });
+  await expect(week).toContainText('10월 24일 – 30일');
+  await page.clock.setFixedTime(new Date('2026-10-25T00:01:00'));
+  // Closing the reader refreshes the archive, which recomputes the window.
+  await page.locator('#notice-1').click();
+  await page.keyboard.press('Escape');
+  await expect(week).toContainText('10월 25일 – 31일');
+  await expect(week.locator('.week-day').first()).toHaveClass(/is-today/);
+  await expect(week.locator('.is-today')).toHaveCount(1);
+});
+
 test('sidebar boards scope the inbox and badges describe their counts', async ({ page }) => {
   await mockDesktop(page, { count: 3, saved: true });
   await page.goto('/');

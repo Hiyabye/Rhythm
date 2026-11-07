@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const workflow = /^\.github\//;
 const rules = {
   frontend: [/^src\//, /^tests\//, /^scripts\//, /^package(-lock)?\.json$/, /^index\.html$/,
-    /^vite\.config\.ts$/, /^tsconfig\.json$/, /^playwright\.config\.ts$/],
+    /^vite\.config\.ts$/, /^tsconfig\.json$/, /^playwright(\.screenshots)?\.config\.ts$/],
   rust: [/^src-tauri\//, /^Cargo\.(toml|lock)$/, /^\.cargo\//, /^rust-toolchain/,
     /^(rustfmt|clippy)\.toml$/,
     // Windows CI runs these PowerShell scripts before its Rust tests.
