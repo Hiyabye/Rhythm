@@ -103,7 +103,7 @@ fn pager(root: ElementRef<'_>, page: u32, total_pages: u32) -> Result<(), String
     let mut special = HashMap::new();
     let mut numbered = Vec::new();
     let mut active = None;
-    for anchor in pager.select(&selector("a, strong")) {
+    for anchor in pager.select(selector("a, strong")) {
         let classes: Vec<&str> = anchor.value().classes().collect();
         // The site prefixes these classes with an underscore (`_first`).
         if let Some(kind) = ["first", "prev", "listPrev", "listNext", "next", "last"]
@@ -203,7 +203,7 @@ pub(super) fn listing(
     }
     pager(root, page, total_pages)?;
     let table = one(list, "table.board-table")?;
-    let rows: Vec<_> = table.select(&selector("tbody tr")).collect();
+    let rows: Vec<_> = table.select(selector("tbody tr")).collect();
     let start = total
         .checked_sub((page - 1) * PAGE_ROWS)
         .ok_or(PARSER_ERROR)?;
@@ -345,7 +345,7 @@ pub(super) fn article(
     }
     let mut published_at = None;
     let mut author = None;
-    let items: Vec<_> = view.select(&selector(".title ul.detail li")).collect();
+    let items: Vec<_> = view.select(selector(".title ul.detail li")).collect();
     if items.is_empty() || items.len() > 10 {
         return invalid();
     }
@@ -366,8 +366,8 @@ pub(super) fn article(
     let (body_html, body_text, inline) = sanitize(&content, &entry.url)?;
     let mut resources = Vec::new();
     let attachment = one(view, "div.attachment")?;
-    let no_file = attachment.select(&selector(".no-file")).next().is_some();
-    let links: Vec<_> = attachment.select(&selector("ul li a")).collect();
+    let no_file = attachment.select(selector(".no-file")).next().is_some();
+    let links: Vec<_> = attachment.select(selector("ul li a")).collect();
     if no_file && !links.is_empty() {
         return invalid();
     }

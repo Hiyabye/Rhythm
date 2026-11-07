@@ -119,7 +119,7 @@ pub(super) fn listing(
     let mut entries = Vec::new();
     let mut seen = HashSet::new();
     let mut count = 0usize;
-    for node in urlset.select(&selector("url")) {
+    for node in urlset.select(selector("url")) {
         count += 1;
         if count > 100_000 {
             return invalid();
@@ -140,7 +140,7 @@ pub(super) fn listing(
         {
             return invalid();
         }
-        let lastmods: Vec<_> = node.select(&selector("lastmod")).collect();
+        let lastmods: Vec<_> = node.select(selector("lastmod")).collect();
         if lastmods.len() > 1 {
             return invalid();
         }
@@ -220,7 +220,7 @@ pub(super) fn article(
     }
     let mut published_at = None;
     let mut author = None;
-    let spans: Vec<_> = header.select(&selector("div > span")).collect();
+    let spans: Vec<_> = header.select(selector("div > span")).collect();
     if spans.is_empty() || spans.len() > 10 {
         return invalid();
     }
@@ -266,15 +266,15 @@ pub(super) fn article(
         }
     }
     let mut resources = Vec::new();
-    for section in view.select(&selector("section")) {
+    for section in view.select(selector("section")) {
         let is_files = section
-            .select(&selector("p.eyebrow"))
+            .select(selector("p.eyebrow"))
             .next()
             .is_some_and(|label| text(label) == "첨부파일");
         if !is_files {
             continue;
         }
-        let links: Vec<_> = section.select(&selector("ul li a")).collect();
+        let links: Vec<_> = section.select(selector("ul li a")).collect();
         if links.is_empty() || links.len() > 100 {
             return invalid();
         }

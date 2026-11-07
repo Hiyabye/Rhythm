@@ -206,7 +206,7 @@ fn link_target(board: &Board, href: &str) -> Result<u32, String> {
 /// Validates the pager block, the active page and the declared last page.
 fn pager(board: &Board, root: ElementRef<'_>, page: u32, total: u32) -> Result<u32, String> {
     let pager = one(root, if ee(board) { ".b_page_no" } else { ".page_bx" })?;
-    let anchors: Vec<_> = pager.select(&selector("a")).collect();
+    let anchors: Vec<_> = pager.select(selector("a")).collect();
     let mut numbered = Vec::new();
     let mut active = None;
     let mut special = HashMap::new();
@@ -315,7 +315,7 @@ fn row_entries(
             ".list_st02 table"
         },
     )?;
-    let rows: Vec<_> = table.select(&selector("tbody tr")).collect();
+    let rows: Vec<_> = table.select(selector("tbody tr")).collect();
     if rows.len() != expected_rows as usize {
         return invalid();
     }
@@ -323,7 +323,7 @@ fn row_entries(
     let mut ordinals = Vec::new();
     let mut seen = HashSet::new();
     for row in rows {
-        let cells: Vec<_> = row.select(&selector("td")).collect();
+        let cells: Vec<_> = row.select(selector("td")).collect();
         if cells.len() != 4 {
             return invalid();
         }
@@ -379,7 +379,7 @@ fn gallery_entries(
         (".list_st01 ul", "li > a[href]", ".subject")
     };
     let list = one(root, container)?;
-    let items: Vec<_> = list.select(&selector(item)).collect();
+    let items: Vec<_> = list.select(selector(item)).collect();
     if items.len() != expected_rows as usize {
         return invalid();
     }
@@ -518,7 +518,7 @@ pub(super) fn article(
     };
     let view = one(root, container)?;
     let title = page_title(one(view, title)?);
-    let meta: Vec<_> = one(view, meta)?.select(&selector("li")).collect();
+    let meta: Vec<_> = one(view, meta)?.select(selector("li")).collect();
     if title.is_empty() || meta.len() != 2 {
         return invalid();
     }
@@ -548,7 +548,7 @@ pub(super) fn article(
     let (body_html, body_text, inline) = sanitize(&one(view, content)?.inner_html(), &entry.url)?;
     let mut resources = Vec::new();
     if ee(&board) {
-        let files: Vec<_> = view.select(&selector("dl.v_file")).collect();
+        let files: Vec<_> = view.select(selector("dl.v_file")).collect();
         if files.len() > 1 {
             return invalid();
         }
@@ -556,7 +556,7 @@ pub(super) fn article(
             if text(one(*files, "dt")?) != "첨부파일" {
                 return invalid();
             }
-            for link in files.select(&selector("dd a")) {
+            for link in files.select(selector("dd a")) {
                 let target = safe_url(&entry.url, link.value().attr("href").ok_or(PARSER_ERROR)?)
                     .ok_or(PARSER_ERROR)?;
                 file_target(&board, &target, &external_id, "/aseoul_bbs/down.php")?;
@@ -576,7 +576,7 @@ pub(super) fn article(
         if text(one(files, "span")?) != "첨부파일" {
             return invalid();
         }
-        for link in files.select(&selector("a")) {
+        for link in files.select(selector("a")) {
             let target = safe_url(&entry.url, link.value().attr("href").ok_or(PARSER_ERROR)?)
                 .ok_or(PARSER_ERROR)?;
             file_target(&board, &target, &external_id, "/bbs/down.php")?;
