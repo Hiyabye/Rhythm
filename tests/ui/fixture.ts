@@ -27,6 +27,8 @@ export interface FixtureOptions {
   aiProjectorState?: 'downloading' | 'installed' | 'failed' | 'cancelled' | 'missing';
   aiPartial?: boolean;
   aiSetupNeeded?: boolean;
+  // A fresh profile that has not finished the first-run setup flow.
+  onboardingNeeded?: boolean;
   // Windows-flavored defaults (paths); pair with a Windows user agent.
   windows?: boolean;
   aiRuntimeDetail?: string;
@@ -149,7 +151,8 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     const snapshot = { settings: { theme: 'light', energy_profile: 'eco', interests: '' },
       extensions: [{ id: 'sogang_notices', display_name: '서강대학교 공지', description: '학교 소식 보관', available: true, enabled: options.enabled ?? true }],
       storage: { path: '/isolated/rhythm.sqlite3', bytes: 4096, schema_version: 5 },
-      worker: { state: 'ready', runtime_available: true, model: null, detail: null }, proactive: copy(proactiveSettings) };
+      worker: { state: 'ready', runtime_available: true, model: null, detail: null }, proactive: copy(proactiveSettings),
+      onboarding_completed: !options.onboardingNeeded };
     let sync = { running: false, source_id: null as string | null, mode: 'historical', page: 0, message: '수집 대기 중입니다.' };
     const separator = options.windows ? '\\' : '/';
     const defaultModelDirectory = options.windows ? 'C:\\Rhythm-test\\models' : '/isolated/models';
@@ -351,6 +354,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (options.settingsError) throw '설정을 저장하지 못했습니다.';
             snapshot.settings = copy(args.settings); return copy(snapshot);
           case 'set_extension': snapshot.extensions[0].enabled = args.enabled; return copy(snapshot);
+          case 'complete_onboarding': snapshot.onboarding_completed = true; return copy(snapshot);
           case 'worker_status': return copy(snapshot.worker);
           case 'personalization_get': return copy(personalization);
           case 'personalization_save_profile':

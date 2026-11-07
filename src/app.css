@@ -1561,6 +1561,88 @@ select:focus-visible {
 }
 .first-run p { margin: 0 0 8px; }
 .first-run ol { margin: 0 0 8px; padding-left: 20px; list-style: decimal; }
+/* First-run setup flow: one centered column of steps, drawn with the Settings grammar. */
+.setup-flow {
+  min-height: 100vh;
+  background: var(--bg);
+  padding: 26px 16px 32px;
+}
+.setup-column {
+  display: flex;
+  flex-direction: column;
+  max-width: 600px;
+  min-height: calc(100vh - 58px);
+  margin: 0 auto;
+}
+/* Doubled class so the icon-sidebar breakpoint never collapses the flow's brand row. */
+.setup-flow .brand.brand {
+  justify-content: flex-start;
+  padding: 2px 0 18px;
+}
+.setup-flow .brand.brand>span:last-child {
+  display: inline;
+}
+.setup-progress {
+  flex: none;
+  margin-bottom: 26px;
+}
+.setup-progress li.current {
+  color: var(--text);
+  font-weight: 600;
+}
+.setup-progress li.current span {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* The flow has no sidebar, so it drops the shell's main offsets. */
+.setup-body {
+  flex: 1;
+  display: block;
+  width: auto;
+  max-width: none;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  outline: none;
+}
+.setup-header {
+  margin-bottom: 22px;
+}
+.setup-header h1:focus {
+  outline: none;
+}
+.setup-header p {
+  margin-top: 4px;
+  color: var(--secondary);
+  word-break: keep-all;
+}
+.setup-choices {
+  grid-template-columns: repeat(3,minmax(0,1fr));
+}
+.setup-choices .model-tile {
+  min-height: 72px;
+}
+@media (max-width:640px) {
+  .setup-choices {
+    grid-template-columns: minmax(0,1fr);
+  }
+}
+.setup-note {
+  margin: 12px 4px 0;
+}
+.setup-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 28px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.setup-footer-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
 .archive-search {
   margin-top: 8px;
 }

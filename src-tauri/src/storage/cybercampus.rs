@@ -319,12 +319,16 @@ mod tests {
             connection
                 .execute_batch(
                     "DROP TABLE cybercampus_tasks; DROP TABLE cybercampus_courses;
+                     ALTER TABLE settings DROP COLUMN onboarding_completed;
                      PRAGMA user_version=17;",
                 )
                 .unwrap();
         }
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.info().unwrap().schema_version, 18);
+        assert_eq!(
+            store.info().unwrap().schema_version,
+            super::super::SCHEMA_VERSION
+        );
         store
             .cybercampus_set_courses(
                 2026,

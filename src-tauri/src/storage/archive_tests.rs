@@ -1476,6 +1476,7 @@ fn schema_ten_upgrade_keeps_archive_and_adds_skipped_articles() {
                  ALTER TABLE ai_preferences DROP COLUMN embedding_model_id;
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
+                 ALTER TABLE settings DROP COLUMN onboarding_completed;
                  PRAGMA user_version=10;",
             )
             .unwrap();
@@ -1526,6 +1527,7 @@ fn schema_eleven_upgrade_retries_mislabeled_and_newly_allowed_resources() {
                  ALTER TABLE ai_preferences DROP COLUMN embedding_model_id;
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
+                 ALTER TABLE settings DROP COLUMN onboarding_completed;
                  PRAGMA user_version=11;"
             ))
             .unwrap();
@@ -1557,6 +1559,7 @@ fn retired_eng_newsletter_row_is_removed_but_archived_data_is_kept() {
             .unwrap()
             .execute_batch(
                 "DROP TABLE cybercampus_tasks; DROP TABLE cybercampus_courses;
+                 ALTER TABLE settings DROP COLUMN onboarding_completed;
                  PRAGMA user_version=16",
             )
             .unwrap();

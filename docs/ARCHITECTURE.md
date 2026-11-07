@@ -71,6 +71,7 @@ Rust owns persistence; browser previews never substitute localStorage or simulat
 | `014_ai_backlog_mode` | Data only: widens `ai_preferences.processing_mode` to `explicit`/`recent`/`backlog` by rebuilding the single-row table, and indexes `ai_jobs(document_id,revision_id,status)` for candidate queries |
 | `015_ai_embedding` | `ai_models.kind` (`generation`/`embedding`), `ai_preferences.embedding_model_id` and `classification_enabled`, `notice_embeddings`, `notice_classifications` |
 | `018_cybercampus` | `cybercampus_courses` (courses of the synced term) and `cybercampus_tasks` (assignments and other deadlines, replaced per course on each successful sync) |
+| `019_onboarding` | `settings.onboarding_completed`: defaults to done for upgraded profiles; `migrate` clears it only for a profile created from scratch, which then shows the first-run setup flow once. Finishing or skipping sets it; a rerun from Settings never clears it |
 
 ### Archive tables
 
