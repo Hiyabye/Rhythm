@@ -105,7 +105,7 @@ test('unconfigured updater shows manual update guidance instead of a failing che
   await expect(updater).toContainText('공지, 설정, AI 모델은 앱과 별도로 저장되어 앱을 바꿔도 지워지지 않습니다.');
   await expect(updater.getByRole('button', { name: '업데이트 확인', exact: true })).toHaveCount(0);
   await expect(updater.getByRole('alert')).toHaveCount(0);
-  await expect(updater).toContainText('1.5.0');
+  await expect(updater).toContainText('1.6.0');
   expect(await callCount(page, 'updater_configured')).toBe(1);
   expect(await callCount(page, 'updater_check')).toBe(0);
 });
