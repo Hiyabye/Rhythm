@@ -1,5 +1,5 @@
 use super::model::{ArticleInput, ListingEntry, ListingPage, ResourceInput, SourceDefinition};
-use scraper::{ElementRef, Html, Selector};
+use scraper::{ElementRef, Html};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use url::Url;
@@ -19,9 +19,7 @@ const PARSER_ERROR: &str = "학교 페이지 형식이 예상과 다릅니다. �
 fn invalid<T>() -> Result<T, String> {
     Err(PARSER_ERROR.into())
 }
-fn selector(value: &str) -> Selector {
-    Selector::parse(value).expect("static CSS selector")
-}
+use super::selector;
 fn text(element: ElementRef<'_>) -> String {
     normalize(&element.text().collect::<Vec<_>>().join(" "))
 }
@@ -29,7 +27,7 @@ fn normalize(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 fn one<'a>(root: ElementRef<'a>, css: &str) -> Result<ElementRef<'a>, String> {
-    let found: Vec<_> = root.select(&selector(css)).collect();
+    let found: Vec<_> = root.select(selector(css)).collect();
     if found.len() == 1 {
         Ok(found[0])
     } else {
@@ -316,7 +314,7 @@ fn computing_listing(
         return invalid();
     }
     if let Some(category) = content
-        .select(&selector(".board-category button[aria-pressed=true]"))
+        .select(selector(".board-category button[aria-pressed=true]"))
         .next()
     {
         if text(category) != "전체" {
@@ -328,10 +326,10 @@ fn computing_listing(
         .parse()
         .map_err(|_| PARSER_ERROR)?;
     let table = one(content, ".board-list table")?;
-    let rows: Vec<_> = table.select(&selector("tbody tr")).collect();
+    let rows: Vec<_> = table.select(selector("tbody tr")).collect();
     let pins = rows
         .iter()
-        .filter(|r| r.select(&selector(".board-list-notice")).next().is_some())
+        .filter(|r| r.select(selector(".board-list-notice")).next().is_some())
         .count() as u32;
     let regular = declared.checked_sub(pins).ok_or(PARSER_ERROR)?;
     let total_pages = regular.div_ceil(10).max(1);
@@ -342,7 +340,7 @@ fn computing_listing(
         if !text(table).contains("등록된 게시물이 없습니다")
             || rows
                 .iter()
-                .any(|r| r.select(&selector(".board-list-title a")).next().is_some())
+                .any(|r| r.select(selector(".board-list-title a")).next().is_some())
         {
             return invalid();
         }
@@ -396,7 +394,7 @@ fn computing_listing(
         {
             return invalid();
         }
-        let pinned = row.select(&selector(".board-list-notice")).next().is_some();
+        let pinned = row.select(selector(".board-list-notice")).next().is_some();
         if !pinned {
             ordinals.push(
                 text(one(row, ".board-list-number")?)
@@ -526,7 +524,7 @@ pub fn article(
                 return invalid();
             }
             let mut metadata = HashMap::new();
-            for div in article.select(&selector(".board-detail-meta > div")) {
+            for div in article.select(selector(".board-detail-meta > div")) {
                 let label = text(one(div, "dt")?);
                 let value = text(one(div, "dd")?);
                 metadata.insert(label, value);
@@ -903,7 +901,7 @@ fn computing_files(
     body: &str,
 ) -> Result<Vec<ResourceInput>, String> {
     let names: Vec<_> = root
-        .select(&selector(".board-detail-files .board-detail-file-download"))
+        .select(selector(".board-detail-files .board-detail-file-download"))
         .map(|a| {
             a.value()
                 .attr("title")

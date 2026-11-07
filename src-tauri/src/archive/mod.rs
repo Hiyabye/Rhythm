@@ -12,9 +12,32 @@ use crate::AppState;
 use base64::Engine;
 use model::*;
 pub use network::Client;
+use std::{
+    collections::HashMap,
+    sync::{LazyLock, Mutex},
+};
 use sync::with_store;
 use tauri::State;
 use url::Url;
+
+/// Parses each distinct CSS selector once. Callers pass literals or values built
+/// from a small fixed set, so the cache stays small and its entries live for the
+/// whole process.
+fn selector(value: &str) -> &'static scraper::Selector {
+    static CACHE: LazyLock<Mutex<HashMap<String, &'static scraper::Selector>>> =
+        LazyLock::new(Default::default);
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(found) = cache.get(value) {
+        return found;
+    }
+    let parsed: &'static scraper::Selector = Box::leak(Box::new(
+        scraper::Selector::parse(value).expect("static CSS selector"),
+    ));
+    cache.insert(value.to_owned(), parsed);
+    parsed
+}
 
 pub fn definitions() -> Vec<SourceDefinition> {
     catalog::definitions()

@@ -2,15 +2,13 @@
 //! observed on 2026-11-06 with a Korean `Accept-Language`; the request flow
 //! follows rycont/eclass-cli (MIT, permission from its author).
 use crate::archive::model::ResourceInput;
-use scraper::{ElementRef, Html, Selector};
+use scraper::{ElementRef, Html};
 use std::collections::HashSet;
 
 pub const ORIGIN: &str = "https://eclass.sogang.ac.kr";
 const PAGE_ERROR: &str = "사이버캠퍼스 페이지 형식이 예상과 다릅니다. 기존 보관 자료는 유지됩니다.";
 
-fn selector(value: &str) -> Selector {
-    Selector::parse(value).expect("static CSS selector")
-}
+use crate::archive::selector;
 fn text(element: ElementRef<'_>) -> String {
     normalize(&element.text().collect::<Vec<_>>().join(" "))
 }
@@ -18,7 +16,7 @@ fn normalize(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 fn first_text(root: ElementRef<'_>, css: &str) -> Option<String> {
-    root.select(&selector(css))
+    root.select(selector(css))
         .next()
         .map(text)
         .filter(|value| !value.is_empty())
@@ -100,7 +98,7 @@ pub fn courses(body: &str) -> Vec<Course> {
     let document = Html::parse_document(body);
     let mut seen = HashSet::new();
     let mut result = Vec::new();
-    for anchor in document.select(&selector("a[onclick*=\"eclassRoom(\"]")) {
+    for anchor in document.select(selector("a[onclick*=\"eclassRoom(\"]")) {
         let onclick = anchor.value().attr("onclick").unwrap_or("");
         let Some(course_key) = call_arguments(onclick, "eclassRoom")
             .and_then(|arguments| arguments.first().and_then(|value| key(value)))
@@ -160,7 +158,7 @@ pub fn notice_list(body: &str) -> Result<NoticeList, String> {
         .ok_or(PAGE_ERROR)?;
     let document = Html::parse_document(body);
     let mut rows = Vec::new();
-    for button in document.select(&selector("button.board_list_wrap")) {
+    for button in document.select(selector("button.board_list_wrap")) {
         let onclick = button.value().attr("onclick").unwrap_or("");
         let Some(seq) = call_arguments(onclick, "noticeViewPop")
             .and_then(|arguments| arguments.first().and_then(|value| key(value)))
@@ -216,12 +214,12 @@ pub struct NoticeView {
     pub files: Option<FileRequest>,
 }
 fn table_value(root: ElementRef<'_>, label: &str) -> Option<String> {
-    for row in root.select(&selector("tr")) {
-        let Some(heading) = row.select(&selector("th")).next() else {
+    for row in root.select(selector("tr")) {
+        let Some(heading) = row.select(selector("th")).next() else {
             continue;
         };
         if text(heading).contains(label) {
-            return row.select(&selector("td")).next().map(text);
+            return row.select(selector("td")).next().map(text);
         }
     }
     None
@@ -234,7 +232,7 @@ pub fn notice_view(body: &str) -> Result<NoticeView, String> {
         .filter(|value| !value.is_empty())
         .ok_or(PAGE_ERROR)?;
     let content = root
-        .select(&selector("div.editor_content"))
+        .select(selector("div.editor_content"))
         .next()
         .ok_or(PAGE_ERROR)?;
     Ok(NoticeView {
@@ -250,7 +248,7 @@ pub fn notice_view(body: &str) -> Result<NoticeView, String> {
 pub fn attachments(body: &str) -> Vec<ResourceInput> {
     let fragment = Html::parse_fragment(body);
     let mut result: Vec<ResourceInput> = Vec::new();
-    for link in fragment.select(&selector("a.file_down[href]")) {
+    for link in fragment.select(selector("a.file_down[href]")) {
         let Some(url) = download_url(link.value().attr("href").unwrap_or("")) else {
             continue;
         };
@@ -289,9 +287,7 @@ pub fn assignments(body: &str) -> Vec<AssignmentRow> {
     let mut result = Vec::new();
     // A group selector yields matches in document order, so each assignment
     // takes the week heading that precedes it.
-    for element in document.select(&selector(
-        "div.activity_week, a[id^=\"class_menu_report_\"]",
-    )) {
+    for element in document.select(selector("div.activity_week, a[id^=\"class_menu_report_\"]")) {
         if element.value().name() == "div" {
             week = element
                 .value()
@@ -342,7 +338,7 @@ pub fn assignment(body: &str) -> Result<AssignmentDetail, String> {
             .split_once("마감일")
             .and_then(|(_, rest)| full_datetime(rest.trim_start_matches([' ', ':'])))
     });
-    let (status, submitted_at) = match root.select(&selector(".submit_info_box")).next() {
+    let (status, submitted_at) = match root.select(selector(".submit_info_box")).next() {
         Some(submitted) => (
             first_text(submitted, ".txt"),
             first_text(submitted, ".date").and_then(|value| full_datetime(&value)),
@@ -373,7 +369,7 @@ pub struct TodoItem {
 pub fn todo(body: &str) -> Vec<TodoItem> {
     let fragment = Html::parse_fragment(body);
     let mut result = Vec::new();
-    for item in fragment.select(&selector("a.todo_wrap.on[href]")) {
+    for item in fragment.select(selector("a.todo_wrap.on[href]")) {
         let href = item.value().attr("href").unwrap_or("");
         let Some(arguments) = call_arguments(href, "goLecture") else {
             continue;
@@ -385,7 +381,7 @@ pub fn todo(body: &str) -> Vec<TodoItem> {
         ) else {
             continue;
         };
-        let Some(heading) = item.select(&selector(".todo_title")).next() else {
+        let Some(heading) = item.select(selector(".todo_title")).next() else {
             continue;
         };
         let label = first_text(heading, "span")
