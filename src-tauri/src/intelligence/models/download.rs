@@ -1,5 +1,183 @@
 use super::*;
 
+/// The two downloadable artifacts share one resumable transfer; only their
+/// inventory record and user-facing wording differ.
+pub(super) trait Download {
+    fn status(&mut self, status: &str);
+    fn clear_error(&mut self);
+    fn downloaded(&mut self) -> &mut u64;
+    fn resume_etag(&mut self) -> &mut Option<String>;
+    fn persist(&self, store: &Arc<Mutex<Store>>) -> Result<(), String>;
+}
+impl Download for AiModel {
+    fn status(&mut self, status: &str) {
+        self.status = status.into();
+    }
+    fn clear_error(&mut self) {
+        self.error = None;
+    }
+    fn downloaded(&mut self) -> &mut u64 {
+        &mut self.downloaded_bytes
+    }
+    fn resume_etag(&mut self) -> &mut Option<String> {
+        &mut self.resume_etag
+    }
+    fn persist(&self, store: &Arc<Mutex<Store>>) -> Result<(), String> {
+        with_store(store, |s| s.ai_upsert_model(self))
+    }
+}
+impl Download for AiProjector {
+    fn status(&mut self, status: &str) {
+        self.status = status.into();
+    }
+    fn clear_error(&mut self) {
+        self.error = None;
+    }
+    fn downloaded(&mut self) -> &mut u64 {
+        &mut self.downloaded_bytes
+    }
+    fn resume_etag(&mut self) -> &mut Option<String> {
+        &mut self.resume_etag
+    }
+    fn persist(&self, store: &Arc<Mutex<Store>>) -> Result<(), String> {
+        with_store(store, |s| s.ai_upsert_projector(self))
+    }
+}
+
+pub(super) struct Messages {
+    open: &'static str,
+    timeout: &'static str,
+    cancelled_resumable: &'static str,
+    cancelled: &'static str,
+    flush_partial: &'static str,
+    limit: &'static str,
+    write: &'static str,
+    finish: &'static str,
+    sync: &'static str,
+    incomplete: &'static str,
+}
+const MODEL_MESSAGES: Messages = Messages {
+    open: "임시 모델 파일을 열지 못했습니다.",
+    timeout: "모델 다운로드 응답 시간이 초과되었습니다.",
+    cancelled_resumable: "모델 설치를 취소했습니다. 다시 선택하면 이어받습니다.",
+    cancelled: "모델 설치를 취소했습니다.",
+    flush_partial: "임시 모델 저장에 실패했습니다.",
+    limit: "모델 다운로드 크기 또는 시간 제한을 초과했습니다.",
+    write: "모델 파일을 저장하지 못했습니다. 저장 공간과 권한을 확인해 주세요.",
+    finish: "모델 파일 저장을 마무리하지 못했습니다.",
+    sync: "모델 파일을 디스크에 저장하지 못했습니다.",
+    incomplete: "모델 파일을 끝까지 받지 못했습니다. 다시 선택하면 이어받습니다.",
+};
+const PROJECTOR_MESSAGES: Messages = Messages {
+    open: "임시 이미지 인식 모듈 파일을 열지 못했습니다.",
+    timeout: "이미지 인식 모듈 다운로드 응답 시간이 초과되었습니다.",
+    cancelled_resumable: "이미지 인식 모듈 설치를 취소했습니다. 다시 선택하면 이어받습니다.",
+    cancelled: "이미지 인식 모듈 설치를 취소했습니다.",
+    flush_partial: "임시 이미지 인식 모듈 저장에 실패했습니다.",
+    limit: "이미지 인식 모듈 다운로드 크기 또는 시간 제한을 초과했습니다.",
+    write: "이미지 인식 모듈 파일을 저장하지 못했습니다. 저장 공간과 권한을 확인해 주세요.",
+    finish: "이미지 인식 모듈 파일 저장을 마무리하지 못했습니다.",
+    sync: "이미지 인식 모듈 파일을 디스크에 저장하지 못했습니다.",
+    incomplete: "이미지 인식 모듈 파일을 끝까지 받지 못했습니다. 다시 선택하면 이어받습니다.",
+};
+
+/// Brings `part` to exactly `total` bytes: reuses a complete partial file,
+/// resumes a strong-validator prefix, or restarts. The caller verifies and
+/// renames the finished file.
+#[allow(clippy::too_many_arguments)]
+async fn download_part(
+    store: &Arc<Mutex<Store>>,
+    record: &mut impl Download,
+    total: u64,
+    url: &Url,
+    part: &Path,
+    cancel: &Arc<AtomicBool>,
+    transport: &impl Transport,
+    messages: &Messages,
+) -> Result<(), String> {
+    let actual = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
+    if actual == total {
+        return Ok(());
+    }
+    let offset = if actual < total && record.resume_etag().as_deref().is_some_and(strong_etag) {
+        actual
+    } else {
+        0
+    };
+    require_space(
+        available_space(part.parent().ok_or("모델 저장 폴더가 없습니다.")?)?,
+        total - offset,
+    )?;
+    record.status("downloading");
+    *record.downloaded() = offset;
+    record.clear_error();
+    record.persist(store)?;
+    let mut response = tokio::select! {r=transport.response(url,total,offset,record.resume_etag().as_deref(),cancel)=>r?,_=cancelled(cancel)=>return check_cancel(cancel)};
+    let append = match validate_response(&response, offset, total, record.resume_etag().as_deref())
+    {
+        Ok(append) => append,
+        Err(error) => {
+            if response.status == 206 || response.status == 416 {
+                // A changed validator/range cannot be retried as the same prefix.
+                tokio::fs::remove_file(part)
+                    .await
+                    .map_err(|_| "잘못된 이어받기 파일을 정리하지 못했습니다.")?;
+                *record.downloaded() = 0;
+                *record.resume_etag() = None;
+            }
+            return Err(error);
+        }
+    };
+    let mut received = if append { offset } else { 0 };
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(!append)
+        .append(append)
+        .open(part)
+        .await
+        .map_err(|_| messages.open)?;
+    *record.resume_etag() = response.etag.take();
+    *record.downloaded() = received;
+    record.persist(store)?;
+    let start = Instant::now();
+    let mut progress = Instant::now();
+    loop {
+        let next = tokio::select! {
+            r = tokio::time::timeout(Duration::from_secs(45), response.body.chunk()) => r.unwrap_or_else(|_| Err(messages.timeout.into())),
+            _ = cancelled(cancel) => Err(messages.cancelled_resumable.into()),
+        };
+        let chunk = match next {
+            Ok(chunk) if !cancel.load(Ordering::Acquire) => chunk,
+            outcome => {
+                // Tokio writes may still be buffered when a network error arrives.
+                file.flush().await.map_err(|_| messages.flush_partial)?;
+                return Err(outcome.err().unwrap_or_else(|| messages.cancelled.into()));
+            }
+        };
+        let Some(chunk) = chunk else { break };
+        if start.elapsed() > Duration::from_secs(2 * 60 * 60)
+            || chunk.len() as u64 > total.saturating_sub(received)
+        {
+            return Err(messages.limit.into());
+        }
+        file.write_all(&chunk).await.map_err(|_| messages.write)?;
+        received += chunk.len() as u64;
+        *record.downloaded() = received;
+        if progress.elapsed() >= Duration::from_millis(350) {
+            record.persist(store)?;
+            progress = Instant::now();
+        }
+    }
+    file.flush().await.map_err(|_| messages.finish)?;
+    file.sync_all().await.map_err(|_| messages.sync)?;
+    drop(file);
+    if received != total {
+        return Err(messages.incomplete.into());
+    }
+    Ok(())
+}
+
 pub(super) async fn install(
     store: &Arc<Mutex<Store>>,
     root: &Path,
@@ -39,97 +217,18 @@ pub(super) async fn install(
         return with_store(store, |s| s.ai_upsert_model(model));
     }
     let part = full.with_extension("part");
-    let actual = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
-    if actual == entry.bytes {
-        return finalize(store, entry, model, cancel, &part, &full).await;
-    }
-    let offset = if actual < entry.bytes && model.resume_etag.as_deref().is_some_and(strong_etag) {
-        actual
-    } else {
-        0
-    };
-    require_space(
-        available_space(full.parent().ok_or("모델 저장 폴더가 없습니다.")?)?,
-        entry.bytes - offset,
-    )?;
-    model.status = "downloading".into();
-    model.downloaded_bytes = offset;
-    model.error = None;
-    with_store(store, |s| s.ai_upsert_model(model))?;
     let url = download_url(entry)?;
-    let mut response = tokio::select! {r=transport.response(&url,entry.bytes,offset,model.resume_etag.as_deref(),cancel)=>r?,_=cancelled(cancel)=>return check_cancel(cancel)};
-    let append =
-        match validate_response(&response, offset, entry.bytes, model.resume_etag.as_deref()) {
-            Ok(append) => append,
-            Err(error) => {
-                if response.status == 206 || response.status == 416 {
-                    // A changed validator/range cannot be retried as the same prefix.
-                    tokio::fs::remove_file(&part)
-                        .await
-                        .map_err(|_| "잘못된 이어받기 파일을 정리하지 못했습니다.")?;
-                    model.downloaded_bytes = 0;
-                    model.resume_etag = None;
-                }
-                return Err(error);
-            }
-        };
-    let mut received = if append { offset } else { 0 };
-    let mut file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(!append)
-        .append(append)
-        .open(&part)
-        .await
-        .map_err(|_| "임시 모델 파일을 열지 못했습니다.")?;
-    model.resume_etag = response.etag.take();
-    model.downloaded_bytes = received;
-    with_store(store, |s| s.ai_upsert_model(model))?;
-    let start = Instant::now();
-    let mut progress = Instant::now();
-    loop {
-        let next = tokio::select! {
-            r = tokio::time::timeout(Duration::from_secs(45), response.body.chunk()) => r.unwrap_or_else(|_| Err("모델 다운로드 응답 시간이 초과되었습니다.".into())),
-            _ = cancelled(cancel) => Err("모델 설치를 취소했습니다. 다시 선택하면 이어받습니다.".into()),
-        };
-        let chunk = match next {
-            Ok(chunk) if !cancel.load(Ordering::Acquire) => chunk,
-            outcome => {
-                // Tokio writes may still be buffered when a network error arrives.
-                file.flush()
-                    .await
-                    .map_err(|_| "임시 모델 저장에 실패했습니다.")?;
-                return Err(outcome
-                    .err()
-                    .unwrap_or_else(|| "모델 설치를 취소했습니다.".into()));
-            }
-        };
-        let Some(chunk) = chunk else { break };
-        if start.elapsed() > Duration::from_secs(2 * 60 * 60)
-            || chunk.len() as u64 > entry.bytes.saturating_sub(received)
-        {
-            return Err("모델 다운로드 크기 또는 시간 제한을 초과했습니다.".into());
-        }
-        file.write_all(&chunk)
-            .await
-            .map_err(|_| "모델 파일을 저장하지 못했습니다. 저장 공간과 권한을 확인해 주세요.")?;
-        received += chunk.len() as u64;
-        model.downloaded_bytes = received;
-        if progress.elapsed() >= Duration::from_millis(350) {
-            with_store(store, |s| s.ai_upsert_model(model))?;
-            progress = Instant::now();
-        }
-    }
-    file.flush()
-        .await
-        .map_err(|_| "모델 파일 저장을 마무리하지 못했습니다.")?;
-    file.sync_all()
-        .await
-        .map_err(|_| "모델 파일을 디스크에 저장하지 못했습니다.")?;
-    drop(file);
-    if received != entry.bytes {
-        return Err("모델 파일을 끝까지 받지 못했습니다. 다시 선택하면 이어받습니다.".into());
-    }
+    download_part(
+        store,
+        model,
+        entry.bytes,
+        &url,
+        &part,
+        cancel,
+        transport,
+        &MODEL_MESSAGES,
+    )
+    .await?;
     finalize(store, entry, model, cancel, &part, &full).await
 }
 pub(super) async fn finalize(
@@ -242,7 +341,6 @@ pub(super) async fn install_projector(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn install_projector_bytes(
     store: &Arc<Mutex<Store>>,
     entry: &CatalogEntry,
@@ -276,102 +374,18 @@ pub(super) async fn install_projector_bytes(
         return with_store(store, |s| s.ai_upsert_projector(record));
     }
     let part = full.with_extension("part");
-    let actual = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
-    if actual == projector.bytes {
-        return finalize_projector(store, projector, record, cancel, &part, full).await;
-    }
-    let offset =
-        if actual < projector.bytes && record.resume_etag.as_deref().is_some_and(strong_etag) {
-            actual
-        } else {
-            0
-        };
-    require_space(
-        available_space(full.parent().ok_or("모델 저장 폴더가 없습니다.")?)?,
-        projector.bytes - offset,
-    )?;
-    record.status = "downloading".into();
-    record.downloaded_bytes = offset;
-    record.error = None;
-    with_store(store, |s| s.ai_upsert_projector(record))?;
     let (url, _) = projector_url(entry)?;
-    let mut response = tokio::select! {r=transport.response(&url,projector.bytes,offset,record.resume_etag.as_deref(),cancel)=>r?,_=cancelled(cancel)=>return check_cancel(cancel)};
-    let append = match validate_response(
-        &response,
-        offset,
+    download_part(
+        store,
+        record,
         projector.bytes,
-        record.resume_etag.as_deref(),
-    ) {
-        Ok(append) => append,
-        Err(error) => {
-            if response.status == 206 || response.status == 416 {
-                tokio::fs::remove_file(&part)
-                    .await
-                    .map_err(|_| "잘못된 이어받기 파일을 정리하지 못했습니다.")?;
-                record.downloaded_bytes = 0;
-                record.resume_etag = None;
-            }
-            return Err(error);
-        }
-    };
-    let mut received = if append { offset } else { 0 };
-    let mut file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(!append)
-        .append(append)
-        .open(&part)
-        .await
-        .map_err(|_| "임시 이미지 인식 모듈 파일을 열지 못했습니다.")?;
-    record.resume_etag = response.etag.take();
-    record.downloaded_bytes = received;
-    with_store(store, |s| s.ai_upsert_projector(record))?;
-    let start = Instant::now();
-    let mut progress = Instant::now();
-    loop {
-        let next = tokio::select! {
-            r = tokio::time::timeout(Duration::from_secs(45), response.body.chunk()) => r.unwrap_or_else(|_| Err("이미지 인식 모듈 다운로드 응답 시간이 초과되었습니다.".into())),
-            _ = cancelled(cancel) => Err("이미지 인식 모듈 설치를 취소했습니다. 다시 선택하면 이어받습니다.".into()),
-        };
-        let chunk = match next {
-            Ok(chunk) if !cancel.load(Ordering::Acquire) => chunk,
-            outcome => {
-                file.flush()
-                    .await
-                    .map_err(|_| "임시 이미지 인식 모듈 저장에 실패했습니다.")?;
-                return Err(outcome
-                    .err()
-                    .unwrap_or_else(|| "이미지 인식 모듈 설치를 취소했습니다.".into()));
-            }
-        };
-        let Some(chunk) = chunk else { break };
-        if start.elapsed() > Duration::from_secs(2 * 60 * 60)
-            || chunk.len() as u64 > projector.bytes.saturating_sub(received)
-        {
-            return Err("이미지 인식 모듈 다운로드 크기 또는 시간 제한을 초과했습니다.".into());
-        }
-        file.write_all(&chunk).await.map_err(|_| {
-            "이미지 인식 모듈 파일을 저장하지 못했습니다. 저장 공간과 권한을 확인해 주세요."
-        })?;
-        received += chunk.len() as u64;
-        record.downloaded_bytes = received;
-        if progress.elapsed() >= Duration::from_millis(350) {
-            with_store(store, |s| s.ai_upsert_projector(record))?;
-            progress = Instant::now();
-        }
-    }
-    file.flush()
-        .await
-        .map_err(|_| "이미지 인식 모듈 파일 저장을 마무리하지 못했습니다.")?;
-    file.sync_all()
-        .await
-        .map_err(|_| "이미지 인식 모듈 파일을 디스크에 저장하지 못했습니다.")?;
-    drop(file);
-    if received != projector.bytes {
-        return Err(
-            "이미지 인식 모듈 파일을 끝까지 받지 못했습니다. 다시 선택하면 이어받습니다.".into(),
-        );
-    }
+        &url,
+        &part,
+        cancel,
+        transport,
+        &PROJECTOR_MESSAGES,
+    )
+    .await?;
     finalize_projector(store, projector, record, cancel, &part, full).await
 }
 
