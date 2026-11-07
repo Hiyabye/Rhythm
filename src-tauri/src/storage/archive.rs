@@ -5,7 +5,16 @@ use sha2::{Digest, Sha256};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 const SOURCE_COLUMNS: &str = "id,name,organization,description,url,family,supported,subscribed,last_attempt,last_success,last_error,next_page,history_complete,status,discovered,archived,failed,(SELECT COUNT(*) FROM skipped_articles k WHERE k.source_id=sources.id)";
-const ITEM_COLUMNS: &str = "d.id,d.source_id,s.name,d.title,d.author,d.category,d.published_at,d.collected_at,COALESCE(u.is_read,0),COALESCE(u.saved,0),d.historical,d.body_text,CASE WHEN EXISTS(SELECT 1 FROM resources a WHERE a.document_id=d.id AND a.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id) AND a.status<>'downloaded') THEN 'missing_resources' ELSE 'archived' END";
+macro_rules! item_columns {
+    ($snippet:literal) => {
+        concat!("d.id,d.source_id,s.name,d.title,d.author,d.category,d.published_at,d.collected_at,COALESCE(u.is_read,0),COALESCE(u.saved,0),d.historical,", $snippet, ",CASE WHEN EXISTS(SELECT 1 FROM resources a WHERE a.document_id=d.id AND a.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id) AND a.status<>'downloaded') THEN 'missing_resources' ELSE 'archived' END")
+    };
+}
+/// The snippet column is the whole body, which `excerpt` narrows around a match.
+const ITEM_COLUMNS: &str = item_columns!("d.body_text");
+/// Without search terms the excerpt is the body's first 240 characters, so one
+/// more is enough to tell whether it was cut. Avoids loading every full body.
+const ITEM_PREVIEW_COLUMNS: &str = item_columns!("substr(d.body_text,1,241)");
 const ITEM_FROM: &str = "documents d JOIN sources s ON s.id=d.source_id LEFT JOIN document_state u ON u.document_id=d.id";
 const RESOURCE_COLUMNS: &str = "id,url,filename,kind,status,mime,bytes,local_path,sha256,error";
 
@@ -621,7 +630,12 @@ impl Store {
             .map_err(|e| e.to_string())?;
         let order = if query.ascending { "ASC" } else { "DESC" };
         let limit = query.limit.unwrap_or(30).clamp(1, 100);
-        let sql=format!("SELECT {ITEM_COLUMNS} FROM {ITEM_FROM} WHERE {condition} ORDER BY d.published_at {order},d.id {order} LIMIT ? OFFSET ?");
+        let columns = if terms.is_empty() {
+            ITEM_PREVIEW_COLUMNS
+        } else {
+            ITEM_COLUMNS
+        };
+        let sql=format!("SELECT {columns} FROM {ITEM_FROM} WHERE {condition} ORDER BY d.published_at {order},d.id {order} LIMIT ? OFFSET ?");
         values.push(i64::from(limit).into());
         values.push(i64::from(query.offset).into());
         let mut statement = self.connection.prepare(&sql).map_err(|e| e.to_string())?;
@@ -890,7 +904,7 @@ impl Store {
         let mut item = self
             .connection
             .query_row(
-                &format!("SELECT {ITEM_COLUMNS} FROM {ITEM_FROM} WHERE d.id=?1"),
+                &format!("SELECT {ITEM_PREVIEW_COLUMNS} FROM {ITEM_FROM} WHERE d.id=?1"),
                 [id],
                 item_row,
             )
