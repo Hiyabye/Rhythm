@@ -454,7 +454,20 @@ fn clock(value: &str) -> Option<(u32, u32)> {
         .parse::<u32>()
         .ok()?;
     let minute = minute.get(..2)?.parse::<u32>().ok()?;
-    (hour < 24 && minute < 60).then_some((hour, minute))
+    if minute >= 60 {
+        return None;
+    }
+    // Some accounts see a 12-hour clock (`오후 2:59`, `2:59 PM`); without the
+    // marker an afternoon deadline would read 12 hours early.
+    let upper = value.to_ascii_uppercase();
+    let afternoon = value.contains("오후") || upper.contains("PM");
+    let morning = value.contains("오전") || upper.contains("AM");
+    match (morning, afternoon) {
+        (false, false) => (hour < 24).then_some((hour, minute)),
+        (true, false) if (1..=12).contains(&hour) => Some((hour % 12, minute)),
+        (false, true) if (1..=12).contains(&hour) => Some((hour % 12 + 12, minute)),
+        _ => None,
+    }
 }
 fn stamp(year: i32, month: u32, day: u32, time: Option<(u32, u32)>) -> String {
     match time {
