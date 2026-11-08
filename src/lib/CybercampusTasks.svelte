@@ -28,14 +28,24 @@
 
   onMount(() => {
     let active = true;
-    const timer = window.setInterval(() => now = Date.now(), 60_000);
+    // Deadlines count down from the local clock alone; a hidden window's timer
+    // may be throttled, so returning to it reads the clock at once.
+    const tick = () => now = Date.now();
+    const timer = window.setInterval(tick, 60_000);
+    window.addEventListener('focus', tick);
+    document.addEventListener('visibilitychange', tick);
     if (desktop) {
       void invoke<CybercampusTask[]>('cybercampus_tasks')
         .then((value) => { if (active) tasks = value; })
         .catch((reason) => { if (active) error = archiveError(reason); })
         .finally(() => { if (active) loading = false; });
     } else loading = false;
-    return () => { active = false; window.clearInterval(timer); };
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', tick);
+      document.removeEventListener('visibilitychange', tick);
+    };
   });
 
   const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
@@ -48,7 +58,10 @@
     const left = instant(value) - now;
     if (left < 0) return '마감 지남';
     const hours = Math.floor(left / 3_600_000);
-    return hours < 24 ? `${Math.max(hours, 0)}시간 남음` : `D-${Math.ceil(left / 86_400_000)}`;
+    if (hours < 24) return `${Math.max(hours, 0)}시간 남음`;
+    // D-N counts KST calendar days, so it changes at midnight, not at the deadline's time of day.
+    const today = new Date(now + 9 * 3_600_000).toISOString().slice(0, 10);
+    return `D-${Math.round((Date.parse(value.slice(0, 10)) - Date.parse(today)) / 86_400_000)}`;
   }
   function progress(task: CybercampusTask) {
     if (task.submitted_at) return `${task.status ?? '제출'} · ${when(task.submitted_at)}`;
