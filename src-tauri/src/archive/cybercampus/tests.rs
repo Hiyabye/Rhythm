@@ -629,6 +629,19 @@ mod parsing {
 
     #[test]
     fn twelve_hour_times_keep_the_afternoon() {
+        // The forms eClass renders when the account's clock is set to 12 hours.
+        assert_eq!(
+            full_datetime("2026.09.22 (화) 오후 7:06").as_deref(),
+            Some("2026-09-22T19:06")
+        );
+        assert_eq!(
+            full_datetime("2026.10.05 (월) 오후 12:59").as_deref(),
+            Some("2026-10-05T12:59")
+        );
+        assert_eq!(
+            month_day("11월 22일 (일) 오후 11:59", 2026).as_deref(),
+            Some("2026-11-22T23:59")
+        );
         assert_eq!(
             full_datetime("2026.11.09 (월) 오후 02:59").as_deref(),
             Some("2026-11-09T14:59")
