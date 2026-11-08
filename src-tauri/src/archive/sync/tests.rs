@@ -2978,3 +2978,252 @@ async fn only_scheduler_jobs_keep_an_outcome_entry_until_taken() {
     assert!(controller.task_outcomes.lock().unwrap().is_empty());
     assert!(controller.task_notifications.lock().unwrap().is_empty());
 }
+
+const VIEWER_PDF: &str =
+    "https://scc.sogang.ac.kr/Download3?pathStr=MTAx&fileName=%EC%95%88%EB%82%B4.pdf&gubun=cmsfile";
+const VIEWER_SCAN: &str =
+    "https://scc.sogang.ac.kr/Download3?pathStr=MTAy&fileName=scan.pdf&gubun=cmsfile";
+
+fn viewer_iframe(file: &str) -> String {
+    let file: String = url::form_urlencoded::byte_serialize(file.as_bytes()).collect();
+    format!(
+        "<div class=\"iframe-wrapper\"><iframe src=\"https://scc.sogang.ac.kr/pdfviewer/web/viewer.html?file={file}\"></iframe></div>"
+    )
+}
+/// `https://scc.sogang.ac.kr/robots.txt` as served (text/plain) on 2026-11-08:
+/// unrendered ASP source choosing rules per host name.
+const SCC_ROBOTS: &str = "<%\r\nResponse.ContentType=\"text/plain\";\r\nif(Request.ServerVariables(\"HTTP_HOST\") == \"nbsm.sogang.ac.kr\"){\r\n%>\r\nUser-agent: *\r\nallow:/\r\n<%\r\n}else{\r\n%>\r\n\r\nUser-agent: *\r\nDisallow:/cgsi/\r\n\r\n<%\r\n<%\r\n}\r\n%>\r\n";
+
+#[test]
+fn asp_source_robots_keeps_the_rules_of_every_branch() {
+    let url = Url::parse(VIEWER_PDF).unwrap();
+    let policy = Robots::parse(&url, &without_asp(SCC_ROBOTS).unwrap()).unwrap();
+    assert!(policy.permits(&url));
+    assert!(!policy.permits(&url.join("/cgsi/a").unwrap()));
+    assert!(without_asp("User-agent: *\n<% if(x){ \nDisallow: /").is_err());
+    assert!(
+        Robots::parse(&url, SCC_ROBOTS).is_err(),
+        "other hosts stay strict"
+    );
+}
+#[tokio::test]
+async fn asp_source_robots_applies_only_to_its_host_and_html_still_fails() {
+    for (host, body, mime, ok) in [
+        ("scc.sogang.ac.kr", SCC_ROBOTS, "text/plain", true),
+        (
+            "scc.sogang.ac.kr",
+            "<html>not available</html>",
+            "text/html",
+            false,
+        ),
+        ("www.sogang.ac.kr", SCC_ROBOTS, "text/plain", false),
+    ] {
+        let fake = Fake::new(vec![]);
+        fake.extra.lock().unwrap().insert(
+            format!("https://{host}/robots.txt"),
+            Some((body.as_bytes().to_vec(), mime.into())),
+        );
+        let url = Url::parse(&format!("https://{host}/robots.txt")).unwrap();
+        let loaded = Robots::load(
+            &fake,
+            &url,
+            &AtomicBool::new(false),
+            network::Access::Source,
+        )
+        .await;
+        assert_eq!(loaded.is_ok(), ok, "{host} {mime}");
+    }
+}
+/// A board whose notices show viewer PDFs from the school's file host.
+fn viewer_fake(ids: &[(u64, &str)]) -> Fake {
+    let fake = Fake::new(vec![ids.iter().map(|(id, _)| *id).collect()]);
+    for (id, file) in ids {
+        fake.changed
+            .lock()
+            .unwrap()
+            .insert(*id, viewer_iframe(file));
+    }
+    let mut extra = fake.extra.lock().unwrap();
+    extra.insert(
+        "https://scc.sogang.ac.kr/robots.txt".into(),
+        Some((SCC_ROBOTS.as_bytes().to_vec(), "text/plain".into())),
+    );
+    extra.insert(
+        VIEWER_PDF.into(),
+        Some((
+            include_bytes!("../fixtures/main-pdf-551680.pdf").to_vec(),
+            "application/octet-stream".into(),
+        )),
+    );
+    extra.insert(
+        VIEWER_SCAN.into(),
+        Some((PDF.to_vec(), "application/octet-stream".into())),
+    );
+    drop(extra);
+    fake
+}
+fn requests(fake: &Fake, url: &str) -> usize {
+    fake.paths().iter().filter(|u| *u == url).count()
+}
+fn document_by_external(store: &SharedStore, external: &str) -> DocumentDetail {
+    let id = with_store(store, |s| s.document_id(MAIN, external))
+        .unwrap()
+        .unwrap();
+    with_store(store, |s| s.document(id, None)).unwrap()
+}
+
+#[tokio::test]
+async fn viewer_pdf_text_becomes_the_body_of_a_new_notice() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = viewer_fake(&[(551680, VIEWER_PDF)]);
+    let controller = Controller::new();
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    let detail = document_by_external(&store, "551680");
+    assert!(detail
+        .body_text
+        .contains("2026학년도 동계계절수업 수강신청 안내"));
+    assert!(detail.body_html.contains("<p>"));
+    assert_eq!(detail.revisions.len(), 1, "the body fill is not a revision");
+    let pdf = detail
+        .resources
+        .iter()
+        .find(|r| r.url == VIEWER_PDF)
+        .unwrap();
+    assert_eq!(
+        (pdf.status.as_str(), pdf.filename.as_str()),
+        ("downloaded", "안내.pdf")
+    );
+    assert_eq!(requests(&fake, VIEWER_PDF), 1);
+    assert!(items(&store)[0].snippet.contains("동계계절수업"));
+
+    // A later check of the same notice (only its view count changed) derives
+    // the same body from the local PDF: no new revision and no new download.
+    fake.views.store(9, Ordering::Release);
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "incremental",
+        Budget::default(),
+    )
+    .await;
+    let checked = document_by_external(&store, "551680");
+    assert_eq!(checked.revisions.len(), 1);
+    assert_eq!(checked.body_text, detail.body_text);
+    assert_eq!(requests(&fake, VIEWER_PDF), 1);
+    assert_eq!(
+        with_store(&store, |s| s.source(MAIN)).unwrap().status,
+        "completed"
+    );
+}
+
+#[tokio::test]
+async fn older_viewer_notices_are_backfilled_from_their_stored_response() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = viewer_fake(&[
+        (551680, VIEWER_PDF),
+        (551681, VIEWER_PDF),
+        (551682, VIEWER_SCAN),
+    ]);
+    let source = with_store(&store, |s| s.source(MAIN)).unwrap().definition;
+    // Archived by an earlier version that did not recognize the viewer PDF.
+    for id in [551680, 551681, 551682] {
+        let entry = ListingEntry {
+            external_id: id.to_string(),
+            url: parser::main_canonical(&id.to_string()).to_string(),
+            pinned: false,
+            modified_at: None,
+        };
+        let mut article = parser::article(&source, &entry, &fake.detail(id)).unwrap();
+        article.resources.clear();
+        with_store(&store, |s| s.upsert_article(MAIN, &article, true)).unwrap();
+    }
+    // An analysis already used 551681's empty revision.
+    let analysed = document_by_external(&store, "551681");
+    with_store(&store, |s| {
+        s.ai_enqueue(
+            &crate::storage::intelligence::AnalysisKey {
+                document_id: analysed.item.id,
+                revision_id: analysed.revision_id,
+                task: "notice_analysis".into(),
+                model_sha256: "a".repeat(64),
+                prompt_version: 5,
+                schema_version: 3,
+                configuration_hash: "b".repeat(64),
+            },
+            &json!({"id": "test"}),
+            1,
+        )
+        .map(|_| ())
+    })
+    .unwrap();
+    let unfilled = document_by_external(&store, "551680").item.id;
+    let before = with_store(&store, |s| s.latest_original(unfilled)).unwrap();
+
+    let controller = Controller::new();
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "historical",
+        Budget::default(),
+    )
+    .await;
+    assert!(
+        fake.paths().iter().all(|u| !u.contains("pkId=")),
+        "archived notices are not requested again"
+    );
+    let filled = document_by_external(&store, "551680");
+    assert!(filled.body_text.contains("동계계절수업"));
+    assert_eq!(
+        filled.revisions.len(),
+        1,
+        "no revision, freshness or change notice"
+    );
+    assert_eq!(
+        with_store(&store, |s| s.latest_original(filled.item.id)).unwrap(),
+        before
+    );
+    let revised = document_by_external(&store, "551681");
+    assert!(revised.body_text.contains("동계계절수업"));
+    assert_eq!(
+        revised.revisions.len(),
+        2,
+        "the analysed empty revision stays intact"
+    );
+    // A PDF without a text layer leaves the notice metadata-only, but stays
+    // downloaded so later runs neither refetch nor fail on it.
+    let scan = document_by_external(&store, "551682");
+    assert!(scan.body_text.is_empty());
+    assert_eq!(scan.resources[0].status, "downloaded");
+    assert_eq!(requests(&fake, VIEWER_PDF), 2);
+    assert_eq!(requests(&fake, VIEWER_SCAN), 1);
+    let source = with_store(&store, |s| s.source(MAIN)).unwrap();
+    assert_eq!((source.status.as_str(), source.failed), ("completed", 0));
+
+    run(
+        &controller,
+        &store,
+        dir.path(),
+        &fake,
+        &[MAIN],
+        "resources",
+        Budget::default(),
+    )
+    .await;
+    assert_eq!(requests(&fake, VIEWER_SCAN), 1);
+    assert_eq!(document_by_external(&store, "551682").revisions.len(), 1);
+}

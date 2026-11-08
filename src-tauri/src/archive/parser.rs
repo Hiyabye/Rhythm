@@ -109,7 +109,7 @@ fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String>
         .filter(|v| !v.trim().is_empty())
         .ok_or_else(|| PARSER_ERROR.into())
 }
-fn main_canonical(external: &str) -> Url {
+pub(super) fn main_canonical(external: &str) -> Url {
     let mut url = Url::parse(&format!("https://www.sogang.ac.kr/ko/detail/{external}")).unwrap();
     url.query_pairs_mut().extend_pairs([
         ("bbsConfigFk", "2"),
@@ -556,6 +556,14 @@ pub fn article(
     if unsupported_iframe_body {
         body_html.clear();
         body_text.clear();
+        // A school PDF-viewer iframe shows a PDF as the whole body. The PDF is
+        // kept as an attachment; once local, its text becomes the body
+        // (`with_pdf_text`). Other iframes are never fetched.
+        for pdf in viewer_pdfs(&content) {
+            if !resources.iter().any(|r| r.url == pdf.url) {
+                resources.push(pdf);
+            }
+        }
     }
     if resources.len() > 200
         || (body_text.is_empty()
@@ -638,6 +646,78 @@ fn escape(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+const PDF_VIEWER: &str = "https://scc.sogang.ac.kr/pdfviewer/web/viewer.html";
+/// The PDFs that `scc.sogang.ac.kr/pdfviewer/web/viewer.html?file=<URL>` iframes
+/// display, limited to file URLs the network policy approves.
+fn viewer_pdfs(content: &str) -> Vec<ResourceInput> {
+    let fragment = Html::parse_fragment(content);
+    fragment
+        .select(selector("iframe[src]"))
+        .filter_map(|iframe| {
+            let viewer = Url::parse(iframe.value().attr("src")?).ok()?;
+            let mut page = viewer.clone();
+            page.set_query(None);
+            if page.as_str() != PDF_VIEWER || viewer.fragment().is_some() {
+                return None;
+            }
+            let mut files = viewer.query_pairs().filter(|(key, _)| key == "file");
+            let file = Url::parse(&files.next()?.1).ok()?;
+            if files.next().is_some() || super::network::validate_url(&file).is_err() {
+                return None;
+            }
+            let filename = file
+                .query_pairs()
+                .find(|(key, _)| key == "fileName")?
+                .1
+                .into_owned();
+            Some(ResourceInput {
+                url: file.into(),
+                filename,
+                kind: "attachment".into(),
+            })
+        })
+        .collect()
+}
+/// The attachments of a metadata-only main-board notice that its PDF viewer
+/// shows as the body.
+pub fn viewer_pdf_resources(article: &ArticleInput) -> Vec<&ResourceInput> {
+    if !article.unsupported_body {
+        return Vec::new();
+    }
+    article
+        .resources
+        .iter()
+        .filter(|r| {
+            r.kind == "attachment"
+                && Url::parse(&r.url).is_ok_and(|url| {
+                    url.host_str() == Some("scc.sogang.ac.kr") && url.path() == "/Download3"
+                })
+        })
+        .collect()
+}
+/// Makes the text of the viewer PDFs (filename, text) the body of a
+/// metadata-only notice. Without any text it stays metadata-only.
+pub fn with_pdf_text(article: &mut ArticleInput, pdfs: &[(String, String)]) {
+    if !article.unsupported_body || pdfs.is_empty() {
+        return;
+    }
+    let mut html =
+        "<p><em>PDF 원문에서 추출한 텍스트입니다. 표와 서식은 첨부된 PDF에서 확인해 주세요.</em></p>"
+            .to_string();
+    let mut plain = Vec::new();
+    for (filename, text) in pdfs {
+        if pdfs.len() > 1 {
+            html.push_str(&format!("<h3>{}</h3>", escape(filename)));
+        }
+        for line in text.lines() {
+            html.push_str(&format!("<p>{}</p>", escape(line)));
+        }
+        plain.push(text.as_str());
+    }
+    article.body_html = html;
+    article.body_text = normalize(&plain.join(" "));
+    article.unsupported_body = false;
 }
 /// True when the body holds one or more iframes and nothing else: only blank
 /// text and textless layout wrappers (as in `<div class="iframe-wrapper">`).

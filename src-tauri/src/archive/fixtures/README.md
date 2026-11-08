@@ -55,6 +55,13 @@ Rhythm's own transport and robots policy, using public GETs only:
 - `main-detail-551377.json`: unchanged public JSON detail for `pkId=551377`. Its
   body is an empty paragraph plus `div.iframe-wrapper` around a PDF-viewer iframe,
   which the iframe-only rule must recognize. The iframe was not fetched.
+- `main-detail-551680.json`: unchanged public JSON detail for `pkId=551680`
+  (2026-11-08), whose whole body is a PDF-viewer iframe on `scc.sogang.ac.kr`.
+- `main-pdf-551680.pdf`: the PDF that viewer shows, from its
+  `https://scc.sogang.ac.kr/Download3?...&gubun=cmsfile` file URL (2026-11-08,
+  public GET, 140,458 bytes, SHA-256
+  `ff614d7ca4bf7f596f94d339084d3c8367fa2c46fc5656ebdd3e2a7ab6154038`), unchanged.
+  It is a Hancom PDF with a Korean text layer.
 - `computing-career-content-396.html`: only the original inner HTML of
   `.sg-content.tiptap-view` from `https://computing.sogang.ac.kr/ko/community/career/detail/396`
   (legacy tables nested about 130 levels deep). The test places it inside the

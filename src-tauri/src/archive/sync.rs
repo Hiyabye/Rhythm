@@ -450,7 +450,13 @@ impl Controller {
                     &mut bytes,
                 )
                 .await?
-                .into_result()
+                .into_result()?;
+                // A retried viewer PDF becomes the body of its metadata-only notice.
+                let document = with_store(&store, |s| s.resource_document(resource.id))?;
+                controller
+                    .fill_pdf_body::<network::Client>(&store, &root, None, document)
+                    .await
+                    .map(|_| ())
             }
             .await;
             controller.finish(
@@ -518,6 +524,22 @@ impl Controller {
                     &mut resource_bytes,
                 )
                 .await
+            };
+            // Older notices whose body is a PDF viewer gain its text after any
+            // run of their board, without re-requesting the notice.
+            let outcome = match outcome {
+                Ok(()) if current.definition.family != cybercampus::FAMILY => {
+                    let definition = current.definition.clone();
+                    self.backfill_pdf_bodies(
+                        store,
+                        root,
+                        transport,
+                        &definition,
+                        &mut resource_bytes,
+                    )
+                    .await
+                }
+                outcome => outcome,
             };
             if let Err(error) = outcome {
                 let cancelled = self.cancel.load(Ordering::Acquire)
@@ -591,9 +613,11 @@ impl Controller {
 
 mod articles;
 mod listing;
+mod pdf;
 mod resources;
 mod robots;
 use articles::*;
+use pdf::*;
 pub use resources::*;
 use robots::*;
 

@@ -3,6 +3,7 @@ pub mod cybercampus;
 pub mod model;
 mod network;
 mod parser;
+mod pdf;
 pub mod sync;
 mod tls;
 #[cfg(windows)]

@@ -1,6 +1,8 @@
 //! robots.txt parsing and the policy every automatic fetch consults.
 use super::*;
 
+/// Serves its robots.txt as unrendered ASP source (see `without_asp`).
+const ASP_SOURCE_HOST: &str = "scc.sogang.ac.kr";
 pub(super) type RobotGroup = (Vec<String>, Vec<(String, bool)>, f64);
 #[derive(Debug)]
 pub(super) struct Robots {
@@ -26,11 +28,13 @@ impl Robots {
                 if matches!(mime.as_deref(), Some("text/html" | "application/xhtml+xml")) {
                     return Err("학교의 수집 정책 대신 HTML 오류 페이지를 받았습니다.".into());
                 }
-                Self::parse(
-                    url,
-                    std::str::from_utf8(&bytes)
-                        .map_err(|_| "학교의 수집 정책을 해석하지 못했습니다.")?,
-                )
+                let body = std::str::from_utf8(&bytes)
+                    .map_err(|_| "학교의 수집 정책을 해석하지 못했습니다.")?;
+                if robots.host_str() == Some(ASP_SOURCE_HOST) {
+                    Self::parse(url, &without_asp(body)?)
+                } else {
+                    Self::parse(url, body)
+                }
             }
             _ => Err("학교의 수집 정책을 확인하지 못했습니다.".into()),
         }
@@ -124,6 +128,23 @@ impl Robots {
         }
         decision.1
     }
+}
+/// Removes the `<% … %>` code blocks of an unrendered ASP robots.txt. That host
+/// chooses between per-host rule branches in code, so dropping the code keeps
+/// the rules of every branch: the policy can only become stricter. An unclosed
+/// block fails instead of silently dropping the rules after it.
+pub(super) fn without_asp(body: &str) -> Result<String, String> {
+    let mut rest = body;
+    let mut rules = String::new();
+    while let Some(start) = rest.find("<%") {
+        rules.push_str(&rest[..start]);
+        let end = rest[start..]
+            .find("%>")
+            .ok_or("학교의 수집 정책을 해석하지 못했습니다.")?;
+        rest = &rest[start + end + 2..];
+    }
+    rules.push_str(rest);
+    Ok(rules)
 }
 // Iterative glob matching with a single remembered wildcard; no recursion or
 // regex backtracking. Unanchored robots rules match any suffix of the URL path.
