@@ -530,6 +530,10 @@ test('sidebar boards scope the inbox and badges describe their counts', async ({
   const sidebar = page.getByRole('navigation', { name: '기본 탐색', exact: true });
   await expect(sidebar).toContainText('구독한 게시판 없음');
   await expect(sidebar.getByRole('button', { name: '받은 소식', exact: true })).toHaveAccessibleDescription('읽지 않은 공지 3개');
+  await expect(sidebar.getByRole('button', { name: '탐색', exact: true })).toHaveAccessibleDescription('보관된 공지 3개');
+  await expect(sidebar.getByRole('button', { name: '보관함', exact: true })).toHaveAccessibleDescription('저장한 공지 3개');
+  // Nothing arrived with the last sync, so 오늘 shows no badge rather than a zero.
+  await expect(sidebar.getByRole('button', { name: '오늘', exact: true })).not.toHaveAttribute('aria-describedby');
   await page.evaluate(() => (window as any).__TAURI_INTERNALS__.invoke('archive_subscribe', { id: 'computing-updates', subscribed: true }));
   await navigate(page, '설정');
   await navigate(page, '오늘');
@@ -539,6 +543,7 @@ test('sidebar boards scope the inbox and badges describe their counts', async ({
   await expect(page.locator('.page-header p')).toHaveText('소프트웨어융합대학 · 받은 소식');
   await expect(page.getByRole('combobox', { name: '정보원', exact: true })).toHaveValue('computing-updates');
   await expect(sidebar.getByRole('button', { name: '소프트웨어융합대학 소식', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(sidebar.getByRole('button', { name: '소프트웨어융합대학 소식', exact: true })).toHaveAccessibleDescription('읽지 않은 공지 3개');
   await expect(sidebar.getByRole('button', { name: '받은 소식', exact: true })).not.toHaveAttribute('aria-current');
   await page.getByRole('combobox', { name: '정보원', exact: true }).selectOption('');
   await expect(sidebar.getByRole('button', { name: '소프트웨어융합대학 소식', exact: true })).not.toHaveAttribute('aria-current');

@@ -526,7 +526,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             return { cached: null, job: copy(job) };
           }
           case 'ai_cancel': { const job = [...ai.jobs, ...fixture.documentJobs].find((job) => job.id === args.id); if (job) job.status = 'cancelled'; if (ai.progress?.job_id === args.id) ai.progress = null; return null; }
-          case 'archive_sources': { const result = copy(sources); await wait(fixture.sourceDelay); return result; }
+          case 'archive_sources': { const result = copy(sources).map((source) => ({ ...source, unread: entries.filter((x) => x.source_id === source.id && !x.is_read).length })); await wait(fixture.sourceDelay); return result; }
           case 'archive_summary': return { documents: entries.length, unread: entries.filter((x) => !x.is_read).length,
             saved: entries.filter((x) => x.saved).length, new_since_sync: 0, resource_bytes: 0 };
           case 'archive_status': return copy(sync);

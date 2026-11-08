@@ -32,6 +32,9 @@ pub struct SourceInfo {
     /// The extension that owns this source; `None` for a source no extension maps.
     #[serde(default)]
     pub extension: Option<String>,
+    /// Archived notices of this source not yet read.
+    #[serde(default)]
+    pub unread: u64,
 }
 /// A notice whose fetched response could not be archived; see `skipped_articles`.
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import type { CybercampusTask } from './types';
-  import { archiveError, kstInstant as instant } from './archive-format';
+  import { archiveError, kstInstant as instant, openTask } from './archive-format';
   import Icon from './Icon.svelte';
 
   let { desktop, onsettings }: { desktop: boolean; onsettings: () => void } = $props();
@@ -10,13 +10,12 @@
   let loading = $state(true);
   let error = $state('');
   let now = $state(Date.now());
-  const submitted = (task: CybercampusTask) => Boolean(task.submitted_at);
   // One pass splits the list, so the history is not found by scanning `upcoming` for every task.
   let split = $derived.by(() => {
     const open: CybercampusTask[] = [];
     const closed: CybercampusTask[] = [];
     for (const task of tasks) {
-      (!submitted(task) && (task.pending || (task.due_at !== null && instant(task.late_due_at ?? task.due_at) >= now)) ? open : closed).push(task);
+      (openTask(task, now) ? open : closed).push(task);
     }
     return {
       upcoming: open.sort((a, b) => (a.due_at ?? '9999').localeCompare(b.due_at ?? '9999')),

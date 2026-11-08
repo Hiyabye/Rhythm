@@ -48,6 +48,8 @@ test('deadlines list what is due first and fold submitted or past items', async 
   ] });
   await page.goto('/');
   const navigation = page.getByRole('navigation', { name: '기본 탐색', exact: true });
+  // The sidebar counts what is still to do, matching the page's list below.
+  await expect(navigation.getByRole('button', { name: '과제·마감' })).toHaveAccessibleDescription('남은 과제 2개');
   await navigation.getByRole('button', { name: '과제·마감' }).click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('과제·마감');
   await expect(page.getByRole('heading', { name: '해야 할 일 2개' })).toBeVisible();
