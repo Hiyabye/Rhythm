@@ -18,7 +18,7 @@ mod personalization_tests;
 pub mod proactive;
 #[cfg(test)]
 mod proactive_tests;
-pub(crate) const SCHEMA_VERSION: i64 = 19;
+pub(crate) const SCHEMA_VERSION: i64 = 20;
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
     let migrations = [
@@ -41,6 +41,7 @@ fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
         include_str!("../../migrations/017_retire_eng_newsletter.sql"),
         include_str!("../../migrations/018_cybercampus.sql"),
         include_str!("../../migrations/019_onboarding.sql"),
+        include_str!("../../migrations/020_extensions.sql"),
     ];
     for (index, migration) in migrations.iter().enumerate().skip(version as usize) {
         let transaction = connection.transaction().map_err(|e| e.to_string())?;
@@ -51,6 +52,12 @@ fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
         if version == 0 && index == 18 {
             transaction
                 .execute("UPDATE settings SET onboarding_completed=0 WHERE id=1", [])
+                .map_err(|e| e.to_string())?;
+        }
+        // A new profile starts blank: the user turns on each feature.
+        if version == 0 && index == 19 {
+            transaction
+                .execute("UPDATE extension_preferences SET enabled=0", [])
                 .map_err(|e| e.to_string())?;
         }
         transaction.commit().map_err(|e| e.to_string())?;
@@ -392,6 +399,75 @@ mod tests {
         assert!(db.onboarding_completed().unwrap());
         assert_eq!(db.settings().unwrap().theme, "dark");
         assert!(!db.update_check_enabled().unwrap());
+    }
+    #[test]
+    fn schema_nineteen_upgrade_keeps_the_features_a_profile_had() {
+        // (notices enabled, cybercampus subscribed) -> cybercampus extension
+        for (notices, subscribed, cybercampus) in [
+            (true, true, true),
+            (true, false, false),
+            (false, true, false),
+            (false, false, false),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("db");
+            {
+                let mut connection = Connection::open(&path).unwrap();
+                migrate(&mut connection, 0).unwrap();
+                // Rebuild a schema-19 profile: drop what 020 added.
+                connection
+                    .execute_batch(&format!(
+                        "DELETE FROM extension_preferences;
+                         INSERT INTO extension_preferences VALUES('sogang_notices',{notices});
+                         INSERT INTO sources(id,name,organization,description,url,family,supported,subscribed)
+                           VALUES('cybercampus','사이버캠퍼스','서강대학교','','https://eclass.sogang.ac.kr/','cybercampus',1,{subscribed}),
+                                 ('sogang-academic','학사','서강대학교','','https://www.sogang.ac.kr/','sogang',1,1);
+                         INSERT INTO source_extensions VALUES('cybercampus','sogang_notices'),('sogang-academic','sogang_notices');
+                         PRAGMA user_version=19;",
+                        notices = notices as i32,
+                        subscribed = subscribed as i32,
+                    ))
+                    .unwrap();
+            }
+            let db = Store::open(&path).unwrap();
+            assert_eq!(db.info().unwrap().schema_version, SCHEMA_VERSION);
+            assert_eq!(db.enabled("sogang_notices").unwrap(), notices);
+            assert_eq!(db.enabled("cybercampus").unwrap(), cybercampus);
+            for id in [
+                "search",
+                "saved",
+                "recommendations",
+                "week",
+                "ai",
+                "proactive",
+            ] {
+                assert!(db.enabled(id).unwrap(), "{id}");
+            }
+            let owner: String = db
+                .connection
+                .query_row(
+                    "SELECT extension_id FROM source_extensions WHERE source_id='cybercampus'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(owner, "cybercampus");
+        }
+    }
+    #[test]
+    fn new_profile_starts_with_every_extension_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Store::open(&dir.path().join("db")).unwrap();
+        let enabled: i64 = db
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM extension_preferences WHERE enabled=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(enabled, 0);
+        assert!(!db.enabled("search").unwrap());
     }
     #[test]
     fn schema_nine_upgrade_keeps_settings_and_enables_update_checks() {

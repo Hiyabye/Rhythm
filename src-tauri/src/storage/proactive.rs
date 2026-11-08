@@ -226,6 +226,20 @@ impl Store {
         read_settings(&self.connection)
     }
 
+    /// The settings background work obeys. With the 알림·백그라운드 extension
+    /// off the stored choices are kept, but nothing runs on its own and closing
+    /// the window quits.
+    pub fn proactive_effective_settings(&self) -> Result<ProactiveSettings, String> {
+        let mut settings = read_settings(&self.connection)?;
+        if !self.enabled(crate::extensions::PROACTIVE)? {
+            settings.scheduler_enabled = false;
+            settings.notifications_enabled = false;
+            settings.close_to_background = false;
+            settings.start_hidden = false;
+        }
+        Ok(settings)
+    }
+
     /// Full validated replacement. The first enable of either the scheduler or
     /// notifications also advances the notification baseline in the same
     /// transaction, so notices archived before opt-in are never replayed.

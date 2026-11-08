@@ -36,6 +36,7 @@ pub const SCHEMA_VERSION: u32 = 3;
 /// Cybercampus documents are the user's own course data (#86, #77).
 pub const PRIVATE_REMOTE: &str =
     "사이버캠퍼스 자료는 원격 AI로 보내지 않습니다. 로컬 엔진으로 분석해 주세요.";
+const AI_DISABLED: &str = "AI 분석 확장 기능을 먼저 켜 주세요.";
 const CONSTRAINED_OUTPUT_DEFAULT: bool = true;
 pub(super) fn decoding_mode() -> &'static str {
     #[cfg(test)]
@@ -314,6 +315,9 @@ impl Controller {
             return Err("앱이 종료 중이어서 AI 분석을 시작할 수 없습니다.".into());
         }
         let mut response = with_store(&store, |store| {
+            if !store.enabled(crate::extensions::AI)? {
+                return Err(AI_DISABLED.into());
+            }
             let document = store.document(document_id, Some(revision_id))?;
             let preferences = store.ai_preferences()?;
             // Both engines share the queue and the semantic cache. Their keys
@@ -420,6 +424,16 @@ impl Controller {
     /// backlog attempt and waits for it to finish, so the caller can reuse or stop
     /// the worker without abandoning a user-requested analysis.
     pub async fn cancel_automatic(&self, store: &SharedStore) -> Result<bool, String> {
+        self.cancel_below(store, DIRECT_PRIORITY).await
+    }
+
+    /// Cancels the running job of any priority and waits for it to settle;
+    /// used when the AI extension is turned off.
+    pub async fn cancel_running(&self, store: &SharedStore) -> Result<bool, String> {
+        self.cancel_below(store, i32::MAX).await
+    }
+
+    async fn cancel_below(&self, store: &SharedStore, priority: i32) -> Result<bool, String> {
         let target = {
             let state = self
                 .inner
@@ -429,7 +443,7 @@ impl Controller {
             state
                 .active
                 .as_ref()
-                .filter(|active| active.priority < DIRECT_PRIORITY)
+                .filter(|active| active.priority < priority)
                 .map(|active| (active.id, active.cancellation.clone()))
         };
         let Some((id, cancellation)) = target else {
@@ -588,10 +602,17 @@ impl Controller {
                     Ok(state) => state,
                     Err(_) => return,
                 };
+                // Pending jobs stay queued while the AI extension is off.
                 let next = if state.stopped {
                     Ok(None)
                 } else {
-                    with_store(&store, Store::ai_claim_next)
+                    with_store(&store, |store| {
+                        if store.enabled(crate::extensions::AI)? {
+                            store.ai_claim_next()
+                        } else {
+                            Ok(None)
+                        }
+                    })
                 };
                 match next {
                     Ok(Some(job)) => {

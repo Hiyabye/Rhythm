@@ -124,7 +124,7 @@ pub async fn sync<H: Http>(
         .parse()
         .map_err(|_| "학기 정보를 확인하지 못했습니다.")?;
     with_store(store, |s| {
-        sync::ensure_active(s, cancel)?;
+        sync::ensure_active(cancel)?;
         s.cybercampus_set_courses(
             year,
             &term.term,
@@ -143,7 +143,7 @@ pub async fn sync<H: Http>(
     let mut failures = Vec::new();
     let mut tasks: HashMap<String, Vec<TaskInput>> = HashMap::new();
     for (index, course) in courses.iter().enumerate() {
-        sync::active(store, cancel)?;
+        sync::active(cancel)?;
         (progress.report)(&format!(
             "{} 강좌를 확인하고 있습니다. ({}/{})",
             course.name,
@@ -186,7 +186,7 @@ pub async fn sync<H: Http>(
             failures.push(format!("{}: {error}", course.name));
         }
     }
-    sync::active(store, cancel)?;
+    sync::active(cancel)?;
     // The TODO list covers every course in one request and adds the other
     // deadline kinds (quizzes, lectures) that are not assignments.
     let keys = courses
@@ -235,7 +235,7 @@ pub async fn sync<H: Http>(
     }
     for (course_key, course_tasks) in &tasks {
         with_store(store, |s| {
-            sync::ensure_active(s, cancel)?;
+            sync::ensure_active(cancel)?;
             s.cybercampus_replace_tasks(course_key, course_tasks)
         })?;
     }
@@ -292,7 +292,7 @@ async fn notices<H: Http>(
     }
     let mut failure = None;
     for row in rows {
-        sync::active(store, cancel)?;
+        sync::active(cancel)?;
         let external_id = format!("{}-{}", course.key, row.seq);
         let marker = fingerprint(&row);
         current.discovered += 1;
@@ -321,7 +321,7 @@ async fn notices<H: Http>(
         {
             Ok(Some(article)) => {
                 let (id, _) = with_store(store, |s| {
-                    sync::ensure_active(s, cancel)?;
+                    sync::ensure_active(cancel)?;
                     s.upsert_article(SOURCE_ID, &article, historical)
                 })?;
                 with_store(store, |s| s.clear_skipped(SOURCE_ID, &external_id))?;
@@ -478,7 +478,7 @@ async fn assignments<H: Http>(
     let stored = with_store(store, |s| s.cybercampus_stored_tasks(&course.key))?;
     let mut result = Vec::new();
     for row in rows {
-        sync::active(store, cancel)?;
+        sync::active(cancel)?;
         let known = stored.get(&("report".to_owned(), row.seq.clone()));
         if let Some(known) = known.filter(|known| !row.open && known.due_at.is_some()) {
             result.push(TaskInput {
@@ -547,7 +547,7 @@ pub async fn download<H: Http>(
     resource: &ResourceRecord,
     total: &mut u64,
 ) -> Result<DownloadOutcome, String> {
-    sync::active(store, cancel)?;
+    sync::active(cancel)?;
     let mut budget_bound = false;
     let outcome = async {
         let url = Url::parse(&resource.url).map_err(|_| "첨부 자료 주소를 해석하지 못했습니다.")?;
@@ -595,7 +595,7 @@ pub async fn download_missing<H: Http>(
     total: &mut u64,
 ) -> Result<(), String> {
     for id in with_store(store, |s| s.documents_missing_resources(SOURCE_ID))? {
-        sync::active(store, cancel)?;
+        sync::active(cancel)?;
         pending(connector, http, store, root, cancel, id, total).await?;
     }
     Ok(())
@@ -633,6 +633,9 @@ pub async fn cybercampus_save_login(
 ) -> Result<Status, String> {
     let _lease = state.operation_gate.shared().await?;
     let credentials = credentials::Credentials::new(&id, &password)?;
+    if !sync::with_store(&state.store, |s| s.enabled(crate::extensions::CYBERCAMPUS))? {
+        return Err("사이버캠퍼스 확장 기능을 먼저 켜 주세요.".into());
+    }
     if state.archive.status()?.running {
         return Err("동기화가 끝난 뒤 다시 시도해 주세요.".into());
     }

@@ -671,6 +671,18 @@ impl Store {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
+    /// The preferences automatic AI work obeys. With the AI extension off the
+    /// stored choices are kept, but no analysis, classification or semantic
+    /// search runs on its own.
+    pub fn ai_effective_preferences(&self) -> Result<AiPreferences, String> {
+        let mut preferences = self.ai_preferences()?;
+        if !self.enabled(crate::extensions::AI)? {
+            preferences.processing_mode = "explicit".into();
+            preferences.classification_enabled = false;
+            preferences.remote_automatic = false;
+        }
+        Ok(preferences)
+    }
     pub fn ai_preferences(&self) -> Result<AiPreferences, String> {
         self.connection.query_row("SELECT active_model_id,setup_completed,processing_mode,automatic_limit,max_tokens,execution_mode,model_directory,embedding_model_id,classification_enabled,engine,remote_base_url,remote_model,remote_embedding_model,remote_timeout_seconds,remote_consent,remote_automatic,remote_daily_limit,remote_embeddings FROM ai_preferences WHERE id=1",[],|r|Ok(AiPreferences { active_model_id:r.get(0)?,setup_completed:r.get(1)?,processing_mode:r.get(2)?,automatic_limit:r.get(3)?,max_tokens:r.get(4)?,execution_mode:r.get(5)?,model_directory:r.get(6)?,embedding_model_id:r.get(7)?,classification_enabled:r.get(8)?,engine:r.get(9)?,remote_base_url:r.get(10)?,remote_model:r.get(11)?,remote_embedding_model:r.get(12)?,remote_timeout_seconds:r.get(13)?,remote_consent:r.get(14)?,remote_automatic:r.get(15)?,remote_daily_limit:r.get(16)?,remote_embeddings:r.get(17)? })).map_err(|e|e.to_string())
     }

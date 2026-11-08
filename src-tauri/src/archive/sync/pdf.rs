@@ -39,7 +39,7 @@ impl Controller {
             return Ok(false);
         }
         let pending = with_store(store, |s| {
-            ensure_active(s, &self.cancel)?;
+            ensure_active(&self.cancel)?;
             s.attach_resources(id, &article.resources)?;
             Ok(s.pending_resources(id)?
                 .iter()
@@ -60,7 +60,7 @@ impl Controller {
         local_pdf_text(store, root, id, &mut article).await?;
         if !article.unsupported_body {
             with_store(store, |s| {
-                ensure_active(s, &self.cancel)?;
+                ensure_active(&self.cancel)?;
                 if !s.fill_body(id, &article)? {
                     s.upsert_article(&source.id, &article, false)?;
                 }
@@ -95,7 +95,7 @@ impl Controller {
         .await?;
         let mut downloads = 0;
         for (id, _) in candidates {
-            active(store, &self.cancel)?;
+            active(&self.cancel)?;
             let download = if downloads < BACKFILL_DOWNLOADS && *total < IMPORT_RESOURCES {
                 Some(Download {
                     transport,

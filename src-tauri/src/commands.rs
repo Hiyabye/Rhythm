@@ -2,7 +2,7 @@
 //! the worker status. Startup and shared state stay in `main.rs`.
 use crate::{
     core,
-    extensions::ExtensionInfo,
+    extensions::{self, ExtensionInfo},
     intelligence::WorkerStatus,
     storage::{proactive::ProactiveSettings, Settings, StorageInfo},
     AppState,
@@ -172,23 +172,33 @@ pub async fn lifecycle_set_launch_at_login(
     enabled: bool,
 ) -> Result<LifecycleStatus, String> {
     let _lease = state.operation_gate.shared().await?;
+    set_launch_at_login(&app, state.inner(), enabled)?;
+    read_lifecycle_status(&app, state.inner())
+}
+
+/// Changes the OS login item and the stored preference together, rolling the
+/// OS state back when the preference cannot be saved.
+fn set_launch_at_login(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    enabled: bool,
+) -> Result<(), String> {
     let _guard = state
         .launch_at_login
         .lock()
         .map_err(|_| "자동 실행 설정 잠금을 획득하지 못했습니다.".to_string())?;
-    let previous = core::lifecycle::autostart_status(&app)?;
+    let previous = core::lifecycle::autostart_status(app)?;
     let changed = previous.enabled != enabled;
     #[cfg(windows)]
     let autostart_snapshot = if changed {
-        Some(core::lifecycle::autostart_snapshot(&app)?)
+        Some(core::lifecycle::autostart_snapshot(app)?)
     } else {
         None
     };
     if changed {
-        core::lifecycle::set_autostart(&app, enabled)?;
+        core::lifecycle::set_autostart(app, enabled)?;
     }
-    if let Err(error) = save_proactive(state.inner(), |settings| settings.launch_at_login = enabled)
-    {
+    if let Err(error) = save_proactive(state, |settings| settings.launch_at_login = enabled) {
         if changed {
             #[cfg(windows)]
             let rollback = core::lifecycle::restore_autostart(
@@ -197,7 +207,7 @@ pub async fn lifecycle_set_launch_at_login(
                     .expect("snapshot captured before changing autostart"),
             );
             #[cfg(not(windows))]
-            let rollback = core::lifecycle::set_autostart(&app, previous.enabled).map(|_| ());
+            let rollback = core::lifecycle::set_autostart(app, previous.enabled).map(|_| ());
             return match rollback {
                 Ok(()) => Err(format!("{error} 자동 실행은 이전 상태로 되돌렸습니다.")),
                 Err(rollback) => {
@@ -210,15 +220,21 @@ pub async fn lifecycle_set_launch_at_login(
         }
         return Err(error);
     }
-    read_lifecycle_status(&app, state.inner())
+    Ok(())
 }
 #[tauri::command]
 pub async fn set_extension(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     id: String,
     enabled: bool,
 ) -> Result<Snapshot, String> {
     let _lease = state.operation_gate.shared().await?;
+    // A login item is OS state the flag cannot gate, so it is removed first;
+    // if that fails the extension stays on.
+    if !enabled && id == extensions::PROACTIVE {
+        set_launch_at_login(&app, state.inner(), false)?;
+    }
     {
         let store = state
             .store
@@ -227,7 +243,13 @@ pub async fn set_extension(
         state.registry.set(&store, &id, enabled)?;
     }
     if !enabled {
-        state.archive.wait().await;
+        match id.as_str() {
+            extensions::NOTICES | extensions::CYBERCAMPUS => state.archive.wait().await,
+            extensions::AI => {
+                crate::intelligence::commands::stop_for_disabled_extension(state.inner()).await?
+            }
+            _ => {}
+        }
     }
     snapshot(&state).await
 }

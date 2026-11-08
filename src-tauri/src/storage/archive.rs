@@ -4,7 +4,7 @@ use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, Row};
 use sha2::{Digest, Sha256};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
-const SOURCE_COLUMNS: &str = "id,name,organization,description,url,family,supported,subscribed,last_attempt,last_success,last_error,next_page,history_complete,status,discovered,archived,failed,(SELECT COUNT(*) FROM skipped_articles k WHERE k.source_id=sources.id)";
+const SOURCE_COLUMNS: &str = "id,name,organization,description,url,family,supported,subscribed,last_attempt,last_success,last_error,next_page,history_complete,status,discovered,archived,failed,(SELECT COUNT(*) FROM skipped_articles k WHERE k.source_id=sources.id),(SELECT extension_id FROM source_extensions se WHERE se.source_id=sources.id)";
 macro_rules! item_columns {
     ($snippet:literal) => {
         concat!("d.id,d.source_id,s.name,d.title,d.author,d.category,d.published_at,d.collected_at,COALESCE(u.is_read,0),COALESCE(u.saved,0),d.historical,", $snippet, ",CASE WHEN EXISTS(SELECT 1 FROM resources a WHERE a.document_id=d.id AND a.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id) AND a.status<>'downloaded') THEN 'missing_resources' ELSE 'archived' END")
@@ -43,6 +43,7 @@ fn source_row(row: &Row<'_>) -> rusqlite::Result<SourceInfo> {
         failed: row.get::<_, i64>(16)? as u64,
         skipped_count: row.get::<_, i64>(17)? as u64,
         skipped: Vec::new(),
+        extension: row.get(18)?,
     })
 }
 /// Bounds the notices listed per source; the count covers all of them.
@@ -201,7 +202,16 @@ impl Store {
         &self,
         definitions: &[SourceDefinition],
     ) -> Result<Vec<SourceInfo>, String> {
-        self.catalog_for_extension("sogang_notices", definitions)
+        // Each source belongs to the extension of its family.
+        for extension in [crate::extensions::NOTICES, crate::extensions::CYBERCAMPUS] {
+            let owned: Vec<_> = definitions
+                .iter()
+                .filter(|d| crate::extensions::owner(&d.family) == extension)
+                .cloned()
+                .collect();
+            self.catalog_for_extension(extension, &owned)?;
+        }
+        self.sources()
     }
     pub(crate) fn catalog_for_extension(
         &self,
@@ -373,6 +383,28 @@ impl Store {
                 source_row,
             )
             .map_err(|_| "등록된 정보원을 찾을 수 없습니다.".into())
+    }
+    /// Whether the extension that owns a source is on. A source that no
+    /// extension maps never syncs.
+    pub(crate) fn source_extension_enabled(&self, id: &str) -> Result<bool, String> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM source_extensions se
+                   JOIN extension_preferences ep ON ep.extension_id=se.extension_id
+                   WHERE se.source_id=?1 AND ep.enabled=1)",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())
+    }
+    pub(crate) fn resource_source(&self, id: i64) -> Result<String, String> {
+        self.connection
+            .query_row(
+                "SELECT d.source_id FROM resources r JOIN documents d ON d.id=r.document_id WHERE r.id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(|_| "첨부 자료를 찾을 수 없습니다.".into())
     }
     pub(crate) fn subscribe(&self, id: &str, subscribed: bool) -> Result<(), String> {
         let source = self.source(id)?;

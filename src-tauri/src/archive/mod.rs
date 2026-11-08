@@ -60,8 +60,8 @@ pub async fn archive_subscribe(
 ) -> Result<Vec<SourceInfo>, String> {
     let _lease = state.operation_gate.shared().await?;
     with_store(&state.store, |s| {
-        if !s.enabled("sogang_notices")? {
-            return Err("서강대학교 공지 확장 기능을 먼저 켜 주세요.".into());
+        if !s.source_extension_enabled(&id)? {
+            return Err("이 정보원의 확장 기능을 먼저 켜 주세요.".into());
         }
         s.subscribe(&id, subscribed)?;
         if !subscribed {

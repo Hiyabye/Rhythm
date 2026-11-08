@@ -436,7 +436,7 @@ impl Controller {
             let Ok(store) = app.store.try_lock() else {
                 return;
             };
-            let Ok(preferences) = store.ai_preferences() else {
+            let Ok(preferences) = store.ai_effective_preferences() else {
                 return;
             };
             preferences
@@ -798,7 +798,7 @@ impl Controller {
     pub async fn query_vector(&self, app: &AppState, query: &str) -> Option<(String, Vec<f32>)> {
         let (preferences, model) = {
             let store = app.store.lock().ok()?;
-            let preferences = store.ai_preferences().ok()?;
+            let preferences = store.ai_effective_preferences().ok()?;
             let model = preferences
                 .embedding_model_id
                 .as_ref()
