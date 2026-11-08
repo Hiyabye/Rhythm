@@ -93,6 +93,45 @@ test('an archive that does not match its pin is rejected and nothing is staged',
   }
 });
 
+test('server errors and network failures are retried with backoff', async () => {
+  const replies = [{ ok: false, status: 504 }, new TypeError('fetch failed'), { ok: false, status: 429 }, response(archive)];
+  const waits = [];
+  const fetched = [];
+  const { cwd, promise, cleanup } = stage({ platform: 'darwin', archiveFiles: ['llama-server', 'LICENSE'],
+    run: () => ({ stdout: '' }), wait: async (ms) => { waits.push(ms); },
+    fetchImpl: async (url) => {
+      fetched.push(url);
+      const reply = replies.shift();
+      if (reply instanceof Error) throw reply;
+      return reply;
+    } });
+  try {
+    await promise;
+    assert.equal(fetched.length, 4);
+    assert.deepEqual(waits, [5000, 10000, 20000]);
+    assert.ok(existsSync(join(cwd, 'src-tauri/binaries/llama/metal/llama-server')));
+  } finally {
+    cleanup();
+  }
+});
+
+test('downloads stop after five attempts, and client errors are not retried', async () => {
+  for (const [status, attempts] of [[504, 5], [404, 1]]) {
+    const waits = [];
+    const fetched = [];
+    const { promise, cleanup } = stage({ platform: 'darwin', archiveFiles: ['llama-server'],
+      wait: async (ms) => { waits.push(ms); },
+      fetchImpl: async (url) => { fetched.push(url); return { ok: false, status }; } });
+    try {
+      await assert.rejects(promise, new RegExp(`Download failed \\(${status}\\)`));
+      assert.equal(fetched.length, attempts);
+      assert.equal(waits.length, attempts - 1);
+    } finally {
+      cleanup();
+    }
+  }
+});
+
 test('Windows stages both builds with every DLL except other tools and the VC runtime beside each', async () => {
   const { cwd, promise, cleanup } = stage({ platform: 'win32', readdir: (directory) => readdirSync(directory),
     archiveFiles: ['llama-server.exe', 'LICENSE-LLVM-OpenMP', 'llama-server-impl.dll', 'llama-cli-impl.dll',

@@ -23,9 +23,32 @@ export function variantsFor(platform, arch) {
 
 const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
 
-async function download(url, destination, { bytes, sha256: expected }, fetchImpl) {
-  const response = await fetchImpl(url);
-  if (!response.ok) throw new Error(`Download failed (${response.status}): ${url}`);
+// GitHub's release CDN intermittently answers CI runners with 5xx; retry those
+// and network errors with backoff, but fail at once on any other status.
+const DOWNLOAD_ATTEMPTS = 5;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function fetchWithRetry(url, fetchImpl, wait, log) {
+  for (let attempt = 1; ; attempt += 1) {
+    let failure;
+    try {
+      const response = await fetchImpl(url);
+      if (response.ok) return response;
+      failure = new Error(`Download failed (${response.status}): ${url}`);
+      if (response.status !== 429 && response.status < 500) throw failure;
+    } catch (error) {
+      if (error === failure) throw error;
+      failure = error;
+    }
+    if (attempt === DOWNLOAD_ATTEMPTS) throw failure;
+    const delay = 5000 * 2 ** (attempt - 1);
+    log(`${failure.message}; retrying in ${delay / 1000} s (${attempt}/${DOWNLOAD_ATTEMPTS - 1}).`);
+    await wait(delay);
+  }
+}
+
+async function download(url, destination, { bytes, sha256: expected }, fetchImpl, wait, log) {
+  const response = await fetchWithRetry(url, fetchImpl, wait, log);
   const partial = `${destination}.part`;
   const hash = createHash('sha256');
   let received = 0;
@@ -90,7 +113,7 @@ function defaultRun(command, args, capture = false) {
 
 export async function stageLlama({ cwd = process.cwd(), platform = process.platform, arch = process.arch,
   pins = pinned, fetchImpl = fetch, run = defaultRun, extract = systemExtract, readdir = readdirSync,
-  copy = copyFileSync, log = console.log } = {}) {
+  copy = copyFileSync, log = console.log, wait = sleep } = {}) {
   const variants = variantsFor(platform, arch);
   const cache = resolve(cwd, 'target', 'llama-cache');
   const output = resolve(cwd, 'src-tauri', 'binaries', 'llama');
@@ -103,7 +126,7 @@ export async function stageLlama({ cwd = process.cwd(), platform = process.platf
     if (existsSync(archive) && sha256(archive) !== pin.sha256) rmSync(archive);
     if (!existsSync(archive)) {
       log(`Downloading llama.cpp ${pins.build} (${variant}).`);
-      await download(`https://github.com/ggml-org/llama.cpp/releases/download/${pins.build}/${pin.file}`, archive, pin, fetchImpl);
+      await download(`https://github.com/ggml-org/llama.cpp/releases/download/${pins.build}/${pin.file}`, archive, pin, fetchImpl, wait, log);
     }
     const unpacked = join(cache, `${pins.build}-${variant}`);
     rmSync(unpacked, { recursive: true, force: true });

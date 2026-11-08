@@ -293,7 +293,7 @@ pub async fn updater_restart(
 ) -> Result<(), String> {
     require_confirmation(confirmed)?;
     ensure_signing_key()?;
-    let _operation = state.exclusive_maintenance().await?;
+    let operation = state.exclusive_maintenance().await?;
     let active = acquire(&updater)?;
     // Maintenance stops jobs but not a loaded model's server, which runs from
     // the install folder. The Windows installer would find its executable
@@ -332,6 +332,9 @@ pub async fn updater_restart(
         serde_json::json!({"phase":"restarting", "version":version}),
     )
     .ok();
+    // `restart` never returns off the main thread: it waits for the exit
+    // handler, which must be able to stop the classifier.
+    operation.hold_until_exit();
     app.restart();
 }
 
