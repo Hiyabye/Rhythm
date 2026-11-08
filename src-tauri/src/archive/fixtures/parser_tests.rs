@@ -428,7 +428,8 @@ fn wrapped_iframe_body_is_iframe_only_but_wrapped_text_is_not() {
     let archived = article(&source, &entry, captured).unwrap();
     assert!(archived.unsupported_body);
     assert!(archived.body_html.is_empty() && archived.body_text.is_empty());
-    assert_eq!(archived.resources.len(), 2, "attachments stay referenced");
+    assert_eq!(archived.resources.len(), 3, "attachments stay referenced");
+    assert_eq!(viewer_pdf_resources(&archived).len(), 1);
     let mut value: Value = serde_json::from_str(captured).unwrap();
     for content in [
         "<div class=\"iframe-wrapper\"><iframe src=\"/a\"></iframe><p>안내</p></div>",
@@ -479,4 +480,80 @@ fn deeply_nested_legacy_tables_keep_their_text() {
     assert!(!html.contains("evil") && !plain.contains("evil"));
     assert_eq!(resources.len(), 1);
     assert!(sanitize(&"<p>가</p>".repeat(60_000), base).is_err());
+}
+#[test]
+fn pdf_viewer_body_references_its_pdf_and_takes_the_pdf_text() {
+    let source = source("sogang-academic");
+    let entry = ListingEntry {
+        external_id: "551680".into(),
+        url: main_canonical("551680").to_string(),
+        pinned: false,
+        modified_at: None,
+    };
+    let captured = include_str!("main-detail-551680.json");
+    let mut archived = article(&source, &entry, captured).unwrap();
+    assert!(archived.unsupported_body);
+    assert!(archived.body_html.is_empty() && archived.body_text.is_empty());
+    let viewer = viewer_pdf_resources(&archived);
+    assert_eq!(viewer.len(), 1);
+    assert_eq!(viewer[0].kind, "attachment");
+    assert_eq!(
+        viewer[0].filename,
+        "2026학년도 동계계절수업 수강신청 안내_공지(학생용).pdf"
+    );
+    let url = Url::parse(&viewer[0].url).unwrap();
+    assert_eq!(
+        (url.host_str(), url.path()),
+        (Some("scc.sogang.ac.kr"), "/Download3")
+    );
+    assert_eq!(archived.resources.len(), 1);
+
+    with_pdf_text(&mut archived, &[]);
+    assert!(
+        archived.unsupported_body,
+        "no text keeps the notice metadata-only"
+    );
+    let pdf = (
+        "안내.pdf".to_string(),
+        "1. 수강신청 일정\n<b>본 수강신청</b> 11. 25(수)".to_string(),
+    );
+    with_pdf_text(&mut archived, &[pdf]);
+    assert!(!archived.unsupported_body);
+    assert_eq!(
+        archived.body_text,
+        "1. 수강신청 일정 <b>본 수강신청</b> 11. 25(수)"
+    );
+    assert!(archived
+        .body_html
+        .ends_with("<p>1. 수강신청 일정</p><p>&lt;b&gt;본 수강신청&lt;/b&gt; 11. 25(수)</p>"));
+    assert!(viewer_pdf_resources(&archived).is_empty());
+
+    // Only the school viewer showing an approved file route is a PDF body.
+    let mut value: Value = serde_json::from_str(captured).unwrap();
+    let file = "https%3A%2F%2Fscc.sogang.ac.kr%2FDownload3%3FpathStr%3DMTAx%26fileName%3Da.pdf%26gubun%3Dcmsfile";
+    for src in [
+        format!(
+            "https://scc.sogang.ac.kr/pdfviewer/web/viewer.html?file={}",
+            file.replace("scc.sogang", "evil")
+        ),
+        format!("https://evil.test/pdfviewer/web/viewer.html?file={file}"),
+        format!("http://scc.sogang.ac.kr/pdfviewer/web/viewer.html?file={file}"),
+        format!(
+            "https://scc.sogang.ac.kr/pdfviewer/web/viewer.html?file={}",
+            file.replace("a.pdf", "a.hwp")
+        ),
+        format!("https://scc.sogang.ac.kr/pdfviewer/web/viewer.html?file={file}&file={file}"),
+    ] {
+        value["data"]["content"] = format!("<iframe src=\"{src}\"></iframe>").into();
+        let parsed = article(&source, &entry, &value.to_string()).unwrap();
+        assert!(parsed.unsupported_body, "{src}");
+        assert!(parsed.resources.is_empty(), "{src}");
+    }
+    // A viewer next to readable text is not the body and is not fetched.
+    value["data"]["content"] = format!(
+        "<p>안내</p><iframe src=\"https://scc.sogang.ac.kr/pdfviewer/web/viewer.html?file={file}\"></iframe>"
+    )
+    .into();
+    let mixed = article(&source, &entry, &value.to_string()).unwrap();
+    assert!(!mixed.unsupported_body && mixed.resources.is_empty());
 }

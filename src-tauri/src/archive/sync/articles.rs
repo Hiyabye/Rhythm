@@ -57,14 +57,38 @@ impl Controller {
                     .map_err(|_| permanent("공지 본문 문자 인코딩을 지원하지 않습니다."))?;
                 let mut article =
                     parser::article(definition, entry, text).map_err(|e| permanent(&e))?;
-                let replaces_readable = match existing_id {
-                    Some(id) => with_store(store, |s| s.has_readable_content(id))?,
-                    None => false,
+                let viewer: Vec<String> = parser::viewer_pdf_resources(&article)
+                    .into_iter()
+                    .map(|r| r.url.clone())
+                    .collect();
+                // A viewer PDF this notice already holds yields the same body
+                // (and content hash) as the archived one.
+                if let (Some(id), false) = (existing_id, viewer.is_empty()) {
+                    local_pdf_text(store, root, id, &mut article).await?;
+                }
+                let keep = match existing_id {
+                    Some(id) if article.unsupported_body => with_store(store, |s| {
+                        if s.has_readable_content(id)? {
+                            // Keep the last good content (approved Sogang exception)
+                            // unless the viewer now shows a PDF never seen before.
+                            viewer.iter().try_fold(true, |all, url| {
+                                Ok::<_, String>(all && s.knows_resource(id, url)?)
+                            })
+                        } else if viewer.is_empty() {
+                            Ok(false)
+                        } else {
+                            // Unchanged except for the newly recognized viewer PDF:
+                            // the body fill below adds it to the stored revision.
+                            let mut previous = article.clone();
+                            previous.resources.retain(|r| !viewer.contains(&r.url));
+                            s.content_matches(id, &previous)
+                        }
+                    })?,
+                    _ => false,
                 };
-                if replaces_readable && article.unsupported_body {
-                    // Keep the last good content (approved Sogang exception). The
-                    // notice was checked, so this is neither a failure nor a skip.
-                    let id = existing_id.expect("readable content belongs to a document");
+                if keep {
+                    // The notice was checked, so this is neither a failure nor a skip.
+                    let id = existing_id.expect("kept content belongs to a document");
                     with_store(store, |s| {
                         ensure_active(s, &self.cancel)?;
                         s.checked(&definition.id, &entry.external_id)
@@ -86,6 +110,16 @@ impl Controller {
         })?;
         self.pending_resources(store, root, transport, policy, id, resource_bytes)
             .await?;
+        if definition.id != "sogang-academic" || with_store(store, |s| s.has_readable_content(id))?
+        {
+            return Ok(inserted);
+        }
+        let download = Download {
+            transport,
+            policy,
+            total: resource_bytes,
+        };
+        self.fill_pdf_body(store, root, Some(download), id).await?;
         Ok(inserted)
     }
 }

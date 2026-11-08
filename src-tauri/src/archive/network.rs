@@ -466,6 +466,27 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
                 && raster_name(parts[4]);
             list || board_file || image || path == "/robots.txt"
         }
+        // The CMS file route behind the main board's PDF-viewer iframes
+        // (user decision): a notice whose whole body is that viewer is archived
+        // from the PDF's text. Article images on this host stay unsupported.
+        "scc.sogang.ac.kr" => {
+            let pdf = path == "/Download3"
+                && exact_query(
+                    url,
+                    &[
+                        ("pathStr", |v| {
+                            bounded_value(v)
+                                && v.bytes()
+                                    .all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(&b))
+                        }),
+                        ("fileName", |v| {
+                            downloadable_name(v) && v.to_ascii_lowercase().ends_with(".pdf")
+                        }),
+                        ("gubun", |v| v == "cmsfile"),
+                    ],
+                );
+            pdf || path == "/robots.txt"
+        }
         _ => false,
     };
     if url.scheme() != "https"
@@ -654,6 +675,30 @@ mod tests {
             );
             assert!(
                 validate(&Url::parse(value).unwrap(), Access::EmbeddedImage).is_err(),
+                "{value}"
+            );
+        }
+    }
+    #[test]
+    fn pdf_viewer_files_are_the_only_approved_scc_route() {
+        let file = "https://scc.sogang.ac.kr/Download3?pathStr=MTAxIyMxMDg%3D&fileName=%EC%95%88%EB%82%B4.pdf&gubun=cmsfile";
+        for value in [file, "https://scc.sogang.ac.kr/robots.txt"] {
+            assert!(validate_url(&Url::parse(value).unwrap()).is_ok(), "{value}");
+        }
+        for value in [
+            "https://scc.sogang.ac.kr/Download3?pathStr=MTAx&fileName=a.hwp&gubun=cmsfile",
+            "https://scc.sogang.ac.kr/Download3?pathStr=MTAx&fileName=a.pdf&gubun=other",
+            "https://scc.sogang.ac.kr/Download3?pathStr=MTAx&fileName=a.pdf",
+            "https://scc.sogang.ac.kr/Download3?pathStr=MTAx&fileName=a.pdf&gubun=cmsfile&x=1",
+            "https://scc.sogang.ac.kr/Download3?pathStr=..%2F..&fileName=a.pdf&gubun=cmsfile",
+            "https://scc.sogang.ac.kr/Download3?pathStr=MTAx&fileName=..%2Fa.pdf&gubun=cmsfile",
+            "https://scc.sogang.ac.kr/Download2?pathStr=MTAx&fileName=a.pdf&gubun=cmsfile",
+            "https://scc.sogang.ac.kr/pdfviewer/web/viewer.html?file=x",
+            "https://scc.sogang.ac.kr/dataview/temp/a.jpg",
+            "http://scc.sogang.ac.kr/Download3?pathStr=MTAx&fileName=a.pdf&gubun=cmsfile",
+        ] {
+            assert!(
+                validate_url(&Url::parse(value).unwrap()).is_err(),
                 "{value}"
             );
         }

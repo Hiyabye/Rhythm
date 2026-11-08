@@ -448,13 +448,207 @@ impl Store {
             )
             .map_err(|e| e.to_string())
     }
-    #[cfg(test)]
     pub(crate) fn latest_original(&self, document_id: i64) -> Result<String, String> {
         self.connection
             .query_row(
                 "SELECT original FROM document_revisions
                  WHERE document_id=?1 ORDER BY id DESC LIMIT 1",
                 [document_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())
+    }
+    /// Notices still archived without a body whose stored response shows a PDF
+    /// viewer, newest first, with the identity to re-parse that response under.
+    pub(crate) fn pdf_viewer_candidates(
+        &self,
+        source: &str,
+    ) -> Result<Vec<(i64, ListingEntry)>, String> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT d.id,d.external_id,d.canonical_url FROM documents d
+                 JOIN document_revisions r
+                   ON r.id=(SELECT MAX(id) FROM document_revisions WHERE document_id=d.id)
+                 WHERE d.source_id=?1 AND d.body_html='' AND d.body_text=''
+                   AND instr(r.original,'/pdfviewer/')>0
+                 ORDER BY d.published_at DESC,d.id DESC LIMIT 1000",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map([source], |row| {
+                Ok((
+                    row.get(0)?,
+                    ListingEntry {
+                        external_id: row.get(1)?,
+                        url: row.get(2)?,
+                        pinned: false,
+                        modified_at: None,
+                    },
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string());
+        rows
+    }
+    /// Adds references the latest revision lacks because an earlier parser did
+    /// not recognize them in the same stored response. Existing rows keep their state.
+    pub(crate) fn attach_resources(
+        &self,
+        document_id: i64,
+        resources: &[ResourceInput],
+    ) -> Result<(), String> {
+        for resource in resources {
+            if !web_url(&resource.url, true)
+                || resource.filename.len() > 4096
+                || !["image", "attachment"].contains(&resource.kind.as_str())
+            {
+                return Err("첨부 자료의 주소나 종류를 확인해 주세요.".into());
+            }
+            self.connection
+                .execute(
+                    "INSERT OR IGNORE INTO resources(document_id,revision_id,url,filename,kind)
+                     VALUES(?1,(SELECT MAX(id) FROM document_revisions WHERE document_id=?1),?2,?3,?4)",
+                    params![document_id, resource.url, resource.filename, resource.kind],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+    /// The newest downloaded copy of a document's attachment at this URL.
+    pub(crate) fn downloaded_attachment(
+        &self,
+        document_id: i64,
+        url: &str,
+    ) -> Result<Option<i64>, String> {
+        self.connection
+            .query_row(
+                "SELECT id FROM resources WHERE document_id=?1 AND url=?2
+                   AND kind='attachment' AND status='downloaded' ORDER BY id DESC LIMIT 1",
+                params![document_id, url],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+    /// Fills the empty body of the latest revision in place with text derived
+    /// from its own attachments. The response did not change, so this is no new
+    /// revision: freshness and change notices stay as they were, and the hash
+    /// matches a later fetch of the same response. Title-only embeddings of that
+    /// revision are dropped so classification recomputes them. Returns false,
+    /// changing nothing, when an analysis job already used the empty revision;
+    /// the caller then archives the text as a new revision instead.
+    pub(crate) fn fill_body(
+        &self,
+        document_id: i64,
+        article: &ArticleInput,
+    ) -> Result<bool, String> {
+        if article.body_text.trim().is_empty()
+            || article.body_html.len() > 8 * 1024 * 1024
+            || article.body_text.len() > 8 * 1024 * 1024
+        {
+            return Err("공지의 식별자, 본문 또는 크기를 확인해 주세요.".into());
+        }
+        let hash = meaningful_hash(article)?;
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let revision: Option<i64> = transaction
+            .query_row(
+                "SELECT r.id FROM document_revisions r
+                 WHERE r.id=(SELECT MAX(id) FROM document_revisions WHERE document_id=?1)
+                   AND r.body_html='' AND r.body_text=''
+                   AND NOT EXISTS(SELECT 1 FROM ai_jobs j WHERE j.document_id=?1 AND j.revision_id=r.id)
+                   AND NOT EXISTS(SELECT 1 FROM ai_results a WHERE a.document_id=?1 AND a.revision_id=r.id)",
+                [document_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some(revision) = revision else {
+            return Ok(false);
+        };
+        transaction
+            .execute(
+                "UPDATE document_revisions SET body_html=?2,body_text=?3,content_hash=?4 WHERE id=?1",
+                params![revision, article.body_html, article.body_text, hash],
+            )
+            .map_err(|e| e.to_string())?;
+        require_changed(
+            transaction
+                .execute(
+                    "UPDATE documents SET body_html=?2,body_text=?3,content_hash=?4 WHERE id=?1",
+                    params![document_id, article.body_html, article.body_text, hash],
+                )
+                .map_err(|e| e.to_string())?,
+        )?;
+        for table in ["notice_classifications", "notice_embeddings"] {
+            transaction
+                .execute(
+                    &format!("DELETE FROM {table} WHERE document_id=?1 AND revision_id=?2"),
+                    params![document_id, revision],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        transaction.commit().map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+    /// True when the stored content hash equals this article's.
+    pub(crate) fn content_matches(
+        &self,
+        document_id: i64,
+        article: &ArticleInput,
+    ) -> Result<bool, String> {
+        let stored: String = self
+            .connection
+            .query_row(
+                "SELECT content_hash FROM documents WHERE id=?1",
+                [document_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(stored == meaningful_hash(article)?)
+    }
+    /// Whether any revision of the document referenced this URL.
+    pub(crate) fn knows_resource(&self, document_id: i64, url: &str) -> Result<bool, String> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM resources WHERE document_id=?1 AND url=?2)",
+                params![document_id, url],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())
+    }
+    /// The source and listing identity a document was archived under.
+    pub(crate) fn document_entry(
+        &self,
+        document_id: i64,
+    ) -> Result<(String, ListingEntry), String> {
+        self.connection
+            .query_row(
+                "SELECT source_id,external_id,canonical_url FROM documents WHERE id=?1",
+                [document_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        ListingEntry {
+                            external_id: row.get(1)?,
+                            url: row.get(2)?,
+                            pinned: false,
+                            modified_at: None,
+                        },
+                    ))
+                },
+            )
+            .map_err(|_| "보관된 항목을 찾을 수 없습니다.".into())
+    }
+    pub(crate) fn resource_document(&self, resource_id: i64) -> Result<i64, String> {
+        self.connection
+            .query_row(
+                "SELECT document_id FROM resources WHERE id=?1",
+                [resource_id],
                 |row| row.get(0),
             )
             .map_err(|e| e.to_string())
