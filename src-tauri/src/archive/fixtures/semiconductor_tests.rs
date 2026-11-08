@@ -370,8 +370,12 @@ fn article_identity_and_board_label_are_bound() {
         "다른 파일.xlsx</a>",
     );
     assert!(article(&notices, &entry, &mismatched).is_err());
-    let unsupported = body.replace(".xlsx", ".exe");
-    assert!(article(&notices, &entry, &unsupported).is_err());
+    // An unlisted file type keeps the notice; the transport never requests it.
+    let unsupported = article(&notices, &entry, &body.replace(".xlsx", ".exe")).unwrap();
+    assert!(unsupported
+        .resources
+        .iter()
+        .any(|resource| resource.kind == "attachment" && resource.filename.ends_with(".exe")));
     let external = body.replace("/board/filedown.php", "https://evil.example/filedown.php");
     assert!(article(&notices, &entry, &external).is_err());
     let extra_query = body.replace("&filename=", "&extra=1&filename=");

@@ -156,6 +156,18 @@ fn notice_detail_keeps_attachments_and_embedded_images() {
     assert!(attachments
         .iter()
         .any(|resource| resource.filename.ends_with("모집공고최종.docx")));
+    // An unlisted file type keeps the notice; the transport never requests it.
+    let video = article(
+        &general,
+        &entry,
+        &include_str!("mechanical-notice-detail-2419.html")
+            .replace("%EC%B5%9C%EC%A2%85.docx", "%EC%B5%9C%EC%A2%85.mp4"),
+    )
+    .unwrap();
+    assert!(video
+        .resources
+        .iter()
+        .any(|resource| resource.filename.ends_with("모집공고최종.mp4")));
     assert!(parsed
         .body_html
         .contains("data-resource-url=\"https://pvdobbplxndsigatnamu.supabase.co"));

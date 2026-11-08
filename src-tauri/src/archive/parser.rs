@@ -614,17 +614,6 @@ fn filename(url: &Url) -> String {
         })
         .unwrap_or_else(|| "첨부 파일".into())
 }
-/// Document and raster extensions the archive downloads as attachments. The
-/// download transport (`network.rs`) enforces the same list.
-fn attachment_extension(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    [
-        ".pdf", ".hwp", ".hwpx", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip", ".txt",
-        ".png", ".jpg", ".jpeg", ".gif", ".webp",
-    ]
-    .iter()
-    .any(|extension| lower.ends_with(extension))
-}
 fn safe_url(base: &str, value: &str) -> Option<Url> {
     if value.len() > 4096 || value.chars().any(char::is_control) {
         return None;

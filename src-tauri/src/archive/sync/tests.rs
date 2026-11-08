@@ -30,6 +30,8 @@ struct Fake {
     changed: Mutex<HashMap<u64, String>>,
     bad: Mutex<HashSet<u64>>,
     failed: Mutex<HashSet<u64>>,
+    rate_limited: Mutex<HashSet<u64>>,
+    attachment: Mutex<String>,
     calls: Mutex<Vec<RecordedRequest>>,
     accesses: Mutex<Vec<(String, network::Access)>>,
     /// Extra responses by exact URL.
@@ -51,6 +53,8 @@ impl Fake {
             changed: Mutex::new(HashMap::new()),
             bad: Mutex::new(HashSet::new()),
             failed: Mutex::new(HashSet::new()),
+            rate_limited: Mutex::new(HashSet::new()),
+            attachment: Mutex::new(PDF_URL.into()),
             calls: Mutex::new(Vec::new()),
             accesses: Mutex::new(Vec::new()),
             extra: Mutex::new(HashMap::new()),
@@ -94,7 +98,7 @@ impl Fake {
                 "{}<p><img src='{PNG_URL}' alt='안내 이미지'></p>",
                 data["content"].as_str().unwrap()
             ));
-            data["fileValue1"] = json!(PDF_URL);
+            data["fileValue1"] = json!(*self.attachment.lock().unwrap());
         }
         value.to_string()
     }
@@ -200,6 +204,9 @@ impl Transport for Fake {
             }
             if self.failed.lock().unwrap().contains(&id) {
                 return Err("모의 학교 서버 연결 실패".into());
+            }
+            if self.rate_limited.lock().unwrap().contains(&id) {
+                return Err(network::RATE_LIMITED.into());
             }
             if self.bad.lock().unwrap().contains(&id) {
                 return body(
@@ -1940,9 +1947,11 @@ async fn bounded_live_import_and_offline_reopen() {
     );
     db.catalog(&catalog::definitions()).unwrap();
     db.set_enabled("sogang_notices", true).unwrap();
+    // Public boards only: the Cybercampus connector would sign in with the
+    // user's stored eClass login, which a live check needs explicit approval for.
     let ids: Vec<_> = catalog::definitions()
         .into_iter()
-        .filter(|s| s.supported)
+        .filter(|s| s.supported && s.family != cybercampus::FAMILY)
         .map(|s| s.id)
         .collect();
     for id in &ids {
@@ -2229,6 +2238,20 @@ fn robots_validates_delays_and_html_without_rejecting_empty_policy() {
     assert!(Robots::parse(&url, "# valid empty policy\n")
         .unwrap()
         .permits(&url));
+}
+
+#[test]
+fn robots_ignores_an_unreadable_delay_of_a_group_for_another_agent() {
+    let url = Url::parse(PNG_URL).unwrap();
+    let policy = Robots::parse(
+        &url,
+        "User-agent: Yeti\nCrawl-delay: 10s\n\nUser-agent: Other\nCrawl-delay: 120\n\nUser-agent: *\nCrawl-delay: 2\nDisallow: /private\n",
+    )
+    .unwrap();
+    assert_eq!(policy.delay, 2.0);
+    assert!(policy.permits(&url));
+    assert!(!policy.permits(&url.join("/private").unwrap()));
+    assert!(Robots::parse(&url, "User-agent: Rhythm\nCrawl-delay: 10s\n").is_err());
 }
 
 #[test]
@@ -3268,4 +3291,62 @@ async fn admission_requires_the_extension_that_owns_each_source() {
                 "sogang_notices"
             }
         )));
+}
+
+#[tokio::test]
+async fn rate_limited_notice_stops_the_board_without_requesting_the_rest() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![2, 3, 4]]);
+    fake.rate_limited.lock().unwrap().insert(3);
+    let controller = Controller::new();
+    let result = controller
+        .execute(
+            &store,
+            dir.path(),
+            &fake,
+            sources(&store, &[MAIN]),
+            "historical",
+            Budget::default(),
+        )
+        .await;
+    assert!(result.unwrap_err().contains(network::RATE_LIMITED));
+    assert!(
+        !fake.paths().iter().any(|url| url.contains("pkId=4")),
+        "{:?}",
+        fake.paths()
+    );
+    let source = skipped(&store, MAIN);
+    assert_eq!(source.status, "failed");
+    assert_eq!((source.next_page, source.failed), (1, 1));
+    assert!(!source.history_complete);
+    assert_eq!(source.skipped_count, 0, "a refusal is not a skipped notice");
+    assert_eq!(items(&store).len(), 1);
+}
+
+#[tokio::test]
+async fn unsupported_attachment_is_recorded_without_requesting_it() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![vec![2]]);
+    fake.resources.store(true, Ordering::Release);
+    let exe = "https://www.sogang.ac.kr/file-fe-prd/board/2/setup.exe?sg=setup.exe";
+    *fake.attachment.lock().unwrap() = exe.into();
+    let controller = Controller::new();
+    for _ in 0..2 {
+        run(
+            &controller,
+            &store,
+            dir.path(),
+            &fake,
+            &[MAIN],
+            "incremental",
+            Budget::default(),
+        )
+        .await;
+    }
+    assert_eq!(requests(&fake, exe), 0, "{:?}", fake.paths());
+    let id = items(&store)[0].id;
+    let resources = with_store(&store, |s| s.pending_resources(id)).unwrap();
+    let attachment = resources.iter().find(|r| r.url == exe).unwrap();
+    assert_eq!(attachment.status, "unsupported");
+    assert_eq!(skipped(&store, MAIN).status, "completed");
 }

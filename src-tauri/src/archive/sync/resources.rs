@@ -97,6 +97,8 @@ pub(super) async fn download_resource<T: Transport>(
     // Set when the remaining job budget, not the per-file cap, bounds this
     // download. A size failure then says nothing about the file itself.
     let mut budget_bound = false;
+    let school = Url::parse(&resource.url)
+        .is_ok_and(|url| url.origin().ascii_serialization() == policy.origin);
     let outcome: Result<(), String> = async {
         let url = Url::parse(&resource.url).map_err(|_| "첨부 자료 주소를 해석하지 못했습니다.")?;
         let access = if resource.kind == "image" {
@@ -105,6 +107,10 @@ pub(super) async fn download_resource<T: Transport>(
             network::Access::Source
         };
         network::validate(&url, access)?;
+        // The name alone decides this, so the file is never requested.
+        if resource.kind != "image" && !supported_attachment(&resource.filename) {
+            return Err(UNSUPPORTED_ATTACHMENT.into());
+        }
         let limit = resource_limit(resource, *total, &mut budget_bound)?;
         let other;
         let policy = if url.origin().ascii_serialization() == policy.origin {
@@ -123,8 +129,21 @@ pub(super) async fn download_resource<T: Transport>(
     .await;
     match outcome {
         Ok(()) => Ok(DownloadOutcome::Downloaded),
+        // The board's own server refuses further requests too, so the sync
+        // stops and the file stays as it was for a later run.
+        Err(error) if school && error == network::RATE_LIMITED => Err(error),
         Err(error) => record_failure(store, root, cancel, resource, error, budget_bound).await,
     }
+}
+const UNSUPPORTED_ATTACHMENT: &str = "자동 다운로드를 지원하지 않는 첨부 파일 형식입니다.";
+fn supported_attachment(filename: &str) -> bool {
+    let lower = filename.to_ascii_lowercase();
+    [
+        ".pdf", ".hwp", ".hwpx", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip", ".txt",
+        ".png", ".jpg", ".jpeg", ".gif", ".webp",
+    ]
+    .iter()
+    .any(|ext| lower.ends_with(ext))
 }
 /// The byte limit of one download: the per-file cap or what is left of the
 /// job budget, whichever is smaller.
@@ -184,17 +203,11 @@ pub(in crate::archive) async fn install_resource(
         if mime.is_none() || bytes.is_empty() {
             return Err("첨부 파일 대신 오류 페이지 또는 지원하지 않는 자료를 받았습니다.".into());
         }
-        let lower = resource.filename.to_ascii_lowercase();
-        if ![
-            ".pdf", ".hwp", ".hwpx", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip",
-            ".txt", ".png", ".jpg", ".jpeg", ".gif", ".webp",
-        ]
-        .iter()
-        .any(|ext| lower.ends_with(ext))
-        {
-            return Err("자동 다운로드를 지원하지 않는 첨부 파일 형식입니다.".into());
+        if !supported_attachment(&resource.filename) {
+            return Err(UNSUPPORTED_ATTACHMENT.into());
         }
-        if lower.ends_with(".pdf") && !bytes.starts_with(b"%PDF-") {
+        if resource.filename.to_ascii_lowercase().ends_with(".pdf") && !bytes.starts_with(b"%PDF-")
+        {
             return Err("PDF 파일 형식 검증에 실패했습니다.".into());
         }
         mime
