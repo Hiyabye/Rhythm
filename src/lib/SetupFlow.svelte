@@ -6,6 +6,8 @@
   import SourceSettings from './SourceSettings.svelte';
   import PersonalizationSettings from './PersonalizationSettings.svelte';
   import ProactiveSettings from './ProactiveSettings.svelte';
+  import ExtensionSettings from './ExtensionSettings.svelte';
+  import { contributed, enabledExtensions } from './extensions';
   import { archiveError, archiveSize } from './archive-format';
   import type { AiSnapshot, AutoUpdateCheck, CatalogEntry, EnergyProfile, ProactiveActivation, ProactiveSnapshot, Settings, Snapshot, SourceInfo, Theme } from './types';
 
@@ -16,14 +18,18 @@
     onactivation: (activation: ProactiveActivation) => void; onfinish: () => void;
   } = $props();
 
-  const steps = [
-    { label: '시작', title: 'Rhythm에 오신 것을 환영합니다', line: '계정이나 클라우드 없이 서강대학교 공지를 이 기기에 보관하고 읽습니다. 여기서 고른 설정은 나중에 설정에서 언제든 바꿀 수 있습니다.' },
-    { label: '게시판', title: '받아 볼 게시판', line: '구독한 게시판만 가져옵니다. 구독만으로는 아무것도 내려받지 않습니다.' },
-    { label: '관심사', title: '관심사', line: '추천 순위에만 쓰이며 이 기기에만 저장됩니다. 비워 두어도 됩니다.' },
-    { label: 'AI', title: 'AI 요약', line: '공지 요약과 일정 근거를 만드는 선택 기능입니다. AI 없이도 읽기, 검색, 추천을 모두 쓸 수 있습니다.' },
-    { label: '백그라운드', title: '백그라운드 실행', line: '처음에는 모두 꺼져 있습니다. 켜더라도 Rhythm이 실행 중이고 기기가 깨어 있을 때만 동작합니다.' },
-    { label: '알림', title: '알림', line: '새 공지를 운영체제 알림으로 받습니다. 처음에는 꺼져 있습니다.' },
-    { label: '완료', title: '준비가 끝났습니다', line: '지금까지 고른 설정입니다. 설정 → 일반에서 초기 설정을 다시 열 수 있습니다.' },
+  // The core steps frame the steps each chosen extension contributes, in this order.
+  type StepId = 'start' | 'extensions' | 'boards' | 'cybercampus' | 'interests' | 'ai' | 'background' | 'notifications' | 'done';
+  const allSteps: { id: StepId; label: string; title: string; line: string; extension?: string }[] = [
+    { id: 'start', label: '시작', title: 'Rhythm에 오신 것을 환영합니다', line: '계정이나 클라우드 없이 학교 소식과 일정을 이 기기에 모아 봅니다. 여기서 고른 설정은 나중에 설정에서 언제든 바꿀 수 있습니다.' },
+    { id: 'extensions', label: '기능', title: '사용할 기능 고르기', line: '켠 기능만 메뉴와 오늘 화면에 나타납니다. 처음에는 모두 꺼져 있고, 설정 → 확장 기능에서 언제든 바꿀 수 있습니다.' },
+    { id: 'boards', label: '게시판', title: '받아 볼 게시판', line: '구독한 게시판만 가져옵니다. 구독만으로는 아무것도 내려받지 않습니다.', extension: 'sogang_notices' },
+    { id: 'cybercampus', label: '사이버캠퍼스', title: '사이버캠퍼스 연결', line: '본인 강좌의 공지와 과제·마감을 가져옵니다. 로그인 정보는 운영체제 보안 저장소에만 저장합니다.', extension: 'cybercampus' },
+    { id: 'interests', label: '관심사', title: '관심사', line: '추천 순위에만 쓰이며 이 기기에만 저장됩니다. 비워 두어도 됩니다.', extension: 'recommendations' },
+    { id: 'ai', label: 'AI', title: 'AI 요약', line: '공지 요약과 일정 근거를 만듭니다. AI 없이도 읽기, 검색, 추천을 모두 쓸 수 있습니다.', extension: 'ai' },
+    { id: 'background', label: '백그라운드', title: '백그라운드 실행', line: '처음에는 모두 꺼져 있습니다. 켜더라도 Rhythm이 실행 중이고 기기가 깨어 있을 때만 동작합니다.', extension: 'proactive' },
+    { id: 'notifications', label: '알림', title: '알림', line: '새 공지를 운영체제 알림으로 받습니다. 처음에는 꺼져 있습니다.', extension: 'proactive' },
+    { id: 'done', label: '완료', title: '준비가 끝났습니다', line: '지금까지 고른 설정입니다. 설정 → 일반에서 초기 설정을 다시 열 수 있습니다.' },
   ];
   const themes: { id: Theme; label: string; icon: string }[] = [
     { id: 'light', label: '라이트', icon: 'today' },
@@ -43,8 +49,13 @@
   ];
   const aiChoiceLabel: Record<AiChoice, string> = { local: '이 기기에서 실행', remote: 'OpenAI 호환 API', later: '나중에 설정' };
 
-  let step = $state(0);
-  let notices = $derived(snapshot.extensions.find((extension) => extension.id === 'sogang_notices') ?? null);
+  let enabled = $derived(enabledExtensions(snapshot.extensions));
+  let steps = $derived(contributed(allSteps, enabled));
+  // Tracked by id, so turning extensions on or off on the 기능 step keeps the place.
+  let current = $state<StepId>('start');
+  let step = $derived(Math.max(0, steps.findIndex((item) => item.id === current)));
+  let sourcesOn = $derived(enabled.has('sogang_notices') || enabled.has('cybercampus'));
+  let chosen = $derived(snapshot.extensions.filter((extension) => extension.enabled).map((extension) => extension.display_name));
 
   let ai = $state<AiSnapshot | null>(null);
   let aiChoice = $state<AiChoice | null>(null);
@@ -72,7 +83,7 @@
 
   // The AI step polls like the AI pane, so download progress stays current.
   $effect(() => {
-    if (step !== 3) return;
+    if (current !== 'ai') return;
     let active = true;
     let issued = 0;
     let applied = 0;
@@ -93,7 +104,7 @@
   });
 
   $effect(() => {
-    if (step !== steps.length - 1) return;
+    if (current !== 'done') return;
     summaryError = '';
     void Promise.all([invoke<SourceInfo[]>('archive_sources'), invoke<ProactiveSnapshot>('proactive_snapshot')])
       .then(([nextSources, nextProactive]) => { sources = nextSources; proactive = nextProactive; })
@@ -107,7 +118,7 @@
   }
 
   function go(next: number) {
-    step = next;
+    current = steps[next].id;
     void focusHeading();
   }
 
@@ -153,7 +164,7 @@
   <div class="setup-column">
     <div class="brand"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>Rhythm</span></div>
     <ol class="setup-steps setup-progress" aria-label="초기 설정 단계">
-      {#each steps as item, index (item.label)}
+      {#each steps as item, index (item.id)}
         <li class:done={index < step} class:current={index === step} aria-current={index === step ? 'step' : undefined}><span aria-hidden="true">{#if index < step}<Icon name="check" size={12} />{:else}{index + 1}{/if}</span>{item.label}</li>
       {/each}
     </ol>
@@ -162,20 +173,21 @@
       <header class="setup-header"><h1 id="setup-title" tabindex="-1">{steps[step].title}</h1><p>{steps[step].line}</p></header>
       {#if error}<p class="archive-error" role="alert">{error}</p>{/if}
 
-      {#if step === 0}
+      {#if current === 'start'}
         <div class="settings-group">
           <div class="settings-row"><span class="row-label">화면 테마</span><div class="segmented" role="group" aria-label="화면 테마">{#each themes as option}<button disabled={busy} class:selected={theme === option.id} aria-pressed={theme === option.id} onclick={() => onsave({ theme: option.id })}><Icon name={option.icon} size={15} />{option.label}</button>{/each}</div></div>
+          <div class="settings-row"><span class="row-label">전원 모드<Hint label="전원 모드">AI 자동 분석과 자동 동기화 간격에 적용됩니다. 절전은 자동 분석을 하지 않고 60분마다, 균형은 30분, 성능은 15분마다 확인합니다.</Hint></span><div class="segmented" role="group" aria-label="전원 모드">{#each energyProfiles as option}<button disabled={busy} class:selected={snapshot.settings.energy_profile === option.id} aria-pressed={snapshot.settings.energy_profile === option.id} onclick={() => onsave({ energy_profile: option.id })}>{option.label}</button>{/each}</div></div>
+          {#if updaterConfigured}<div class="settings-row"><span class="row-label">자동으로 업데이트 확인<Hint label="자동으로 업데이트 확인">앱이 실행 중일 때 하루에 한 번 GitHub에서 새 버전을 확인해 알려 드립니다. 내려받기와 설치는 직접 고를 때만 진행합니다.</Hint></span><button class="switch" class:on={autoCheck === true} role="switch" aria-label="자동으로 업데이트 확인" aria-checked={autoCheck === true} disabled={autoCheck === null} onclick={toggleAutoCheck}><span></span></button></div>{/if}
         </div>
-      {:else if step === 1}
-        {#if notices}
-          <div class="settings-group">
-            <div class="settings-row"><span class="row-label">{notices.display_name}<Hint label={notices.display_name}>{notices.description} 꺼도 보관한 공지와 구독은 그대로 남습니다.</Hint></span><button class="switch" class:on={notices.enabled} role="switch" aria-checked={notices.enabled} aria-label={`${notices.display_name} 사용 설정`} disabled={busy} onclick={() => ontoggleextension(notices.id, !notices.enabled)}><span></span></button></div>
-          </div>
-          {#if notices.enabled}<SourceSettings enabled={notices.enabled} extension="sogang_notices" />{/if}
-        {/if}
-      {:else if step === 2}
+      {:else if current === 'extensions'}
+        <ExtensionSettings extensions={snapshot.extensions} {busy} ontoggle={ontoggleextension} compact />
+      {:else if current === 'boards'}
+        <SourceSettings enabled extension="sogang_notices" />
+      {:else if current === 'cybercampus'}
+        <SourceSettings enabled extension="cybercampus" />
+      {:else if current === 'interests'}
         <PersonalizationSettings desktop compact />
-      {:else if step === 3}
+      {:else if current === 'ai'}
         {#if aiError}<p class="archive-error" role="alert">{aiError}</p>{/if}
         {#if ai}
           <ul class="model-grid setup-choices" aria-label="AI 사용 방식">
@@ -206,22 +218,21 @@
             <p class="footnote setup-note">API 주소, 키, 전송 동의는 설정 → AI에서 입력합니다. 동의하기 전에는 아무것도 보내지 않습니다.</p>
           {/if}
         {:else if !aiError}<p class="loading" role="status">모델 정보를 불러오는 중입니다…</p>{/if}
-      {:else if step === 4}
-        <div class="settings-group">
-          <div class="settings-row"><span class="row-label">전원 모드<Hint label="전원 모드">AI 자동 분석과 자동 동기화 간격에 적용됩니다. 절전은 자동 분석을 하지 않고 60분마다, 균형은 30분, 성능은 15분마다 확인합니다.</Hint></span><div class="segmented" role="group" aria-label="전원 모드">{#each energyProfiles as option}<button disabled={busy} class:selected={snapshot.settings.energy_profile === option.id} aria-pressed={snapshot.settings.energy_profile === option.id} onclick={() => onsave({ energy_profile: option.id })}>{option.label}</button>{/each}</div></div>
-          {#if updaterConfigured}<div class="settings-row"><span class="row-label">자동으로 업데이트 확인<Hint label="자동으로 업데이트 확인">앱이 실행 중일 때 하루에 한 번 GitHub에서 새 버전을 확인해 알려 드립니다. 내려받기와 설치는 직접 고를 때만 진행합니다.</Hint></span><button class="switch" class:on={autoCheck === true} role="switch" aria-label="자동으로 업데이트 확인" aria-checked={autoCheck === true} disabled={autoCheck === null} onclick={toggleAutoCheck}><span></span></button></div>{/if}
-        </div>
+      {:else if current === 'background'}
         <ProactiveSettings desktop part="background" compact onopen={() => {}} {onactivation} />
-      {:else if step === 5}
+      {:else if current === 'notifications'}
         <ProactiveSettings desktop part="notifications" compact onopen={() => {}} {onactivation} />
       {:else}
         {#if summaryError}<p class="archive-error" role="alert">{summaryError}</p>{/if}
         <div class="settings-group" role="group" aria-label="선택한 설정">
-          <div class="settings-row"><span class="row-label">구독한 게시판</span><span class="value">{notices?.enabled ? `${subscribed.length.toLocaleString('ko-KR')}개` : '꺼짐'}</span></div>
-          <div class="settings-row"><span class="row-label">AI</span><span class="value">{aiChoice ? aiChoiceLabel[aiChoice] : '나중에 설정'}</span></div>
-          <div class="settings-row"><span class="row-label">자동 동기화</span><span class="value">{proactive ? (proactive.settings.scheduler_enabled ? '켜짐' : '꺼짐') : '—'}</span></div>
-          <div class="settings-row"><span class="row-label">알림</span><span class="value">{proactive ? (proactive.settings.notifications_enabled ? '켜짐' : '꺼짐') : '—'}</span></div>
-          <div class="settings-row"><span class="row-label">지금 공지 가져오기<Hint label="지금 공지 가져오기">구독한 게시판의 새 소식을 확인하고 이전 공지를 차례로 가져옵니다. 진행 상황은 사이드바와 설정 → 게시판에 표시됩니다.</Hint>{#if syncMessage}<span class="row-detail" role="status">{syncMessage}</span>{/if}</span><button class="button secondary small" disabled={syncBusy || Boolean(syncMessage) || !notices?.enabled || !subscribed.length} onclick={syncNow}>가져오기</button></div>
+          <div class="settings-row"><span class="row-label">켠 기능<span class="row-detail">{chosen.length ? chosen.join(', ') : '오늘만 표시합니다. 설정 → 확장 기능에서 언제든 켤 수 있습니다.'}</span></span><span class="value">{chosen.length.toLocaleString('ko-KR')}개</span></div>
+          {#if sourcesOn}<div class="settings-row"><span class="row-label">구독한 게시판</span><span class="value">{subscribed.length.toLocaleString('ko-KR')}개</span></div>{/if}
+          {#if enabled.has('ai')}<div class="settings-row"><span class="row-label">AI</span><span class="value">{aiChoice ? aiChoiceLabel[aiChoice] : '나중에 설정'}</span></div>{/if}
+          {#if enabled.has('proactive')}
+            <div class="settings-row"><span class="row-label">자동 동기화</span><span class="value">{proactive ? (proactive.settings.scheduler_enabled ? '켜짐' : '꺼짐') : '—'}</span></div>
+            <div class="settings-row"><span class="row-label">알림</span><span class="value">{proactive ? (proactive.settings.notifications_enabled ? '켜짐' : '꺼짐') : '—'}</span></div>
+          {/if}
+          {#if sourcesOn}<div class="settings-row"><span class="row-label">지금 공지 가져오기<Hint label="지금 공지 가져오기">구독한 게시판의 새 소식을 확인하고 이전 공지를 차례로 가져옵니다. 진행 상황은 사이드바와 각 게시판 설정에 표시됩니다.</Hint>{#if syncMessage}<span class="row-detail" role="status">{syncMessage}</span>{/if}</span><button class="button secondary small" disabled={syncBusy || Boolean(syncMessage) || !subscribed.length} onclick={syncNow}>가져오기</button></div>{/if}
         </div>
       {/if}
     </main>

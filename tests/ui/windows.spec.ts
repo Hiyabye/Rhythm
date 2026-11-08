@@ -244,9 +244,10 @@ test('an unavailable capability check does not enable notifications', async ({ p
 });
 
 test('setup uses the Windows notification wording', async ({ page }) => {
-  await mockDesktop(page, { windows: true, onboardingNeeded: true });
+  await mockDesktop(page, { windows: true, onboardingNeeded: true, extensions: { sogang_notices: false, cybercampus: false, recommendations: false, ai: false } });
   await page.goto('/');
-  for (let step = 0; step < 5; step++) await page.getByRole('button', { name: '다음', exact: true }).click();
+  // 시작 → 기능 → 백그라운드 → 알림
+  for (let step = 0; step < 3; step++) await page.getByRole('button', { name: '다음', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: '알림', exact: true })).toBeFocused();
   await expect(page.getByRole('button', { name: '시험 알림으로 연결 확인' })).toBeVisible();
   await expect(page.getByRole('button', { name: '운영체제 알림 권한 요청' })).toHaveCount(0);

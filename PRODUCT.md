@@ -40,7 +40,7 @@ Also supported but secondary: a quick check of Today, deep reading of long notic
 
 Environment: a desktop window with native window controls and a 640 px minimum width, a tray item (menu bar on macOS, notification area on Windows), native notifications and native confirmation dialogs. The window may be hidden for long periods.
 
-Current information architecture (open to change in a redesign): 오늘 (ranked Today), 받은 소식 (chronological inbox), 탐색 (search), 보관함 (saved), 설정 (settings: general, extensions/sources, AI models and processing, personalization, background, notifications, backup, updates).
+Current information architecture: every feature beyond the core shell is a built-in extension the user turns on, modeled on Obsidian's plugins (built-in only, never loaded from outside). The core is 오늘 and 설정 (확장 기능, 일반, 데이터 및 정보 with backup and updates). Extensions add 받은 소식 and its boards (서강대학교 공지), 과제·마감 (사이버캠퍼스), 탐색, 보관함, Today's 나를 위한 소식 and 앞으로 7일, AI 분석 and 알림·백그라운드, each with its own settings pane. A new profile starts blank; upgraded profiles keep what they had.
 
 ## Capabilities and Constraints
 
