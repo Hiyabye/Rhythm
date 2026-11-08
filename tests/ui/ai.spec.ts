@@ -414,6 +414,26 @@ test('a retired 9B stays removable and is never offered for installation', async
   expect(calls.map((call: any) => call.args)).toEqual([{ id: 'qwen35-9b', confirmed: true }]);
 });
 
+test('removing two models in a row confirms each inside its own tile', async ({ page }) => {
+  await mockDesktop(page, { aiInstalled: true, aiRetiredModel: true });
+  await page.goto('/');
+  await openSettings(page, 'AI');
+  const tile = (name: string) => page.locator('.model-tile').filter({ has: page.getByRole('heading', { name, exact: true }) });
+  await tile('Qwen3.5 9B').getByRole('button', { name: '모델 삭제', exact: true }).click();
+  // The pending confirmation belongs to the tile; opening another tile's moves it there.
+  await expect(tile('Qwen3.5 9B').getByRole('group', { name: 'Qwen3.5 9B 삭제 확인', exact: true })).toBeVisible();
+  await tile('Qwen3.5 4B').getByRole('button', { name: '모델 삭제', exact: true }).click();
+  await expect(page.getByRole('group', { name: 'Qwen3.5 9B 삭제 확인', exact: true })).toHaveCount(0);
+  await tile('Qwen3.5 4B').getByRole('group', { name: 'Qwen3.5 4B 삭제 확인', exact: true }).getByRole('button', { name: '확인하고 삭제', exact: true }).click();
+  await expect(tile('Qwen3.5 4B').getByRole('button', { name: 'Qwen3.5 4B 다운로드 및 설치', exact: true })).toBeVisible();
+  await tile('Qwen3.5 9B').getByRole('button', { name: '모델 삭제', exact: true }).click();
+  await tile('Qwen3.5 9B').getByRole('group', { name: 'Qwen3.5 9B 삭제 확인', exact: true }).getByRole('button', { name: '확인하고 삭제', exact: true }).click();
+  await expect(tile('Qwen3.5 9B')).toHaveCount(0);
+  await expect(tile('Qwen3.5 4B').getByRole('button', { name: '모델 삭제', exact: true })).toHaveCount(0);
+  const calls = await page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'ai_remove'));
+  expect(calls.map((call: any) => call.args)).toEqual([{ id: 'qwen35-4b', confirmed: true }, { id: 'qwen35-9b', confirmed: true }]);
+});
+
 test('image-origin facts cite the image and projector actions stay with capable installed models', async ({ page }) => {
   await mockDesktop(page, { aiInstalled: true, aiResult: true, aiImageResult: true }); await page.goto('/'); await reader(page);
   const panel = page.getByRole('region', { name: '공지 AI 분석' });

@@ -119,6 +119,23 @@ test('choosing the remote engine saves it and leaves the details to the AI pane'
   expect(await page.evaluate(() => (window as any).__fixture.ai.preferences.engine)).toBe('openai-compatible');
 });
 
+test('an installed model can be removed from the AI step after confirming', async ({ page }) => {
+  await mockDesktop(page, { onboardingNeeded: true, aiInstalled: true });
+  await page.goto('/');
+  for (const name of allSteps.slice(0, 5)) await next(page, name);
+  const models = page.getByRole('list', { name: '설치할 수 있는 모델' });
+  await models.getByRole('button', { name: 'Qwen3.5 4B 삭제', exact: true }).click();
+  const confirm = models.getByRole('group', { name: 'Qwen3.5 4B 삭제 확인' });
+  await confirm.getByRole('button', { name: '취소', exact: true }).click();
+  expect(await callCount(page, 'ai_remove')).toBe(0);
+
+  await models.getByRole('button', { name: 'Qwen3.5 4B 삭제', exact: true }).click();
+  await confirm.getByRole('button', { name: '확인하고 삭제', exact: true }).click();
+  await expect(models.getByRole('button', { name: 'Qwen3.5 4B 다운로드 및 설치', exact: true })).toBeVisible();
+  const calls = await page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'ai_remove').map((call: any) => call.args));
+  expect(calls).toEqual([{ id: 'qwen35-4b', confirmed: true }]);
+});
+
 test('setup can be reopened from Settings and from the empty Today guide', async ({ page }) => {
   await mockDesktop(page, { count: 0 });
   await page.goto('/');

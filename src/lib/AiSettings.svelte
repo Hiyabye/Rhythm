@@ -180,6 +180,18 @@
   }
 </script>
 
+{#snippet removeConfirm(model: AiModel)}
+  <div class="ai-confirm" role="group" aria-label={`${model.name} 삭제 확인`}>
+    <p>{model.kind === 'embedding' ? (model.ownership === 'external' ? '분류 모델 참조만 해제합니다. 외부 원본 파일과 공지·요약 결과는 유지되며, 이 모델의 분류 결과는 삭제됩니다.' : '분류 모델 파일을 삭제할까요? 공지와 요약 결과는 유지되며, 이 모델의 분류 결과는 삭제됩니다.') : (model.ownership === 'external' ? '등록된 참조만 해제합니다. 외부 원본 파일은 삭제하지 않습니다.' : '모델 파일을 삭제할까요? 공지와 기존 AI 분석은 유지됩니다.')}</p>
+    {#if model.ownership === 'managed'}<p class="footnote">폴더에 접근할 수 없거나 다른 위치에 다시 설치하려면 파일을 남기고 목록에서 제거하세요.</p>{/if}
+    <div class="popover-actions">
+      <button class="button secondary small" disabled={busy || data?.busy} onclick={async () => { await action('ai_remove', { id: model.id, confirmed: true }, '모델 등록을 정리했습니다. 기존 분석은 유지됩니다.'); removal = null; }}>확인하고 {model.ownership === 'external' ? '참조 해제' : '삭제'}</button>
+      {#if model.ownership === 'managed'}<button class="text-button" disabled={busy || data?.busy} onclick={async () => { await action('ai_remove', { id: model.id, confirmed: true, keepFiles: true }, '파일을 남기고 모델을 목록에서 제거했습니다. 기존 분석은 유지됩니다.'); removal = null; }}>파일을 남기고 목록에서 제거</button>{/if}
+      <button class="text-button" onclick={() => removal = null}>취소</button>
+    </div>
+  </div>
+{/snippet}
+
 <div id="ai" class="ai-settings" aria-busy={desktop && !data && !fetchError}>
   {#if !desktop}<p class="muted">모델 설치와 로컬 추론은 데스크톱 앱에서 사용할 수 있습니다.</p>
   {:else if !data && !fetchError}<p class="loading" role="status">모델 정보를 불러오는 중입니다…</p>{/if}
@@ -314,6 +326,7 @@
             {#if model && removal !== model.id && !['downloading', 'pending', 'verifying'].includes(model.status)}<button class="text-button" disabled={busy || data.busy} onclick={() => removal = model.id}>{model.ownership === 'external' ? '참조 해제' : '모델 삭제'}</button>{/if}
             <button class="row-icon model-info" popovertarget={infoId} aria-label={`${name} 정보`}><Icon name="info" size={15} /></button>
           </div>
+          {#if model && removal === model.id}{@render removeConfirm(model)}{/if}
           {#if model && projectorSpec && model.status === 'installed' && model.ownership !== 'external'}
             <div class="model-actions model-projector">
               {#if !projector}<button class="button secondary small" disabled={busy || data.busy} aria-label={`${name} 이미지 인식 추가`} onclick={() => action('ai_install_projector', { modelId: model.id }, '이미지 인식 모듈 다운로드를 시작했습니다.')}>이미지 인식 추가 ({archiveSize(projectorSpec.bytes)})</button>
@@ -321,6 +334,15 @@
               {:else if projector.status === 'verifying'}{:else if projector.status === 'installed'}{#if projectorRemoval !== model.id}<button class="text-button" disabled={busy || data.busy} onclick={() => projectorRemoval = model.id}>이미지 인식 제거</button>{/if}
               {:else}<button class="button small" disabled={busy || data.busy} aria-label={`${name} 이미지 인식 다시 설치`} onclick={() => action('ai_install_projector', { modelId: model.id }, '이미지 인식 모듈 다운로드를 다시 시작했습니다.')}>다시 설치</button>{/if}
             </div>
+            {#if projectorRemoval === model.id}
+              <div class="ai-confirm" role="group" aria-label={`${model.name} 이미지 인식 모듈 제거 확인`}>
+                <p>이미지 인식 모듈 파일을 삭제할까요? 모델과 기존 분석은 유지되며, 이후 분석은 텍스트만 읽습니다.</p>
+                <div class="popover-actions">
+                  <button class="button secondary small" disabled={busy || data.busy} onclick={async () => { await action('ai_remove_projector', { modelId: model.id, confirmed: true }, '이미지 인식 모듈을 제거했습니다. 이후 분석은 텍스트만 읽습니다.'); projectorRemoval = null; }}>확인하고 제거</button>
+                  <button class="text-button" onclick={() => projectorRemoval = null}>취소</button>
+                </div>
+              </div>
+            {/if}
           {/if}
           <Popover id={infoId} label={`${name} 정보`} wide>
             <p class="popover-title">{name}</p>
@@ -352,7 +374,8 @@
               <span class="row-label"><label for="ai-classification-enabled">새 공지 자동 분류</label><Hint label="자동 분류">요약 모델이 분석 중이거나 모델을 설치·삭제하는 동안에는 기다립니다. 공지 수집은 분류를 기다리지 않습니다. 분류 모델은 1분 넘게 할 일이 없으면 메모리를 반환합니다.</Hint></span>
               <input id="ai-classification-enabled" type="checkbox" checked={data.preferences.classification_enabled} disabled={controlsBusy} onchange={(event) => action('ai_classification_preferences', { enabled: event.currentTarget.checked }, event.currentTarget.checked ? '새 공지 자동 분류를 켰습니다.' : '새 공지 자동 분류를 껐습니다. 기존 분류는 유지됩니다.')} />
             </div>
-            {#if removal !== embeddingModel.id}<button class="text-button" disabled={busy || data.busy} onclick={() => removal = embeddingModel!.id}>분류 모델 삭제</button>{/if}
+            {#if removal !== embeddingModel.id}<button class="text-button" disabled={busy || data.busy} onclick={() => removal = embeddingModel!.id}>분류 모델 삭제</button>
+            {:else}{@render removeConfirm(embeddingModel)}{/if}
             {#if classificationState === 'failed'}<button class="text-button" disabled={busy || data.busy} onclick={() => action('ai_classification_preferences', { enabled: data?.preferences.classification_enabled ?? true }, '분류를 다시 준비했습니다.')}>분류 다시 시도</button>{/if}
           {:else if embeddingModel && ['pending', 'downloading'].includes(embeddingModel.status)}
             <label class="ai-progress"><span class="sr-only">분류 모델 다운로드</span><progress max={embeddingModel.expected_bytes || 1} value={embeddingModel.downloaded_bytes}></progress><span>{archiveSize(embeddingModel.downloaded_bytes)} / {archiveSize(embeddingModel.expected_bytes ?? 0)}</span></label>
@@ -367,27 +390,6 @@
         </div>
       {/if}
     </div>
-
-    {#each data.models.filter((model) => model.id === removal) as model (model.id)}
-      <div class="ai-confirm" role="group" aria-label={`${model.name} 삭제 확인`}>
-        <p>{model.kind === 'embedding' ? (model.ownership === 'external' ? '분류 모델 참조만 해제합니다. 외부 원본 파일과 공지·요약 결과는 유지되며, 이 모델의 분류 결과는 삭제됩니다.' : '분류 모델 파일을 삭제할까요? 공지와 요약 결과는 유지되며, 이 모델의 분류 결과는 삭제됩니다.') : (model.ownership === 'external' ? '등록된 참조만 해제합니다. 외부 원본 파일은 삭제하지 않습니다.' : '모델 파일을 삭제할까요? 공지와 기존 AI 분석은 유지됩니다.')}</p>
-        {#if model.ownership === 'managed'}<p class="footnote">폴더에 접근할 수 없거나 다른 위치에 다시 설치하려면 파일을 남기고 목록에서 제거하세요.</p>{/if}
-        <div class="popover-actions">
-          <button class="button secondary small" disabled={busy || data.busy} onclick={async () => { await action('ai_remove', { id: model.id, confirmed: true }, '모델 등록을 정리했습니다. 기존 분석은 유지됩니다.'); removal = null; }}>확인하고 {model.ownership === 'external' ? '참조 해제' : '삭제'}</button>
-          {#if model.ownership === 'managed'}<button class="text-button" disabled={busy || data.busy} onclick={async () => { await action('ai_remove', { id: model.id, confirmed: true, keepFiles: true }, '파일을 남기고 모델을 목록에서 제거했습니다. 기존 분석은 유지됩니다.'); removal = null; }}>파일을 남기고 목록에서 제거</button>{/if}
-          <button class="text-button" onclick={() => removal = null}>취소</button>
-        </div>
-      </div>
-    {/each}
-    {#each data.models.filter((model) => model.id === projectorRemoval) as model (model.id)}
-      <div class="ai-confirm" role="group" aria-label={`${model.name} 이미지 인식 모듈 제거 확인`}>
-        <p>이미지 인식 모듈 파일을 삭제할까요? 모델과 기존 분석은 유지되며, 이후 분석은 텍스트만 읽습니다.</p>
-        <div class="popover-actions">
-          <button class="button secondary small" disabled={busy || data.busy} onclick={async () => { await action('ai_remove_projector', { modelId: model.id, confirmed: true }, '이미지 인식 모듈을 제거했습니다. 이후 분석은 텍스트만 읽습니다.'); projectorRemoval = null; }}>확인하고 제거</button>
-          <button class="text-button" onclick={() => projectorRemoval = null}>취소</button>
-        </div>
-      </div>
-    {/each}
 
     <h3 class="settings-group-title">분석</h3>
     <div class="settings-group">
