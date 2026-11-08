@@ -29,6 +29,9 @@ pub struct SourceInfo {
     pub skipped_count: u64,
     #[serde(default)]
     pub skipped: Vec<SkippedArticle>,
+    /// The extension that owns this source; `None` for a source no extension maps.
+    #[serde(default)]
+    pub extension: Option<String>,
 }
 /// A notice whose fetched response could not be archived; see `skipped_articles`.
 #[derive(Clone, Debug, Serialize, Deserialize)]

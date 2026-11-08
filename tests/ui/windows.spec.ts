@@ -172,7 +172,7 @@ test('model installation folder picker locks its controls while pending and repo
 test('Windows notifications stay disabled until OS availability is confirmed', async ({ page }) => {
   await mockDesktop(page, { windows: true, notificationAuthorization: 'denied' });
   await page.goto('/');
-  await openSettings(page, '알림');
+  await openSettings(page, '알림·백그라운드');
   await expect(permission(page)).toContainText('거부됨');
   await expect(page.getByText(/Windows 설정 → 시스템 → 알림/)).toBeVisible();
   await expect(page.getByRole('button', { name: '시험 알림으로 연결 확인' })).toHaveCount(0);
@@ -189,7 +189,7 @@ test('Windows notifications stay disabled until OS availability is confirmed', a
 test('first notification connection requires an explicit test and separate opt-in', async ({ page }) => {
   await mockDesktop(page, { windows: true, notificationAuthorization: 'not_determined' });
   await page.goto('/');
-  await openSettings(page, '알림');
+  await openSettings(page, '알림·백그라운드');
   const toggle = page.getByRole('switch', { name: '알림 활성화', exact: true });
   const testButton = page.getByRole('button', { name: '시험 알림으로 연결 확인', exact: true });
   await expect(toggle).toHaveAttribute('aria-checked', 'false');
@@ -207,7 +207,7 @@ test('first notification connection requires an explicit test and separate opt-i
 test('unsent notification test is not reported as requested or enabled', async ({ page }) => {
   await mockDesktop(page, { windows: true, notificationAuthorization: 'not_determined', notificationRequestResult: 'not_determined', notificationTestRequested: false });
   await page.goto('/');
-  await openSettings(page, '알림');
+  await openSettings(page, '알림·백그라운드');
   await page.getByRole('button', { name: '시험 알림으로 연결 확인', exact: true }).click();
   await expect(page.getByText('시험 알림을 요청하지 못했습니다. Windows 알림 상태를 확인해 주세요.', { exact: true })).toBeVisible();
   await expect(page.getByRole('switch', { name: '알림 활성화', exact: true })).toBeDisabled();
@@ -217,7 +217,7 @@ test('unsent notification test is not reported as requested or enabled', async (
 test('unavailable notification APIs are reported without claiming delivery', async ({ page }) => {
   await mockDesktop(page, { windows: true, notificationAuthorization: 'unavailable' });
   await page.goto('/');
-  await openSettings(page, '알림');
+  await openSettings(page, '알림·백그라운드');
   await expect(permission(page)).toContainText('이 환경에서 사용할 수 없음');
   await expect(page.getByText(/Windows 알림 상태를 확인할 수 없습니다/)).toBeVisible();
   await expect(page.getByRole('switch', { name: '알림 활성화', exact: true })).toBeDisabled();
@@ -227,7 +227,7 @@ test('unavailable notification APIs are reported without claiming delivery', asy
 test('an existing enabled setting can be switched off when Windows notifications become unavailable', async ({ page }) => {
   await mockDesktop(page, { windows: true, notificationAuthorization: 'denied', initialNotificationsEnabled: true });
   await page.goto('/');
-  await openSettings(page, '알림');
+  await openSettings(page, '알림·백그라운드');
   const toggle = page.getByRole('switch', { name: '알림 활성화', exact: true });
   await expect(toggle).toHaveAttribute('aria-checked', 'true');
   await toggle.click();
@@ -238,15 +238,16 @@ test('an existing enabled setting can be switched off when Windows notifications
 test('an unavailable capability check does not enable notifications', async ({ page }) => {
   await mockDesktop(page, { windows: true, capabilitiesError: true });
   await page.goto('/');
-  await openSettings(page, '알림');
+  await openSettings(page, '알림·백그라운드');
   await expect(page.getByText('알림 사용 가능 여부를 확인하지 못했습니다.', { exact: true })).toBeVisible();
   await expect(page.getByRole('switch', { name: '알림 활성화', exact: true })).toBeDisabled();
 });
 
 test('setup uses the Windows notification wording', async ({ page }) => {
-  await mockDesktop(page, { windows: true, onboardingNeeded: true });
+  await mockDesktop(page, { windows: true, onboardingNeeded: true, extensions: { sogang_notices: false, cybercampus: false, recommendations: false, ai: false } });
   await page.goto('/');
-  for (let step = 0; step < 5; step++) await page.getByRole('button', { name: '다음', exact: true }).click();
+  // 시작 → 기능 → 백그라운드 → 알림
+  for (let step = 0; step < 3; step++) await page.getByRole('button', { name: '다음', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: '알림', exact: true })).toBeFocused();
   await expect(page.getByRole('button', { name: '시험 알림으로 연결 확인' })).toBeVisible();
   await expect(page.getByRole('button', { name: '운영체제 알림 권한 요청' })).toHaveCount(0);

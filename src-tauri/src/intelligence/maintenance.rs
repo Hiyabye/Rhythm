@@ -193,7 +193,7 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
         let context = state.store.try_lock().ok().and_then(|store| {
             Some((
                 store.settings().ok()?.energy_profile,
-                store.ai_preferences().ok()?,
+                store.ai_effective_preferences().ok()?,
             ))
         });
         let Some((energy, preferences)) = context else {

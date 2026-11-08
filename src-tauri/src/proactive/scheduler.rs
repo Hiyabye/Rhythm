@@ -315,7 +315,7 @@ fn with_store<T>(
 
 fn settings(store: &sync::SharedStore) -> Result<(ProactiveSettings, Settings), String> {
     with_store(store, |store| {
-        Ok((store.proactive_settings()?, store.settings()?))
+        Ok((store.proactive_effective_settings()?, store.settings()?))
     })
 }
 
@@ -325,7 +325,14 @@ fn reconcile_tasks(
     energy: &Settings,
 ) -> Result<(), String> {
     let (sources, extension_enabled) = with_store(store, |store| {
-        Ok((store.sources()?, store.enabled("sogang_notices")?))
+        let sources = store.sources()?;
+        let mut enabled = std::collections::HashSet::new();
+        for source in &sources {
+            if store.source_extension_enabled(&source.definition.id)? {
+                enabled.insert(source.definition.id.clone());
+            }
+        }
+        Ok((sources, enabled))
     })?;
     let interval = resolved_interval(prefs.scheduler_interval_minutes, &energy.energy_profile);
     let active = sources
@@ -342,8 +349,9 @@ fn reconcile_tasks(
         .filter(|source| source.definition.supported)
     {
         let task_id = format!("source:{}", source.definition.id);
-        let enabled =
-            prefs.scheduler_enabled && extension_enabled && active.contains(&source.definition.id);
+        let enabled = prefs.scheduler_enabled
+            && extension_enabled.contains(&source.definition.id)
+            && active.contains(&source.definition.id);
         if current
             .get(&task_id)
             .is_none_or(|task| task.enabled != enabled || task.interval_minutes != interval)
@@ -375,8 +383,8 @@ fn task_inputs(
     source_id: &str,
 ) -> Result<(ProactiveSettings, bool, bool), String> {
     with_store(store, |store| {
-        let prefs = store.proactive_settings()?;
-        let extension_enabled = store.enabled("sogang_notices")?;
+        let prefs = store.proactive_effective_settings()?;
+        let extension_enabled = store.source_extension_enabled(source_id)?;
         let subscribed = store
             .sources()?
             .into_iter()
@@ -385,7 +393,10 @@ fn task_inputs(
     })
 }
 
-fn task_currently_active(store: &sync::SharedStore, source_id: &str) -> Result<bool, String> {
+pub(super) fn task_currently_active(
+    store: &sync::SharedStore,
+    source_id: &str,
+) -> Result<bool, String> {
     let (prefs, extension_enabled, subscribed) = task_inputs(store, source_id)?;
     Ok(task_is_active(&prefs, extension_enabled, subscribed))
 }
@@ -656,7 +667,7 @@ pub(super) fn revalidate_delivery_batch(
     store: &Store,
     items: Vec<DeliveryItem>,
 ) -> Result<Vec<DeliveryItem>, String> {
-    let prefs = store.proactive_settings()?;
+    let prefs = store.proactive_effective_settings()?;
     let local_minutes = store.proactive_local_minutes()?;
     let quiet_delay = quiet_end_delay_minutes(&prefs.quiet_hours, local_minutes);
     if !prefs.notifications_enabled || quiet_delay.is_some() {

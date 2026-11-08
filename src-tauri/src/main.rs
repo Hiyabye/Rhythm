@@ -147,7 +147,7 @@ impl StoredLifecycle {
             .0
             .lock()
             .map_err(|_| "저장소에 접근할 수 없습니다.".to_string())
-            .and_then(|store| store.proactive_settings().map_err(storage_error))
+            .and_then(|store| store.proactive_effective_settings().map_err(storage_error))
         {
             Ok(settings) => Some(settings),
             Err(error) => {

@@ -8,7 +8,10 @@ export interface FixtureOptions {
   queryError?: boolean;
   readError?: boolean;
   settingsError?: boolean;
+  // Controls `sogang_notices` alone; `extensions` overrides any extension.
   enabled?: boolean;
+  // Per-extension on/off; every extension not listed is on, as for an upgraded profile.
+  extensions?: Record<string, boolean>;
   body?: string;
   unsupportedBody?: boolean;
   imageError?: boolean;
@@ -123,6 +126,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     if (options.sourceList) {
       sources = options.sourceList.map((source) => ({ ...sources[0], family: 'computing', subscribed: false, last_error: null, ...source }));
     }
+    for (const source of sources) Object.assign(source, { extension: source.family === 'cybercampus' ? 'cybercampus' : 'sogang_notices' });
     if ((options.sourceCount ?? 0) > sources.length) {
       sources.push(...Array.from({ length: options.sourceCount! - sources.length }, (_, index) => ({
         ...sources[0], id: `extra-source-${index}`, name: `추가 정보원 ${index + 1}`,
@@ -149,7 +153,10 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       return snapshot;
     };
     const snapshot = { settings: { theme: 'light', energy_profile: 'eco', interests: '' },
-      extensions: [{ id: 'sogang_notices', display_name: '서강대학교 공지', description: '학교 소식 보관', available: true, enabled: options.enabled ?? true }],
+      extensions: ([['sogang_notices', '서강대학교 공지'], ['cybercampus', '사이버캠퍼스'], ['search', '탐색'], ['saved', '보관함'],
+        ['recommendations', '나를 위한 소식'], ['week', '앞으로 7일'], ['ai', 'AI 분석'], ['proactive', '알림·백그라운드']] as const).map(([id, display_name]) => ({
+        id, display_name, description: `${display_name} 설명`, available: true,
+        enabled: options.extensions?.[id] ?? (id === 'sogang_notices' ? options.enabled ?? true : true) })),
       storage: { path: '/isolated/rhythm.sqlite3', bytes: 4096, schema_version: 5 },
       worker: { state: 'ready', runtime_available: true, model: null, detail: null }, proactive: copy(proactiveSettings),
       onboarding_completed: !options.onboardingNeeded };
@@ -353,7 +360,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'save_settings':
             if (options.settingsError) throw '설정을 저장하지 못했습니다.';
             snapshot.settings = copy(args.settings); return copy(snapshot);
-          case 'set_extension': snapshot.extensions[0].enabled = args.enabled; return copy(snapshot);
+          case 'set_extension': snapshot.extensions.find((extension) => extension.id === args.id)!.enabled = args.enabled; return copy(snapshot);
           case 'complete_onboarding': snapshot.onboarding_completed = true; return copy(snapshot);
           case 'worker_status': return copy(snapshot.worker);
           case 'personalization_get': return copy(personalization);
@@ -629,7 +636,7 @@ export async function dialogMessages(page: Page) {
   return page.evaluate(() => [...(window as DialogWindow).__fixture.dialogs]);
 }
 
-export type SettingsPane = '일반' | '게시판' | 'AI' | '개인화' | '알림' | '데이터 및 정보';
+export type SettingsPane = '확장 기능' | '일반' | '게시판' | '사이버캠퍼스' | '개인화' | 'AI' | '알림·백그라운드' | '데이터 및 정보';
 /** Opens Settings from the sidebar and shows one pane. */
 export async function openSettings(page: Page, pane: SettingsPane) {
   await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name: '설정', exact: true }).click();

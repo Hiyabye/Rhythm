@@ -209,6 +209,7 @@ fn fixture() -> (tempfile::TempDir, SharedStore, i64, i64) {
     use crate::archive::model::{ArticleInput, SourceDefinition};
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(&directory.path().join("archive.sqlite3")).unwrap();
+    store.set_enabled("ai", true).unwrap();
     store
         .catalog(&[SourceDefinition {
             id: "one".into(),
@@ -1442,4 +1443,72 @@ fn shared_analysis_contract_matches_rust_versions() {
         serde_json::from_str(include_str!("../../../../src/lib/analysis-contract.json")).unwrap();
     assert_eq!(contract["prompt_version"], PROMPT_VERSION);
     assert_eq!(contract["schema_version"], SCHEMA_VERSION);
+}
+
+#[tokio::test]
+async fn ai_extension_off_refuses_admission_and_masks_automatic_work() {
+    let (directory, store, document, revision) = fixture();
+    with_store(&store, |s| {
+        let mut preferences = s.ai_preferences()?;
+        preferences.processing_mode = "backlog".into();
+        preferences.classification_enabled = true;
+        s.ai_save_preferences(&preferences)?;
+        s.set_enabled("ai", false)
+    })
+    .unwrap();
+    let controller = Controller::default();
+    let worker = fake_engine(directory.path());
+    let error = controller
+        .start(
+            store.clone(),
+            worker,
+            directory.path().into(),
+            document,
+            revision,
+            false,
+        )
+        .err()
+        .unwrap();
+    assert_eq!(error, AI_DISABLED);
+    let (stored, effective) = with_store(&store, |s| {
+        Ok((s.ai_preferences()?, s.ai_effective_preferences()?))
+    })
+    .unwrap();
+    assert_eq!(stored.processing_mode, "backlog");
+    assert!(stored.classification_enabled);
+    assert_eq!(effective.processing_mode, "explicit");
+    assert!(!effective.classification_enabled);
+}
+#[tokio::test]
+async fn turning_ai_off_cancels_a_direct_analysis() {
+    let (directory, store, id, revision) = fixture();
+    std::fs::write(directory.path().join("delay"), b"delay").unwrap();
+    let worker = fake_engine(directory.path());
+    let controller = Controller::default();
+    controller
+        .start(
+            store.clone(),
+            worker.clone(),
+            directory.path().into(),
+            id,
+            revision,
+            false,
+        )
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        while !directory.path().join("entered").exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // A user-requested job outlives `cancel_automatic`, not the extension.
+    assert!(!controller.cancel_automatic(&store).await.unwrap());
+    with_store(&store, |s| s.set_enabled("ai", false)).unwrap();
+    assert!(controller.cancel_running(&store).await.unwrap());
+    assert!(!controller.running());
+    let jobs = with_store(&store, |store| store.ai_jobs(1)).unwrap();
+    assert_eq!(jobs[0].priority, DIRECT_PRIORITY);
+    assert_eq!(jobs[0].status, "cancelled");
+    worker.lock().await.stop().await;
 }

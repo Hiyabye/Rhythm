@@ -8,8 +8,10 @@
   import Popover from './Popover.svelte';
   import CybercampusSettings from './CybercampusSettings.svelte';
 
-  let { enabled }: { enabled: boolean } = $props();
-  let sources = $state<SourceInfo[]>([]);
+  // Each source extension's pane manages only the sources that extension owns.
+  let { enabled, extension }: { enabled: boolean; extension: string } = $props();
+  let catalog = $state<SourceInfo[]>([]);
+  let sources = $derived(catalog.filter((source) => source.extension === extension));
   let status = $state<SyncStatus | null>(null);
   let loading = $state(true);
   let busy = $state(false);
@@ -55,7 +57,7 @@
     try {
       const [nextSources, nextStatus] = await Promise.all([invoke<SourceInfo[]>('archive_sources'), invoke<SyncStatus>('archive_status')]);
       if (!active || request !== refreshGeneration) return;
-      sources = nextSources;
+      catalog = nextSources;
       status = nextStatus;
     } catch (reason) { if (active && request === refreshGeneration) error = archiveError(reason); }
     finally { if (active && request === refreshGeneration) loading = false; }
@@ -70,13 +72,13 @@
     try {
       const next = await invoke<SourceInfo[]>('archive_subscribe', { id: source.id, subscribed });
       if (!active) return;
-      sources = next;
+      catalog = next;
       feedback = subscribed ? `${source.name} 구독을 시작했습니다. 가져오기를 눌러야 수집합니다.` : `${source.name} 구독을 해제했습니다. 보관한 공지는 남습니다.`;
     } catch (reason) { if (active) error = archiveError(reason); }
     finally { if (active) busy = false; }
   }
 
-  async function start(mode: 'refresh' | 'skipped' | 'resources', ids: string[] | null = null) {
+  async function start(mode: 'refresh' | 'skipped' | 'resources', ids: string[] = subscribed.map((source) => source.id)) {
     busy = true;
     error = '';
     feedback = '';
@@ -114,7 +116,7 @@
   }
 </script>
 
-<div class="source-manager" aria-label="서강대학교 공지 정보원 관리" aria-busy={loading || busy}>
+<div class="source-manager" aria-label="정보원 관리" aria-busy={loading || busy}>
   <div class="collect-bar">
     <button class="button small" disabled={locked || !subscribed.length} onclick={() => start('refresh')}>새로고침</button>
     <button class="button secondary small" disabled={locked || !subscribed.length} onclick={() => start('resources')}>자료 모두 내려받기</button>

@@ -29,7 +29,7 @@ impl Controller {
         if current.history_complete {
             return Ok(());
         }
-        active(store, &self.cancel)?;
+        active(&self.cancel)?;
         self.source(
             store,
             root,
@@ -84,7 +84,7 @@ impl Controller {
         let mut page = first_page;
         let mut processed = 0;
         loop {
-            active(store, &self.cancel)?;
+            active(&self.cancel)?;
             if page > 100_000 {
                 persist(
                     store,
@@ -154,7 +154,7 @@ impl Controller {
             let mut known_regular_frontier = false;
             let mut all_regular_known = true;
             for entry in listing.entries {
-                active(store, &self.cancel)?;
+                active(&self.cancel)?;
                 let existing_id =
                     with_store(store, |s| s.document_id(&definition.id, &entry.external_id))?;
                 let exists = existing_id.is_some();
@@ -179,7 +179,7 @@ impl Controller {
                     if with_store(store, |s| {
                         s.listing_unchanged(&definition.id, &entry.external_id, modified_at)
                     })? {
-                        active(store, &self.cancel)?;
+                        active(&self.cancel)?;
                         self.pending_resources(store, root, transport, &policy, id, resource_bytes)
                             .await?;
                         continue;
@@ -222,7 +222,7 @@ impl Controller {
                         // Retrying the same response cannot succeed, so this notice
                         // must not hold the page checkpoint; it stays listed instead.
                         with_store(store, |s| {
-                            ensure_active(s, &self.cancel)?;
+                            ensure_active(&self.cancel)?;
                             s.record_skipped(
                                 &definition.id,
                                 &entry,
@@ -233,7 +233,7 @@ impl Controller {
                         })?;
                     }
                     Err(ArticleError::Transient(error)) => {
-                        active(store, &self.cancel)?;
+                        active(&self.cancel)?;
                         current.failed += 1;
                         errors.push(error);
                     }
@@ -302,7 +302,7 @@ impl Controller {
         )
         .await?;
         for (index, id) in documents.iter().enumerate() {
-            active(store, &self.cancel)?;
+            active(&self.cancel)?;
             if *resource_bytes >= IMPORT_RESOURCES {
                 break;
             }
@@ -344,7 +344,7 @@ impl Controller {
         .await?;
         let mut errors = Vec::new();
         for (index, (entry, historical)) in entries.iter().enumerate() {
-            active(store, &self.cancel)?;
+            active(&self.cancel)?;
             self.update(
                 Some(definition.id.clone()),
                 "skipped",
@@ -377,7 +377,7 @@ impl Controller {
                     response_sha256,
                 }) => {
                     with_store(store, |s| {
-                        ensure_active(s, &self.cancel)?;
+                        ensure_active(&self.cancel)?;
                         s.record_skipped(
                             &definition.id,
                             entry,
@@ -388,7 +388,7 @@ impl Controller {
                     })?;
                 }
                 Err(ArticleError::Transient(error)) => {
-                    active(store, &self.cancel)?;
+                    active(&self.cancel)?;
                     errors.push(error);
                 }
             }

@@ -590,6 +590,15 @@ async fn reap_idle_worker(state: &AppState) -> Result<(), String> {
     }
     reset_worker(&state.worker, &state.maintenance_shutdown).await
 }
+/// Turning the AI extension off stops the running job of any priority and
+/// reaps the generation server. The classifier sees the extension off on its
+/// next pass and stops its own process.
+pub(crate) async fn stop_for_disabled_extension(state: &AppState) -> Result<(), String> {
+    let _gate = state.ai_gate.lock().await;
+    check_open(state)?;
+    state.analysis.cancel_running(&state.store).await?;
+    reset_worker(&state.worker, &state.maintenance_shutdown).await
+}
 #[tauri::command]
 pub async fn ai_unload(state: tauri::State<'_, AppState>) -> Result<(), String> {
     reap_idle_worker(&state).await

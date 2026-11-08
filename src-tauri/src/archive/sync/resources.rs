@@ -93,7 +93,7 @@ pub(super) async fn download_resource<T: Transport>(
     resource: &ResourceRecord,
     total: &mut u64,
 ) -> Result<DownloadOutcome, String> {
-    active(store, cancel)?;
+    active(cancel)?;
     // Set when the remaining job budget, not the per-file cap, bounds this
     // download. A size failure then says nothing about the file itself.
     let mut budget_bound = false;
@@ -199,7 +199,7 @@ pub(in crate::archive) async fn install_resource(
         }
         mime
     };
-    active(store, cancel)?;
+    active(cancel)?;
     let hash = format!("{:x}", Sha256::digest(&bytes));
     let extension = if resource.kind == "image" {
         match media.as_deref() {
@@ -259,7 +259,7 @@ pub(in crate::archive) async fn install_resource(
             .map_err(|_| "첨부 파일 저장을 완료하지 못했습니다.")?;
     }
     with_store(store, |s| {
-        ensure_active(s, cancel)?;
+        ensure_active(cancel)?;
         s.resource_result(
             resource.id,
             "downloaded",
@@ -281,7 +281,7 @@ pub(in crate::archive) async fn record_failure(
     error: String,
     budget_bound: bool,
 ) -> Result<DownloadOutcome, String> {
-    active(store, cancel)?;
+    active(cancel)?;
     if budget_bound && (error == BUDGET_REACHED || error.contains("크기")) {
         // Leave the row as it was (normally pending) for a later run.
         return Ok(DownloadOutcome::Failed(BUDGET_REACHED.into()));

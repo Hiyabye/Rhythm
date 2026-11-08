@@ -32,7 +32,7 @@ impl Controller {
             network::Fetch::NotModified => {
                 let id = existing_id.ok_or("보관되지 않은 원문의 변경 없음 응답을 받았습니다.")?;
                 with_store(store, |s| {
-                    ensure_active(s, &self.cancel)?;
+                    ensure_active(&self.cancel)?;
                     s.checked(&definition.id, &entry.external_id)
                 })?;
                 (id, false)
@@ -90,7 +90,7 @@ impl Controller {
                     // The notice was checked, so this is neither a failure nor a skip.
                     let id = existing_id.expect("kept content belongs to a document");
                     with_store(store, |s| {
-                        ensure_active(s, &self.cancel)?;
+                        ensure_active(&self.cancel)?;
                         s.checked(&definition.id, &entry.external_id)
                     })?;
                     (id, false)
@@ -98,7 +98,7 @@ impl Controller {
                     article.etag = etag;
                     article.last_modified = last_modified;
                     let (id, _) = with_store(store, |s| {
-                        ensure_active(s, &self.cancel)?;
+                        ensure_active(&self.cancel)?;
                         s.upsert_article(&definition.id, &article, historical)
                     })?;
                     (id, existing_id.is_none())

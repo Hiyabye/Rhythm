@@ -1130,7 +1130,10 @@ async fn disabling_extension_during_fetch_prevents_commit() {
     );
     let disable = async {
         gate.entered.notified().await;
-        with_store(&store, |s| s.set_enabled("sogang_notices", false)).unwrap();
+        // The real disable path: the registry flips the flag and cancels
+        // under the same store lock.
+        let registry = crate::extensions::Registry::new(controller.clone());
+        with_store(&store, |s| registry.set(s, "sogang_notices", false)).unwrap();
         gate.release.notify_one();
     };
     let (result, ()) = tokio::join!(execute, disable);
@@ -3226,4 +3229,43 @@ async fn older_viewer_notices_are_backfilled_from_their_stored_response() {
     .await;
     assert_eq!(requests(&fake, VIEWER_SCAN), 1);
     assert_eq!(document_by_external(&store, "551682").revisions.len(), 1);
+}
+
+#[tokio::test]
+async fn admission_requires_the_extension_that_owns_each_source() {
+    let (dir, store) = setup(&["sogang-academic", "cybercampus"]);
+    let controller = Controller::new();
+    let start = |ids: &[&str]| {
+        controller
+            .start_tracked_with_lease(
+                store.clone(),
+                dir.path().to_path_buf(),
+                Offline,
+                Some(ids.iter().map(|id| id.to_string()).collect()),
+                "incremental".into(),
+                None,
+            )
+            .map(|_| ())
+    };
+    // The notice extension does not cover the Cybercampus source.
+    assert!(start(&["cybercampus"]).is_err());
+    assert!(start(&["sogang-academic", "cybercampus"]).is_err());
+    start(&["sogang-academic"]).unwrap();
+    controller.wait().await;
+    // And the reverse: with only Cybercampus on, the public board is refused.
+    with_store(&store, |s| {
+        s.set_enabled("sogang_notices", false)?;
+        s.set_enabled("cybercampus", true)
+    })
+    .unwrap();
+    assert!(start(&["sogang-academic"]).is_err());
+    let owners = with_store(&store, |s| s.sources()).unwrap();
+    assert!(owners.iter().all(|source| source.extension.as_deref()
+        == Some(
+            if source.definition.family == crate::archive::cybercampus::FAMILY {
+                "cybercampus"
+            } else {
+                "sogang_notices"
+            }
+        )));
 }

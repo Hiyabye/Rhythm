@@ -16,7 +16,7 @@ function task(overrides: Partial<CybercampusTask>): CybercampusTask {
 test('the Cybercampus login is checked before it is saved and is never shown again', async ({ page }) => {
   await mockDesktop(page, { sourceList: [board] });
   await page.goto('/');
-  await openSettings(page, '게시판');
+  await openSettings(page, '사이버캠퍼스');
   const login = page.getByRole('group', { name: '사이버캠퍼스 로그인' });
   await expect(login).toContainText('저장된 로그인 정보 없음');
   const id = login.getByRole('textbox', { name: '사이버캠퍼스 아이디(학번)' });
@@ -80,11 +80,15 @@ test('D-day counts calendar days and rolls over at midnight without refetching',
   await expect(due.nth(1)).toContainText('D-2');
 });
 
-test('the deadline page appears only with the Cybercampus board subscribed', async ({ page }) => {
-  await mockDesktop(page, { sourceList: [{ ...board, subscribed: false }] });
+test('the deadline page appears only with the Cybercampus extension on', async ({ page }) => {
+  await mockDesktop(page, { sourceList: [{ ...board, subscribed: false }], extensions: { cybercampus: false } });
   await page.goto('/');
-  await expect(page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name: '받은 소식' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '과제·마감' })).toHaveCount(0);
+  const sidebar = page.getByRole('navigation', { name: '기본 탐색', exact: true });
+  await expect(sidebar.getByRole('button', { name: '받은 소식' })).toBeVisible();
+  await expect(sidebar.getByRole('button', { name: '과제·마감' })).toHaveCount(0);
+  await openSettings(page, '확장 기능');
+  await page.getByRole('switch', { name: '사이버캠퍼스 사용 설정', exact: true }).click();
+  await expect(sidebar.getByRole('button', { name: '과제·마감' })).toBeVisible();
 });
 
 test.describe('Today week pane', () => {

@@ -165,6 +165,8 @@ export interface SourceInfo {
   /** All skipped notices; `skipped` lists only the most recent of them. */
   skipped_count: number;
   skipped: SkippedArticle[];
+  /** The extension that owns this source, or null when none maps it. */
+  extension: string | null;
 }
 export interface SkippedArticle {
   external_id: string;

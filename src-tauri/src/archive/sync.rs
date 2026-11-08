@@ -51,15 +51,18 @@ pub fn with_store<T>(
         .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
     operation(&guard)
 }
-pub(super) fn active(store: &SharedStore, cancel: &AtomicBool) -> Result<(), String> {
-    if cancel.load(Ordering::Acquire) || !with_store(store, |s| s.enabled("sogang_notices"))? {
+// Disabling a source extension sets the cancel flag under the store lock that
+// job admission also takes, and admission resets it only for sources whose
+// extension is on, so the flag alone stops a disabled extension's work.
+pub(super) fn active(cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Acquire) {
         Err("동기화를 중단했습니다. 저장된 자료는 유지됩니다.".into())
     } else {
         Ok(())
     }
 }
-pub(super) fn ensure_active(store: &Store, cancel: &AtomicBool) -> Result<(), String> {
-    if cancel.load(Ordering::Acquire) || !store.enabled("sogang_notices")? {
+pub(super) fn ensure_active(cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Acquire) {
         return Err("동기화를 중단했습니다.".into());
     }
     Ok(())
@@ -324,18 +327,18 @@ impl Controller {
         // The same lock serializes extension disabling and job admission.
         let task_id = self.next_task_id.fetch_add(1, Ordering::AcqRel);
         let sources = with_store(&store, |s| {
-            ensure_active(s, &AtomicBool::new(false))?;
-            let sources: Vec<_> = s
-                .sources()?
-                .into_iter()
-                .filter(|source| {
-                    source.subscribed
-                        && source.definition.supported
-                        && ids
-                            .as_ref()
-                            .is_none_or(|ids| ids.contains(&source.definition.id))
-                })
-                .collect();
+            let mut sources = Vec::new();
+            for source in s.sources()? {
+                if source.subscribed
+                    && source.definition.supported
+                    && ids
+                        .as_ref()
+                        .is_none_or(|ids| ids.contains(&source.definition.id))
+                    && s.source_extension_enabled(&source.definition.id)?
+                {
+                    sources.push(source);
+                }
+            }
             if sources.is_empty() {
                 return Err("동기화할 정보원을 구독해 주세요.".into());
             }
@@ -406,7 +409,9 @@ impl Controller {
         lease: crate::operation_gate::AdmissionLease,
     ) -> Result<SyncStatus, String> {
         let resource = with_store(&store, |s| {
-            ensure_active(s, &AtomicBool::new(false))?;
+            if !s.source_extension_enabled(&s.resource_source(id)?)? {
+                return Err("이 자료의 확장 기능을 먼저 켜 주세요.".into());
+            }
             let resource = s.resource(id)?;
             self.reserve()?;
             Ok(resource)
@@ -482,7 +487,7 @@ impl Controller {
         // the board, so they leave its status, counters and last error as they are.
         let retry = matches!(mode, "skipped" | "resources");
         for source in sources {
-            active(store, &self.cancel)?;
+            active(&self.cancel)?;
             if mode == "resources" && resource_bytes >= IMPORT_RESOURCES {
                 failures.push(BUDGET_REACHED.to_owned());
                 break;
@@ -543,7 +548,9 @@ impl Controller {
             };
             if let Err(error) = outcome {
                 let cancelled = self.cancel.load(Ordering::Acquire)
-                    || !with_store(store, |s| s.enabled("sogang_notices"))?;
+                    || !with_store(store, |s| {
+                        s.source_extension_enabled(&current.definition.id)
+                    })?;
                 if !retry {
                     persist(
                         store,

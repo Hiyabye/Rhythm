@@ -6,10 +6,12 @@
   import Icon from './Icon.svelte';
   import AnalysisPanel from './AnalysisPanel.svelte';
 
-  let { id, initialRevisionId = null, enabled, onclose, onchange, onaisettings, onopen }: {
-    id: number; initialRevisionId?: number | null; enabled: boolean; onclose: () => void; onchange: () => void; onaisettings: () => void; onopen: (id: number) => void;
+  // `enabledSources` lists the sources whose extension is on: only those may download more files.
+  let { id, initialRevisionId = null, enabledSources, ai, onclose, onchange, onaisettings, onopen }: {
+    id: number; initialRevisionId?: number | null; enabledSources: string[]; ai: boolean; onclose: () => void; onchange: () => void; onaisettings: () => void; onopen: (id: number) => void;
   } = $props();
   let detail = $state<DocumentDetail | null>(null);
+  let enabled = $derived(detail !== null && enabledSources.includes(detail.item.source_id));
   let classification = $state<AiClassification | null>(null);
   let similar = $state<SimilarNotice[]>([]);
   let loading = $state(true);
@@ -302,7 +304,7 @@
     <header class="reader-header">
       <span class="section-kicker">{detail.item.source_name}</span>
       <h2 bind:this={heading} tabindex="-1">{detail.item.title}</h2>
-      <div class="notice-meta"><time datetime={detail.item.published_at}>{archiveDate(detail.item.published_at)}</time>{#if detail.item.author}<span>{detail.item.author}</span>{/if}{#if detail.item.category}<span>{detail.item.category}</span>{/if}{#if classification}<span class="ai-tag">분류 · {classification.category}{classification.low_confidence ? ' · 확신 낮음' : ''}</span>{/if}</div>
+      <div class="notice-meta"><time datetime={detail.item.published_at}>{archiveDate(detail.item.published_at)}</time>{#if detail.item.author}<span>{detail.item.author}</span>{/if}{#if detail.item.category}<span>{detail.item.category}</span>{/if}{#if ai && classification}<span class="ai-tag">분류 · {classification.category}{classification.low_confidence ? ' · 확신 낮음' : ''}</span>{/if}</div>
       <div class="reader-actions">
         <button class="button secondary small" disabled={busy} onclick={() => updateState('is_read')}>{detail.item.is_read ? '읽지 않음으로 표시' : '읽음으로 표시'}</button>
         <button class="button secondary small" disabled={busy} onclick={() => updateState('saved')}><Icon name="bookmark" size={16} />{detail.item.saved ? '저장 해제' : '보관함에 저장'}</button>
@@ -327,7 +329,7 @@
         </label>
       {/if}
     </header>
-    {#key detail.revision_id}<AnalysisPanel documentId={detail.item.id} revisionId={detail.revision_id} onsettings={onaisettings} {onchange} />{/key}
+    {#if ai}{#key detail.revision_id}<AnalysisPanel documentId={detail.item.id} revisionId={detail.revision_id} onsettings={onaisettings} {onchange} />{/key}{/if}
     {#if detail.body_html === '' && detail.body_text === ''}
       <p class="reader-plain" role="status"><strong>본문 미지원</strong> · 이 공지의 본문은 로컬에 보관되지 않았습니다. 학교 원문을 열어 확인해 주세요.</p>
     {:else}
@@ -346,10 +348,10 @@
             <button class="text-button" disabled={!enabled || resourceBusy} aria-label={`${resource.filename || '첨부 자료'} 다시 내려받기`} onclick={() => retry(resource.id)}>{resourceBusy ? '자료 다운로드 중…' : '다시 내려받기'}</button>
           </div>
         {/each}
-        {#if !enabled}<p class="footnote">자료를 추가로 받으려면 설정에서 서강대학교 공지 확장 기능을 켜 주세요.</p>{/if}
+        {#if !enabled}<p class="footnote">자료를 추가로 받으려면 설정 → 확장 기능에서 이 공지의 정보원을 켜 주세요.</p>{/if}
       </section>
     {/if}
-    {#if similar.length}
+    {#if ai && similar.length}
       <section class="reader-resources" aria-labelledby="similar-heading">
         <h3 id="similar-heading">비슷한 공지 <span class="muted">{similar.length}</span></h3>
         <p class="footnote">분류용으로 저장한 임베딩을 최근 공지와 비교했습니다. 제목과 본문의 날짜·시간·숫자가 모두 같을 때만 같은 공지로 표시합니다.</p>

@@ -251,6 +251,7 @@ fn inactive_sources_are_suppressed_before_any_notification_can_be_delivered() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("rhythm.db");
         let store = Store::open(&path).unwrap();
+        store.set_enabled("proactive", true).unwrap();
         let mut settings = store.proactive_settings().unwrap();
         settings.notifications_enabled = true;
         settings.notification_sensitivity = NotificationSensitivity::All;
@@ -346,6 +347,7 @@ fn candidate_preparation_does_not_claim_or_report_delivery() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("rhythm.db");
     let store = Store::open(&path).unwrap();
+    store.set_enabled("proactive", true).unwrap();
     let mut settings = store.proactive_settings().unwrap();
     settings.notifications_enabled = true;
     settings.notification_sensitivity = NotificationSensitivity::All;
@@ -505,6 +507,7 @@ fn claimed_delivery_fixture() -> (
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("rhythm.db");
     let store = Store::open(&path).unwrap();
+    store.set_enabled("proactive", true).unwrap();
     let mut settings = store.proactive_settings().unwrap();
     settings.notifications_enabled = true;
     settings.notification_sensitivity = NotificationSensitivity::All;
@@ -817,6 +820,7 @@ async fn scheduled_controller_imports_multiple_fixture_pages_and_runs_again() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("rhythm.sqlite3");
     let store = Store::open(&path).unwrap();
+    store.set_enabled("proactive", true).unwrap();
     store.catalog(&archive::definitions()).unwrap();
     store.set_enabled("sogang_notices", true).unwrap();
     store.subscribe("sogang-academic", true).unwrap();
@@ -936,4 +940,39 @@ async fn scheduled_controller_imports_multiple_fixture_pages_and_runs_again() {
     let later_outcome = controller.take_task_outcome(later_job).unwrap().unwrap();
     assert!(later_outcome.result.is_ok());
     assert_eq!(transport.pages.lock().unwrap().len(), 8);
+}
+
+#[test]
+fn scheduled_tasks_need_the_proactive_and_owning_extensions() {
+    use crate::{archive, storage::Store};
+    use std::sync::{Arc, Mutex};
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(&directory.path().join("rhythm.sqlite3")).unwrap();
+    store.catalog(&archive::definitions()).unwrap();
+    store.set_enabled("sogang_notices", true).unwrap();
+    store.set_enabled("proactive", true).unwrap();
+    store.subscribe("sogang-academic", true).unwrap();
+    store.subscribe("cybercampus", true).unwrap();
+    let mut settings = store.proactive_settings().unwrap();
+    settings.scheduler_enabled = true;
+    settings.notifications_enabled = true;
+    settings.close_to_background = true;
+    store.proactive_save_settings(&settings).unwrap();
+    let store = Arc::new(Mutex::new(store));
+    let active = |id| scheduler::task_currently_active(&store, id).unwrap();
+    assert!(active("sogang-academic"));
+    assert!(!active("cybercampus"));
+    store
+        .lock()
+        .unwrap()
+        .set_enabled("proactive", false)
+        .unwrap();
+    assert!(!active("sogang-academic"));
+    // The stored choices survive; only what runs is masked.
+    let guard = store.lock().unwrap();
+    let effective = guard.proactive_effective_settings().unwrap();
+    assert!(!effective.scheduler_enabled && !effective.notifications_enabled);
+    assert!(!effective.close_to_background);
+    let stored = guard.proactive_settings().unwrap();
+    assert!(stored.scheduler_enabled && stored.notifications_enabled && stored.close_to_background);
 }
