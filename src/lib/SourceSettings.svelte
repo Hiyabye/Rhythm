@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { SourceInfo, SyncStatus } from './types';
+  import type { SourceInfo, SubscribeResult, SyncStatus } from './types';
   import { archiveDate, archiveError, sourceStatus } from './archive-format';
   import Icon from './Icon.svelte';
   import Hint from './Hint.svelte';
@@ -24,7 +24,9 @@
   let supportedGroups = $derived(groups(sources.filter((source) => source.supported)));
   let unsupportedGroups = $derived(groups(sources.filter((source) => !source.supported)));
   let unsupportedCount = $derived(sources.filter((source) => !source.supported).length);
-  let locked = $derived(!enabled || busy || loading || Boolean(status?.running));
+  // Subscriptions stay open while a job runs; only starting another job waits.
+  let switchesLocked = $derived(!enabled || busy || loading);
+  let locked = $derived(switchesLocked || Boolean(status?.running));
 
   onMount(() => {
     void refresh();
@@ -70,10 +72,14 @@
     error = '';
     const subscribed = !source.subscribed;
     try {
-      const next = await invoke<SourceInfo[]>('archive_subscribe', { id: source.id, subscribed });
+      const next = await invoke<SubscribeResult>('archive_subscribe', { id: source.id, subscribed });
       if (!active) return;
-      catalog = next;
-      feedback = subscribed ? `${source.name} 구독을 시작했습니다. 가져오기를 눌러야 수집합니다.` : `${source.name} 구독을 해제했습니다. 보관한 공지는 남습니다.`;
+      catalog = next.sources;
+      const running = Boolean(status?.running);
+      feedback = !subscribed ? `${source.name} 구독을 해제했습니다.${running ? ' 이 게시판의 가져오기만 멈춥니다.' : ''} 보관한 공지는 남습니다.`
+        : next.joined ? `${source.name} 구독을 시작했습니다. 진행 중인 새로고침에서 함께 가져옵니다.`
+        : running ? `${source.name} 구독을 시작했습니다. 지금 진행 중인 작업이 끝난 뒤 새로고침을 눌러야 수집합니다.`
+        : `${source.name} 구독을 시작했습니다. 가져오기를 눌러야 수집합니다.`;
     } catch (reason) { if (active) error = archiveError(reason); }
     finally { if (active) busy = false; }
   }
@@ -106,9 +112,12 @@
 
   function runningLabel(value: SyncStatus) {
     const labels: Record<string, string> = { refresh: '새로고침 준비 중', incremental: '새 소식 확인 중', historical: '이전 공지 가져오는 중', resource: '첨부 자료 내려받는 중', skipped: '가져오지 못한 공지 다시 확인 중', resources: '첨부 자료 모두 내려받는 중' };
-    const mode = labels[value.mode] ?? '새 소식 확인 중';
-    const source = sources.find((item) => item.id === value.source_id)?.name;
-    return [mode, source, value.page > 0 ? `${value.page}쪽` : ''].filter(Boolean).join(' · ');
+    const boards = value.active.filter((board) => sources.some((item) => item.id === board.source_id));
+    if (boards.length > 1) return `게시판 ${boards.length}개를 동시에 가져오는 중`;
+    const board = boards[0];
+    const mode = labels[board?.mode ?? value.mode] ?? '새 소식 확인 중';
+    const source = sources.find((item) => item.id === board?.source_id)?.name;
+    return [mode, source, board && board.page > 0 ? `${board.page}쪽` : ''].filter(Boolean).join(' · ');
   }
 
   function historyLabel(source: SourceInfo) {
@@ -131,9 +140,9 @@
   {#if loading && !sources.length}<p class="loading" role="status">게시판 목록을 불러오는 중입니다…</p>{/if}
 
   {#snippet tile(source: SourceInfo, organization: string)}
-    {@const running = status?.running && status.source_id === source.id}
+    {@const running = status?.running && status.active.some((board) => board.source_id === source.id)}
     <li class="board-tile" class:on={source.subscribed} class:unsupported={!source.supported}>
-      <button class="board-switch" role="switch" aria-checked={source.subscribed} aria-label={`${organization} ${source.name} 구독`} aria-describedby={source.last_error ? `board-alert-${source.id}` : undefined} disabled={locked || !source.supported} onclick={() => subscribe(source)}>
+      <button class="board-switch" role="switch" aria-checked={source.subscribed} aria-label={`${organization} ${source.name} 구독`} aria-describedby={source.last_error ? `board-alert-${source.id}` : undefined} disabled={switchesLocked || !source.supported} onclick={() => subscribe(source)}>
         <span class="board-mark" aria-hidden="true">{#if source.subscribed}<Icon name="check" size={13} />{/if}</span>
         <span class="board-name">{source.name}</span>
         {#if running}<span class="board-state spinning" aria-hidden="true"><Icon name="refresh" size={14} /></span>

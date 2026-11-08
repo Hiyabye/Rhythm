@@ -153,7 +153,20 @@ pub struct ArchiveSummary {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SyncStatus {
     pub running: bool,
-    pub source_id: Option<String>,
+    pub mode: String,
+    pub message: String,
+    /// Boards collecting now; boards on different hosts run at once.
+    pub active: Vec<ActiveSource>,
+}
+/// `joined` is whether a running refresh of every board collects the board.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SubscribeResult {
+    pub sources: Vec<SourceInfo>,
+    pub joined: bool,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ActiveSource {
+    pub source_id: String,
     pub mode: String,
     pub page: u32,
     pub message: String,

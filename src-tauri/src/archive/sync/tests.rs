@@ -711,8 +711,10 @@ async fn refresh_checks_new_notices_then_continues_the_unfinished_backlog() {
     );
 }
 
+/// Presses 중단 (a job-wide cancel) as the `cancel_on`-th request starts.
 struct CancelAfter<'a> {
     fake: &'a Fake,
+    controller: &'a Controller,
     calls: AtomicU64,
     cancel_on: u64,
 }
@@ -727,7 +729,7 @@ impl Transport for CancelAfter<'_> {
         access: network::Access,
     ) -> Result<network::Fetch, String> {
         if self.calls.fetch_add(1, Ordering::AcqRel) + 1 == self.cancel_on {
-            cancel.store(true, Ordering::Release);
+            self.controller.cancel();
         }
         self.fake
             .fetch(url, validators, limit, cancel, access)
@@ -744,6 +746,7 @@ async fn refresh_cancelled_between_steps_keeps_new_notices_and_skips_the_backlog
     // cancellation is requested on the backlog pass's robots request.
     let transport = CancelAfter {
         fake: &fake,
+        controller: &controller,
         calls: AtomicU64::new(0),
         cancel_on: 8,
     };
@@ -1263,7 +1266,7 @@ async fn failed_resource_downloads_preserve_text_and_can_be_retried() {
     )
     .await
     .unwrap();
-    let mut total = 0;
+    let total = AtomicU64::new(0);
     for resource in with_store(&store, |s| s.pending_resources(id)).unwrap() {
         download_resource(
             &store,
@@ -1273,7 +1276,7 @@ async fn failed_resource_downloads_preserve_text_and_can_be_retried() {
             &policy,
             &RobotsCache::default(),
             &resource,
-            &mut total,
+            &total,
         )
         .await
         .unwrap();
@@ -1775,7 +1778,7 @@ async fn resource_retry_keeps_good_offline_copy_and_repairs_corrupt_or_oversized
         &policy,
         &RobotsCache::default(),
         &resource,
-        &mut 0,
+        &AtomicU64::new(0),
     )
     .await
     .unwrap()
@@ -1809,7 +1812,7 @@ async fn resource_retry_keeps_good_offline_copy_and_repairs_corrupt_or_oversized
         &policy,
         &RobotsCache::default(),
         &resource,
-        &mut 0,
+        &AtomicU64::new(0),
     )
     .await
     .unwrap();
@@ -1834,7 +1837,7 @@ async fn resource_retry_keeps_good_offline_copy_and_repairs_corrupt_or_oversized
         &policy,
         &RobotsCache::default(),
         &resource,
-        &mut 0,
+        &AtomicU64::new(0),
     )
     .await
     .unwrap();
@@ -1895,7 +1898,7 @@ async fn unicode_data_path_recovers_a_temporarily_locked_resource() {
         &policy,
         &RobotsCache::default(),
         &resource,
-        &mut 0
+        &AtomicU64::new(0)
     )
     .await
     .unwrap()
@@ -1913,7 +1916,7 @@ async fn unicode_data_path_recovers_a_temporarily_locked_resource() {
         &policy,
         &RobotsCache::default(),
         &failed,
-        &mut 0,
+        &AtomicU64::new(0),
     )
     .await
     .unwrap()
@@ -2159,7 +2162,7 @@ async fn failed_explicit_retry_is_not_success_but_article_stays_archived() {
         &policy,
         &RobotsCache::default(),
         &resource,
-        &mut 0,
+        &AtomicU64::new(0),
     )
     .await
     .unwrap();
@@ -2200,7 +2203,7 @@ async fn resource_budget_counts_failed_disk_writes_and_caps_remaining_request() 
         "User-agent: *\nAllow: /\n",
     )
     .unwrap();
-    let mut total = IMPORT_RESOURCES - 100;
+    let total = AtomicU64::new(IMPORT_RESOURCES - 100);
     let outcome = download_resource(
         &store,
         &bad_root,
@@ -2209,12 +2212,12 @@ async fn resource_budget_counts_failed_disk_writes_and_caps_remaining_request() 
         &policy,
         &RobotsCache::default(),
         &resource,
-        &mut total,
+        &total,
     )
     .await
     .unwrap();
     assert!(outcome.into_result().is_err());
-    assert!(total > IMPORT_RESOURCES - 100);
+    assert!(total.into_inner() > IMPORT_RESOURCES - 100);
     assert_eq!(fake.limits.lock().unwrap().last().unwrap().1, 100);
     assert_eq!(
         with_store(&store, |s| s.resource(resource.id))
@@ -2760,7 +2763,7 @@ async fn exhausted_budget_leaves_files_pending_instead_of_too_large() {
                 &policy,
                 &RobotsCache::default(),
                 &resource,
-                &mut total.clone(),
+                &AtomicU64::new(total),
             )
             .await
             .unwrap();
@@ -3349,4 +3352,210 @@ async fn unsupported_attachment_is_recorded_without_requesting_it() {
     let attachment = resources.iter().find(|r| r.url == exe).unwrap();
     assert_eq!(attachment.status, "unsupported");
     assert_eq!(skipped(&store, MAIN).status, "completed");
+}
+
+const COMPUTING_GRADUATE: &str = "computing-graduate";
+type Hook<'a> = Box<dyn Fn(u64, &Url) + Send + Sync + 'a>;
+/// Holds every request briefly so boards overlap, records the peak number of
+/// requests in flight overall and per host, and runs `hook` with the
+/// 1-based request number before each request.
+struct Overlap<'a> {
+    fake: &'a Fake,
+    calls: AtomicU64,
+    inflight: Mutex<HashMap<String, usize>>,
+    peak_total: AtomicU64,
+    peak_host: AtomicU64,
+    hook: Hook<'a>,
+}
+impl<'a> Overlap<'a> {
+    fn new(fake: &'a Fake, hook: impl Fn(u64, &Url) + Send + Sync + 'a) -> Self {
+        Self {
+            fake,
+            calls: AtomicU64::new(0),
+            inflight: Mutex::new(HashMap::new()),
+            peak_total: AtomicU64::new(0),
+            peak_host: AtomicU64::new(0),
+            hook: Box::new(hook),
+        }
+    }
+}
+impl Transport for Overlap<'_> {
+    async fn fetch(
+        &self,
+        url: &Url,
+        validators: Option<(Option<String>, Option<String>)>,
+        limit: usize,
+        cancel: &AtomicBool,
+        access: network::Access,
+    ) -> Result<network::Fetch, String> {
+        (self.hook)(self.calls.fetch_add(1, Ordering::AcqRel) + 1, url);
+        let host = url.host_str().unwrap().to_owned();
+        {
+            let mut inflight = self.inflight.lock().unwrap();
+            let count = inflight.entry(host.clone()).or_default();
+            *count += 1;
+            self.peak_host.fetch_max(*count as u64, Ordering::AcqRel);
+            let total = inflight.values().sum::<usize>() as u64;
+            self.peak_total.fetch_max(total, Ordering::AcqRel);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        *self.inflight.lock().unwrap().get_mut(&host).unwrap() -= 1;
+        self.fake
+            .fetch(url, validators, limit, cancel, access)
+            .await
+    }
+}
+fn status(store: &SharedStore, id: &str) -> String {
+    with_store(store, |s| s.source(id)).unwrap().status
+}
+fn requested(fake: &Fake, host: &str) -> bool {
+    fake.calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(url, _)| Url::parse(url).unwrap().host_str() == Some(host))
+}
+
+#[tokio::test]
+async fn boards_on_different_hosts_collect_at_once_and_one_host_stays_serial() {
+    let boards = [MAIN, COMPUTING, COMPUTING_GRADUATE];
+    let (dir, store) = setup(&boards);
+    let fake = Fake::new(vec![vec![1, 2]]);
+    let controller = Controller::new();
+    let transport = Overlap::new(&fake, |_, _| {});
+    let outcome = controller
+        .execute(
+            &store,
+            dir.path(),
+            &transport,
+            sources(&store, &boards),
+            "historical",
+            Budget::default(),
+        )
+        .await;
+    // The fake serves only one computing notice, so those boards fail; that
+    // failure must not stop the other host.
+    assert!(outcome.is_err());
+    assert_eq!(status(&store, MAIN), "completed");
+    for id in [COMPUTING, COMPUTING_GRADUATE] {
+        assert_eq!(status(&store, id), "failed", "{id}");
+    }
+    assert_eq!(
+        transport.peak_total.load(Ordering::Acquire),
+        2,
+        "the www and computing hosts collect at once"
+    );
+    assert_eq!(
+        transport.peak_host.load(Ordering::Acquire),
+        1,
+        "the two computing boards never overlap"
+    );
+}
+
+#[tokio::test]
+async fn unsubscribing_a_running_board_stops_only_that_board() {
+    let (dir, store) = setup(&[MAIN, COMPUTING]);
+    let fake = Fake::new(vec![vec![1, 2]]);
+    let controller = Controller::new();
+    let transport = Overlap::new(&fake, |_, url| {
+        if url.host_str() == Some("computing.sogang.ac.kr") && url.path().ends_with("/list") {
+            // What `archive_subscribe(false)` does.
+            with_store(&store, |s| s.subscribe(COMPUTING, false)).unwrap();
+            controller.cancel_source(COMPUTING);
+        }
+    });
+    let outcome = controller
+        .execute(
+            &store,
+            dir.path(),
+            &transport,
+            sources(&store, &[MAIN, COMPUTING]),
+            "historical",
+            Budget::default(),
+        )
+        .await;
+    assert!(
+        outcome.is_ok(),
+        "an unsubscribed board is not a failure: {outcome:?}"
+    );
+    assert_eq!(status(&store, MAIN), "completed");
+    assert_eq!(status(&store, COMPUTING), "cancelled");
+    assert!(items(&store).iter().all(|item| item.source_id == MAIN));
+}
+
+#[tokio::test]
+async fn cancelling_the_job_stops_every_board() {
+    let (dir, store) = setup(&[MAIN, COMPUTING]);
+    let fake = Fake::new(vec![vec![1, 2], vec![3, 4]]);
+    let controller = Controller::new();
+    let transport = Overlap::new(&fake, |call, _| {
+        if call == 3 {
+            controller.cancel();
+        }
+    });
+    let outcome = controller
+        .execute(
+            &store,
+            dir.path(),
+            &transport,
+            sources(&store, &[MAIN, COMPUTING]),
+            "historical",
+            Budget::default(),
+        )
+        .await;
+    assert!(outcome.is_err());
+    assert_eq!(status(&store, MAIN), "cancelled");
+    assert_eq!(status(&store, COMPUTING), "cancelled");
+}
+
+#[tokio::test]
+async fn a_board_subscribed_during_a_job_of_every_board_joins_it() {
+    for joinable in [true, false] {
+        let (dir, store) = setup(&[MAIN]);
+        let fake = Fake::new(vec![vec![1, 2]]);
+        let controller = Controller::new();
+        let joined = AtomicBool::new(false);
+        let transport = Overlap::new(&fake, |call, _| {
+            if call == 1 {
+                // What `archive_subscribe(true)` does.
+                let source = with_store(&store, |s| {
+                    s.subscribe(COMPUTING, true)?;
+                    s.source(COMPUTING)
+                })
+                .unwrap();
+                joined.store(controller.join(source), Ordering::Release);
+            }
+        });
+        let extensions = if joinable {
+            HashSet::from([Some("sogang_notices".to_owned())])
+        } else {
+            HashSet::new()
+        };
+        controller.reserve_task(0, extensions).unwrap();
+        let outcome = controller
+            .execute(
+                &store,
+                dir.path(),
+                &transport,
+                sources(&store, &[MAIN]),
+                "historical",
+                Budget::default(),
+            )
+            .await;
+        controller.finish(String::new());
+        assert_eq!(joined.load(Ordering::Acquire), joinable);
+        assert_eq!(status(&store, MAIN), "completed");
+        assert_eq!(
+            requested(&fake, "computing.sogang.ac.kr"),
+            joinable,
+            "joinable job: {joinable}"
+        );
+        // The fake serves only one computing notice, so the joined board fails.
+        assert_eq!(outcome.is_ok(), !joinable, "{outcome:?}");
+        if joinable {
+            assert_eq!(status(&store, COMPUTING), "failed");
+        }
+        // A finished job takes no more boards.
+        assert!(!controller.join(with_store(&store, |s| s.source(COMPUTING)).unwrap()));
+    }
 }

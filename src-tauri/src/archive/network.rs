@@ -1,5 +1,6 @@
 use reqwest::{header, StatusCode};
 use std::{
+    collections::HashMap,
     net::{IpAddr, SocketAddr},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -20,9 +21,14 @@ pub enum Access {
     /// to their verified routes.
     EmbeddedImage,
 }
+/// Hosts a job collects from at once, and so requests one client has in flight.
+pub const MAX_HOSTS: usize = 3;
+/// Time of the last request to each host. Requests to one host stay 650 ms
+/// apart; different hosts do not wait for each other.
+type Gates = std::sync::Mutex<HashMap<String, Arc<Mutex<Instant>>>>;
 #[derive(Clone)]
 pub struct Client {
-    gate: Arc<Mutex<Instant>>,
+    gates: Arc<Gates>,
     inflight: Arc<Semaphore>,
 }
 #[derive(Debug)]
@@ -40,8 +46,8 @@ pub enum Fetch {
 impl Client {
     pub fn new() -> Result<Self, String> {
         Ok(Self {
-            gate: Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1))),
-            inflight: Arc::new(Semaphore::new(2)),
+            gates: Arc::default(),
+            inflight: Arc::new(Semaphore::new(MAX_HOSTS)),
         })
     }
     pub async fn get(
@@ -75,6 +81,21 @@ impl Client {
             }
         }
         unreachable!()
+    }
+    /// Waits until 650 ms have passed since the last request to `host`.
+    async fn pace(&self, host: &str, cancel: &AtomicBool) -> Result<(), Failure> {
+        let gate = self
+            .gates
+            .lock()
+            .map_err(|_| Failure::Fatal("요청 간격을 확인하지 못했습니다.".into()))?
+            .entry(host.to_owned())
+            .or_insert_with(|| Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1))))
+            .clone();
+        let mut last = gate.lock().await;
+        let delay = Duration::from_millis(650).saturating_sub(last.elapsed());
+        tokio::select! {_=tokio::time::sleep(delay)=>{},_=cancelled(cancel)=>return Err(Failure::Fatal("사용자가 동기화를 중단했습니다.".into()))};
+        *last = Instant::now();
+        Ok(())
     }
     async fn attempt(
         &self,
@@ -120,12 +141,7 @@ impl Client {
             ))
             .build()
             .map_err(|_| Failure::Fatal("안전한 HTTPS 연결을 준비하지 못했습니다.".into()))?;
-        {
-            let mut last = self.gate.lock().await;
-            let delay = Duration::from_millis(650).saturating_sub(last.elapsed());
-            tokio::select! {_=tokio::time::sleep(delay)=>{},_=cancelled(cancel)=>return Err(Failure::Fatal("사용자가 동기화를 중단했습니다.".into()))};
-            *last = Instant::now();
-        }
+        self.pace(host, cancel).await?;
         let mut request = client.get(url.clone()).header(
             header::ACCEPT,
             if url.path() == "/robots.txt" {
@@ -933,6 +949,23 @@ mod tests {
                 "{path}"
             );
         }
+    }
+    #[tokio::test]
+    async fn requests_are_paced_per_host() {
+        let client = Client::new().unwrap();
+        let cancel = AtomicBool::new(false);
+        let start = Instant::now();
+        assert!(client.pace("www.sogang.ac.kr", &cancel).await.is_ok());
+        assert!(client.pace("eng.sogang.ac.kr", &cancel).await.is_ok());
+        assert!(
+            start.elapsed() < Duration::from_millis(300),
+            "another host does not wait"
+        );
+        assert!(client.pace("www.sogang.ac.kr", &cancel).await.is_ok());
+        assert!(
+            start.elapsed() >= Duration::from_millis(650),
+            "the same host waits"
+        );
     }
     #[tokio::test]
     async fn cancelled_request_never_starts_network_work() {

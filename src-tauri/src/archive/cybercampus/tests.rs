@@ -248,7 +248,7 @@ fn setup(password: Option<&str>) -> Setup {
 }
 async fn run(setup: &Setup) -> Result<(), String> {
     let mut current = with_store(&setup.store, |s| s.source(SOURCE_ID)).unwrap();
-    let mut bytes = 0;
+    let bytes = AtomicU64::new(0);
     sync(
         &setup.connector,
         &setup.fake,
@@ -257,7 +257,7 @@ async fn run(setup: &Setup) -> Result<(), String> {
         &AtomicBool::new(false),
         &mut current,
         Progress { report: &|_| {} },
-        &mut bytes,
+        &bytes,
     )
     .await
 }

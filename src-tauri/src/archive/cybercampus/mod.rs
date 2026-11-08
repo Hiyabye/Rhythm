@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     path::Path,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use url::Url;
 
@@ -84,7 +84,7 @@ pub async fn sync<H: Http>(
     cancel: &AtomicBool,
     current: &mut SourceInfo,
     progress: Progress<'_>,
-    resource_bytes: &mut u64,
+    resource_bytes: &AtomicU64,
 ) -> Result<(), String> {
     let session = &connector.session;
     let vault = &connector.vault;
@@ -262,7 +262,7 @@ async fn notices<H: Http>(
     course: &parser::Course,
     year: i32,
     historical: bool,
-    resource_bytes: &mut u64,
+    resource_bytes: &AtomicU64,
 ) -> Result<(), String> {
     let request = |path: &'static str, form: Vec<(&'static str, String)>| {
         connector
@@ -529,7 +529,7 @@ async fn pending<H: Http>(
     root: &Path,
     cancel: &AtomicBool,
     document_id: i64,
-    total: &mut u64,
+    total: &AtomicU64,
 ) -> Result<(), String> {
     for resource in with_store(store, |s| s.pending_resources(document_id))? {
         download(connector, http, store, root, cancel, &resource, total).await?;
@@ -545,7 +545,7 @@ pub async fn download<H: Http>(
     root: &Path,
     cancel: &AtomicBool,
     resource: &ResourceRecord,
-    total: &mut u64,
+    total: &AtomicU64,
 ) -> Result<DownloadOutcome, String> {
     sync::active(cancel)?;
     let mut budget_bound = false;
@@ -555,7 +555,8 @@ pub async fn download<H: Http>(
         client::validate(&url).map_err(|_| {
             "사이버캠퍼스 밖의 자료는 자동으로 내려받지 않아 지원하지 않습니다.".to_string()
         })?;
-        let limit = sync::resource_limit(resource, *total, &mut budget_bound)?;
+        let limit =
+            sync::resource_limit(resource, total.load(Ordering::Acquire), &mut budget_bound)?;
         let path = match url.query() {
             Some(query) => format!("{}?{query}", url.path()),
             None => url.path().to_owned(),
@@ -592,7 +593,7 @@ pub async fn download_missing<H: Http>(
     store: &SharedStore,
     root: &Path,
     cancel: &AtomicBool,
-    total: &mut u64,
+    total: &AtomicU64,
 ) -> Result<(), String> {
     for id in with_store(store, |s| s.documents_missing_resources(SOURCE_ID))? {
         sync::active(cancel)?;

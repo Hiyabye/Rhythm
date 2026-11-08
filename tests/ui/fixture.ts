@@ -160,7 +160,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       storage: { path: '/isolated/rhythm.sqlite3', bytes: 4096, schema_version: 5 },
       worker: { state: 'ready', runtime_available: true, model: null, detail: null }, proactive: copy(proactiveSettings),
       onboarding_completed: !options.onboardingNeeded };
-    let sync = { running: false, source_id: null as string | null, mode: 'historical', page: 0, message: '수집 대기 중입니다.' };
+    type Board = { source_id: string; mode: string; page: number; message: string };
+    let sync = { running: false, mode: 'historical', message: '수집 대기 중입니다.', active: [] as Board[] };
+    const board = (mode: string, page = 1, source_id = 'computing-updates'): Board => ({ source_id, mode, page, message: '공개 공지를 가져오는 중입니다.' });
     const separator = options.windows ? '\\' : '/';
     const defaultModelDirectory = options.windows ? 'C:\\Rhythm-test\\models' : '/isolated/models';
     const chosenModelDirectory = options.windows ? 'D:\\로컬 모델\\Rhythm' : '/Volumes/로컬 모델/Rhythm';
@@ -236,8 +238,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         if (keepPending) pendingActivation = copy(activation);
         if (notificationHandler !== null) callbacks.get(notificationHandler)?.({ event: 'proactive://notification-clicked', id: eventId, payload: activation });
       },
-      completeSync: () => { sync = { ...sync, running: false, message: '가져오기를 마쳤습니다.' }; },
-      syncMode: (mode: string, page = 1) => { sync = { ...sync, running: true, source_id: 'computing-updates', mode, page }; } };
+      completeSync: () => { sync = { ...sync, running: false, message: '가져오기를 마쳤습니다.', active: [] }; },
+      syncMode: (mode: string, page = 1) => { sync = { ...sync, running: true, mode, active: [board(mode, page)] }; },
+      syncBoards: (ids: string[]) => { sync = { ...sync, running: true, mode: 'refresh', active: ids.map((id) => board('historical', 1, id)) }; } };
     let operationStarted = 0;
     let analysisStarted = 0;
     async function operation(kind: AiOperation['kind'], delay: number) {
@@ -581,9 +584,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             await wait(fixture.subscribeDelay);
             if (fixture.subscribeError) throw '구독 설정을 저장하지 못했습니다.';
             sources = sources.map((source) => source.id === args.id ? { ...source, subscribed: args.subscribed } : source);
-            return copy(sources);
-          case 'archive_start': sync = { running: true, source_id: 'computing-updates', mode: args.mode, page: 1, message: '공개 공지를 가져오는 중입니다.' }; return copy(sync);
-          case 'archive_cancel': sync = { ...sync, running: false, message: '가져오기를 중단했습니다.' }; return copy(sync);
+            return copy({ sources, joined: args.subscribed && sync.running && sync.mode === 'refresh' });
+          case 'archive_start': sync = { running: true, mode: args.mode, message: '공개 공지를 가져오는 중입니다.', active: [board(args.mode)] }; return copy(sync);
+          case 'archive_cancel': sync = { ...sync, running: false, message: '가져오기를 중단했습니다.', active: [] }; return copy(sync);
           case 'archive_resource_image':
             await wait(options.imageDelay ?? 0);
             if (options.imageError) throw '로컬 자료가 손상되었습니다. 다시 내려받아 주세요.';
