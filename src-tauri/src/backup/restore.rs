@@ -1019,7 +1019,7 @@ pub(crate) async fn backup_restore(
             // next launch; Rhythm does not relaunch itself because a relaunched
             // instance can race this process for the single-instance socket and
             // data-directory lock and then exit silently.
-            std::mem::forget(maintenance);
+            maintenance.hold_until_exit();
             app_for_exit.exit(0);
         }
         output

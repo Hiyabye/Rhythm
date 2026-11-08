@@ -53,6 +53,19 @@ pub(crate) struct AppMaintenanceGuard {
     classifier_guard: Option<intelligence::classification::PauseGuard>,
 }
 
+impl AppMaintenanceGuard {
+    /// Keeps maintenance closed and work stopped for the rest of the process.
+    /// `RunEvent::Exit` stops the classifier by taking its batch guard, so an
+    /// exit requested while this guard is held must release that guard first,
+    /// or the main thread blocks forever and the window stops responding.
+    pub(crate) fn hold_until_exit(mut self) {
+        if let Some(classifier_guard) = self.classifier_guard.take() {
+            classifier_guard.release_for_exit();
+        }
+        std::mem::forget(self);
+    }
+}
+
 impl Drop for AppMaintenanceGuard {
     fn drop(&mut self) {
         drop(self.classifier_guard.take());

@@ -212,6 +212,15 @@ impl Drop for PauseGuard {
     }
 }
 
+impl PauseGuard {
+    /// Releases the batch guard so `shutdown` can acquire it during exit, but
+    /// keeps classification paused: no new batch starts before the process ends.
+    pub fn release_for_exit(self) {
+        let mut this = std::mem::ManuallyDrop::new(self);
+        drop(this.guard.take());
+    }
+}
+
 pub struct Controller {
     worker: AsyncMutex<Worker>,
     batch: Arc<AsyncMutex<()>>,
@@ -1072,6 +1081,22 @@ mod tests {
         assert!(controller.is_failed(&identity));
         assert!(!directory.path().join("requests").exists());
         controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn pause_released_for_exit_lets_shutdown_finish_and_stays_paused() {
+        let (directory, controller, model) = fake_controller();
+        let identity = model.sha256.clone().unwrap();
+        let controller = Arc::new(controller);
+        controller.quiesce().await.release_for_exit();
+        tokio::time::timeout(Duration::from_secs(5), controller.shutdown())
+            .await
+            .expect("shutdown must not wait for a pause held until exit");
+        assert!(controller
+            .embed_query(directory.path(), &model, &identity, "장학")
+            .await
+            .is_none());
+        assert!(!controller.is_failed(&identity));
     }
 
     #[test]
