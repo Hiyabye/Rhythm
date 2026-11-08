@@ -263,14 +263,13 @@ pub(super) fn listing(
 }
 
 /// The attachment name is the query value the download route uses; the visible
-/// link must agree with it. Only ordinary document and raster extensions are
-/// accepted, and the download transport enforces the same list.
+/// link must agree with it. An unlisted file type is still recorded; the
+/// download transport refuses it, so it stays visible as unsupported.
 fn attachment_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 512
         && !name.contains(['/', '\\'])
         && !name.chars().any(char::is_control)
-        && attachment_extension(name)
 }
 
 pub(super) fn article(

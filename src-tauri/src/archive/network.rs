@@ -177,9 +177,7 @@ impl Client {
             return Ok(Fetch::NotModified);
         }
         if status == StatusCode::TOO_MANY_REQUESTS {
-            return Err(Failure::Fatal(
-                "학교 서버가 요청을 제한했습니다. 잠시 기다린 후 다시 동기화해 주세요.".into(),
-            ));
+            return Err(Failure::Fatal(RATE_LIMITED.into()));
         }
         if status.is_server_error() || status == StatusCode::REQUEST_TIMEOUT {
             return Err(Failure::Retry(format!(
@@ -265,6 +263,10 @@ async fn cancelled(cancel: &AtomicBool) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
+/// A 429 response. The sync stops the board on it instead of requesting the
+/// rest of the page from a server that asked it to slow down.
+pub const RATE_LIMITED: &str =
+    "학교 서버가 요청을 제한했습니다. 잠시 기다린 후 다시 동기화해 주세요.";
 const BLOCKED: &str = "검증된 학교 공개 자료 주소가 아니어서 자동 다운로드하지 않았습니다.";
 pub fn validate(url: &Url, access: Access) -> Result<(), String> {
     if validate_url(url).is_ok() || (access == Access::EmbeddedImage && third_party_image(url)) {

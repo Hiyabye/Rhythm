@@ -3,7 +3,9 @@ use super::*;
 
 /// Serves its robots.txt as unrendered ASP source (see `without_asp`).
 const ASP_SOURCE_HOST: &str = "scc.sogang.ac.kr";
-pub(super) type RobotGroup = (Vec<String>, Vec<(String, bool)>, f64);
+/// Agents, rules and crawl delay; `None` is a delay that cannot be honored,
+/// which fails the policy only when the group applies to Rhythm.
+pub(super) type RobotGroup = (Vec<String>, Vec<(String, bool)>, Option<f64>);
 #[derive(Debug)]
 pub(super) struct Robots {
     pub(super) origin: String,
@@ -48,7 +50,7 @@ impl Robots {
         let mut groups: Vec<RobotGroup> = Vec::new();
         let mut agents = Vec::new();
         let mut rules = Vec::new();
-        let mut delay = 0.0;
+        let mut delay = Some(0.0);
         let mut directives = false;
         for line in body.lines() {
             let line = line.split('#').next().unwrap_or("").trim();
@@ -64,7 +66,7 @@ impl Robots {
                             std::mem::take(&mut rules),
                             delay,
                         ));
-                        delay = 0.0;
+                        delay = Some(0.0);
                         directives = false;
                     }
                     agents.push(value.to_ascii_lowercase());
@@ -77,13 +79,11 @@ impl Robots {
                 }
                 "crawl-delay" if !agents.is_empty() => {
                     directives = true;
+                    // Validate before max(): floating-point max can discard NaN.
                     delay = value
                         .parse::<f64>()
-                        .map_err(|_| "학교의 요청 간격 정책을 해석하지 못했습니다.")?;
-                    // Validate before max(): floating-point max can discard NaN.
-                    if !delay.is_finite() || !(0.0..=60.0).contains(&delay) {
-                        return Err("학교의 수집 간격 정책은 자동 처리할 수 없습니다.".into());
-                    }
+                        .ok()
+                        .filter(|delay| delay.is_finite() && (0.0..=60.0).contains(delay));
                 }
                 _ => {}
             }
@@ -102,6 +102,7 @@ impl Robots {
                 .iter()
                 .any(|a| a == if specific { "rhythm" } else { "*" })
             {
+                let delay = delay.ok_or("학교의 수집 간격 정책은 자동 처리할 수 없습니다.")?;
                 policy.rules.extend(rules);
                 policy.delay = policy.delay.max(delay);
             }

@@ -235,6 +235,11 @@ impl Controller {
                     Err(ArticleError::Transient(error)) => {
                         active(&self.cancel)?;
                         current.failed += 1;
+                        // The server asked to slow down; the rest of the page
+                        // would only repeat the refusal.
+                        if error == network::RATE_LIMITED {
+                            return Err(error);
+                        }
                         errors.push(error);
                     }
                 }
@@ -389,6 +394,9 @@ impl Controller {
                 }
                 Err(ArticleError::Transient(error)) => {
                     active(&self.cancel)?;
+                    if error == network::RATE_LIMITED {
+                        return Err(error);
+                    }
                     errors.push(error);
                 }
             }

@@ -281,13 +281,11 @@ pub(super) fn article(
         for link in links {
             let target = safe_url(&entry.url, link.value().attr("href").ok_or(PARSER_ERROR)?)
                 .ok_or(PARSER_ERROR)?;
-            let filename = attachment_filename(&target, "");
-            // An HTTP reference is recorded, never downloaded; the transport
-            // rejects it and the reader shows its unsupported state.
-            if target.fragment().is_some()
-                || target.host_str().is_none()
-                || !attachment_extension(&filename)
-            {
+            let filename = attachment_filename(&target, "첨부 파일");
+            // An HTTP reference or an unlisted file type is recorded, never
+            // downloaded; the reader shows its unsupported state. Neither may
+            // keep the notice's text out of the archive.
+            if target.fragment().is_some() || target.host_str().is_none() {
                 return invalid();
             }
             resources.push(ResourceInput {
