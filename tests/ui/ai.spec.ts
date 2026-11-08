@@ -235,10 +235,11 @@ test('pending job cancellation bypasses a long command-owned model operation', a
   await expect(page.getByRole('button', { name: '선택한 모델 불러오기', exact: true })).toBeEnabled();
 });
 
-test('setup reports real inference phase and cancellation never marks setup complete', async ({ page }) => {
+test('setup completes without a preloaded model, reports real inference phase and cancellation never marks setup complete', async ({ page }) => {
   await mockDesktop(page, { aiInstalled: true, aiSetupNeeded: true, aiSetupDelay: 20000 }); await page.goto('/');
   await page.getByRole('button', { name: '로컬 AI 설정하기', exact: true }).click();
-  await page.getByRole('button', { name: '선택한 모델 불러오기', exact: true }).click();
+  // Setup loads the model itself, so an installed, selected model is enough even when nothing is loaded.
+  expect(await page.evaluate(() => (window as any).__fixture.ai.runtime.model)).toBeNull();
   await page.getByRole('button', { name: '실제 추론 확인 후 AI 설정 완료' }).click();
   await expect(page.getByText('짧은 로컬 추론으로 설치를 확인하고 있습니다 · 경과', { exact: false })).toBeVisible();
   await page.getByRole('button', { name: '현재 AI 작업 취소', exact: true }).click();

@@ -50,6 +50,9 @@
   });
   let activeModel = $derived(data?.models.find((model) => model.id === data?.preferences.active_model_id) ?? null);
   let hasInstalled = $derived(data?.models.some((model) => model.kind !== 'embedding' && model.status === 'installed') ?? false);
+  // Completing setup loads the selected model and runs a short inference itself; it must not
+  // depend on a model that the idle unload may already have released.
+  let setupReady = $derived(activeModel?.status === 'installed' && activeModel.kind !== 'embedding');
   let embeddingEntry = $derived(data?.catalog.find((entry) => entry.kind === 'embedding') ?? null);
   let embeddingModel = $derived(data?.models.find((model) => model.kind === 'embedding' && model.id === data?.preferences.embedding_model_id)
     ?? data?.models.find((model) => model.kind === 'embedding') ?? null);
@@ -252,10 +255,10 @@
         <div class="setup-title"><h3>로컬 AI 시작하기</h3><Hint label="로컬 AI 시작하기">모델 설치는 직접 누를 때만 시작합니다. 마지막 단계에서 짧은 로컬 추론으로 실제 동작을 확인합니다. 준비하지 않아도 보관한 공지는 읽고 검색할 수 있습니다.</Hint></div>
         <ol class="setup-steps">
           <li class:done={hasInstalled}><span aria-hidden="true">{#if hasInstalled}<Icon name="check" size={12} />{:else}1{/if}</span>모델 설치</li>
-          <li class:done={Boolean(data.runtime.model)}><span aria-hidden="true">{#if data.runtime.model}<Icon name="check" size={12} />{:else}2{/if}</span>불러오기</li>
+          <li class:done={setupReady}><span aria-hidden="true">{#if setupReady}<Icon name="check" size={12} />{:else}2{/if}</span>모델 선택</li>
           <li><span aria-hidden="true">3</span>동작 확인</li>
         </ol>
-        <button class="button small" disabled={busy || data.busy || !data.runtime.model} aria-label="실제 추론 확인 후 AI 설정 완료" onclick={() => preference({ setup_completed: true })}>동작 확인하고 완료</button>
+        <button class="button small" disabled={busy || data.busy || !setupReady} aria-label="실제 추론 확인 후 AI 설정 완료" onclick={() => preference({ setup_completed: true })}>동작 확인하고 완료</button>
       </div>
     {/if}
 
