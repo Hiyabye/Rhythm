@@ -344,13 +344,15 @@ Stored vectors also drive similar notices and cross-post grouping, with no model
 
 Optional `backlog` processing is idle-only and needs completed setup, an installed selected model, at least five minutes of OS user inactivity, external power and a non-Eco profile. It considers the latest revision of every notice that has archived text and no attempt for that revision, newest publication first, and admits at most 20 attempts per rolling hour while the app runs. `intelligence/idle.rs` reports OS idle time (CoreGraphics on macOS, `GetLastInputInfo` on Windows) and the power source (IOKit, `GetSystemPowerStatus`); an unavailable probe admits nothing. A running backlog attempt is cancelled and reaped before an explicit worker/inventory action reuses the engine. A direct analysis is never cancelled; pending work is claimed by priority (direct 100, backlog 10), so a running backlog item finishes and the direct request runs before any further backlog item.
 
-| Profile | Automatic analysis | Idle model residency | Scheduler cadence when interval is `0` |
-| --- | --- | --- | --- |
-| Eco | None (explicit only) | 30 s | 60 min |
-| Balanced | Up to `min(automatic_limit, 3)` | 120 s | 30 min |
-| Performance | Up to `min(automatic_limit, 20)` | 600 s | 15 min |
+The same loop reaps the generation `llama-server` once it has served no load or request for `IDLE_UNLOAD` (60 s on every profile). The check runs before the download, AI-gate and store checks, so none of them can postpone it; a worker held by an analysis or command is in use and is left alone. The next request starts a fresh process. Explicit **불러오기** only warms the model; it is unloaded after the same idle minute. The embedding process unloads on its own one-minute timer.
 
-When the remote engine is selected, `recent` and `backlog` additionally require consent, `remote_automatic`, a stored key and a valid endpoint, and reserve a slot in the persisted per-local-day limit before admission; a failed or cached admission releases the slot. Direct user requests are never counted. Active work, a busy operation gate or model/job changes reset residency. Battery state is detected only to block backlog admission; Eco disables all automatic AI on AC and battery.
+| Profile | Automatic analysis | Scheduler cadence when interval is `0` |
+| --- | --- | --- |
+| Eco | None (explicit only) | 60 min |
+| Balanced | Up to `min(automatic_limit, 3)` | 30 min |
+| Performance | Up to `min(automatic_limit, 20)` | 15 min |
+
+When the remote engine is selected, `recent` and `backlog` additionally require consent, `remote_automatic`, a stored key and a valid endpoint, and reserve a slot in the persisted per-local-day limit before admission; a failed or cached admission releases the slot. Direct user requests are never counted. Battery state is detected only to block backlog admission; Eco disables all automatic AI on AC and battery.
 
 ## Backup, restore and updater
 

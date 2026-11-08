@@ -1,7 +1,7 @@
 //! Transient command-owned work. No source text, generated text or job state is retained.
 use serde::Serialize;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
 use std::time::{Duration, Instant};
@@ -25,7 +25,6 @@ struct Active {
 #[derive(Clone, Default)]
 pub struct Controller {
     active: Arc<Mutex<Option<Active>>>,
-    activity: Arc<AtomicU64>,
 }
 impl Controller {
     pub fn begin(&self, kind: &str) -> Result<Operation, String> {
@@ -37,7 +36,6 @@ impl Controller {
             return Err("진행 중인 AI 작업을 먼저 취소하거나 완료해 주세요.".into());
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        self.activity.fetch_add(1, Ordering::Release);
         *active = Some(Active {
             kind: kind.into(),
             phase: "verifying".into(),
@@ -48,10 +46,6 @@ impl Controller {
             controller: self.clone(),
             cancel,
         })
-    }
-    /// Retain an observation of work that began and finished between idle polls.
-    pub fn activity_generation(&self) -> u64 {
-        self.activity.load(Ordering::Acquire)
     }
     pub fn status(&self) -> Option<Status> {
         let active = self.active.lock().ok()?;
@@ -117,7 +111,6 @@ impl Drop for Operation {
                 .is_some_and(|a| Arc::ptr_eq(&a.cancel, &self.cancel))
             {
                 *active = None;
-                self.controller.activity.fetch_add(1, Ordering::Release);
             }
         }
     }
@@ -149,18 +142,6 @@ mod tests {
         let next = controller.begin("load").unwrap();
         assert!(!controller.status().unwrap().cancelling);
         drop(next);
-    }
-    #[test]
-    fn short_completed_operations_remain_observable_between_idle_polls() {
-        let controller = Controller::default();
-        let observer = controller.clone();
-        let before = observer.activity_generation();
-        assert!(observer.status().is_none());
-        drop(controller.begin("load").unwrap());
-        assert!(observer.status().is_none());
-        assert_ne!(observer.activity_generation(), before);
-        let after = observer.activity_generation();
-        assert_eq!(controller.activity_generation(), after);
     }
     #[tokio::test]
     async fn shutdown_sets_the_same_hash_cancellation_token() {

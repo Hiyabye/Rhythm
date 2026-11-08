@@ -95,14 +95,6 @@ fn backlog_window_allows(window: &mut VecDeque<Instant>, now: Instant) -> bool {
     window.len() < BACKLOG_HOURLY_LIMIT
 }
 
-fn idle_limit(energy: &str) -> Duration {
-    Duration::from_secs(match energy {
-        "eco" => 30,
-        "performance" => 600,
-        _ => 120,
-    })
-}
-
 // SQLite collection timestamps are UTC ISO strings with three fractional digits.
 // Deriving the boundary from SystemTime avoids a platform command or another dependency.
 fn session_boundary(time: SystemTime) -> Option<String> {
@@ -160,10 +152,6 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
     let mut attempted = HashSet::new();
     let mut admitted = 0;
     let mut backlog_window = VecDeque::new();
-    let mut last_activity = Instant::now();
-    let mut previous_model = None;
-    let mut previous_job = None;
-    let mut previous_operation = 0;
     while !shutdown.load(Ordering::Acquire) {
         // No immediate startup inference. A model is loaded only by explicit setup,
         // explicit analysis, or the opt-in focused-window policy below.
@@ -181,61 +169,36 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
             .get_webview_window("main")
             .and_then(|window| window.is_focused().ok())
             .unwrap_or(false);
-        if state.analysis.running() || state.models.busy() {
-            last_activity = Instant::now();
+        if state.analysis.running() {
+            continue;
+        }
+        // Before any other early exit: a busy store or a pending user action
+        // must not keep an idle model's memory reserved. A worker held by a
+        // command or an analysis is in use, so a failed try_lock skips this.
+        if let Ok(mut worker) = state.worker.try_lock() {
+            worker.unload_if_idle(super::IDLE_UNLOAD).await;
+        }
+        if state.models.busy() {
             continue;
         }
         // Read policy only after admission is serialized with user preference
         // changes. A snapshot taken before this gate could admit work after opt-out.
         // Never wait behind a user operation, and preserve its lock order.
         let Ok(_gate) = state.ai_gate.try_lock() else {
-            last_activity = Instant::now();
             continue;
         };
         if shutdown.load(Ordering::Acquire) || state.analysis.running() {
             continue;
         }
-        let operation = state.ai_operation.activity_generation();
-        if previous_operation != operation {
-            previous_operation = operation;
-            last_activity = Instant::now();
-        }
         let context = state.store.try_lock().ok().and_then(|store| {
             Some((
                 store.settings().ok()?.energy_profile,
                 store.ai_preferences().ok()?,
-                store
-                    .ai_jobs(1)
-                    .ok()?
-                    .first()
-                    .map(|job| (job.id, job.status.clone(), job.updated_at.clone())),
             ))
         });
-        let Some((energy, preferences, newest_job)) = context else {
+        let Some((energy, preferences)) = context else {
             continue;
         };
-        if previous_job != newest_job {
-            previous_job = newest_job;
-            last_activity = Instant::now();
-        }
-        {
-            let Ok(mut worker) = state.worker.try_lock() else {
-                last_activity = Instant::now();
-                continue;
-            };
-            let status = worker.status();
-            if previous_model != status.model {
-                previous_model = status.model.clone();
-                last_activity = Instant::now();
-            }
-            if status.model.is_some() && last_activity.elapsed() >= idle_limit(&energy) {
-                if let Err(error) = worker.unload().await {
-                    eprintln!("AI idle unload: {error}");
-                }
-                previous_model = None;
-                last_activity = Instant::now();
-            }
-        }
         // Remote work needs a cached credential-store presence check. It is
         // only consulted when the mode and consent already allow automatic work.
         let key_ready = if preferences.engine == "openai-compatible"
@@ -294,7 +257,6 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
             ) {
                 Ok(response) if response.job.is_some() => {
                     admitted += 1;
-                    last_activity = Instant::now();
                 }
                 Ok(_) => {
                     if reserved {
@@ -350,7 +312,6 @@ pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
         ) {
             Ok(response) if response.job.is_some() => {
                 backlog_window.push_back(Instant::now());
-                last_activity = Instant::now();
             }
             Ok(_) => {
                 if reserved {
@@ -556,7 +517,7 @@ mod tests {
         assert_eq!(window.len(), 0);
     }
     #[test]
-    fn utc_boundary_and_residency_policy_are_deterministic() {
+    fn utc_boundary_is_deterministic() {
         assert_eq!(
             session_boundary(UNIX_EPOCH).as_deref(),
             Some("1970-01-01T00:00:00.000Z")
@@ -569,8 +530,5 @@ mod tests {
             session_boundary(UNIX_EPOCH + Duration::from_secs(1709251200)).as_deref(),
             Some("2024-03-01T00:00:00.000Z")
         );
-        assert_eq!(idle_limit("eco"), Duration::from_secs(30));
-        assert_eq!(idle_limit("balanced"), Duration::from_secs(120));
-        assert_eq!(idle_limit("performance"), Duration::from_secs(600));
     }
 }

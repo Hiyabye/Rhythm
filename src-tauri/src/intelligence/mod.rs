@@ -25,7 +25,7 @@ use server::{EmbeddingLaunch, Launch, Server};
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use tokio::process::Child;
-use tokio::time::Duration;
+use tokio::time::{Duration, Instant};
 
 #[derive(Clone, Serialize)]
 pub struct WorkerStatus {
@@ -256,6 +256,9 @@ const EMBED_DEADLINE: Duration = Duration::from_secs(120);
 const MAX_EMBED_BATCH: usize = 32;
 const MAX_EMBED_INPUT_BYTES: usize = 8 * 1024;
 const MAX_EMBED_DIM: usize = 8192;
+/// Reap the generation process after this much time without a load or
+/// request, so an idle app does not keep the model's memory reserved.
+pub const IDLE_UNLOAD: Duration = Duration::from_secs(60);
 const STOPPED: &str = "AI 엔진이 중지되었습니다. 다음 요청 때 다시 시작합니다.";
 
 /// Bundled `llama-server` builds below the `llama/` resource directory.
@@ -313,6 +316,8 @@ pub struct Worker {
     return_to_gpu: bool,
     server: Option<Server>,
     status: WorkerStatus,
+    /// End of the most recent load or request; idle unload measures from it.
+    last_used: Instant,
 }
 impl Worker {
     /// `llama` is the bundled resource directory; `runtime` is the private
@@ -354,6 +359,7 @@ impl Worker {
             return_to_gpu: false,
             server: None,
             status: WorkerStatus::unavailable(STOPPED),
+            last_used: Instant::now(),
         };
         worker.select_initial_backend();
         worker
@@ -584,6 +590,7 @@ impl Worker {
                 result = self.infer_once(path, projector, &body).await;
             }
         }
+        self.last_used = Instant::now();
         match &result {
             Ok(response) => {
                 self.status = WorkerStatus {
@@ -651,6 +658,7 @@ impl Worker {
                 result = self.embed_once(path, &body, inputs.len()).await;
             }
         }
+        self.last_used = Instant::now();
         match &result {
             Ok(_) => {
                 self.status = WorkerStatus {
@@ -690,7 +698,20 @@ impl Worker {
             self.fail(&error).await;
             return Err(error);
         }
+        self.last_used = Instant::now();
         Ok(self.refresh().await)
+    }
+    /// Unloads a server unused for `after`. Returns whether a process was reaped.
+    pub async fn unload_if_idle(&mut self, after: Duration) -> bool {
+        self.observe_exit();
+        if self.server.is_none() || self.last_used.elapsed() < after {
+            return false;
+        }
+        if let Err(error) = self.unload().await {
+            // The process is already reaped; only the status refresh failed.
+            eprintln!("AI idle unload: {error}");
+        }
+        true
     }
     /// Reaping the process is the reliable memory-release boundary.
     pub async fn unload(&mut self) -> Result<WorkerStatus, String> {
@@ -1099,6 +1120,29 @@ mod tests {
             assert!(worker.load(&path).await.is_err());
             assert!(worker.process_id().is_none());
         }
+    }
+
+    #[tokio::test]
+    async fn idle_unload_waits_for_the_last_request_then_reaps_the_process() {
+        let (_directory, mut worker, model) = fake("ok");
+        assert!(!worker.unload_if_idle(Duration::ZERO).await);
+        worker.load(&model).await.unwrap();
+        assert!(!worker.unload_if_idle(IDLE_UNLOAD).await);
+        // A request after a long quiet period restarts the idle clock.
+        worker.last_used -= IDLE_UNLOAD * 2;
+        worker.infer(&model, "분석", 32).await.unwrap();
+        assert!(!worker.unload_if_idle(IDLE_UNLOAD).await);
+        assert!(worker.process_id().is_some());
+        worker.last_used -= IDLE_UNLOAD;
+        assert!(worker.unload_if_idle(IDLE_UNLOAD).await);
+        assert!(worker.process_id().is_none());
+        let status = worker.status();
+        assert_eq!(status.state, "ready");
+        assert!(status.model.is_none());
+        // The next request starts a fresh process on demand.
+        let response = worker.infer_detailed(&model, "분석", 32).await.unwrap();
+        assert_eq!(response.metrics.model_reused, Some(false));
+        worker.stop().await;
     }
 
     #[tokio::test]
