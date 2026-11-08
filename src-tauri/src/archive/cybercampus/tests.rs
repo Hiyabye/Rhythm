@@ -626,4 +626,51 @@ mod parsing {
         );
         assert_eq!(month_day("13월 2일", 2026), None);
     }
+
+    #[test]
+    fn twelve_hour_times_keep_the_afternoon() {
+        // The forms eClass renders when the account's clock is set to 12 hours.
+        assert_eq!(
+            full_datetime("2026.09.22 (화) 오후 7:06").as_deref(),
+            Some("2026-09-22T19:06")
+        );
+        assert_eq!(
+            full_datetime("2026.10.05 (월) 오후 12:59").as_deref(),
+            Some("2026-10-05T12:59")
+        );
+        assert_eq!(
+            month_day("11월 22일 (일) 오후 11:59", 2026).as_deref(),
+            Some("2026-11-22T23:59")
+        );
+        assert_eq!(
+            full_datetime("2026.11.09 (월) 오후 02:59").as_deref(),
+            Some("2026-11-09T14:59")
+        );
+        assert_eq!(
+            full_datetime("2026.11.09 (월) 오전 2:59").as_deref(),
+            Some("2026-11-09T02:59")
+        );
+        assert_eq!(
+            month_day("11월 9일 (월) 오후 2:59", 2026).as_deref(),
+            Some("2026-11-09T14:59")
+        );
+        assert_eq!(
+            month_day("11월 9일 (월) 02:59 PM", 2026).as_deref(),
+            Some("2026-11-09T14:59")
+        );
+        // Noon and midnight are 12 in the 12-hour clock.
+        assert_eq!(
+            full_datetime("2026.11.09 (월) 오후 12:00").as_deref(),
+            Some("2026-11-09T12:00")
+        );
+        assert_eq!(
+            full_datetime("2026.11.09 (월) 오전 12:30").as_deref(),
+            Some("2026-11-09T00:30")
+        );
+        // A marker with a 24-hour value is contradictory.
+        assert_eq!(
+            full_datetime("2026.11.09 (월) 오후 14:59").as_deref(),
+            Some("2026-11-09")
+        );
+    }
 }
