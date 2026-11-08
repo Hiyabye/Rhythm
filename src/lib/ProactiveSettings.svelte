@@ -96,9 +96,14 @@
     error = '';
     notice = '';
     try {
-      const settings = { ...data.settings, ...patch,
+      // The background and notification parts can share a pane; merging into
+      // freshly read settings keeps one part from undoing the other's change.
+      const current = await invoke<ProactiveSnapshot>('proactive_snapshot');
+      // Reading the snapshot hands over a pending notification click.
+      if (current.pending_activation) onactivation(current.pending_activation);
+      const settings = { ...current.settings, ...patch,
         // Login registration is reconciled with the OS only by its lifecycle command.
-        launch_at_login: lifecycle?.launch_at_login ?? data.settings.launch_at_login };
+        launch_at_login: lifecycle?.launch_at_login ?? current.settings.launch_at_login };
       data = await invoke<ProactiveSnapshot>('proactive_save', { settings });
       notice = '설정을 저장했습니다.';
     } catch (reason) { error = archiveError(reason); }

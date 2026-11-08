@@ -12,28 +12,13 @@
   import ProactiveSettings from './lib/ProactiveSettings.svelte';
   import CybercampusTasks from './lib/CybercampusTasks.svelte';
   import SetupFlow from './lib/SetupFlow.svelte';
+  import ExtensionSettings from './lib/ExtensionSettings.svelte';
+  import { contributed, enabledExtensions, navigation, settingsPanes, sourceExtensions, type SettingsPane } from './lib/extensions';
   import Hint from './lib/Hint.svelte';
   import './lib/ai.css';
   import { archiveError as message, archiveDay, localDayKey } from './lib/archive-format';
   import type { ArchiveSummary, EnergyProfile, Settings, Snapshot, SourceInfo, SyncStatus, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo } from './lib/types';
 
-  const navigation = [
-    { id: 'today', label: '오늘' },
-    { id: 'inbox', label: '받은 소식' },
-    { id: 'search', label: '탐색' },
-    { id: 'bookmark', label: '보관함' },
-    { id: 'tasks', label: '과제·마감' },
-    { id: 'settings', label: '설정' },
-  ];
-  type SettingsPane = 'general' | 'boards' | 'ai' | 'personalization' | 'notifications' | 'data';
-  const settingsPanes: { id: SettingsPane; label: string; icon: string }[] = [
-    { id: 'general', label: '일반', icon: 'settings' },
-    { id: 'boards', label: '게시판', icon: 'boards' },
-    { id: 'ai', label: 'AI', icon: 'cpu' },
-    { id: 'personalization', label: '개인화', icon: 'person' },
-    { id: 'notifications', label: '알림', icon: 'bell' },
-    { id: 'data', label: '데이터 및 정보', icon: 'database' },
-  ];
   const themes: { id: Theme; label: string; icon: string }[] = [
     { id: 'light', label: '라이트', icon: 'today' },
     { id: 'dark', label: '다크', icon: 'moon' },
@@ -57,16 +42,19 @@
   // The first-run setup flow replaces the shell until it is finished or skipped.
   let showSetup = $state(false);
   // Kept while the app is open, so returning to Settings shows the last pane.
-  let settingsPane = $state<SettingsPane>('general');
-  let paneLabel = $derived(settingsPanes.find((item) => item.id === settingsPane)!.label);
+  let settingsPane = $state<SettingsPane>('extensions');
+  // Only the core shell and what enabled extensions add are shown.
+  let enabled = $derived(enabledExtensions(snapshot?.extensions));
+  let panes = $derived(contributed(settingsPanes, enabled));
+  let paneLabel = $derived(panes.find((item) => item.id === settingsPane)?.label ?? '');
   let restoreOutcome = $state<RestoreOutcome | null>(null);
   // Found by the automatic check; "나중에" hides it for this version until restart.
   let availableUpdate = $state<UpdateInfo | null>(null);
   let dismissedUpdate = $state('');
-  let noticesEnabled = $derived(snapshot?.extensions.some((extension) => extension.id === 'sogang_notices' && extension.enabled) ?? false);
+  let noticesEnabled = $derived(enabled.has('sogang_notices'));
   let theme = $state<Theme>('system');
   let systemDark = $state(false);
-  let heading = $derived(navigation.find((item) => item.id === page)!);
+  let heading = $derived(page === 'settings' ? '설정' : navigation.find((item) => item.id === page)?.label ?? '');
   let dark = $derived(theme === 'dark' || (theme === 'system' && systemDark));
   // The header date follows the local day; the periodic timer below refreshes the key across midnight.
   let dayKey = $state(localDayKey(new Date()));
@@ -80,16 +68,23 @@
   let activeSource = $state('');
   let weekPane = $state(false);
   let boards = $derived(sources.filter((item) => item.supported && item.subscribed));
-  // Deadlines come from the Cybercampus connector, so the page appears once it is subscribed.
-  let primaryNavigation = $derived(navigation.filter((item) => item.id !== 'settings' && (item.id !== 'tasks' || page === 'tasks' || boards.some((board) => board.family === 'cybercampus'))));
-  // Board names repeat across institutions ("학사 공지" / "학사공지"), so the sidebar groups them by organization.
-  let boardGroups = $derived.by(() => {
+  let primaryNavigation = $derived(contributed(navigation, enabled));
+  // Each enabled source extension gets a sidebar group of its subscribed boards.
+  // Board names repeat across institutions ("학사 공지" / "학사공지"), so a group lists them by organization.
+  let sidebarGroups = $derived(sourceExtensions.filter((owner) => enabled.has(owner.id)).map((owner) => {
     const groups = new Map<string, SourceInfo[]>();
-    for (const board of boards) {
+    for (const board of boards.filter((item) => item.extension === owner.id)) {
       const label = organizationLabel(board.organization);
       groups.set(label, [...(groups.get(label) ?? []), board]);
     }
-    return [...groups];
+    return { ...owner, name: snapshot?.extensions.find((extension) => extension.id === owner.id)?.display_name ?? owner.id, organizations: [...groups] };
+  }));
+  // A page or pane whose extension was just turned off falls back to the core shell.
+  // A board scope keeps the inbox open: its owner may be Cybercampus alone.
+  $effect(() => {
+    if (!snapshot) return;
+    if (page !== 'settings' && !primaryNavigation.some((item) => item.id === page) && !(page === 'inbox' && boards.some((board) => board.id === activeSource))) page = 'today';
+    if (!panes.some((item) => item.id === settingsPane)) settingsPane = 'extensions';
   });
   let scopedBoard = $derived(page === 'inbox' && activeSource ? sources.find((item) => item.id === activeSource) ?? null : null);
   let lastChecked = $derived(boards.reduce<string | null>((latest, item) => !item.last_success || (latest && latest >= item.last_success) ? latest : item.last_success, null));
@@ -319,23 +314,19 @@
           </button></li>
         {/each}
       </ul>
-      {#each snapshot?.extensions ?? [] as extension}
-        <p class="source-group-heading" id={`group-${extension.id}`}>{extension.display_name}</p>
-        <ul class="source-list" aria-labelledby={`group-${extension.id}`}>
-          {#if !extension.enabled}
-            <li><button class="source-item quiet" onclick={() => openSettings('boards')}><span class="source-label">꺼져 있음 · 설정에서 켜기</span></button></li>
-          {:else if extension.id === 'sogang_notices' && boards.length}
-            {#each boardGroups as [organization, members] (organization)}
-              <li class="board-organization" aria-hidden="true">{organization}</li>
-              {#each members as board (board.id)}
-                <li><button class="source-item board" class:active={page === 'inbox' && activeSource === board.id} aria-current={page === 'inbox' && activeSource === board.id ? 'page' : undefined} aria-label={`${organizationLabel(board.organization)} ${board.name}`} onclick={() => navigate('inbox', board.id)}>
-                  <span class={`board-swatch family-${board.family}`} aria-hidden="true"></span><span class="source-label">{board.name}</span>
-                </button></li>
-              {/each}
+      {#each sidebarGroups as group (group.id)}
+        <p class="source-group-heading" id={`group-${group.id}`}>{group.name}</p>
+        <ul class="source-list" aria-labelledby={`group-${group.id}`}>
+          {#each group.organizations as [organization, members] (organization)}
+            <li class="board-organization" aria-hidden="true">{organization}</li>
+            {#each members as board (board.id)}
+              <li><button class="source-item board" class:active={page === 'inbox' && activeSource === board.id} aria-current={page === 'inbox' && activeSource === board.id ? 'page' : undefined} aria-label={`${organizationLabel(board.organization)} ${board.name}`} onclick={() => navigate('inbox', board.id)}>
+                <span class={`board-swatch family-${board.family}`} aria-hidden="true"></span><span class="source-label">{board.name}</span>
+              </button></li>
             {/each}
           {:else}
-            <li><button class="source-item quiet" onclick={() => openSettings('boards')}><span class="source-label">구독한 게시판 없음 · 설정</span></button></li>
-          {/if}
+            <li><button class="source-item quiet" onclick={() => openSettings(group.pane)}><span class="source-label">구독한 게시판 없음 · 설정</span></button></li>
+          {/each}
         </ul>
       {/each}
       <div class="sidebar-bottom">
@@ -350,19 +341,19 @@
   </aside>
 
   <main id="main" tabindex="-1" class:with-week-pane={weekPane}>
-    <header class="page-header"><h1>{scopedBoard?.name ?? heading.label}</h1>{#if scopedBoard}<p>{organizationLabel(scopedBoard.organization)} · 받은 소식</p>{/if}{#if page === 'today'}<p>{date}{#if summary}{' · '}읽지 않은 공지 {summary.unread.toLocaleString('ko-KR')}{#if summary.new_since_sync}{' · '}최근 동기화로 새 공지 {summary.new_since_sync.toLocaleString('ko-KR')}{/if}{/if}</p>{/if}</header>
+    <header class="page-header"><h1>{scopedBoard?.name ?? heading}</h1>{#if scopedBoard}<p>{organizationLabel(scopedBoard.organization)} · 받은 소식</p>{/if}{#if page === 'today'}<p>{date}{#if summary}{' · '}읽지 않은 공지 {summary.unread.toLocaleString('ko-KR')}{#if summary.new_since_sync}{' · '}최근 동기화로 새 공지 {summary.new_since_sync.toLocaleString('ko-KR')}{/if}{/if}</p>{/if}</header>
     {#if !desktop && !loading}<div class="banner browser-notice" role="status"><Icon name="info" /><div><strong>데스크톱 앱에서 시작해 주세요</strong><p>브라우저에서는 화면만 둘러볼 수 있습니다. 설정 저장과 로컬 데이터 접근은 Rhythm 앱에서 사용할 수 있습니다.</p></div></div>{/if}
     {#if error}<div class="banner error" role="alert"><Icon name="info" /><div><strong>작업을 완료하지 못했습니다</strong><p>{error}</p></div>{#if !snapshot && desktop}<button class="text-button" onclick={load}>다시 시도</button>{/if}</div>{/if}
     {#if restoreOutcome}<div class="banner" role="status"><Icon name="info" /><div><strong>백업 복원을 마쳤습니다</strong><p>공지 {restoreOutcome.documents.toLocaleString('ko-KR')}건과 첨부 자료 {restoreOutcome.resources.toLocaleString('ko-KR')}개를 복원하고 무결성을 확인했습니다.{#if restoreOutcome.unavailable_resources} 백업 당시 내려받지 못한 첨부 자료 {restoreOutcome.unavailable_resources.toLocaleString('ko-KR')}개는 포함되지 않았습니다.{/if}{#if restoreOutcome.models_needing_reinstall} 사용할 수 없는 AI 모델 {restoreOutcome.models_needing_reinstall.toLocaleString('ko-KR')}개는 다시 등록하거나 설치해 주세요.{/if} 이전 데이터는 데이터 폴더에 복구용으로 보관되어 있습니다.</p></div><button class="text-button" onclick={() => restoreOutcome = null}>닫기</button></div>{/if}
     {#if desktop && availableUpdate && dismissedUpdate !== availableUpdate.version && page !== 'settings'}<div class="banner" role="status"><Icon name="info" /><div><strong>Rhythm {availableUpdate.version} 버전을 설치할 수 있습니다</strong><p>설정 → 데이터 및 정보에서 내려받으면 업데이트 서명을 확인한 뒤 설치 여부를 묻습니다. 그 전에는 아무것도 바뀌지 않습니다.</p></div><button class="text-button" onclick={updateSettings}>업데이트 보기</button><button class="text-button" onclick={() => dismissedUpdate = availableUpdate?.version ?? ''}>나중에</button></div>{/if}
-    {#if desktop && setupNeeded && page !== 'settings'}<div class="banner ai-setup-banner" role="status"><Icon name="cpu" /><div><strong>나의 기기에서 공지의 핵심을 정리하세요</strong><p>로컬 AI 모델을 선택하면 한국어 요약과 일정의 근거를 확인할 수 있습니다. 준비 전이나 오프라인에서도 공지는 계속 읽을 수 있습니다.</p></div><button class="text-button" onclick={aiSettings}>로컬 AI 설정하기</button><button class="text-button" onclick={() => setupNeeded = false}>나중에</button></div>{/if}
+    {#if desktop && setupNeeded && enabled.has('ai') && page !== 'settings'}<div class="banner ai-setup-banner" role="status"><Icon name="cpu" /><div><strong>나의 기기에서 공지의 핵심을 정리하세요</strong><p>로컬 AI 모델을 선택하면 한국어 요약과 일정의 근거를 확인할 수 있습니다. 준비 전이나 오프라인에서도 공지는 계속 읽을 수 있습니다.</p></div><button class="text-button" onclick={aiSettings}>로컬 AI 설정하기</button><button class="text-button" onclick={() => setupNeeded = false}>나중에</button></div>{/if}
     <div class="save-notice" class:visible={Boolean(notice)} role="status" aria-live="polite">{#if notice}<Icon name="check" size={15} />{notice}{/if}</div>
 
     {#if page === 'settings'}
       <div class="settings-layout">
         <nav class="settings-nav" aria-label="설정 항목">
           <ul>
-            {#each settingsPanes as item (item.id)}
+            {#each panes as item (item.id)}
               <li><button class="pane-item" class:active={settingsPane === item.id} aria-current={settingsPane === item.id ? 'page' : undefined} onclick={() => settingsPane = item.id}><Icon name={item.icon} size={17} /><span>{item.label}</span></button></li>
             {/each}
           </ul>
@@ -378,21 +369,19 @@
             <div class="settings-group">
               <div class="settings-row"><span class="row-label">초기 설정<Hint label="초기 설정">처음 실행할 때 본 설정 단계를 다시 엽니다. 현재 설정을 그대로 보여 주며 아무것도 초기화하지 않습니다.</Hint></span><button class="button secondary small" disabled={!snapshot || busy} onclick={openSetup}>다시 실행</button></div>
             </div>
-            <ProactiveSettings {desktop} part="background" onopen={openProactiveDocument} onactivation={handleProactiveActivation} />
+          {:else if settingsPane === 'extensions'}
+            {#if snapshot}<ExtensionSettings extensions={snapshot.extensions} {busy} ontoggle={toggleExtension} />
+            {:else if !loading}<p class="muted">데스크톱 앱에서 확장 기능을 켤 수 있습니다.</p>{/if}
           {:else if settingsPane === 'boards'}
-            {#if snapshot}
-              <div class="settings-group">
-                {#each snapshot.extensions as extension}
-                  <div class="settings-row"><span class="row-label">{extension.display_name}<Hint label={extension.display_name}>{extension.description} 꺼도 보관한 공지와 구독은 그대로 남습니다.{#if !extension.available} 지금은 사용할 수 없습니다.{/if}</Hint></span><button class="switch" class:on={extension.enabled} role="switch" aria-checked={extension.enabled} aria-label={`${extension.display_name} 사용 설정`} disabled={busy} onclick={() => toggleExtension(extension.id, !extension.enabled)}><span></span></button></div>
-                {/each}
-              </div>
-            {:else if !loading}<p class="muted">데스크톱 앱에서 게시판을 구독할 수 있습니다.</p>{/if}
-            {#if noticesEnabled}<SourceSettings enabled={noticesEnabled} />{/if}
+            <SourceSettings enabled={noticesEnabled} extension="sogang_notices" />
+          {:else if settingsPane === 'cybercampus'}
+            <SourceSettings enabled={enabled.has('cybercampus')} extension="cybercampus" />
           {:else if settingsPane === 'ai'}
             <AiSettings {desktop} onsetup={() => setupNeeded = false} />
           {:else if settingsPane === 'personalization'}
             <PersonalizationSettings {desktop} />
           {:else if settingsPane === 'notifications'}
+            <ProactiveSettings {desktop} part="background" onopen={openProactiveDocument} onactivation={handleProactiveActivation} />
             <ProactiveSettings {desktop} part="notifications" onopen={openProactiveDocument} onactivation={handleProactiveActivation} />
           {:else}
             <div class="settings-group">
@@ -404,9 +393,9 @@
         </section>
       </div>
     {:else if page === 'tasks'}
-      <CybercampusTasks {desktop} onsettings={() => openSettings('boards')} />
+      <CybercampusTasks {desktop} onsettings={() => openSettings('cybercampus')} />
     {:else}
-      <ArchiveView {page} {desktop} enabled={noticesEnabled} onsetup={openSetup} {sourceRequest} activation={proactiveActivation} onactivationhandled={() => proactiveActivation = null} onsettings={(pane) => openSettings(pane ?? 'boards')} onaisettings={aiSettings}
+      <ArchiveView {page} {desktop} {enabled} onsetup={openSetup} onextensions={() => openSettings('extensions')} {sourceRequest} activation={proactiveActivation} onactivationhandled={() => proactiveActivation = null} onsettings={(pane) => openSettings(pane ?? 'extensions')} onaisettings={aiSettings}
         onsourcechange={(id) => activeSource = id}
         onweekpane={(visible) => weekPane = visible}
         ontasks={() => void navigate('tasks')}

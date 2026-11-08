@@ -149,7 +149,10 @@ test('failed regeneration keeps good cached analysis and offers retry', async ({
 });
 
 test('cached output is escaped, partial processing is honest, disabled connector retains AI', async ({ page }) => {
-  await mockDesktop(page, { enabled: false, aiResult: true, aiPartial: true, aiText: '<img src=x onerror="window.__injected=true">' }); await page.goto('/'); await reader(page);
+  // With the notice extension off its inbox is hidden; 탐색 still opens archived notices.
+  await mockDesktop(page, { enabled: false, aiResult: true, aiPartial: true, aiText: '<img src=x onerror="window.__injected=true">' }); await page.goto('/');
+  await page.getByRole('button', { name: '탐색', exact: true }).click();
+  await page.locator('#notice-1').click();
   const panel = page.getByRole('region', { name: '공지 AI 분석' });
   await expect(panel.getByText('<img src=x onerror="window.__injected=true">', { exact: true })).toBeVisible();
   await expect(panel.locator('img')).toHaveCount(0);

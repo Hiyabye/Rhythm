@@ -12,7 +12,7 @@ function history(page: Page) {
 test('sync interval distinguishes the energy-profile default from an explicit one-hour override', async ({ page }) => {
   await mockDesktop(page);
   await page.goto('/');
-  await openSettings(page, '일반');
+  await openSettings(page, '알림·백그라운드');
 
   const enabled = page.getByRole('switch', { name: '자동 동기화', exact: true });
   await enabled.click();
@@ -40,7 +40,7 @@ test('sync interval distinguishes the energy-profile default from an explicit on
 test('proactive settings save OS lifecycle, sync cadence, notifications and quiet hours', async ({ page }) => {
   await mockDesktop(page, { schedulerError: true });
   await page.goto('/');
-  await openSettings(page, '일반');
+  await openSettings(page, '알림·백그라운드');
 
   const closeToBackground = page.getByRole('switch', { name: '창을 닫아도 백그라운드에서 실행', exact: true });
   await closeToBackground.click();
@@ -75,7 +75,7 @@ test('proactive settings save OS lifecycle, sync cadence, notifications and quie
   // A stored scheduler error is status, not a fresh announcement on every visit.
   await expect(schedulerStatus.getByRole('alert')).toHaveCount(0);
 
-  await page.getByRole('navigation', { name: '설정 항목', exact: true }).getByRole('button', { name: '알림', exact: true }).click();
+  await page.getByRole('navigation', { name: '설정 항목', exact: true }).getByRole('button', { name: '알림·백그라운드', exact: true }).click();
   const notifications = page.getByRole('switch', { name: '알림 활성화', exact: true });
   await notifications.click();
   await expect(notifications).toHaveAttribute('aria-checked', 'true');
@@ -103,7 +103,7 @@ test('proactive settings save OS lifecycle, sync cadence, notifications and quie
 test('notification permission is queried without prompting and granted only after an explicit request', async ({ page }) => {
   await mockDesktop(page, { notificationAuthorization: 'not_determined', notificationRequestResult: 'authorized' });
   await page.goto('/');
-  await openSettings(page, '알림');
+  await openSettings(page, '알림·백그라운드');
 
   await expect(permission(page)).toContainText('아직 결정되지 않음');
   expect(await callCount(page, 'notification_authorization')).toBe(1);
@@ -116,7 +116,7 @@ test('notification permission is queried without prompting and granted only afte
 test('denied permission remains denied after an explicit request', async ({ page }) => {
   await mockDesktop(page, { notificationAuthorization: 'denied', notificationRequestResult: 'denied' });
   await page.goto('/');
-  await openSettings(page, '알림');
+  await openSettings(page, '알림·백그라운드');
 
   await expect(permission(page)).toContainText('거부됨');
   await expect(permission(page)).toContainText('시스템 설정의 알림에서 Rhythm을 허용한 뒤 새로고침하세요.');
@@ -129,7 +129,7 @@ test('denied permission remains denied after an explicit request', async ({ page
 test('unavailable permission request is reported without claiming delivery', async ({ page }) => {
   await mockDesktop(page, { notificationAuthorization: 'not_determined', notificationRequestResult: 'unavailable' });
   await page.goto('/');
-  await openSettings(page, '알림');
+  await openSettings(page, '알림·백그라운드');
 
   expect(await callCount(page, 'notification_request_permission')).toBe(0);
   await page.getByRole('button', { name: '운영체제 알림 권한 요청', exact: true }).click();
@@ -141,7 +141,7 @@ test('unavailable permission request is reported without claiming delivery', asy
 test('unsupported notification permission APIs are reported as unavailable and cannot be requested', async ({ page }) => {
   await mockDesktop(page, { notificationAuthorization: 'unavailable' });
   await page.goto('/');
-  await openSettings(page, '알림');
+  await openSettings(page, '알림·백그라운드');
 
   await expect(permission(page)).toContainText('이 환경에서 사용할 수 없음');
   await expect(permission(page)).toContainText('이 환경에서는 권한을 확인하거나 요청할 수 없습니다.');
@@ -153,7 +153,7 @@ test('unsupported notification permission APIs are reported as unavailable and c
 test('failed proactive save retains the saved value and exposes the backend error', async ({ page }) => {
   await mockDesktop(page, { proactiveSaveError: true });
   await page.goto('/');
-  await openSettings(page, '일반');
+  await openSettings(page, '알림·백그라운드');
   const enabled = page.getByRole('switch', { name: '자동 동기화', exact: true });
   await enabled.click();
   await expect(enabled).toHaveAttribute('aria-checked', 'false');
@@ -163,7 +163,7 @@ test('failed proactive save retains the saved value and exposes the backend erro
 test('history can be cleared and opens its stable document destination in the archive reader', async ({ page }) => {
   await mockDesktop(page);
   await page.goto('/');
-  await openSettings(page, '알림');
+  await openSettings(page, '알림·백그라운드');
   await expect(history(page)).toContainText('한국어 공지 01');
   expect(await callCount(page, 'proactive_history')).toBeGreaterThan(0);
   await page.getByRole('button', { name: '한국어 공지 01 공지 열기', exact: true }).click();
@@ -204,23 +204,25 @@ test('notification activation opens a document by stable identity and missing de
 test('browser preview explains that proactive settings and OS delivery are unavailable', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByText('브라우저에서는 화면만 둘러볼 수 있습니다.', { exact: false })).toBeVisible();
-  await openSettings(page, '일반');
-  await expect(page.getByText('브라우저 미리보기에서는 설정을 저장하거나 운영체제 기능을 확인할 수 없습니다.', { exact: true })).toBeVisible();
+  // Without the desktop backend no extension is on, so only the core panes appear.
+  await openSettings(page, '확장 기능');
+  await expect(page.getByText('데스크톱 앱에서 확장 기능을 켤 수 있습니다.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: '설정 항목', exact: true }).getByRole('button', { name: '알림·백그라운드', exact: true })).toHaveCount(0);
   await expect(page.getByRole('switch')).toHaveCount(0);
 });
 
 test('OS lifecycle and history-clear failures retain authoritative values and disclose errors', async ({ page }) => {
   await mockDesktop(page, { lifecycleError: true, proactiveClearError: true });
   await page.goto('/');
-  await openSettings(page, '일반');
+  await openSettings(page, '알림·백그라운드');
   const closeToBackground = page.getByRole('switch', { name: '창을 닫아도 백그라운드에서 실행', exact: true });
   await closeToBackground.click();
   await expect(closeToBackground).toHaveAttribute('aria-checked', 'false');
-  await expect(page.getByRole('alert')).toContainText('운영체제 시작 설정을 바꾸지 못했습니다.');
-  await page.getByRole('navigation', { name: '설정 항목', exact: true }).getByRole('button', { name: '알림', exact: true }).click();
+  // Both parts share the pane, so each reports its own failure.
+  await expect(page.locator('#background').getByRole('alert')).toContainText('운영체제 시작 설정을 바꾸지 못했습니다.');
   await answerDialogs(page, 'ok');
   await page.getByRole('button', { name: '알림 기록 비우기', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('알림 기록을 비우지 못했습니다.');
+  await expect(page.locator('#notifications').getByRole('alert')).toContainText('알림 기록을 비우지 못했습니다.');
   await expect(history(page)).toContainText('한국어 공지 01');
 });
 
@@ -239,7 +241,7 @@ test('notification event and snapshot share deduplication without blocking a lat
   await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 01');
   await page.keyboard.press('Escape');
   await expect(page.locator('.reader-header h2')).toHaveCount(0);
-  await openSettings(page, '알림');
+  await openSettings(page, '알림·백그라운드');
   await expect(page.getByRole('heading', { name: '알림 기록', exact: true })).toBeVisible();
   // Each mounted settings pane reads the snapshot again; none may reopen the handled activation.
   await expect.poll(() => callCount(page, 'proactive_snapshot')).toBeGreaterThanOrEqual(2);
@@ -259,7 +261,7 @@ test('snapshot-first activation ignores a late event but manual history can reop
   await page.goto('/');
   await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 01');
   await page.keyboard.press('Escape');
-  await openSettings(page, '알림');
+  await openSettings(page, '알림·백그라운드');
   await expect(page.getByRole('button', { name: '한국어 공지 01 공지 열기', exact: true })).toBeVisible();
   await page.evaluate(() => (window as any).__fixture.emitNotification({ event_id: 12, document_id: 1, revision_id: 1 }));
   await expect(page.locator('.reader-header h2')).toHaveCount(0);

@@ -180,10 +180,8 @@ test('an empty archive explains first steps, local storage and optional AI on To
   await page.goto('/');
   const start = page.getByRole('region', { name: 'Rhythm 시작하기' });
   await expect(start).toContainText('이 기기에만 저장됩니다');
-  await expect(start).toContainText('원문 수집을 확인한 게시판만 구독할 수 있습니다');
-  await expect(start).toContainText('로컬 AI 모델은 선택 사항입니다');
-  await expect(start).toContainText('처음에 모두 꺼져 있습니다');
-  await expect(start).toContainText('설정 → 게시판에서 서강대학교 공지를 켜고');
+  await expect(start).toContainText('설정 → 확장 기능에서 서강대학교 공지나 사이버캠퍼스를 켭니다');
+  await expect(start).toContainText('AI 분석, 알림·백그라운드 같은 기능도 확장 기능에서 필요할 때 켭니다');
   await expect(start).toContainText('설정 → 데이터 및 정보에서 확인할 수 있습니다');
   await start.getByRole('button', { name: '초기 설정 열기', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Rhythm에 오신 것을 환영합니다', exact: true })).toBeFocused();
@@ -201,18 +199,18 @@ test('settings shows one pane at a time and remembers it while the app is open',
   await page.goto('/');
   await navigate(page, '설정');
   const panes = page.getByRole('navigation', { name: '설정 항목', exact: true }).getByRole('button');
-  await expect(panes).toHaveText(['일반', '게시판', 'AI', '개인화', '알림', '데이터 및 정보']);
+  await expect(panes).toHaveText(['확장 기능', '일반', '게시판', '사이버캠퍼스', '개인화', 'AI', '알림·백그라운드', '데이터 및 정보']);
   await expect(panes.first()).toHaveAttribute('aria-current', 'page');
-  for (const name of ['게시판', 'AI', '개인화', '알림', '데이터 및 정보', '일반']) {
+  for (const name of ['일반', '게시판', '사이버캠퍼스', '개인화', 'AI', '알림·백그라운드', '데이터 및 정보', '확장 기능']) {
     await panes.filter({ hasText: name }).click();
     await expect(page.getByRole('heading', { level: 2, name, exact: true })).toBeVisible();
     await expect(panes.filter({ hasText: name })).toHaveAttribute('aria-current', 'page');
     await expect(page.getByRole('heading', { level: 2 })).toHaveCount(1);
   }
-  await panes.filter({ hasText: '알림' }).click();
+  await panes.filter({ hasText: '알림·백그라운드' }).click();
   await navigate(page, '오늘');
   await navigate(page, '설정');
-  await expect(page.getByRole('heading', { level: 2, name: '알림', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2, name: '알림·백그라운드', exact: true })).toBeVisible();
 });
 
 test('row explanations open from the keyboard and Escape returns focus to their button', async ({ page }) => {
@@ -234,7 +232,7 @@ test('row explanations open from the keyboard and Escape returns focus to their 
 test('settings failure rolls back optimistic theme; system theme follows OS', async ({ page }) => {
   await mockDesktop(page, { settingsError: true });
   await page.goto('/');
-  await navigate(page, '설정');
+  await openSettings(page, '일반');
   await page.getByRole('button', { name: '다크', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('설정을 저장하지 못했습니다');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
@@ -277,7 +275,8 @@ test('subscriptions have no automatic collection, protect refreshing state, show
   expect(await callCount(page, 'archive_start')).toBe(0);
   const starts = () => page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'archive_start').map((call: any) => call.args));
   await page.getByRole('button', { name: '새로고침', exact: true }).click();
-  await expect.poll(starts).toEqual([{ sourceIds: null, mode: 'refresh' }]);
+  // The pane refreshes the subscribed boards it manages.
+  await expect.poll(starts).toEqual([{ sourceIds: ['computing-updates'], mode: 'refresh' }]);
   await expect(page.locator('.collect-status')).toContainText('새로고침 준비 중');
   // The one job reports each step, so the label follows new notices into the backlog.
   await syncMode(page, 'incremental');
@@ -291,13 +290,13 @@ test('subscriptions have no automatic collection, protect refreshing state, show
   await page.getByRole('button', { name: '소프트웨어융합대학 소식 상태', exact: true }).click();
   await expect(status.getByRole('button', { name: '새 소식 확인', exact: true })).toHaveCount(0);
   await status.getByRole('button', { name: '새로고침', exact: true }).click();
-  await expect.poll(starts).toEqual([{ sourceIds: null, mode: 'refresh' }, { sourceIds: ['computing-updates'], mode: 'refresh' }]);
+  await expect.poll(starts).toEqual([{ sourceIds: ['computing-updates'], mode: 'refresh' }, { sourceIds: ['computing-updates'], mode: 'refresh' }]);
   // Missing files of every subscribed board download through one explicit action.
   await page.keyboard.press('Escape');
   await page.evaluate(() => (window as any).__fixture.completeSync());
   await expect(page.getByRole('button', { name: '자료 모두 내려받기', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: '자료 모두 내려받기', exact: true }).click();
-  await expect.poll(starts).toEqual([{ sourceIds: null, mode: 'refresh' }, { sourceIds: ['computing-updates'], mode: 'refresh' }, { sourceIds: null, mode: 'resources' }]);
+  await expect.poll(starts).toEqual([{ sourceIds: ['computing-updates'], mode: 'refresh' }, { sourceIds: ['computing-updates'], mode: 'refresh' }, { sourceIds: ['computing-updates'], mode: 'resources' }]);
   await expect(page.locator('.collect-status')).toContainText('첨부 자료 모두 내려받는 중');
 });
 
@@ -463,9 +462,11 @@ test('returning before automatic read write completes refreshes unread filters a
 test('disabling extension preserves local saved items and disables resource retries', async ({ page }) => {
   await mockDesktop(page, { saved: true, resources: [image] });
   await page.goto('/');
-  await openSettings(page, '게시판');
+  await openSettings(page, '확장 기능');
   await page.getByRole('switch', { name: '서강대학교 공지 사용 설정', exact: true }).click();
-  await expect(page.locator('.source-manager')).toHaveCount(0);
+  // Its settings pane and inbox disappear; saved items stay.
+  await expect(page.getByRole('navigation', { name: '설정 항목', exact: true }).getByRole('button', { name: '게시판', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name: '받은 소식', exact: true })).toHaveCount(0);
   await navigate(page, '보관함');
   await expect(page.locator('.notice-list > li')).toHaveCount(2);
   await page.locator('#notice-1').click();

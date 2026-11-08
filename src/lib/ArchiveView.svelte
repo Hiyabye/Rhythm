@@ -8,14 +8,19 @@
   import Highlighted from './Highlighted.svelte';
   import Icon from './Icon.svelte';
 
-  let { page, desktop, enabled, sourceRequest, activation, onactivationhandled, onsettings, onaisettings, onsetup, onsourcechange, oncontext, onweekpane, ontasks }: {
-    page: string; desktop: boolean; enabled: boolean; sourceRequest: { id: string; token: number };
+  let { page, desktop, enabled, sourceRequest, activation, onactivationhandled, onsettings, onaisettings, onsetup, onextensions, onsourcechange, oncontext, onweekpane, ontasks }: {
+    page: string; desktop: boolean; enabled: Set<string>; sourceRequest: { id: string; token: number };
     activation: { document_id: number; revision_id: number; event_id: number } | null;
-    onactivationhandled: () => void; onsettings: (pane?: 'boards' | 'personalization') => void; onaisettings: () => void; onsetup: () => void; onsourcechange: (id: string) => void;
+    onactivationhandled: () => void; onsettings: (pane?: 'boards' | 'personalization') => void; onaisettings: () => void; onsetup: () => void; onextensions: () => void; onsourcechange: (id: string) => void;
     oncontext: (context: { summary: ArchiveSummary | null; sources: SourceInfo[] | null; status: SyncStatus | null }) => void;
     onweekpane: (visible: boolean) => void;
     ontasks: () => void;
   } = $props();
+  // Today's widgets and the AI annotations follow their extensions.
+  let showRecommendations = $derived(enabled.has('recommendations'));
+  let showWeek = $derived(enabled.has('week'));
+  let ai = $derived(enabled.has('ai'));
+  let sourcesOn = $derived(enabled.has('sogang_notices') || enabled.has('cybercampus'));
   let result = $state<ArchivePage>({ items: [], total: 0, categories: [] });
   let summary = $state<ArchiveSummary | null>(null);
   let sources = $state<SourceInfo[]>([]);
@@ -94,7 +99,7 @@
 
   // The week agenda is a trailing window pane, so the shell reserves its width while it is shown.
   $effect(() => {
-    onweekpane(page === 'today' && readerId === null);
+    onweekpane(page === 'today' && readerId === null && showWeek);
     return () => onweekpane(false);
   });
 
@@ -119,8 +124,8 @@
     const archiveRevision = revision;
     if (currentPage === 'today' && isDesktop) {
       void archiveRevision;
-      void loadRecommendations();
-      void loadTasks();
+      if (showRecommendations) void loadRecommendations();
+      if (enabled.has('cybercampus')) void loadTasks();
     }
   });
 
@@ -157,8 +162,12 @@
       if (active && request === contextRequest) aiSnapshot = snapshot;
     } catch { if (active && request === contextRequest) aiSnapshot = null; }
   }
+  // Stored AI output stays in SQLite while the AI extension is off; it is just not shown.
+  let analyses = $derived(ai ? recentAnalyses : []);
+  let labels = $derived(ai ? classifications : {});
+  let groupedCopies = $derived(ai ? duplicates : {});
   function currentSummary(documentId: number): AiResult | null {
-    const analysis = recentAnalyses.find((value) => value.document_id === documentId);
+    const analysis = analyses.find((value) => value.document_id === documentId);
     const contract = aiSnapshot?.analysis_contract;
     if (!analysis || !aiSnapshot || !contract || !contract.configuration_hash) return null;
     if (contract.prompt_version !== analysisContract.prompt_version || contract.schema_version !== analysisContract.schema_version) return null;
@@ -237,7 +246,7 @@
     for (const item of result.items) {
       if (placed.has(item.id)) continue;
       placed.add(item.id);
-      const folded = (duplicates[item.id] ?? []).flatMap((notice) => {
+      const folded = (groupedCopies[item.id] ?? []).flatMap((notice) => {
         const copy = byId.get(notice.document_id);
         if (!copy || placed.has(copy.id)) return [];
         placed.add(copy.id);
@@ -249,7 +258,7 @@
     return rows;
   });
   function duplicateBoards(item: DocumentItem) {
-    return [...new Set((duplicates[item.id] ?? []).map((notice) => notice.source_name))].join(', ');
+    return [...new Set((groupedCopies[item.id] ?? []).map((notice) => notice.source_name))].join(', ');
   }
 
   async function fetchPage(filters: ArchiveQuery, ranked: boolean) {
@@ -352,13 +361,13 @@
       ?? recommendations.find((item) => item.item.id === documentId)?.item.title ?? fallback;
   }
   // Only dates from analyses that match the current contract appear.
-  let referenceDates = $derived(recentAnalyses.flatMap((analysis) => currentSummary(analysis.document_id)?.id !== analysis.id ? [] :
+  let referenceDates = $derived(analyses.flatMap((analysis) => currentSummary(analysis.document_id)?.id !== analysis.id ? [] :
     analysis.result.facts.filter((fact) => fact.date && /^\d{4}-\d{2}-\d{2}/.test(fact.date)).map((fact, index) => ({
       key: `${analysis.id}-${index}`, day: fact.date!.slice(0, 10), label: fact.label, documentId: analysis.document_id,
       title: titleOf(analysis.document_id, analysis.result.short_summary),
     }))));
   // Stored tasks outlive an unsubscribed board; the week follows the 과제·마감 navigation and shows them only while subscribed.
-  let showTasks = $derived(sources.some((item) => item.family === 'cybercampus' && item.subscribed));
+  let showTasks = $derived(enabled.has('cybercampus') && sources.some((item) => item.family === 'cybercampus' && item.subscribed));
   // Open deadlines only: a submitted task or one whose deadline (and late window) has passed is no longer something to plan for.
   let openTasks = $derived.by(() => {
     if (!showTasks) return [];
@@ -400,29 +409,35 @@
 </script>
 
 {#if readerId !== null}
-  {#key `${readerId}:${readerRevisionId ?? ''}`}<DocumentReader id={readerId} initialRevisionId={readerRevisionId} {enabled} onclose={closeReader} onchange={changed} {onaisettings} onopen={(id) => void openDocument(id, `notice-${id}`)} />{/key}
+  {#key `${readerId}:${readerRevisionId ?? ''}`}<DocumentReader id={readerId} initialRevisionId={readerRevisionId} enabledSources={sources.filter((item) => item.extension && enabled.has(item.extension)).map((item) => item.id)} {ai} onclose={closeReader} onchange={changed} {onaisettings} onopen={(id) => void openDocument(id, `notice-${id}`)} />{/key}
 {:else}
   <section class="archive-view" aria-busy={loading}>
-    {#if page === 'today'}
+    {#if page === 'today' && !showRecommendations && !showWeek}
+      <section class="empty-state today-blank" aria-labelledby="today-blank-heading">
+        <span class="empty-icon"><Icon name="extensions" size={30} /></span>
+        <h2 id="today-blank-heading" bind:this={listHeading} tabindex="-1">오늘을 채울 확장 기능을 켜 보세요</h2>
+        <p>Rhythm은 필요한 기능만 켜서 씁니다. 학교 공지나 사이버캠퍼스를 연결하고, 나를 위한 소식이나 앞으로 7일을 켜면 이곳에 나타납니다.</p>
+        <button class="button" onclick={() => onextensions()}>확장 기능 열기 <Icon name="arrow" size={16} /></button>
+      </section>
+    {:else if page === 'today'}
       <div class="today-layout">
         <div class="today-main">
           {#if desktop && summary?.documents === 0}
             <section class="first-run" aria-labelledby="first-run-heading">
               <h2 id="first-run-heading">Rhythm 시작하기</h2>
-              <p>Rhythm은 서강대학교의 공개 공지를 이 기기에 보관해 인터넷 없이도 읽고 검색할 수 있게 합니다. 계정이나 클라우드 없이 모든 자료와 설정은 이 기기에만 저장됩니다.</p>
+              <p>Rhythm은 공지를 이 기기에 보관해 인터넷 없이도 읽고 검색할 수 있게 합니다. 계정이나 클라우드 없이 모든 자료와 설정은 이 기기에만 저장됩니다.</p>
               <ol>
-                <li>설정 → 게시판에서 서강대학교 공지를 켜고 게시판을 구독합니다. 원문 수집을 확인한 게시판만 구독할 수 있습니다.</li>
-                <li>새로고침을 누르면 새 소식과 아직 받지 않은 이전 공지를 차례로 가져옵니다. 직접 시작하거나 자동 동기화를 켠 경우에만 네트워크를 사용합니다.</li>
-                <li>로컬 AI 모델은 선택 사항입니다. 모델 없이도 읽기, 검색과 추천을 사용할 수 있습니다.</li>
-                <li>백그라운드 실행, 자동 동기화와 알림은 처음에 모두 꺼져 있습니다. 켜더라도 Rhythm이 실행 중이고 기기가 깨어 있을 때만 동작합니다.</li>
+                <li>설정 → 확장 기능에서 서강대학교 공지나 사이버캠퍼스를 켭니다.</li>
+                <li>새로 생긴 게시판 설정에서 게시판을 구독하고 새로고침을 누릅니다. 직접 시작하거나 자동 동기화를 켠 경우에만 네트워크를 사용합니다.</li>
+                <li>AI 분석, 알림·백그라운드 같은 기능도 확장 기능에서 필요할 때 켭니다. 켜더라도 Rhythm이 실행 중이고 기기가 깨어 있을 때만 동작합니다.</li>
               </ol>
               <p>데이터 저장 위치는 설정 → 데이터 및 정보에서 확인할 수 있습니다.</p>
               <button class="button" onclick={() => onsetup()}>초기 설정 열기</button>
             </section>
           {/if}
           {#if error}<div class="archive-error" role="alert">{error}<button class="text-button" onclick={() => { revision++; void refreshContext(); }}>다시 시도</button></div>{/if}
-          {#if recommendationError}<p role="alert" class="archive-error">{recommendationError}</p>{/if}
-          {#if recommendations.length}
+          {#if showRecommendations && recommendationError}<p role="alert" class="archive-error">{recommendationError}</p>{/if}
+          {#if showRecommendations && recommendations.length}
             <section class="today-picks" aria-label="오늘의 추천">
               <div class="pane-heading">
                 <h2 bind:this={listHeading} tabindex="-1">나를 위한 소식</h2>
@@ -445,18 +460,19 @@
                 {/each}
               </ul>
             </section>
-          {:else if !recommendationError}
+          {:else if showRecommendations && !recommendationError}
             <div class="recommendation-empty">
               <h2 bind:this={listHeading} tabindex="-1">나를 위한 소식</h2>
-              <p>{enabled ? hasPreferences ? '관심 분야와 맞는 소식을 아직 찾지 못했습니다.' : '개인화 전에는 최근 공지를 표시합니다. 관심사를 설정하면 추천에 반영됩니다.' : '확장 기능을 끄면 새 추천은 표시하지 않습니다. 기존 공지는 받은 소식과 탐색에서 계속 볼 수 있습니다.'}</p>
+              <p>{sourcesOn ? hasPreferences ? '관심 분야와 맞는 소식을 아직 찾지 못했습니다.' : '개인화 전에는 최근 공지를 표시합니다. 관심사를 설정하면 추천에 반영됩니다.' : '정보원 확장 기능이 꺼져 있어 새 추천은 표시하지 않습니다. 보관한 공지는 그대로 남아 있습니다.'}</p>
               {#if !hasPreferences}<button class="text-button" onclick={() => onsettings('personalization')}>관심 분야 설정</button>{/if}
             </div>
           {/if}
-          {#if aiError}
+          {#if ai && aiError}
             <p class="footnote">저장된 AI 결과를 불러오지 못했습니다. 공지 목록은 계속 사용할 수 있습니다.</p>
           {/if}
         </div>
 
+        {#if showWeek}
         <aside class="week-pane" aria-labelledby="week-heading">
           <div class="pane-heading"><h2 id="week-heading">앞으로 7일</h2><span class="pane-note">{shortDay(week[0].key)} – {week[6].month === week[0].month ? `${week[6].date}일` : shortDay(week[6].key)}</span></div>
           {#if loading && !result.items.length}<p class="loading" role="status">오늘 공지를 불러오는 중입니다…</p>{/if}
@@ -505,8 +521,9 @@
               {/each}
             </ul>
           {/if}
-          <p class="pane-footnote">오늘 게시된 공지{#if showTasks}, 사이버캠퍼스에서 마지막으로 가져온 과제 마감{/if}과 로컬 AI가 원문에서 추출한 참고 일정입니다. 참고 일정은 추천 순위와 알림에 쓰지 않으니 원문에서 확인하세요.</p>
+          <p class="pane-footnote">오늘 게시된 공지{#if showTasks}, 사이버캠퍼스에서 마지막으로 가져온 과제 마감{/if}{#if ai}과 AI가 원문에서 추출한 참고 일정입니다. 참고 일정은 추천 순위와 알림에 쓰지 않으니 원문에서 확인하세요.{:else}입니다.{/if}</p>
         </aside>
+        {/if}
       </div>
     {:else}
     {#if page === 'search'}
@@ -529,15 +546,15 @@
     {#if result.items.length}
       <ul class="notice-list" aria-label="공지 목록">
         {#each listRows as { item, folded, member } (item.id)}
-          {@const analysis = recentAnalyses.find((value) => value.document_id === item.id)}
+          {@const analysis = analyses.find((value) => value.document_id === item.id)}
           {@const hiddenUnread = expandedDuplicates[item.id] ? 0 : folded.filter((copy) => !copy.is_read).length}
           <li class:notice-unread={!item.is_read || hiddenUnread > 0} class:notice-duplicate-member={member} class:has-duplicates={folded.length > 0}>
             <button class="notice-open" id={`notice-${item.id}`} onclick={() => open(item)}>
               <span class="notice-title"><span class="notice-read-dot" aria-hidden="true"></span><Highlighted text={item.title} {query} /><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}{hiddenUnread ? `, 접힌 같은 공지 ${hiddenUnread}건 읽지 않음` : ''}</span></span>
               <span class="notice-meta"><span>{item.source_name}</span><time datetime={item.published_at}>{archiveDate(item.published_at)}</time>{#if item.category}<span>{item.category}</span>{/if}</span>
-              {#if (analysis || classifications[item.id]) && page !== 'search'}<span class="notice-ai-preview">{#if classifications[item.id]}<span class="ai-tag">분류 · {classifications[item.id].category}{classifications[item.id].low_confidence ? ' · 확신 낮음' : ''}</span>{/if}{#if analysis}{#if classifications[item.id]}{' · '}{/if}<span class="ai-tag">AI 요약</span> {analysis.result.short_summary}{/if}</span>{/if}
+              {#if (analysis || labels[item.id]) && page !== 'search'}<span class="notice-ai-preview">{#if labels[item.id]}<span class="ai-tag">분류 · {labels[item.id].category}{labels[item.id].low_confidence ? ' · 확신 낮음' : ''}</span>{/if}{#if analysis}{#if labels[item.id]}{' · '}{/if}<span class="ai-tag">AI 요약</span> {analysis.result.short_summary}{/if}</span>{/if}
               {#if result.meaning_only?.includes(item.id)}<span class="notice-meaning-note">검색어는 없지만 뜻이 비슷한 공지</span>{/if}
-              {#if duplicates[item.id]?.length}<span class="notice-duplicate-note">같은 공지 {duplicates[item.id].length}건 · {duplicateBoards(item)}</span>{/if}
+              {#if groupedCopies[item.id]?.length}<span class="notice-duplicate-note">같은 공지 {groupedCopies[item.id].length}건 · {duplicateBoards(item)}</span>{/if}
               {#if page === 'search' && item.snippet}<span class="notice-snippet"><Highlighted text={item.snippet} {query} /></span>{/if}
               {#if item.content_status === 'missing_resources'}<span class="notice-resource-warning">일부 첨부 자료 미저장</span>{/if}
             </button>

@@ -171,7 +171,7 @@
           <div class="settings-group">
             <div class="settings-row"><span class="row-label">{notices.display_name}<Hint label={notices.display_name}>{notices.description} 꺼도 보관한 공지와 구독은 그대로 남습니다.</Hint></span><button class="switch" class:on={notices.enabled} role="switch" aria-checked={notices.enabled} aria-label={`${notices.display_name} 사용 설정`} disabled={busy} onclick={() => ontoggleextension(notices.id, !notices.enabled)}><span></span></button></div>
           </div>
-          {#if notices.enabled}<SourceSettings enabled={notices.enabled} />{/if}
+          {#if notices.enabled}<SourceSettings enabled={notices.enabled} extension="sogang_notices" />{/if}
         {/if}
       {:else if step === 2}
         <PersonalizationSettings desktop compact />
