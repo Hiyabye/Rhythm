@@ -61,6 +61,7 @@
   let aiChoice = $state<AiChoice | null>(null);
   let aiBusy = $state(false);
   let aiError = $state('');
+  let removal = $state<string | null>(null);
   let offered = $derived(ai?.catalog.filter((entry) => ['verified', 'available'].includes(entry.compatibility) && entry.kind !== 'embedding') ?? []);
 
   let updaterConfigured = $state(false);
@@ -145,6 +146,11 @@
     return aiCommand('ai_install', { catalogId: entry.id });
   }
 
+  async function remove(id: string) {
+    await aiCommand('ai_remove', { id, confirmed: true });
+    removal = null;
+  }
+
   async function toggleAutoCheck() {
     if (autoCheck === null) return;
     try { autoCheck = await invoke<boolean>('updater_set_auto_check', { enabled: !autoCheck }); }
@@ -204,13 +210,24 @@
             <ul class="model-grid" aria-label="설치할 수 있는 모델">
               {#each offered as entry (entry.id)}
                 {@const model = ai.models.find((row) => row.catalog_id === entry.id) ?? null}
+                {@const external = model?.ownership === 'external'}
                 <li class="model-tile">
                   <div class="model-heading"><h4>{entry.name}</h4>{#if model?.status === 'installed'}<span class="model-check"><Icon name="check" size={13} /><span>설치됨</span></span>{/if}</div>
                   <p class="model-meta">{entry.use_case} · {archiveSize(entry.bytes)}</p>
                   {#if model && ['downloading', 'pending'].includes(model.status)}
                     <label class="ai-progress"><span class="sr-only">{entry.name} 다운로드</span><progress max={model.expected_bytes || 1} value={model.downloaded_bytes}></progress><span>{archiveSize(model.downloaded_bytes)} / {archiveSize(model.expected_bytes ?? 0)}</span></label>
                   {:else if model?.status === 'verifying'}<p class="model-note" role="status">무결성 확인 중</p>{/if}
-                  {#if !model || ['failed', 'cancelled'].includes(model.status)}<div class="model-actions"><button class="button small" disabled={aiBusy || ai.busy} aria-label={`${entry.name} 다운로드 및 설치`} onclick={() => install(entry)}>{model ? '이어받기' : '설치'}</button></div>{/if}
+                  {#if model && removal === model.id}
+                    <div class="model-confirm" role="group" aria-label={`${entry.name} 삭제 확인`}>
+                      <p class="model-note">{external ? '등록된 참조만 해제합니다. 외부 원본 파일은 삭제하지 않습니다.' : '모델 파일을 삭제할까요? 공지와 기존 AI 분석은 유지됩니다.'}</p>
+                      <div class="model-actions"><button class="button secondary small" disabled={aiBusy || ai.busy} onclick={() => remove(model.id)}>확인하고 {external ? '참조 해제' : '삭제'}</button><button class="text-button" onclick={() => removal = null}>취소</button></div>
+                    </div>
+                  {:else if !model || !['downloading', 'pending', 'verifying'].includes(model.status)}
+                    <div class="model-actions">
+                      {#if !model || ['failed', 'cancelled'].includes(model.status)}<button class="button small" disabled={aiBusy || ai.busy} aria-label={`${entry.name} 다운로드 및 설치`} onclick={() => install(entry)}>{model ? '이어받기' : '설치'}</button>{/if}
+                      {#if model}<button class="text-button" disabled={aiBusy || ai.busy} aria-label={`${entry.name} ${external ? '참조 해제' : '삭제'}`} onclick={() => removal = model.id}>{external ? '참조 해제' : '모델 삭제'}</button>{/if}
+                    </div>
+                  {/if}
                 </li>
               {/each}
             </ul>

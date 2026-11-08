@@ -1159,6 +1159,14 @@ button svg {
 .model-info {
   margin-left: auto;
 }
+/* The setup flow confirms a removal inside the tile, in place of its actions. */
+.model-confirm {
+  margin-top: auto;
+  padding-top: 8px;
+}
+.model-confirm .model-actions {
+  padding-top: 6px;
+}
 .ai-progress {
   display: grid;
   gap: 4px;
@@ -1182,6 +1190,13 @@ button svg {
 }
 .ai-confirm .footnote {
   margin-top: 4px;
+}
+/* Inside a model tile the confirmation sits above the tile's selection button. */
+.model-tile .ai-confirm {
+  position: relative;
+  margin-top: 8px;
+  padding: 10px;
+  word-break: keep-all;
 }
 
 /* 개인화: profile on one line, interests as chips. */
