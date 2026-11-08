@@ -1,7 +1,7 @@
 //! Fetching one notice and committing it to the archive.
 use super::*;
 
-impl Controller {
+impl Board<'_> {
     /// Fetches and archives one notice. Returns whether a new document was created.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn article<T: Transport>(
@@ -14,7 +14,7 @@ impl Controller {
         entry: &ListingEntry,
         existing_id: Option<i64>,
         historical: bool,
-        resource_bytes: &mut u64,
+        resource_bytes: &AtomicU64,
     ) -> Result<bool, ArticleError> {
         let validators = with_store(store, |s| s.validators(&definition.id, &entry.external_id))?;
         let url = parser::detail_url(definition, entry)?;
@@ -23,7 +23,7 @@ impl Controller {
             &url,
             validators,
             ARTICLE_LIMIT,
-            &self.cancel,
+            self.cancel,
             policy,
             network::Access::Source,
         )
@@ -32,7 +32,7 @@ impl Controller {
             network::Fetch::NotModified => {
                 let id = existing_id.ok_or("보관되지 않은 원문의 변경 없음 응답을 받았습니다.")?;
                 with_store(store, |s| {
-                    ensure_active(&self.cancel)?;
+                    ensure_active(self.cancel)?;
                     s.checked(&definition.id, &entry.external_id)
                 })?;
                 (id, false)
@@ -90,7 +90,7 @@ impl Controller {
                     // The notice was checked, so this is neither a failure nor a skip.
                     let id = existing_id.expect("kept content belongs to a document");
                     with_store(store, |s| {
-                        ensure_active(&self.cancel)?;
+                        ensure_active(self.cancel)?;
                         s.checked(&definition.id, &entry.external_id)
                     })?;
                     (id, false)
@@ -98,7 +98,7 @@ impl Controller {
                     article.etag = etag;
                     article.last_modified = last_modified;
                     let (id, _) = with_store(store, |s| {
-                        ensure_active(&self.cancel)?;
+                        ensure_active(self.cancel)?;
                         s.upsert_article(&definition.id, &article, historical)
                     })?;
                     (id, existing_id.is_none())

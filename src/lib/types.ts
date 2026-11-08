@@ -344,12 +344,23 @@ export interface ArchiveSummary {
   new_since_sync: number;
   resource_bytes: number;
 }
+/** Boards on different hosts collect at once; `active` lists those collecting now. */
 export interface SyncStatus {
   running: boolean;
-  source_id: string | null;
+  mode: string;
+  message: string;
+  active: ActiveSource[];
+}
+export interface ActiveSource {
+  source_id: string;
   mode: string;
   page: number;
   message: string;
+}
+/** `joined`: a running refresh of every subscribed board also collects this board. */
+export interface SubscribeResult {
+  sources: SourceInfo[];
+  joined: boolean;
 }
 
 /** A restore this launch finalized; mirrors `backup::RestoreOutcome`. */

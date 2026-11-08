@@ -57,17 +57,25 @@ pub async fn archive_subscribe(
     state: State<'_, AppState>,
     id: String,
     subscribed: bool,
-) -> Result<Vec<SourceInfo>, String> {
+) -> Result<SubscribeResult, String> {
     let _lease = state.operation_gate.shared().await?;
     with_store(&state.store, |s| {
         if !s.source_extension_enabled(&id)? {
             return Err("이 정보원의 확장 기능을 먼저 켜 주세요.".into());
         }
         s.subscribe(&id, subscribed)?;
-        if !subscribed {
-            state.archive.cancel();
-        }
-        s.sources()
+        // Under the store lock, as job admission, so a running job and this
+        // choice agree on whether it collects the board.
+        let joined = if subscribed {
+            state.archive.join(s.source(&id)?)
+        } else {
+            state.archive.cancel_source(&id);
+            false
+        };
+        Ok(SubscribeResult {
+            sources: s.sources()?,
+            joined,
+        })
     })
 }
 #[tauri::command]

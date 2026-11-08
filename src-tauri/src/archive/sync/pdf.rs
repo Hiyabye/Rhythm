@@ -9,10 +9,10 @@ const BACKFILL_DOWNLOADS: usize = 10;
 pub(super) struct Download<'a, T> {
     pub(super) transport: &'a T,
     pub(super) policy: &'a Robots,
-    pub(super) total: &'a mut u64,
+    pub(super) total: &'a AtomicU64,
 }
 
-impl Controller {
+impl Board<'_> {
     /// Fills an archived notice's empty body from the text of its viewer PDFs,
     /// re-parsing the stored response so older notices gain the PDF reference.
     /// Missing PDFs are downloaded only with `download`. Returns whether a
@@ -39,7 +39,7 @@ impl Controller {
             return Ok(false);
         }
         let pending = with_store(store, |s| {
-            ensure_active(&self.cancel)?;
+            ensure_active(self.cancel)?;
             s.attach_resources(id, &article.resources)?;
             Ok(s.pending_resources(id)?
                 .iter()
@@ -60,7 +60,7 @@ impl Controller {
         local_pdf_text(store, root, id, &mut article).await?;
         if !article.unsupported_body {
             with_store(store, |s| {
-                ensure_active(&self.cancel)?;
+                ensure_active(self.cancel)?;
                 if !s.fill_body(id, &article)? {
                     s.upsert_article(&source.id, &article, false)?;
                 }
@@ -77,7 +77,7 @@ impl Controller {
         root: &Path,
         transport: &T,
         definition: &SourceDefinition,
-        total: &mut u64,
+        total: &AtomicU64,
     ) -> Result<(), String> {
         if definition.id != "sogang-academic" {
             return Ok(());
@@ -89,18 +89,20 @@ impl Controller {
         let policy = Robots::load(
             transport,
             &parser::list_url(definition, 1)?,
-            &self.cancel,
+            self.cancel,
             network::Access::Source,
         )
         .await?;
         let mut downloads = 0;
         for (id, _) in candidates {
-            active(&self.cancel)?;
-            let download = if downloads < BACKFILL_DOWNLOADS && *total < IMPORT_RESOURCES {
+            active(self.cancel)?;
+            let download = if downloads < BACKFILL_DOWNLOADS
+                && total.load(Ordering::Acquire) < IMPORT_RESOURCES
+            {
                 Some(Download {
                     transport,
                     policy: &policy,
-                    total: &mut *total,
+                    total,
                 })
             } else {
                 None

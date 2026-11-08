@@ -2,7 +2,7 @@
 //! the manual refresh and the skipped-notice and missing-resource retries.
 use super::*;
 
-impl Controller {
+impl Board<'_> {
     /// Runs one board's manual refresh: new notices and recent edits first, then
     /// the unfinished backlog. Each pass persists its own progress, so a failure
     /// or cancellation between them keeps what the first pass saved.
@@ -14,7 +14,7 @@ impl Controller {
         transport: &T,
         current: &mut SourceInfo,
         budget: &Budget,
-        resource_bytes: &mut u64,
+        resource_bytes: &AtomicU64,
     ) -> Result<(), String> {
         self.source(
             store,
@@ -29,7 +29,7 @@ impl Controller {
         if current.history_complete {
             return Ok(());
         }
-        active(&self.cancel)?;
+        active(self.cancel)?;
         self.source(
             store,
             root,
@@ -50,7 +50,7 @@ impl Controller {
         current: &mut SourceInfo,
         mode: &str,
         budget: &Budget,
-        resource_bytes: &mut u64,
+        resource_bytes: &AtomicU64,
     ) -> Result<(), String> {
         if mode == "skipped" {
             let definition = current.definition.clone();
@@ -78,13 +78,13 @@ impl Controller {
         let definition = &current.definition.clone();
         let initial = parser::list_url(definition, first_page)?;
         let policy =
-            Robots::load(transport, &initial, &self.cancel, network::Access::Source).await?;
+            Robots::load(transport, &initial, self.cancel, network::Access::Source).await?;
         let mut seen = HashSet::new();
         let mut page_hashes = HashSet::new();
         let mut page = first_page;
         let mut processed = 0;
         loop {
-            active(&self.cancel)?;
+            active(self.cancel)?;
             if page > 100_000 {
                 persist(
                     store,
@@ -97,7 +97,7 @@ impl Controller {
                 )?;
                 return Ok(());
             }
-            self.update(
+            self.controller.update(
                 Some(definition.id.clone()),
                 mode,
                 page,
@@ -109,7 +109,7 @@ impl Controller {
                 &url,
                 None,
                 ARTICLE_LIMIT,
-                &self.cancel,
+                self.cancel,
                 &policy,
                 network::Access::Source,
             )
@@ -131,7 +131,7 @@ impl Controller {
                 }
             };
             let pinned = listing.entries.iter().filter(|entry| entry.pinned).count();
-            self.update(
+            self.controller.update(
                 Some(definition.id.clone()),
                 mode,
                 page,
@@ -154,7 +154,7 @@ impl Controller {
             let mut known_regular_frontier = false;
             let mut all_regular_known = true;
             for entry in listing.entries {
-                active(&self.cancel)?;
+                active(self.cancel)?;
                 let existing_id =
                     with_store(store, |s| s.document_id(&definition.id, &entry.external_id))?;
                 let exists = existing_id.is_some();
@@ -179,7 +179,7 @@ impl Controller {
                     if with_store(store, |s| {
                         s.listing_unchanged(&definition.id, &entry.external_id, modified_at)
                     })? {
-                        active(&self.cancel)?;
+                        active(self.cancel)?;
                         self.pending_resources(store, root, transport, &policy, id, resource_bytes)
                             .await?;
                         continue;
@@ -222,7 +222,7 @@ impl Controller {
                         // Retrying the same response cannot succeed, so this notice
                         // must not hold the page checkpoint; it stays listed instead.
                         with_store(store, |s| {
-                            ensure_active(&self.cancel)?;
+                            ensure_active(self.cancel)?;
                             s.record_skipped(
                                 &definition.id,
                                 &entry,
@@ -233,7 +233,7 @@ impl Controller {
                         })?;
                     }
                     Err(ArticleError::Transient(error)) => {
-                        active(&self.cancel)?;
+                        active(self.cancel)?;
                         current.failed += 1;
                         // The server asked to slow down; the rest of the page
                         // would only repeat the refusal.
@@ -293,7 +293,7 @@ impl Controller {
         root: &Path,
         transport: &T,
         definition: &SourceDefinition,
-        resource_bytes: &mut u64,
+        resource_bytes: &AtomicU64,
     ) -> Result<(), String> {
         let documents = with_store(store, |s| s.documents_missing_resources(&definition.id))?;
         if documents.is_empty() {
@@ -302,16 +302,16 @@ impl Controller {
         let policy = Robots::load(
             transport,
             &parser::list_url(definition, 1)?,
-            &self.cancel,
+            self.cancel,
             network::Access::Source,
         )
         .await?;
         for (index, id) in documents.iter().enumerate() {
-            active(&self.cancel)?;
-            if *resource_bytes >= IMPORT_RESOURCES {
+            active(self.cancel)?;
+            if resource_bytes.load(Ordering::Acquire) >= IMPORT_RESOURCES {
                 break;
             }
-            self.update(
+            self.controller.update(
                 Some(definition.id.clone()),
                 "resources",
                 0,
@@ -334,7 +334,7 @@ impl Controller {
         root: &Path,
         transport: &T,
         definition: &SourceDefinition,
-        resource_bytes: &mut u64,
+        resource_bytes: &AtomicU64,
     ) -> Result<(), String> {
         let entries = with_store(store, |s| s.skipped_entries(&definition.id))?;
         if entries.is_empty() {
@@ -343,14 +343,14 @@ impl Controller {
         let policy = Robots::load(
             transport,
             &parser::list_url(definition, 1)?,
-            &self.cancel,
+            self.cancel,
             network::Access::Source,
         )
         .await?;
         let mut errors = Vec::new();
         for (index, (entry, historical)) in entries.iter().enumerate() {
-            active(&self.cancel)?;
-            self.update(
+            active(self.cancel)?;
+            self.controller.update(
                 Some(definition.id.clone()),
                 "skipped",
                 0,
@@ -382,7 +382,7 @@ impl Controller {
                     response_sha256,
                 }) => {
                     with_store(store, |s| {
-                        ensure_active(&self.cancel)?;
+                        ensure_active(self.cancel)?;
                         s.record_skipped(
                             &definition.id,
                             entry,
@@ -393,7 +393,7 @@ impl Controller {
                     })?;
                 }
                 Err(ArticleError::Transient(error)) => {
-                    active(&self.cancel)?;
+                    active(self.cancel)?;
                     if error == network::RATE_LIMITED {
                         return Err(error);
                     }

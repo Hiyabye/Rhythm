@@ -1,7 +1,7 @@
 //! Downloading, verifying and recording notice attachments and images.
 use super::*;
 
-impl Controller {
+impl Board<'_> {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn pending_resources<T: Transport>(
         &self,
@@ -10,7 +10,7 @@ impl Controller {
         transport: &T,
         policy: &Robots,
         id: i64,
-        total: &mut u64,
+        total: &AtomicU64,
     ) -> Result<(), String> {
         for resource in with_store(store, |s| s.pending_resources(id))? {
             // A persisted resource failure is nonfatal to article/page completion.
@@ -19,9 +19,9 @@ impl Controller {
                 store,
                 root,
                 transport,
-                &self.cancel,
+                self.cancel,
                 policy,
-                &self.image_robots,
+                &self.controller.image_robots,
                 &resource,
                 total,
             )
@@ -91,7 +91,7 @@ pub(super) async fn download_resource<T: Transport>(
     policy: &Robots,
     image_robots: &RobotsCache,
     resource: &ResourceRecord,
-    total: &mut u64,
+    total: &AtomicU64,
 ) -> Result<DownloadOutcome, String> {
     active(cancel)?;
     // Set when the remaining job budget, not the per-file cap, bounds this
@@ -111,7 +111,7 @@ pub(super) async fn download_resource<T: Transport>(
         if resource.kind != "image" && !supported_attachment(&resource.filename) {
             return Err(UNSUPPORTED_ATTACHMENT.into());
         }
-        let limit = resource_limit(resource, *total, &mut budget_bound)?;
+        let limit = resource_limit(resource, total.load(Ordering::Acquire), &mut budget_bound)?;
         let other;
         let policy = if url.origin().ascii_serialization() == policy.origin {
             policy
@@ -175,12 +175,14 @@ pub(in crate::archive) async fn install_resource(
     bytes: Vec<u8>,
     mime: Option<String>,
     limit: usize,
-    total: &mut u64,
+    total: &AtomicU64,
 ) -> Result<(), String> {
     // Charge received bytes even when format validation or disk writes fail.
     // The transport independently caps the next response to remaining budget.
-    *total = total.saturating_add(bytes.len() as u64);
-    if bytes.len() > limit || *total > IMPORT_RESOURCES {
+    // Boards on other hosts charge the same total concurrently, so only bytes
+    // that still fit after this charge are installed.
+    let charged = total.fetch_add(bytes.len() as u64, Ordering::AcqRel) + bytes.len() as u64;
+    if bytes.len() > limit || charged > IMPORT_RESOURCES {
         return Err(BUDGET_REACHED.into());
     }
     let media = if resource.kind == "image" {

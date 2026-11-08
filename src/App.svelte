@@ -353,7 +353,7 @@
       {/each}
       <div class="sidebar-bottom">
         <p class="sync-line" role="status">
-          {#if syncStatus?.running}<Icon name="refresh" size={14} /><span>{syncStatus.message}{#if syncStatus.page > 0} · {syncStatus.page}쪽{/if}</span>
+          {#if syncStatus?.running}<Icon name="refresh" size={14} /><span>{syncStatus.message}{#if syncStatus.active.length === 1 && syncStatus.active[0].page > 0} · {syncStatus.active[0].page}쪽{:else if syncStatus.active.length > 1} · 게시판 {syncStatus.active.length}개{/if}</span>
           {:else if lastChecked}<span>마지막 확인 {checkedLabel(lastChecked)}</span>
           {:else if boards.length}<span>아직 가져온 적 없음</span>{/if}
         </p>

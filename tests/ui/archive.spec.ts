@@ -300,6 +300,34 @@ test('subscriptions have no automatic collection, protect refreshing state, show
   await expect(page.locator('.collect-status')).toContainText('첨부 자료 모두 내려받는 중');
 });
 
+test('boards can be switched while a refresh runs, and several boards show progress at once', async ({ page }) => {
+  await mockDesktop(page, { sourceList: [
+    { id: 'computing-updates', name: '소식', organization: '소프트웨어융합대학', supported: true, subscribed: true },
+    { id: 'computing-career', name: '취업', organization: '소프트웨어융합대학', supported: true },
+    { id: 'sogang-academic', name: '학부 학사공지', organization: '서강대학교', supported: true, family: 'main' },
+  ] });
+  await page.goto('/');
+  await openSettings(page, '게시판');
+  await page.getByRole('button', { name: '새로고침', exact: true }).click();
+  await expect(page.getByRole('button', { name: '가져오기 중단', exact: true })).toBeVisible();
+  // Starting another job waits, but subscriptions stay open.
+  await expect(page.getByRole('button', { name: '새로고침', exact: true })).toBeDisabled();
+  const main = page.getByRole('switch', { name: '서강대학교 학부 학사공지 구독', exact: true });
+  await expect(main).toBeEnabled();
+  await main.click();
+  await expect(main).toHaveAttribute('aria-checked', 'true');
+  await expect(page.locator('.source-manager .archive-feedback')).toContainText('진행 중인 새로고침에서 함께 가져옵니다');
+  await page.evaluate(() => (window as any).__fixture.syncBoards(['computing-updates', 'sogang-academic']));
+  await expect(page.locator('.collect-status')).toContainText('게시판 2개를 동시에 가져오는 중');
+  await expect(page.locator('.board-state.spinning')).toHaveCount(2);
+  // Unsubscribing a running board stops only that board.
+  const updates = page.getByRole('switch', { name: '소프트웨어융합대학 소식 구독', exact: true });
+  await updates.click();
+  await expect(updates).toHaveAttribute('aria-checked', 'false');
+  await expect(page.locator('.source-manager .archive-feedback')).toContainText('이 게시판의 가져오기만 멈춥니다');
+  expect(await callCount(page, 'archive_cancel')).toBe(0);
+});
+
 test('skipped notices are listed per board with their originals and an explicit retry', async ({ page }) => {
   const parser = '학교 페이지 형식이 예상과 다릅니다. 기존 보관 자료는 유지됩니다.';
   await mockDesktop(page, { sourceList: [{ id: 'computing-career', name: '취업', organization: '소프트웨어융합대학', supported: true, subscribed: true,
