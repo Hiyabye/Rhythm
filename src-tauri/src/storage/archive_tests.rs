@@ -256,6 +256,17 @@ fn revisions_deduplicate_content_but_preserve_changes_and_user_state() {
     assert!(store.document(id, Some(other_revision)).is_err());
     assert_eq!(store.archive_summary().unwrap().documents, 2);
     assert_eq!(store.archive_summary().unwrap().new_since_sync, 1);
+    // Each board counts only its own unread notices: "one" holds the read one.
+    let unread = |id: &str| {
+        store
+            .sources()
+            .unwrap()
+            .into_iter()
+            .find(|source| source.definition.id == id)
+            .unwrap()
+            .unread
+    };
+    assert_eq!((unread("one"), unread("two")), (0, 1));
     drop(store);
     let reopened = Store::open(&directory.path().join("db")).unwrap();
     let current = reopened.document(id, None).unwrap();

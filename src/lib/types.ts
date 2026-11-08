@@ -167,6 +167,8 @@ export interface SourceInfo {
   skipped: SkippedArticle[];
   /** The extension that owns this source, or null when none maps it. */
   extension: string | null;
+  /** Archived notices of this source not yet read. */
+  unread: number;
 }
 export interface SkippedArticle {
   external_id: string;

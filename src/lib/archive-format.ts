@@ -1,3 +1,5 @@
+import type { CybercampusTask } from './types';
+
 export function archiveError(reason: unknown): string {
   if (typeof reason !== 'string') return '작업을 완료하지 못했습니다. 다시 시도해 주세요.';
   if (/database or disk is full|no space left on device/i.test(reason)) {
@@ -36,6 +38,11 @@ export function archiveDay(value: string | null): string | null {
 /** eClass shows Korean local time without an offset (`YYYY-MM-DDTHH:MM` or `YYYY-MM-DD`); read it as KST on any device. */
 export function kstInstant(value: string): number {
   return new Date(value.length === 10 ? `${value}T23:59:59+09:00` : `${value}:00+09:00`).getTime();
+}
+
+/** Still to do: unsubmitted, and pending or not past its (late) deadline. The 과제·마감 page and its sidebar count share this. */
+export function openTask(task: CybercampusTask, now: number): boolean {
+  return !task.submitted_at && (task.pending || (task.due_at !== null && kstInstant(task.late_due_at ?? task.due_at) >= now));
 }
 
 export function localDayKey(date: Date): string {

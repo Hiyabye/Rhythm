@@ -4,7 +4,7 @@ use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, Row};
 use sha2::{Digest, Sha256};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
-const SOURCE_COLUMNS: &str = "id,name,organization,description,url,family,supported,subscribed,last_attempt,last_success,last_error,next_page,history_complete,status,discovered,archived,failed,(SELECT COUNT(*) FROM skipped_articles k WHERE k.source_id=sources.id),(SELECT extension_id FROM source_extensions se WHERE se.source_id=sources.id)";
+const SOURCE_COLUMNS: &str = "id,name,organization,description,url,family,supported,subscribed,last_attempt,last_success,last_error,next_page,history_complete,status,discovered,archived,failed,(SELECT COUNT(*) FROM skipped_articles k WHERE k.source_id=sources.id),(SELECT extension_id FROM source_extensions se WHERE se.source_id=sources.id),(SELECT COUNT(*) FROM documents d LEFT JOIN document_state u ON u.document_id=d.id WHERE d.source_id=sources.id AND COALESCE(u.is_read,0)=0)";
 macro_rules! item_columns {
     ($snippet:literal) => {
         concat!("d.id,d.source_id,s.name,d.title,d.author,d.category,d.published_at,d.collected_at,COALESCE(u.is_read,0),COALESCE(u.saved,0),d.historical,", $snippet, ",CASE WHEN EXISTS(SELECT 1 FROM resources a WHERE a.document_id=d.id AND a.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id) AND a.status<>'downloaded') THEN 'missing_resources' ELSE 'archived' END")
@@ -44,6 +44,7 @@ fn source_row(row: &Row<'_>) -> rusqlite::Result<SourceInfo> {
         skipped_count: row.get::<_, i64>(17)? as u64,
         skipped: Vec::new(),
         extension: row.get(18)?,
+        unread: row.get::<_, i64>(19)? as u64,
     })
 }
 /// Bounds the notices listed per source; the count covers all of them.

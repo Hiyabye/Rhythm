@@ -16,8 +16,8 @@
   import { contributed, enabledExtensions, navigation, settingsPanes, sourceExtensions, type SettingsPane } from './lib/extensions';
   import Hint from './lib/Hint.svelte';
   import './lib/ai.css';
-  import { archiveError as message, archiveDay, localDayKey } from './lib/archive-format';
-  import type { ArchiveSummary, EnergyProfile, Settings, Snapshot, SourceInfo, SyncStatus, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo } from './lib/types';
+  import { archiveError as message, archiveDay, localDayKey, openTask } from './lib/archive-format';
+  import type { ArchiveSummary, EnergyProfile, Settings, Snapshot, SourceInfo, SyncStatus, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusTask } from './lib/types';
 
   const themes: { id: Theme; label: string; icon: string }[] = [
     { id: 'light', label: '라이트', icon: 'today' },
@@ -87,6 +87,26 @@
     if (!panes.some((item) => item.id === settingsPane)) settingsPane = 'extensions';
   });
   let scopedBoard = $derived(page === 'inbox' && activeSource ? sources.find((item) => item.id === activeSource) ?? null : null);
+  // Only the open-task count is shown; the 과제·마감 page loads its own list.
+  let tasks = $state<CybercampusTask[]>([]);
+  let now = $state(Date.now());
+  let openTasks = $derived(tasks.filter((task) => openTask(task, now)).length);
+  // Each context refresh (sync finished, reader closed) and each page change reloads them, like the archive counts.
+  $effect(() => {
+    void sources; void page;
+    if (!desktop || !enabled.has('cybercampus')) { tasks = []; return; }
+    let current = true;
+    void invoke<CybercampusTask[]>('cybercampus_tasks').then((value) => { if (current) tasks = value; }).catch(() => { /* The 과제·마감 page reports load failures. */ });
+    return () => { current = false; };
+  });
+  function navCount(id: string): { count: number; label: string } | null {
+    const entry = id === 'today' ? summary && { count: summary.new_since_sync, label: '최근 동기화로 새 공지' }
+      : id === 'inbox' ? summary && { count: summary.unread, label: '읽지 않은 공지' }
+      : id === 'search' ? summary && { count: summary.documents, label: '보관된 공지' }
+      : id === 'bookmark' ? summary && { count: summary.saved, label: '저장한 공지' }
+      : id === 'tasks' ? { count: openTasks, label: '남은 과제' } : null;
+    return entry?.count ? entry : null;
+  }
   let lastChecked = $derived(boards.reduce<string | null>((latest, item) => !item.last_success || (latest && latest >= item.last_success) ? latest : item.last_success, null));
 
   $effect(() => {
@@ -130,6 +150,7 @@
     } else loading = false;
     const healthTimer = window.setInterval(() => {
       dayKey = localDayKey(new Date());
+      now = Date.now();
       if (desktop && snapshot && page === 'settings' && !busy) {
         void invoke<WorkerStatus>('worker_status').then((status) => {
           if (snapshot) snapshot.worker = status;
@@ -307,10 +328,10 @@
     <nav aria-label="기본 탐색">
       <ul class="source-list">
         {#each primaryNavigation as item}
-          {@const count = item.id === 'inbox' ? summary?.unread : item.id === 'bookmark' ? summary?.saved : undefined}
+          {@const count = navCount(item.id)}
           <li><button class="source-item" class:active={page === item.id && !activeSource} aria-label={item.label} aria-current={page === item.id && !activeSource ? 'page' : undefined} aria-describedby={count ? `nav-count-${item.id}` : undefined} onclick={() => navigate(item.id)}>
             <Icon name={item.id} size={17} /><span class="source-label">{item.label}</span>
-            {#if count}<span class="count" aria-hidden="true">{count.toLocaleString('ko-KR')}</span><span class="sr-only" id={`nav-count-${item.id}`}>{item.id === 'inbox' ? `읽지 않은 공지 ${count}개` : `저장한 공지 ${count}개`}</span>{/if}
+            {#if count}<span class="count" aria-hidden="true">{count.count.toLocaleString('ko-KR')}</span><span class="sr-only" id={`nav-count-${item.id}`}>{count.label} {count.count}개</span>{/if}
           </button></li>
         {/each}
       </ul>
@@ -320,8 +341,9 @@
           {#each group.organizations as [organization, members] (organization)}
             <li class="board-organization" aria-hidden="true">{organization}</li>
             {#each members as board (board.id)}
-              <li><button class="source-item board" class:active={page === 'inbox' && activeSource === board.id} aria-current={page === 'inbox' && activeSource === board.id ? 'page' : undefined} aria-label={`${organizationLabel(board.organization)} ${board.name}`} onclick={() => navigate('inbox', board.id)}>
+              <li><button class="source-item board" class:active={page === 'inbox' && activeSource === board.id} aria-current={page === 'inbox' && activeSource === board.id ? 'page' : undefined} aria-label={`${organizationLabel(board.organization)} ${board.name}`} aria-describedby={board.unread ? `board-count-${board.id}` : undefined} onclick={() => navigate('inbox', board.id)}>
                 <span class={`board-swatch family-${board.family}`} aria-hidden="true"></span><span class="source-label">{board.name}</span>
+                {#if board.unread}<span class="count" aria-hidden="true">{board.unread.toLocaleString('ko-KR')}</span><span class="sr-only" id={`board-count-${board.id}`}>읽지 않은 공지 {board.unread}개</span>{/if}
               </button></li>
             {/each}
           {:else}
