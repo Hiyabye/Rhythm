@@ -63,6 +63,23 @@ test('deadlines list what is due first and fold submitted or past items', async 
   await expect(page.getByRole('list', { name: '제출했거나 마감이 지난 항목' })).toContainText('정상제출');
 });
 
+test('D-day counts calendar days and rolls over at midnight without refetching', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-10-24T22:00:00+09:00') });
+  await mockDesktop(page, { sourceList: [{ ...board, subscribed: true }], cybercampusId: '20990001', cybercampusTasks: [
+    task({ item_id: '2', title: '실습 과제 2', due_at: '2026-10-27T23:59', pending: true }),
+    task({ item_id: '3', title: '실습 과제 3', due_at: '2026-10-26T01:00', pending: true }),
+  ] });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name: '과제·마감' }).click();
+  const due = page.getByRole('list', { name: '해야 할 일' }).getByRole('listitem');
+  await expect(due.nth(0)).toContainText('D-2');
+  await expect(due.nth(1)).toContainText('D-3');
+  // Past midnight KST the count drops by one; the page reads only the clock.
+  await page.clock.runFor('02:01:00');
+  await expect(due.nth(0)).toContainText('D-1');
+  await expect(due.nth(1)).toContainText('D-2');
+});
+
 test('the deadline page appears only with the Cybercampus board subscribed', async ({ page }) => {
   await mockDesktop(page, { sourceList: [{ ...board, subscribed: false }] });
   await page.goto('/');
