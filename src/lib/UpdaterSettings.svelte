@@ -101,7 +101,7 @@
 <div id="about">
   <h3 class="settings-group-title" id="about-title" tabindex="-1">정보</h3>
   <div class="settings-group">
-    <div class="settings-row about-row"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="row-label">Rhythm<span class="row-detail">버전 <span>1.6.0</span> · MIT 라이선스 · github.com/Hiyabye/Rhythm</span></span></div>
+    <div class="settings-row about-row"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="row-label">Rhythm<span class="row-detail">버전 <span>1.6.1</span> · MIT 라이선스 · github.com/Hiyabye/Rhythm</span></span></div>
     {#if desktop && configured}
       <div class="settings-row"><span class="row-label">앱 업데이트<Hint label="앱 업데이트">GitHub 안정 채널에서 받은 업데이트의 서명과 기기 아키텍처를 확인한 뒤, 설치하고 다시 시작할지 묻습니다.</Hint>{#if checked && !update}<span class="row-detail" role="status">최신 버전입니다.</span>{/if}</span><button class="button secondary small" disabled={checking || installing} onclick={check}>{checking ? '확인 중…' : '업데이트 확인'}</button></div>
       <div class="settings-row"><span class="row-label">자동으로 업데이트 확인<Hint label="자동으로 업데이트 확인">앱이 실행 중일 때 하루에 한 번 GitHub에서 새 버전을 확인해 알려 드립니다. 내려받기와 설치는 직접 고를 때만 진행합니다.</Hint></span><button class="switch" class:on={autoCheck === true} role="switch" aria-label="자동으로 업데이트 확인" aria-checked={autoCheck === true} disabled={autoCheck === null || savingAutoCheck} onclick={toggleAutoCheck}><span></span></button></div>
