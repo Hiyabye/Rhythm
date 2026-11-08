@@ -1,6 +1,6 @@
 # Roadmap
 
-Rhythm stays local-first and Korean-first. The current release is **v1.6.0**. Support targets macOS Apple Silicon and Windows 11 x64; Linux and Intel Macs are not supported. Planned work is tracked in [GitHub issues](https://github.com/Hiyabye/Rhythm/issues); this page records the current state and what has actually been verified.
+Rhythm stays local-first and Korean-first. The current release is **v1.6.1**. Support targets macOS Apple Silicon and Windows 11 x64; Linux and Intel Macs are not supported. Planned work is tracked in [GitHub issues](https://github.com/Hiyabye/Rhythm/issues); this page records the current state and what has actually been verified.
 
 ## Current state
 
