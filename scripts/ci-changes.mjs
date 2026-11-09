@@ -20,7 +20,9 @@ const rules = {
   // Release builds run on main only; a pull request never builds packages.
   packaging: [/^scripts\//, /^src-tauri\/(tauri[^/]*\.conf\.json|build\.rs|Cargo\.toml)$/,
     /^src-tauri\/(icons|capabilities)\//, /^Cargo\.(toml|lock)$/,
-    /^package(-lock)?\.json$/],
+    /^package(-lock)?\.json$/,
+    // Bundled as an app resource.
+    /^LICENSE$/],
 };
 
 // Markdown under src-tauri/ or scripts/ is documentation; no Rust

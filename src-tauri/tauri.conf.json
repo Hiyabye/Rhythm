@@ -33,7 +33,9 @@
       "minimumSystemVersion": "11.0"
     },
     "resources": {
+      "../LICENSE": "licenses/Rhythm-GPL-3.0.txt",
       "../assets/licenses/Pretendard-OFL.txt": "licenses/Pretendard-OFL.txt",
+      "../assets/licenses/eclass-cli-MIT.txt": "licenses/eclass-cli-MIT.txt",
       "binaries/llama/": "llama/"
     },
     "icon": [
