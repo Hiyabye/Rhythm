@@ -2,9 +2,11 @@
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import type { CalendarTodo, CybercampusTask, ReferenceDate, TodoInput } from './types';
-  import { archiveError, localDayKey } from './archive-format';
+  import { archiveError, localDayKey, wallTime } from './archive-format';
   import { confirmAction } from './confirm';
+  import { clock } from './clock.svelte';
   import Icon from './Icon.svelte';
+  import TimeField from './TimeField.svelte';
   import { fade, slide } from './motion';
 
   let { desktop, selected = $bindable(), tasks, dates, ontasks, onopen }: {
@@ -20,8 +22,6 @@
 
   const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
   const cellLimit = 3;
-  const hours = Array.from({ length: 12 }, (_, index) => index + 1);
-  const minutes = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, '0'));
   let today = $state(localDayKey(new Date()));
   let month = $derived(selected.slice(0, 7));
   let todos = $state<CalendarTodo[]>([]);
@@ -31,10 +31,6 @@
   let busy = $state(false);
   let editing = $state<number | null>(null);
   let draft = $state<TodoInput>({ title: '', day: '', time: null, memo: '' });
-  // The time is edited as 오전/오후 plus a 12-hour clock; an empty hour means no time.
-  let meridiem = $state<'am' | 'pm'>('am');
-  let hour = $state('');
-  let minute = $state('00');
   let grid = $state<HTMLElement>();
   let loadRequest = 0;
   let active = true;
@@ -139,26 +135,13 @@
     }
   }
 
-  function setTime(time: string | null) {
-    const [hours, minutes] = (time ?? '').split(':').map(Number);
-    if (!time) { hour = ''; minute = '00'; return; }
-    meridiem = hours < 12 ? 'am' : 'pm';
-    hour = String(hours % 12 || 12);
-    minute = String(minutes).padStart(2, '0');
-  }
-  function draftTime(): string | null {
-    if (!hour) return null;
-    return `${String(Number(hour) % 12 + (meridiem === 'pm' ? 12 : 0)).padStart(2, '0')}:${minute}`;
-  }
   function startAdd() {
     editing = 0;
     draft = { title: '', day: selected, time: null, memo: '' };
-    setTime(null);
   }
   function startEdit(todo: CalendarTodo) {
     editing = todo.id;
     draft = { title: todo.title, day: todo.day, time: todo.time, memo: todo.memo };
-    setTime(todo.time);
   }
   async function submit(event: SubmitEvent) {
     event.preventDefault();
@@ -166,7 +149,7 @@
     busy = true;
     error = '';
     feedback = '';
-    const todo = { ...draft, time: draftTime() };
+    const todo = { ...draft };
     try {
       if (editing) await invoke<CalendarTodo>('calendar_update_todo', { id: editing, todo });
       else await invoke<CalendarTodo>('calendar_create_todo', { todo });
@@ -220,14 +203,7 @@
     <label class="todo-field todo-title-field"><span class="field-label">제목</span><input bind:value={draft.title} maxlength="200" required placeholder="예: 장학금 서류 내기" /></label>
     <div class="todo-row">
       {#if editing}<label class="todo-field"><span class="field-label">날짜</span><input type="date" bind:value={draft.day} required /></label>{/if}
-      <div class="todo-field" role="group" aria-labelledby="todo-time-label">
-        <span class="field-label" id="todo-time-label">시간 (선택)</span>
-        <div class="todo-time">
-          <div class="segmented" role="group" aria-label="오전 또는 오후">{#each [['am', '오전'], ['pm', '오후']] as [value, text]}<button type="button" class:selected={meridiem === value} aria-pressed={meridiem === value} onclick={() => meridiem = value as 'am' | 'pm'}>{text}</button>{/each}</div>
-          <select bind:value={hour} aria-label="시"><option value="">시간 없음</option>{#each hours as value}<option value={String(value)}>{value}시</option>{/each}</select>
-          <select bind:value={minute} aria-label="분" disabled={!hour}>{#each minutes as value}<option {value}>{value}분</option>{/each}</select>
-        </div>
-      </div>
+      <div class="todo-field"><span class="field-label" aria-hidden="true">시간 (선택)</span><TimeField value={draft.time} label="시간 (선택)" optional onchange={(time) => draft.time = time} /></div>
     </div>
     <label class="todo-field"><span class="field-label">메모 (선택)</span><textarea bind:value={draft.memo} maxlength="2000" rows="2"></textarea></label>
     <div class="todo-actions">
@@ -289,7 +265,7 @@
       {#each selectedItems.tasks as task (`${task.course_key}-${task.category}-${task.item_id}`)}
         <li><button class="event event-task" onclick={ontasks}>
           <span class="event-bar" aria-hidden="true"></span>
-          <span class="event-title"><span class="ai-mark task-mark">마감{task.due_at!.length > 10 ? ` ${task.due_at!.slice(11, 16)}` : ''}</span> {task.title}</span>
+          <span class="event-title"><span class="ai-mark task-mark">마감{task.due_at!.length > 10 ? ` ${wallTime(task.due_at!.slice(11, 16), clock.format)}` : ''}</span> {task.title}</span>
           <span class="event-meta">{task.course_name} · 과제·마감에서 보기</span>
         </button></li>
       {/each}
@@ -299,7 +275,7 @@
           {:else}
             <label class="todo-check"><input type="checkbox" checked={todo.done} disabled={busy || !desktop} onchange={() => void toggle(todo)} /><span class="sr-only">{todo.done ? '완료함' : '완료 표시'}</span></label>
             <div class="todo-body">
-              <span class="todo-title">{#if todo.time}<span class="ai-mark todo-mark">{todo.time}</span>{' '}{/if}{todo.title}</span>
+              <span class="todo-title">{#if todo.time}<span class="ai-mark todo-mark">{wallTime(todo.time, clock.format)}</span>{' '}{/if}{todo.title}</span>
               {#if todo.memo}<span class="todo-memo">{todo.memo}</span>{/if}
             </div>
             <div class="todo-buttons">
@@ -364,8 +340,6 @@
   .todo-row { display: flex; gap: 8px; flex-wrap: wrap; }
   .todo-field .field-label { margin-bottom: 4px; color: var(--secondary); }
   .todo-field input { width: 100%; min-width: 0; font: inherit; font-size: 13px; color: var(--text); background: var(--field); border: 1px solid var(--line-strong); border-radius: 6px; padding: 4px 8px; }
-  .todo-time { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  .todo-time select { font: inherit; font-size: 13px; color: var(--text); background: var(--field); border: 1px solid var(--line-strong); border-radius: 6px; padding: 3px 6px; }
   .todo-field textarea { min-height: 52px; padding: 6px 8px; }
   .todo-actions { display: flex; justify-content: flex-end; gap: 6px; }
   @media (max-width: 1000px) {

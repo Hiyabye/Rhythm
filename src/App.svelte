@@ -18,8 +18,9 @@
   import Hint from './lib/Hint.svelte';
   import { fade, fly, slide } from './lib/motion';
   import './lib/ai.css';
-  import { archiveError as message, archiveDay, localDayKey, openTask } from './lib/archive-format';
-  import type { ArchiveSummary, EnergyProfile, Settings, Snapshot, SourceInfo, SyncStatus, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusTask } from './lib/types';
+  import { archiveError as message, archiveDay, localDayKey, openTask, timeOptions } from './lib/archive-format';
+  import { clock } from './lib/clock.svelte';
+  import type { ArchiveSummary, ClockFormat, EnergyProfile, Settings, Snapshot, SourceInfo, SyncStatus, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusTask } from './lib/types';
 
   const themes: { id: Theme; label: string; icon: string }[] = [
     { id: 'light', label: '라이트', icon: 'today' },
@@ -30,6 +31,10 @@
     { id: 'eco', label: '절전' },
     { id: 'balanced', label: '균형' },
     { id: 'performance', label: '성능' },
+  ];
+  const clockFormats: { id: ClockFormat; label: string }[] = [
+    { id: '12h', label: '12시간' },
+    { id: '24h', label: '24시간' },
   ];
   let page = $state('today');
   let snapshot = $state<Snapshot | null>(null);
@@ -200,6 +205,8 @@
     void openProactiveDocument(payload.document_id, payload.revision_id, payload.event_id, payload.attempt_count, eventIds);
   }
 
+  $effect(() => { if (snapshot) clock.format = snapshot.settings.clock_format; });
+
   async function load() {
     loading = true;
     error = '';
@@ -312,7 +319,7 @@
     if (!day) return value;
     if (day !== localDayKey(new Date())) return `${Number(day.slice(5, 7))}월 ${Number(day.slice(8, 10))}일`;
     const time = new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value) ? `${value.replace(' ', 'T')}Z` : value);
-    return Number.isNaN(time.getTime()) ? '오늘' : `오늘 ${new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false }).format(time)}`;
+    return Number.isNaN(time.getTime()) ? '오늘' : `오늘 ${new Intl.DateTimeFormat('ko-KR', timeOptions(clock.format)).format(time)}`;
   }
 
   function storageSize(bytes: number) {
@@ -391,6 +398,7 @@
           {#if settingsPane === 'general'}
             <div class="settings-group">
               <div class="settings-row"><span class="row-label">화면 테마</span><div class="segmented" role="group" aria-label="화면 테마">{#each themes as option}<button disabled={!snapshot || busy} class:selected={theme === option.id} aria-pressed={theme === option.id} onclick={() => save({ theme: option.id })}><Icon name={option.icon} size={15} />{option.label}</button>{/each}</div></div>
+              <div class="settings-row"><span class="row-label">시간 표시<span class="row-detail">{clock.format === '12h' ? '오후 9:30' : '21:30'}</span></span><div class="segmented" role="group" aria-label="시간 표시">{#each clockFormats as option}<button disabled={!snapshot || busy} class:selected={clock.format === option.id} aria-pressed={clock.format === option.id} onclick={() => save({ clock_format: option.id })}>{option.label}</button>{/each}</div></div>
               <div class="settings-row"><span class="row-label">전원 모드<Hint label="전원 모드">AI 자동 분석과 자동 동기화 간격에 적용됩니다. 절전은 자동 분석을 하지 않고 60분마다, 균형은 30분, 성능은 15분마다 확인합니다. AI는 한 번에 한 공지만 분석합니다.</Hint></span><div class="segmented" role="group" aria-label="전원 모드">{#each energyProfiles as option}<button disabled={!snapshot || busy} class:selected={snapshot?.settings.energy_profile === option.id} aria-pressed={snapshot?.settings.energy_profile === option.id} onclick={() => save({ energy_profile: option.id })}>{option.label}</button>{/each}</div></div>
             </div>
             <div class="settings-group">

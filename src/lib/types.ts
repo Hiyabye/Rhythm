@@ -1,5 +1,6 @@
 export type Theme = 'system' | 'light' | 'dark';
 export type EnergyProfile = 'eco' | 'balanced' | 'performance';
+export type ClockFormat = '12h' | '24h';
 export interface StudiumRoom { id: string; name: string; label: string; capacity: number }
 export interface StudiumPreferences { room_ids: string[]; view_room: string }
 export interface StudiumSeatData {
@@ -66,6 +67,7 @@ export interface Settings {
   theme: Theme;
   energy_profile: EnergyProfile;
   interests: string;
+  clock_format: ClockFormat;
 }
 export type NotificationSensitivity = 'important' | 'interested' | 'all';
 export interface QuietHours { enabled: boolean; start: string; end: string }

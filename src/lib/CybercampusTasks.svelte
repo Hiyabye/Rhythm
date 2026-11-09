@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import type { CybercampusTask } from './types';
-  import { archiveError, kstInstant as instant, openTask } from './archive-format';
+  import { archiveError, kstInstant as instant, openTask, wallTime } from './archive-format';
+  import { clock } from './clock.svelte';
   import Icon from './Icon.svelte';
   import { fade } from './motion';
 
@@ -52,7 +53,7 @@
   function when(value: string) {
     const [year, month, day] = value.slice(0, 10).split('-').map(Number);
     const weekday = weekdays[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
-    return `${month}월 ${day}일 (${weekday})${value.length > 10 ? ` ${value.slice(11, 16)}` : ''}`;
+    return `${month}월 ${day}일 (${weekday})${value.length > 10 ? ` ${wallTime(value.slice(11, 16), clock.format)}` : ''}`;
   }
   function remaining(value: string) {
     const left = instant(value) - now;

@@ -1,4 +1,4 @@
-import type { CybercampusTask } from './types';
+import type { ClockFormat, CybercampusTask } from './types';
 
 export function archiveError(reason: unknown): string {
   if (typeof reason !== 'string') return '작업을 완료하지 못했습니다. 다시 시도해 주세요.';
@@ -14,7 +14,8 @@ export function archiveError(reason: unknown): string {
   return /[가-힣]/.test(reason) ? reason : '작업을 완료하지 못했습니다. 다시 시도해 주세요.';
 }
 
-export function archiveDate(value: string | null, includeTime = false): string {
+/** With a clock format, the time is included in that format. */
+export function archiveDate(value: string | null, time: ClockFormat | null = null): string {
   if (!value) return '기록 없음';
   const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
     ? `${value.replace(' ', 'T')}Z` : /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value;
@@ -22,8 +23,21 @@ export function archiveDate(value: string | null, includeTime = false): string {
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat('ko-KR', {
     year: 'numeric', month: 'long', day: 'numeric',
-    ...(includeTime ? { hour: '2-digit', minute: '2-digit' } as const : {}),
+    ...(time ? timeOptions(time) : {}),
   }).format(date);
+}
+
+/** Intl hour/minute options for a clock format: `오후 9:30` or `21:30`. */
+export function timeOptions(format: ClockFormat, seconds = false): Intl.DateTimeFormatOptions {
+  const twelve = format === '12h';
+  return { hour: twelve ? 'numeric' : '2-digit', minute: '2-digit', ...(seconds ? { second: '2-digit' } : {}), hourCycle: twelve ? 'h12' : 'h23' };
+}
+
+/** A local wall-clock `HH:MM` in a clock format. */
+export function wallTime(value: string, format: ClockFormat): string {
+  if (format === '24h') return value.slice(0, 5);
+  const hours = Number(value.slice(0, 2));
+  return `${hours < 12 ? '오전' : '오후'} ${hours % 12 || 12}:${value.slice(3, 5)}`;
 }
 
 /** Local calendar day (`YYYY-MM-DD`) of an archive timestamp, or null when unparseable. */

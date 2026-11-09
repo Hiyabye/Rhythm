@@ -81,16 +81,13 @@ test('proactive settings save OS lifecycle, sync cadence, notifications and quie
   await expect(notifications).toHaveAttribute('aria-checked', 'true');
   await page.getByLabel('알림 민감도', { exact: true }).selectOption('interested');
   await page.getByRole('switch', { name: '방해 금지 시간', exact: true }).click();
-  const quietStart = page.getByLabel('시작 시간', { exact: true });
-  const quietEnd = page.getByLabel('종료 시간', { exact: true });
-  await quietStart.fill('23:30');
-  // WebKit commits native time inputs on blur; finish each edit as a user would
-  // before inspecting the persisted settings or editing the next field.
-  await quietStart.press('Tab');
-  await expect(quietStart).toBeEnabled();
-  await quietEnd.fill('07:30');
-  await quietEnd.press('Tab');
-  await expect(quietEnd).toBeEnabled();
+  const quietStart = page.getByRole('group', { name: '시작 시간', exact: true });
+  const quietEnd = page.getByRole('group', { name: '종료 시간', exact: true });
+  await expect(quietStart.getByRole('button', { name: '오후' })).toHaveAttribute('aria-pressed', 'true');
+  await quietStart.getByRole('combobox', { name: '시' }).selectOption('11');
+  await quietStart.getByRole('combobox', { name: '분' }).selectOption('30');
+  await expect(quietEnd.getByRole('button', { name: '오전' })).toHaveAttribute('aria-pressed', 'true');
+  await quietEnd.getByRole('combobox', { name: '분' }).selectOption('30');
   await page.getByRole('button', { name: '알림 설명', exact: true }).click();
   await expect(page.getByText('권한을 허용해도 전달을 보장하지는 않습니다', { exact: false })).toBeVisible();
   await expect.poll(() => page.evaluate(() => {

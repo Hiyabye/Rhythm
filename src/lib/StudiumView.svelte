@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { archiveError } from './archive-format';
+  import { archiveError, timeOptions } from './archive-format';
+  import { clock as clockSetting } from './clock.svelte';
   import Hint from './Hint.svelte';
   import { fade } from './motion';
   import type { StudiumRoomState, StudiumSnapshot } from './types';
@@ -119,7 +120,7 @@
 
   function clock(value: string | null | undefined): string {
     if (!value || !Number.isFinite(Date.parse(value))) return '확인 불가';
-    return new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(value));
+    return new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'numeric', day: 'numeric', ...timeOptions(clockSetting.format, true) }).format(new Date(value));
   }
 
   function stale(value: string): boolean {

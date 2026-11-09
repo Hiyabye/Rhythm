@@ -2,7 +2,9 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import type { LifecycleStatus, NotificationAuthorization, PlatformCapabilities, ProactiveActivation, ProactiveHistoryItem, ProactiveSettings as Settings, ProactiveSnapshot } from './types';
-  import { archiveError } from './archive-format';
+  import { archiveError, timeOptions } from './archive-format';
+  import { clock } from './clock.svelte';
+  import TimeField from './TimeField.svelte';
   import { confirmAction } from './confirm';
   import { isWindows } from './platform';
   import Icon from './Icon.svelte';
@@ -156,7 +158,7 @@
   function localTimestamp(value: string | null, fallback = '기록 없음') {
     if (!value) return fallback;
     const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat('ko-KR', { dateStyle: 'short', timeStyle: 'short' }).format(date);
+    return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat('ko-KR', { year: '2-digit', month: '2-digit', day: '2-digit', ...timeOptions(clock.format) }).format(date);
   }
 </script>
 
@@ -198,7 +200,7 @@
         <button class="row-icon" type="button" disabled={busy} aria-label="알림 권한 상태 새로고침" onclick={load}><Icon name="refresh" size={15} /></button>
       </div>
       <div class="settings-row"><label class="row-label" for="notification-sensitivity">알림 민감도</label><select id="notification-sensitivity" value={data.settings.notification_sensitivity} disabled={busy || !data.settings.notifications_enabled} onchange={(event) => save({ notification_sensitivity: event.currentTarget.value as Settings['notification_sensitivity'] })}><option value="important">중요한 공지만</option><option value="interested">관심 분야 공지</option><option value="all">모든 새 공지와 변경</option></select></div>
-      <div class="settings-row quiet-hours"><span class="row-label">방해 금지 시간<Hint label="방해 금지 시간">이 시간에는 알림을 미뤘다가 끝난 뒤 보냅니다. 자정을 넘겨도 됩니다.</Hint></span><span class="time-range"><label class="sr-only" for="quiet-start">시작 시간</label><input id="quiet-start" type="time" value={data.settings.quiet_hours.start} disabled={busy} onchange={(event) => save({ quiet_hours: { ...data!.settings.quiet_hours, start: event.currentTarget.value } })} /><span aria-hidden="true">–</span><label class="sr-only" for="quiet-end">종료 시간</label><input id="quiet-end" type="time" value={data.settings.quiet_hours.end} disabled={busy} onchange={(event) => save({ quiet_hours: { ...data!.settings.quiet_hours, end: event.currentTarget.value } })} /></span><button class="switch" class:on={data.settings.quiet_hours.enabled} role="switch" aria-label="방해 금지 시간" aria-checked={data.settings.quiet_hours.enabled} disabled={busy} onclick={() => save({ quiet_hours: { ...data!.settings.quiet_hours, enabled: !data!.settings.quiet_hours.enabled } })}><span></span></button></div>
+      <div class="settings-row quiet-hours"><span class="row-label">방해 금지 시간<Hint label="방해 금지 시간">이 시간에는 알림을 미뤘다가 끝난 뒤 보냅니다. 자정을 넘겨도 됩니다.</Hint></span><span class="time-range"><TimeField value={data.settings.quiet_hours.start} label="시작 시간" disabled={busy} onchange={(start) => save({ quiet_hours: { ...data!.settings.quiet_hours, start: start! } })} /><span aria-hidden="true">–</span><TimeField value={data.settings.quiet_hours.end} label="종료 시간" disabled={busy} onchange={(end) => save({ quiet_hours: { ...data!.settings.quiet_hours, end: end! } })} /></span><button class="switch" class:on={data.settings.quiet_hours.enabled} role="switch" aria-label="방해 금지 시간" aria-checked={data.settings.quiet_hours.enabled} disabled={busy} onclick={() => save({ quiet_hours: { ...data!.settings.quiet_hours, enabled: !data!.settings.quiet_hours.enabled } })}><span></span></button></div>
     </div>
 
     {#if !compact}
