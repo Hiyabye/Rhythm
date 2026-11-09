@@ -1,8 +1,11 @@
 import type { Page } from '@playwright/test';
 import analysisContract from '../../src/lib/analysis-contract.json' with { type: 'json' };
-import type { AiOperation, CalendarTodo, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation } from '../../src/lib/types';
+import type { AiOperation, CalendarTodo, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation, StudiumSnapshot } from '../../src/lib/types';
 
 export interface FixtureOptions {
+  studium?: Partial<StudiumSnapshot>;
+  studiumSaveError?: boolean;
+  studiumStartError?: boolean;
   count?: number;
   saved?: boolean;
   queryError?: boolean;
@@ -10,7 +13,7 @@ export interface FixtureOptions {
   settingsError?: boolean;
   // Controls `sogang_notices` alone; `extensions` overrides any extension.
   enabled?: boolean;
-  // Per-extension on/off; every extension not listed is on, as for an upgraded profile.
+  // Per-extension on/off; Studium stays opt-in while existing extensions default on.
   extensions?: Record<string, boolean>;
   body?: string;
   unsupportedBody?: boolean;
@@ -164,12 +167,27 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     };
     const snapshot = { settings: { theme: 'light', energy_profile: 'eco', interests: '' },
       extensions: ([['sogang_notices', '서강대학교 공지'], ['cybercampus', '사이버캠퍼스'], ['search', '탐색'], ['saved', '보관함'],
-        ['recommendations', '나를 위한 소식'], ['week', '앞으로 7일'], ['calendar', '캘린더'], ['ai', 'AI 분석'], ['proactive', '알림·백그라운드']] as const).map(([id, display_name]) => ({
+        ['recommendations', '나를 위한 소식'], ['week', '앞으로 7일'], ['calendar', '캘린더'], ['ai', 'AI 분석'], ['proactive', '알림·백그라운드'], ['studium', 'Studium']] as const).map(([id, display_name]) => ({
         id, display_name, description: `${display_name} 설명`, available: true,
-        enabled: options.extensions?.[id] ?? (id === 'sogang_notices' ? options.enabled ?? true : true) })),
+        enabled: options.extensions?.[id] ?? (id === 'sogang_notices' ? options.enabled ?? true : id !== 'studium') })),
       storage: { path: '/isolated/rhythm.sqlite3', bytes: 4096, schema_version: 5 },
       worker: { state: 'ready', runtime_available: true, model: null, detail: null }, proactive: copy(proactiveSettings),
       onboarding_completed: !options.onboardingNeeded };
+    const studium: StudiumSnapshot = {
+      rooms: [
+        { id: '19', name: '111 로욜라 인벤툼Ⅰ', label: '로욜라 인벤툼 I', capacity: 113 },
+        { id: '5', name: '133 로욜라 인벤툼 II', label: '로욜라 인벤툼 II', capacity: 102 },
+        { id: '6', name: 'K관 열람실', label: 'K관 열람실', capacity: 311 },
+        { id: '11', name: 'PA관 열람실', label: 'PA관 열람실', capacity: 101 },
+        { id: '15', name: 'J관 일반열람실', label: 'J관 일반열람실', capacity: 207 },
+        { id: '16', name: 'J관 노트북전용실', label: 'J관 노트북전용실', capacity: 92 },
+        { id: '18', name: 'MA관 열람실', label: 'MA관 열람실', capacity: 174 },
+      ],
+      preferences: { room_ids: ['5'], view_room: '5' }, job_id: null, running: false, results: [],
+      ...copy(options.studium ?? {}),
+    };
+    const studiumStates = (status: 'not_checked' | 'loading' | 'cancelled') => studium.preferences.room_ids.map((room_id) => ({ room_id, status, result: null, error: null, checked_at: null }));
+    if (!options.studium?.results) studium.results = studiumStates('not_checked');
     type Board = { source_id: string; mode: string; page: number; message: string };
     let sync = { running: false, mode: 'historical', message: '수집 대기 중입니다.', active: [] as Board[] };
     const board = (mode: string, page = 1, source_id = 'computing-updates'): Board => ({ source_id, mode, page, message: '공개 공지를 가져오는 중입니다.' });
@@ -229,7 +247,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     let availableHandler: number | null = null;
     let autoUpdateCheck = options.autoUpdateCheck ?? true;
     let notificationHandler: number | null = null;
-    const fixture = { ai, analyses, options, entries, calls: [] as { command: string; args: any }[], sourceDelay: options.sourceDelay ?? 0,
+    const fixture = { ai, analyses, options, entries, studium, studiumStatusDelay: 0, studiumSaveError: options.studiumSaveError ?? false, calls: [] as { command: string; args: any }[], sourceDelay: options.sourceDelay ?? 0,
       setNotificationAuthorization: (status: string) => { notificationAuthorization = status; },
       modelDirectoryResolvers: [] as Array<() => void>,
       releaseModelDirectory() { this.modelDirectoryResolvers.splice(0).forEach((release) => release()); },
@@ -375,7 +393,43 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'save_settings':
             if (options.settingsError) throw '설정을 저장하지 못했습니다.';
             snapshot.settings = copy(args.settings); return copy(snapshot);
-          case 'set_extension': snapshot.extensions.find((extension) => extension.id === args.id)!.enabled = args.enabled; return copy(snapshot);
+          case 'set_extension':
+            snapshot.extensions.find((extension) => extension.id === args.id)!.enabled = args.enabled;
+            if (args.id === 'studium' && !args.enabled) { studium.running = false; studium.job_id = null; studium.results = studiumStates('not_checked'); }
+            return copy(snapshot);
+          case 'studium_snapshot': return copy(studium);
+          case 'studium_status': {
+            const value = copy(studium);
+            await wait(fixture.studiumStatusDelay);
+            return value;
+          }
+          case 'studium_save_preferences': {
+            if (studium.running) throw '확인 중에는 대상 열람실을 바꿀 수 없습니다.';
+            if (fixture.studiumSaveError) throw '열람실 설정을 저장하지 못했습니다.';
+            const ids = args.roomIds as string[];
+            if (!ids.length || ids.length > 7 || new Set(ids).size !== ids.length || ids.some((id) => !studium.rooms.some((room) => room.id === id)) || !ids.includes(args.viewRoom)) throw '확인할 열람실을 확인해 주세요.';
+            studium.preferences = { room_ids: studium.rooms.filter((room) => ids.includes(room.id)).map((room) => room.id), view_room: args.viewRoom };
+            studium.results = studium.preferences.room_ids.map((room_id) => studium.results.find((value) => value.room_id === room_id) ?? { room_id, status: 'not_checked', result: null, error: null, checked_at: null });
+            return copy(studium);
+          }
+          case 'studium_set_view_room':
+            if (fixture.studiumSaveError) throw '표시할 열람실을 저장하지 못했습니다.';
+            if (!studium.preferences.room_ids.includes(args.roomId)) throw '선택한 열람실을 확인해 주세요.';
+            studium.preferences.view_room = args.roomId;
+            return copy(studium);
+          case 'studium_start':
+            if (options.studiumStartError) throw '좌석 확인을 시작하지 못했습니다.';
+            if (studium.running) throw '이미 좌석을 확인하고 있습니다.';
+            studium.job_id = (studium.job_id ?? 0) + 1;
+            studium.running = true;
+            studium.results = studiumStates('loading');
+            return copy(studium);
+          case 'studium_cancel':
+            if (args.jobId === studium.job_id) {
+              studium.running = false;
+              studium.results = studium.results.map((value) => value.status === 'loading' ? { ...value, status: 'cancelled', result: null } : value);
+            }
+            return copy(studium);
           case 'complete_onboarding': snapshot.onboarding_completed = true; return copy(snapshot);
           case 'worker_status': return copy(snapshot.worker);
           case 'personalization_get': return copy(personalization);
