@@ -3833,6 +3833,8 @@ version = "1.8.0"
 dependencies = [
  "base64 0.22.1",
  "block2",
+ "chrono",
+ "encoding_rs",
  "getrandom 0.3.4",
  "keyring",
  "mac-usernotifications",
