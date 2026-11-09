@@ -11,7 +11,7 @@
   import { fade, fly } from './motion';
   import { contributed, enabledExtensions } from './extensions';
   import { archiveError, archiveSize } from './archive-format';
-  import type { AiSnapshot, AutoUpdateCheck, CatalogEntry, EnergyProfile, ProactiveActivation, ProactiveSnapshot, Settings, Snapshot, SourceInfo, Theme } from './types';
+  import type { AiSnapshot, AutoUpdateCheck, CatalogEntry, ClockFormat, EnergyProfile, ProactiveActivation, ProactiveSnapshot, Settings, Snapshot, SourceInfo, Theme } from './types';
 
   // Every control saves through the same command its Settings pane uses, so leaving midway loses nothing.
   let { snapshot, theme, busy, error, onsave, ontoggleextension, onactivation, onfinish }: {
@@ -37,6 +37,10 @@
     { id: 'light', label: '라이트', icon: 'today' },
     { id: 'dark', label: '다크', icon: 'moon' },
     { id: 'system', label: '시스템', icon: 'monitor' },
+  ];
+  const clockFormats: { id: ClockFormat; label: string }[] = [
+    { id: '12h', label: '12시간' },
+    { id: '24h', label: '24시간' },
   ];
   const energyProfiles: { id: EnergyProfile; label: string }[] = [
     { id: 'eco', label: '절전' },
@@ -188,6 +192,7 @@
       {#if current === 'start'}
         <div class="settings-group">
           <div class="settings-row"><span class="row-label">화면 테마</span><div class="segmented" role="group" aria-label="화면 테마">{#each themes as option}<button disabled={busy} class:selected={theme === option.id} aria-pressed={theme === option.id} onclick={() => onsave({ theme: option.id })}><Icon name={option.icon} size={15} />{option.label}</button>{/each}</div></div>
+          <div class="settings-row"><span class="row-label">시간 표시<span class="row-detail">{snapshot.settings.clock_format === '12h' ? '오후 9:30' : '21:30'}</span></span><div class="segmented" role="group" aria-label="시간 표시">{#each clockFormats as option}<button disabled={busy} class:selected={snapshot.settings.clock_format === option.id} aria-pressed={snapshot.settings.clock_format === option.id} onclick={() => onsave({ clock_format: option.id })}>{option.label}</button>{/each}</div></div>
           <div class="settings-row"><span class="row-label">전원 모드<Hint label="전원 모드">AI 자동 분석과 자동 동기화 간격에 적용됩니다. 절전은 자동 분석을 하지 않고 60분마다, 균형은 30분, 성능은 15분마다 확인합니다.</Hint></span><div class="segmented" role="group" aria-label="전원 모드">{#each energyProfiles as option}<button disabled={busy} class:selected={snapshot.settings.energy_profile === option.id} aria-pressed={snapshot.settings.energy_profile === option.id} onclick={() => onsave({ energy_profile: option.id })}>{option.label}</button>{/each}</div></div>
           {#if updaterConfigured}<div class="settings-row"><span class="row-label">자동으로 업데이트 확인<Hint label="자동으로 업데이트 확인">앱이 실행 중일 때 하루에 한 번 GitHub에서 새 버전을 확인해 알려 드립니다. 내려받기와 설치는 직접 고를 때만 진행합니다.</Hint></span><button class="switch" class:on={autoCheck === true} role="switch" aria-label="자동으로 업데이트 확인" aria-checked={autoCheck === true} disabled={autoCheck === null} onclick={toggleAutoCheck}><span></span></button></div>{/if}
         </div>

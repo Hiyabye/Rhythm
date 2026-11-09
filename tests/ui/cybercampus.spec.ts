@@ -109,7 +109,7 @@ test.describe('Today week pane', () => {
     await page.goto('/');
     const week = page.getByRole('complementary', { name: '앞으로 7일', exact: true });
     const days = week.locator('.week-day');
-    await expect(days.nth(2).locator('.event-task')).toHaveText(/마감 23:59 실습 과제 2\s*자료구조실습/);
+    await expect(days.nth(2).locator('.event-task')).toHaveText(/마감 오후 11:59 실습 과제 2\s*자료구조실습/);
     await expect(days.first().locator('.event-task')).toContainText('실습 과제 3');
     await expect(days.first().locator('.event-task')).toContainText('지각 제출 가능');
     await expect(week.locator('.event-task')).toHaveCount(2);

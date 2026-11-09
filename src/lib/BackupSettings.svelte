@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { save, open } from '@tauri-apps/plugin-dialog';
-  import { archiveError, archiveSize } from './archive-format';
+  import { archiveError, archiveSize, timeOptions } from './archive-format';
+  import { clock } from './clock.svelte';
   import { confirmAction } from './confirm';
   import Hint from './Hint.svelte';
 
@@ -33,7 +34,7 @@
   }
   function createdAt(value: string) {
     const seconds = Number(value);
-    return Number.isFinite(seconds) ? new Date(seconds * 1000).toLocaleString('ko-KR') : value;
+    return Number.isFinite(seconds) ? new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'numeric', day: 'numeric', ...timeOptions(clock.format, true) }).format(new Date(seconds * 1000)) : value;
   }
   function startOperation() {
     const id = crypto.randomUUID();

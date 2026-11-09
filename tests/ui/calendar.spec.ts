@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { mockDesktop } from './fixture';
+import { mockDesktop, openSettings } from './fixture';
 import type { CalendarTodo, CybercampusTask } from '../../src/lib/types';
 
 test.use({ timezoneId: 'Asia/Seoul' });
@@ -35,7 +35,7 @@ test('todos are added, completed, moved and deleted from the selected day', asyn
   await add.click();
   await expect(panel.getByRole('status')).toHaveText('할 일을 추가했습니다.');
   const list = panel.getByRole('list', { name: '10월 24일 일정' });
-  await expect(list).toContainText('09:30 보고서 제출');
+  await expect(list).toContainText('오전 9:30 보고서 제출');
   await expect(list).toContainText('학과 사무실');
   const today = page.locator('[data-day="2026-10-24"]');
   await expect(today).toHaveAccessibleName('10월 24일 토요일, 오늘, 할 일 1개');
@@ -58,7 +58,7 @@ test('todos are added, completed, moved and deleted from the selected day', asyn
   await panel.getByRole('button', { name: '저장' }).click();
   await expect(page.getByRole('heading', { name: '2026년 11월' })).toBeVisible();
   const moved = page.getByRole('region', { name: /11월 2일 월요일/ });
-  await expect(moved.getByRole('list')).toContainText('21:30 보고서 제출');
+  await expect(moved.getByRole('list')).toContainText('오후 9:30 보고서 제출');
 
   await page.evaluate(() => (window as any).__fixture.dialogAnswers.push('cancel'));
   await moved.getByRole('button', { name: '보고서 제출 삭제' }).click();
@@ -67,6 +67,34 @@ test('todos are added, completed, moved and deleted from the selected day', asyn
   await moved.getByRole('button', { name: '보고서 제출 삭제' }).click();
   await expect(moved.getByRole('status')).toHaveText('할 일을 삭제했습니다.');
   await expect(moved).toContainText('일정 없음');
+});
+
+test('the 24-hour setting shows and edits todo times without 오전/오후', async ({ page }) => {
+  await mockDesktop(page, { calendarTodos: [todo({ day: '2026-10-24', time: '21:05', title: '보고서 제출' })] });
+  await page.goto('/');
+  await openSettings(page, '일반');
+  const formats = page.getByRole('group', { name: '시간 표시', exact: true });
+  await expect(formats.getByRole('button', { name: '12시간' })).toHaveAttribute('aria-pressed', 'true');
+  await formats.getByRole('button', { name: '24시간' }).click();
+  await expect(formats.getByRole('button', { name: '24시간' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(formats.getByRole('button', { name: '12시간' })).toHaveAttribute('aria-pressed', 'false');
+  await expect.poll(() => page.evaluate(() => {
+    const calls = (window as any).__fixture.calls.filter((call: any) => call.command === 'save_settings');
+    return calls[calls.length - 1]?.args.settings.clock_format;
+  })).toBe('24h');
+
+  await openCalendar(page);
+  const panel = page.getByRole('region', { name: /10월 24일 토요일/ });
+  const list = panel.getByRole('list', { name: '10월 24일 일정' });
+  await expect(list).toContainText('21:05 보고서 제출');
+  await list.getByRole('button', { name: '보고서 제출 수정' }).click();
+  await expect(panel.getByRole('group', { name: '오전 또는 오후' })).toHaveCount(0);
+  const hour = panel.getByRole('combobox', { name: '시' });
+  await expect(hour).toHaveValue('21');
+  await expect(hour.locator('option')).toHaveCount(25);
+  await hour.selectOption('0');
+  await panel.getByRole('button', { name: '저장' }).click();
+  await expect(list).toContainText('00:05 보고서 제출');
 });
 
 test('arrow and page keys move the selected day across months', async ({ page }) => {
@@ -93,7 +121,7 @@ test('the calendar shows open eClass deadlines and AI reference dates', async ({
   await openCalendar(page);
   await page.locator('[data-day="2026-10-26"]').click();
   const deadlineDay = page.getByRole('region', { name: /10월 26일 월요일/ });
-  await expect(deadlineDay).toContainText('마감 23:59 실습 과제 2');
+  await expect(deadlineDay).toContainText('마감 오후 11:59 실습 과제 2');
   await page.locator('[data-day="2026-10-30"]').click();
   const aiDay = page.getByRole('region', { name: /10월 30일 금요일/ });
   await expect(aiDay).toContainText('AI 참고 일정 신청 마감');

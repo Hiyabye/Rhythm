@@ -20,7 +20,7 @@ pub mod proactive;
 #[cfg(test)]
 mod proactive_tests;
 pub mod studium;
-pub(crate) const SCHEMA_VERSION: i64 = 23;
+pub(crate) const SCHEMA_VERSION: i64 = 24;
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
     let migrations = [
@@ -47,6 +47,7 @@ fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
         include_str!("../../migrations/021_source_groups.sql"),
         include_str!("../../migrations/022_calendar.sql"),
         include_str!("../../migrations/023_studium.sql"),
+        include_str!("../../migrations/024_clock_format.sql"),
     ];
     for (index, migration) in migrations.iter().enumerate().skip(version as usize) {
         let transaction = connection.transaction().map_err(|e| e.to_string())?;
@@ -75,6 +76,8 @@ pub struct Settings {
     pub theme: String,
     pub energy_profile: String,
     pub interests: String,
+    /// `12h` or `24h`; only changes how the UI shows times.
+    pub clock_format: String,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -82,6 +85,7 @@ impl Default for Settings {
             theme: "system".into(),
             energy_profile: "balanced".into(),
             interests: String::new(),
+            clock_format: "12h".into(),
         }
     }
 }
@@ -127,13 +131,14 @@ impl Store {
     pub fn settings(&self) -> Result<Settings, String> {
         self.connection
             .query_row(
-                "SELECT theme,energy_profile,interests FROM settings WHERE id=1",
+                "SELECT theme,energy_profile,interests,clock_format FROM settings WHERE id=1",
                 [],
                 |r| {
                     Ok(Settings {
                         theme: r.get(0)?,
                         energy_profile: r.get(1)?,
                         interests: r.get(2)?,
+                        clock_format: r.get(3)?,
                     })
                 },
             )
@@ -143,13 +148,14 @@ impl Store {
         if !["system", "light", "dark"].contains(&s.theme.as_str())
             || !["eco", "balanced", "performance"].contains(&s.energy_profile.as_str())
             || s.interests.chars().count() > 4000
+            || !["12h", "24h"].contains(&s.clock_format.as_str())
         {
             return Err("설정값을 확인해 주세요.".into());
         }
         self.connection
             .execute(
-                "UPDATE settings SET theme=?1,energy_profile=?2,interests=?3 WHERE id=1",
-                params![s.theme, s.energy_profile, s.interests],
+                "UPDATE settings SET theme=?1,energy_profile=?2,interests=?3,clock_format=?4 WHERE id=1",
+                params![s.theme, s.energy_profile, s.interests, s.clock_format],
             )
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -282,6 +288,7 @@ mod tests {
                 theme: "dark".into(),
                 energy_profile: "eco".into(),
                 interests: "보안, 장학금".into(),
+                clock_format: "24h".into(),
             })
             .unwrap();
             db.set_enabled("sogang_notices", true).unwrap();
@@ -291,6 +298,7 @@ mod tests {
         assert_eq!(db.settings().unwrap().theme, "dark");
         assert_eq!(db.settings().unwrap().energy_profile, "eco");
         assert_eq!(db.settings().unwrap().interests, "보안, 장학금");
+        assert_eq!(db.settings().unwrap().clock_format, "24h");
         assert!(!db.enabled("sogang_notices").unwrap());
         assert!(db
             .connection
@@ -309,6 +317,7 @@ mod tests {
                 theme: "dark".into(),
                 energy_profile: "eco".into(),
                 interests: "보안".into(),
+                ..Settings::default()
             })
             .unwrap();
         store.backup_to(&snapshot).unwrap();
@@ -336,6 +345,16 @@ mod tests {
         s.theme = "invalid".into();
         assert!(db.save(&s).is_err());
         assert_eq!(db.settings().unwrap().theme, "system");
+        let mut s = db.settings().unwrap();
+        s.clock_format = "12".into();
+        assert!(db.save(&s).is_err());
+        assert_eq!(db.settings().unwrap().clock_format, "12h");
+    }
+    #[test]
+    fn a_new_profile_shows_twelve_hour_times() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Store::open(&dir.path().join("db")).unwrap();
+        assert_eq!(db.settings().unwrap().clock_format, "12h");
     }
     #[test]
     fn update_checks_default_on_and_persist_across_reopen() {
@@ -428,7 +447,7 @@ mod tests {
                            VALUES('cybercampus','사이버캠퍼스','서강대학교','','https://eclass.sogang.ac.kr/','cybercampus',1,{subscribed}),
                                  ('sogang-academic','학사','서강대학교','','https://www.sogang.ac.kr/','sogang',1,1);
                          INSERT INTO source_extensions VALUES('cybercampus','sogang_notices'),('sogang-academic','sogang_notices');
-                         ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms;
+                         ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format;
                          PRAGMA user_version=19;",
                         notices = notices as i32,
                         subscribed = subscribed as i32,
@@ -461,6 +480,58 @@ mod tests {
         }
     }
     #[test]
+    fn schema_twenty_three_upgrade_keeps_settings_and_shows_twelve_hour_times() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        Store::open(&path)
+            .unwrap()
+            .connection
+            .execute_batch(
+                "ALTER TABLE settings DROP COLUMN clock_format;
+                 UPDATE settings SET theme='dark',energy_profile='eco',interests='장학금';
+                 PRAGMA user_version=23;",
+            )
+            .unwrap();
+        let db = Store::open(&path).unwrap();
+        assert_eq!(db.info().unwrap().schema_version, SCHEMA_VERSION);
+        let settings = db.settings().unwrap();
+        assert_eq!(
+            (
+                settings.theme.as_str(),
+                settings.energy_profile.as_str(),
+                settings.interests.as_str(),
+                settings.clock_format.as_str()
+            ),
+            ("dark", "eco", "장학금", "12h")
+        );
+    }
+    #[test]
+    fn failed_clock_format_migration_keeps_schema_twenty_three() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        // The column survives the downgrade, so the 024 ALTER fails mid-open.
+        Store::open(&path)
+            .unwrap()
+            .connection
+            .execute_batch(
+                "UPDATE settings SET theme='dark',clock_format='24h'; PRAGMA user_version=23;",
+            )
+            .unwrap();
+        assert!(Store::open(&path).is_err());
+        let connection = Connection::open(&path).unwrap();
+        let (version, theme, clock): (i64, String, String) = connection
+            .query_row(
+                "SELECT (SELECT user_version FROM pragma_user_version),theme,clock_format FROM settings",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (version, theme.as_str(), clock.as_str()),
+            (23, "dark", "24h")
+        );
+    }
+    #[test]
     fn schema_twenty_one_upgrade_adds_calendar_off_and_keeps_extensions() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db");
@@ -470,7 +541,7 @@ mod tests {
             db.set_enabled("search", true).unwrap();
             db.connection
                 .execute_batch(
-                    "DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms;
+                    "DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format;
                      DELETE FROM extension_preferences WHERE extension_id='calendar';
                      PRAGMA user_version=21;",
                 )

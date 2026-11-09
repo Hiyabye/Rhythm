@@ -3,6 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import type { SourceGroup, SourceInfo, SubscribeResult, SyncStatus } from './types';
   import { archiveDate, archiveError, sourceStatus } from './archive-format';
+  import { clock } from './clock.svelte';
   import Icon from './Icon.svelte';
   import Hint from './Hint.svelte';
   import Popover from './Popover.svelte';
@@ -191,7 +192,7 @@
         <Popover id={`board-${source.id}`} label={`${source.name} 상태`} wide>
           <p class="popover-title">{source.name}</p>
           <p>{sourceStatus(source.status)} · {historyLabel(source)}</p>
-          <dl class="popover-facts"><div><dt>마지막 시도</dt><dd>{archiveDate(source.last_attempt, true)}</dd></div><div><dt>마지막 성공</dt><dd>{archiveDate(source.last_success, true)}</dd></div>
+          <dl class="popover-facts"><div><dt>마지막 시도</dt><dd>{archiveDate(source.last_attempt, clock.format)}</dd></div><div><dt>마지막 성공</dt><dd>{archiveDate(source.last_success, clock.format)}</dd></div>
             {#if source.discovered || source.archived || source.failed || source.status === 'running'}<div><dt>최근 시도</dt><dd>발견 {source.discovered} · 보관 {source.archived} · 실패 {source.failed}</dd></div>{/if}</dl>
           {#if source.last_error}<p class="archive-error">{archiveError(source.last_error)}</p>{/if}
           {#if source.skipped_count}

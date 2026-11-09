@@ -141,6 +141,7 @@ mod tests {
             .connection
             .execute_batch(
                 "DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms;
+             ALTER TABLE settings DROP COLUMN clock_format;
              DELETE FROM extension_preferences WHERE extension_id='studium';
              PRAGMA user_version=22;",
             )

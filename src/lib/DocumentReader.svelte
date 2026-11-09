@@ -3,6 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import type { AiClassification, DocumentDetail, SimilarNotice, SyncStatus } from './types';
   import { archiveDate, archiveError, archiveSize, resourceStatus } from './archive-format';
+  import { clock } from './clock.svelte';
   import Icon from './Icon.svelte';
   import AnalysisPanel from './AnalysisPanel.svelte';
   import { fly } from './motion';
@@ -325,7 +326,7 @@
       {#if detail.revisions.length > 1}
         <label class="revision-label">보관 이력
           <select bind:value={selectedRevision} onchange={() => { if (selectedRevision !== null) void load(selectedRevision); }} disabled={loading}>
-            {#each detail.revisions as revision, index}<option value={revision.id}>{archiveDate(revision.collected_at, true)} · 버전 {detail.revisions.length - index}</option>{/each}
+            {#each detail.revisions as revision, index}<option value={revision.id}>{archiveDate(revision.collected_at, clock.format)} · 버전 {detail.revisions.length - index}</option>{/each}
           </select>
         </label>
       {/if}
@@ -364,6 +365,6 @@
         {/each}
       </section>
     {/if}
-    <footer class="reader-archive-meta"><span>처음 수집: {archiveDate(detail.item.collected_at, true)}</span><span>이 버전 보관: {archiveDate(detail.revisions.find((revision) => revision.id === detail?.revision_id)?.collected_at ?? null, true)}</span></footer>
+    <footer class="reader-archive-meta"><span>처음 수집: {archiveDate(detail.item.collected_at, clock.format)}</span><span>이 버전 보관: {archiveDate(detail.revisions.find((revision) => revision.id === detail?.revision_id)?.collected_at ?? null, clock.format)}</span></footer>
   {/if}
 </section>

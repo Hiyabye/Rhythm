@@ -165,7 +165,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       if (consumeActivation) pendingActivation = null;
       return snapshot;
     };
-    const snapshot = { settings: { theme: 'light', energy_profile: 'eco', interests: '' },
+    const snapshot = { settings: { theme: 'light', energy_profile: 'eco', interests: '', clock_format: '12h' },
       extensions: ([['sogang_notices', '서강대학교 공지'], ['cybercampus', '사이버캠퍼스'], ['search', '탐색'], ['saved', '보관함'],
         ['recommendations', '나를 위한 소식'], ['week', '앞으로 7일'], ['calendar', '캘린더'], ['ai', 'AI 분석'], ['proactive', '알림·백그라운드'], ['studium', 'Studium']] as const).map(([id, display_name]) => ({
         id, display_name, description: `${display_name} 설명`, available: true,

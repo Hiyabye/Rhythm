@@ -3,7 +3,8 @@
   import { invoke } from '@tauri-apps/api/core';
   import type { AiSnapshot, ArchivePage, ArchiveQuery, ArchiveSummary, AiResult, AiClassification, CalendarTodo, CybercampusTask, ReferenceDate, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
   import analysisContract from './analysis-contract.json' with { type: 'json' };
-  import { archiveDate, archiveDay, archiveError, kstInstant, localDayKey } from './archive-format';
+  import { archiveDate, archiveDay, archiveError, kstInstant, localDayKey, wallTime } from './archive-format';
+  import { clock } from './clock.svelte';
   import CalendarView from './CalendarView.svelte';
   import DocumentReader from './DocumentReader.svelte';
   import Highlighted from './Highlighted.svelte';
@@ -513,14 +514,14 @@
                   {#each day.tasks as task (`${task.course_key}-${task.category}-${task.item_id}`)}
                     <li><button class="event event-task" id={`week-task-${task.course_key}-${task.category}-${task.item_id}`} onclick={() => ontasks()}>
                       <span class="event-bar" aria-hidden="true"></span>
-                      <span class="event-title"><span class="ai-mark task-mark">마감{task.due_at!.length > 10 ? ` ${task.due_at!.slice(11, 16)}` : ''}</span> {task.title}</span>
+                      <span class="event-title"><span class="ai-mark task-mark">마감{task.due_at!.length > 10 ? ` ${wallTime(task.due_at!.slice(11, 16), clock.format)}` : ''}</span> {task.title}</span>
                       <span class="event-meta">{task.course_name}{#if kstInstant(task.due_at!) < Date.now()}{' · '}지각 제출 가능{/if}</span>
                     </button></li>
                   {/each}
                   {#each day.todos as todo (todo.id)}
                     <li><button class="event event-todo" id={`week-todo-${todo.id}`} onclick={() => oncalendar(day.key)}>
                       <span class="event-bar" aria-hidden="true"></span>
-                      <span class="event-title"><span class="ai-mark todo-mark">할 일{todo.time ? ` ${todo.time}` : ''}</span> {todo.title}</span>
+                      <span class="event-title"><span class="ai-mark todo-mark">할 일{todo.time ? ` ${wallTime(todo.time, clock.format)}` : ''}</span> {todo.title}</span>
                       <span class="event-meta">캘린더에서 보기</span>
                     </button></li>
                   {/each}
