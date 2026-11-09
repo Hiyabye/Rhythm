@@ -52,10 +52,6 @@ Each is a GitHub issue:
 Each is a future product decision, sharing the archive, search and personalization core:
 
 - **Opportunities:** competitions, activities, internships, research and jobs.
-- **Calendar and tasks:** schedules, deadlines, reminders and daily planning. The
-  dormitory calendar (`/sgdormitory/6558/subview.do`) is a month grid of title/time
-  schedule entries, not notices; supporting it needs this event model rather than the
-  notice archive.
 - **Email:** after OAuth and provider limits are handled deliberately.
 - **Personal agent:** proposals and workflows whose consequential actions stay under user control.
 
