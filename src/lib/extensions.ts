@@ -12,6 +12,7 @@ export const navigation: { id: string; label: string; extension?: string }[] = [
   { id: 'bookmark', label: '보관함', extension: 'saved' },
   { id: 'tasks', label: '과제·마감', extension: 'cybercampus' },
   { id: 'calendar', label: '캘린더', extension: 'calendar' },
+  { id: 'studium', label: '열람실', extension: 'studium' },
 ];
 
 export const settingsPanes: { id: SettingsPane; label: string; icon: string; extension?: string }[] = [
