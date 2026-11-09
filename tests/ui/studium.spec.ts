@@ -119,6 +119,28 @@ test('the live status announces the completed cycle including partial failure', 
   await expect(page.getByRole('button', { name: '지금 확인', exact: true })).toBeEnabled();
 });
 
+test('keyboard focus follows the lookup actions and polling stops once the cycle ends', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true }, studium: { preferences } });
+  await openStudium(page);
+  await page.getByRole('button', { name: '지금 확인', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: '확인 취소', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: '지금 확인', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: '확인 취소', exact: true })).toBeFocused();
+  await expect.poll(() => callCount(page, 'studium_status')).toBeGreaterThan(0);
+  await page.evaluate((results) => {
+    const state = (window as any).__fixture.studium;
+    state.results = results;
+    state.running = false;
+  }, [row('5', 1, [84]), row('6', 2, [1, 2])]);
+  await expect(page.getByRole('button', { name: '지금 확인', exact: true })).toBeFocused();
+  const polls = await callCount(page, 'studium_status');
+  await page.waitForTimeout(1_200);
+  expect(await callCount(page, 'studium_status')).toBe(polls);
+});
+
 test('late status cannot revert a saved view and reopening resumes memory status without another start', async ({ page }) => {
   await mockDesktop(page, { extensions: { studium: true }, studium: { preferences, running: true, job_id: 7, results: [{ room_id: '5', status: 'loading', result: null, error: null, checked_at: null }, { room_id: '6', status: 'loading', result: null, error: null, checked_at: null }] } });
   await openStudium(page);
@@ -151,11 +173,12 @@ test('source freshness expires with the local clock without starting or polling 
   const clock = new Date('2026-11-09T10:00:00Z');
   const nearExpiry = row('5', 1, [84]);
   nearExpiry.result!.source_time = new Date(clock.getTime() - 299_000).toISOString();
-  await page.clock.install({ time: clock });
+  // A frozen clock keeps the one-second margin independent of runner speed.
+  await page.clock.setFixedTime(clock);
   await mockDesktop(page, { extensions: { studium: true }, studium: { results: [nearExpiry] } });
   await openStudium(page);
   await expect(page.locator('.stale')).toHaveCount(0);
-  await page.clock.fastForward(2_000);
+  await page.clock.setFixedTime(new Date(clock.getTime() + 2_000));
   await expect(page.locator('.stale')).toBeVisible();
   expect(await callCount(page, 'studium_start')).toBe(0);
   expect(await callCount(page, 'studium_status')).toBe(0);

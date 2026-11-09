@@ -19,6 +19,11 @@
   let mounted = false;
   let generation = 0;
   let polling = false;
+  let startButton = $state<HTMLButtonElement>();
+  let cancelButton = $state<HTMLButtonElement>();
+  // Set when the user operates 지금 확인/확인 취소: disabling or removing the
+  // pressed button would otherwise drop keyboard focus to the page body.
+  let keepActionFocus = false;
   let selected = $derived(snapshot?.rooms.filter((room) => snapshot?.preferences.room_ids.includes(room.id)) ?? []);
   let room = $derived(snapshot?.rooms.find((item) => item.id === viewRoom));
   let result = $derived(snapshot?.results.find((item) => item.room_id === viewRoom));
@@ -122,6 +127,20 @@
     return !Number.isFinite(age) || age > 300_000 || age < -60_000;
   }
 
+  $effect(() => {
+    const target = snapshot?.running ? cancelButton : busy ? undefined : startButton;
+    if (!keepActionFocus || !target || target.disabled) return;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    target.focus();
+    if (target === startButton) keepActionFocus = false;
+  });
+
+  function runAction(command: string, args: Record<string, unknown> = {}) {
+    keepActionFocus = true;
+    void act(command, args);
+  }
+
   onMount(() => {
     mounted = true;
     if (desktop) void load();
@@ -162,7 +181,7 @@
       </section>
 
       <section aria-labelledby="studium-results-title">
-        <div class="section-heading results-heading"><h2 id="studium-results-title">좌석 현황</h2><div class="actions"><button class="button primary" disabled={busy || snapshot.running} onclick={() => act('studium_start')}>지금 확인</button>{#if snapshot.running}<button class="button secondary" disabled={busy || snapshot.job_id === null} onclick={() => act('studium_cancel', { jobId: snapshot!.job_id })}>확인 취소</button>{/if}</div></div>
+        <div class="section-heading results-heading"><h2 id="studium-results-title">좌석 현황</h2><div class="actions"><button class="button primary" bind:this={startButton} disabled={busy || snapshot.running} onclick={() => runAction('studium_start')}>지금 확인</button>{#if snapshot.running}<button class="button secondary" bind:this={cancelButton} disabled={busy || snapshot.job_id === null} onclick={() => runAction('studium_cancel', { jobId: snapshot!.job_id })}>확인 취소</button>{/if}</div></div>
         <p class="live-status" role="status" aria-live="polite" aria-atomic="true">{cycleStatus(snapshot)}</p>
         <ul class="room-summary" aria-label="열람실별 확인 상태">
           {#each selected as item (item.id)}
