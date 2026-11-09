@@ -1142,7 +1142,10 @@ async fn disabling_extension_during_fetch_prevents_commit() {
         gate.entered.notified().await;
         // The real disable path: the registry flips the flag and cancels
         // under the same store lock.
-        let registry = crate::extensions::Registry::new(controller.clone());
+        let registry = crate::extensions::Registry::new(
+            controller.clone(),
+            crate::studium::controller::Controller::new(),
+        );
         with_store(&store, |s| registry.set(s, "sogang_notices", false)).unwrap();
         gate.release.notify_one();
     };
