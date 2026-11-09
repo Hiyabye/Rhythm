@@ -139,6 +139,10 @@ pub fn timestamp_seconds(value: &str) -> Result<i64, String> {
         .map_err(|_| "페이지 기준 시각을 해석할 수 없습니다.".into())
 }
 
+pub fn now_timestamp() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
 fn document(html: &str) -> Result<Html, String> {
     if html.len() > MAX_PAGE_BYTES * 3 || html.contains('\0') {
         return Err("페이지 형식을 확인할 수 없습니다.".into());

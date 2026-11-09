@@ -1,19 +1,14 @@
-use super::rooms;
-#[cfg(test)]
-use super::{cancelled, parser};
-#[cfg(test)]
+use super::{cancelled, parser, rooms};
 use crate::archive::{
     network::{Access, Fetch},
     sync::{robots::Robots, Transport},
 };
-#[cfg(test)]
 use std::{
     sync::atomic::AtomicBool,
     time::{Duration, Instant},
 };
 use url::Url;
 
-#[cfg(test)]
 pub(crate) const RESPONSE_LIMIT: usize = 1_000_000;
 
 pub(crate) fn validate_url(url: &Url) -> Result<(), String> {
@@ -39,14 +34,12 @@ pub(crate) fn validate_url(url: &Url) -> Result<(), String> {
 }
 
 /// One manual cycle shares its policy. Transport keeps cross-cycle pacing.
-#[cfg(test)]
 pub(crate) struct Session<'a, T> {
     transport: &'a T,
     policy: Robots,
     last: Instant,
 }
 
-#[cfg(test)]
 impl<'a, T: Transport> Session<'a, T> {
     pub(crate) async fn new(transport: &'a T, cancel: &AtomicBool) -> Result<Self, String> {
         let url = Url::parse(rooms::STATUS_URL).map_err(|_| "열람실 주소 오류")?;

@@ -1,6 +1,4 @@
-#[cfg(test)]
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Room {
@@ -11,7 +9,6 @@ pub struct Room {
 }
 
 impl Room {
-    #[cfg(test)]
     pub fn url(&self) -> String {
         format!(
             "https://libseat.sogang.ac.kr:444/SEAT/roomview5.asp?room_no={}",
@@ -20,14 +17,12 @@ impl Room {
     }
 }
 
-#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Preferences {
     pub room_ids: Vec<String>,
     pub view_room: String,
 }
 
-#[cfg(test)]
 impl Default for Preferences {
     fn default() -> Self {
         Self {
@@ -37,7 +32,6 @@ impl Default for Preferences {
     }
 }
 
-#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SeatData {
     pub total: u32,
@@ -47,4 +41,22 @@ pub struct SeatData {
     /// None means numbers could not be validated; Some([]) is verified full.
     pub seat_numbers: Option<Vec<u32>>,
     pub source_url: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RoomState {
+    pub room_id: String,
+    pub status: String,
+    pub result: Option<SeatData>,
+    pub error: Option<String>,
+    pub checked_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Snapshot {
+    pub rooms: Vec<Room>,
+    pub preferences: Preferences,
+    pub job_id: Option<u64>,
+    pub running: bool,
+    pub results: Vec<RoomState>,
 }
