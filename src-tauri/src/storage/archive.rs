@@ -1,13 +1,14 @@
+use super::trash::NOT_TRASHED;
 use super::Store;
 use crate::archive::model::*;
 use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, Row};
 use sha2::{Digest, Sha256};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
-const SOURCE_COLUMNS: &str = "id,name,organization,description,url,family,supported,subscribed,selected,group_id,last_attempt,last_success,last_error,next_page,history_complete,status,discovered,archived,failed,(SELECT COUNT(*) FROM skipped_articles k WHERE k.source_id=sources.id),(SELECT extension_id FROM source_extensions se WHERE se.source_id=sources.id),(SELECT COUNT(*) FROM documents d LEFT JOIN document_state u ON u.document_id=d.id WHERE d.source_id=sources.id AND COALESCE(u.is_read,0)=0)";
+const SOURCE_COLUMNS: &str = "id,name,organization,description,url,family,supported,subscribed,selected,group_id,last_attempt,last_success,last_error,next_page,history_complete,status,discovered,archived,failed,(SELECT COUNT(*) FROM skipped_articles k WHERE k.source_id=sources.id),(SELECT extension_id FROM source_extensions se WHERE se.source_id=sources.id),(SELECT COUNT(*) FROM documents d LEFT JOIN document_state u ON u.document_id=d.id WHERE d.source_id=sources.id AND COALESCE(u.is_read,0)=0 AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id))";
 macro_rules! item_columns {
     ($snippet:literal) => {
-        concat!("d.id,d.source_id,s.name,d.title,d.author,d.category,d.published_at,d.collected_at,COALESCE(u.is_read,0),COALESCE(u.saved,0),d.historical,", $snippet, ",CASE WHEN EXISTS(SELECT 1 FROM resources a WHERE a.document_id=d.id AND a.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id) AND a.status<>'downloaded') THEN 'missing_resources' ELSE 'archived' END")
+        concat!("d.id,d.source_id,s.name,d.title,d.author,d.category,d.published_at,d.collected_at,COALESCE(u.is_read,0),COALESCE(u.saved,0),d.historical,", $snippet, ",CASE WHEN EXISTS(SELECT 1 FROM resources a WHERE a.document_id=d.id AND a.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id) AND a.status<>'downloaded') THEN 'missing_resources' ELSE 'archived' END,EXISTS(SELECT 1 FROM trashed_documents t WHERE t.document_id=d.id)")
     };
 }
 /// The snippet column is the whole body, which `excerpt` narrows around a match.
@@ -103,6 +104,7 @@ fn item_row(row: &Row<'_>) -> rusqlite::Result<DocumentItem> {
         historical: row.get(10)?,
         snippet: row.get(11)?,
         content_status: row.get(12)?,
+        trashed: row.get(13)?,
     })
 }
 fn resource_row(row: &Row<'_>) -> rusqlite::Result<ResourceRecord> {
@@ -408,8 +410,10 @@ impl Store {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT external_id,url,historical FROM skipped_articles
-                 WHERE source_id=?1 ORDER BY skipped_at,external_id",
+                "SELECT k.external_id,k.url,k.historical FROM skipped_articles k
+                 WHERE k.source_id=?1 AND NOT EXISTS(
+                   SELECT 1 FROM deleted_notices x WHERE x.source_id=k.source_id AND x.external_id=k.external_id)
+                 ORDER BY k.skipped_at,k.external_id",
             )
             .map_err(|e| e.to_string())?;
         let rows = statement
@@ -865,6 +869,9 @@ impl Store {
             }
         }
         let hash = meaningful_hash(article)?;
+        if self.notice_deleted(source_id, &article.external_id)? {
+            return Err("영구 삭제한 공지라 다시 보관하지 않습니다.".into());
+        }
         let transaction = self
             .connection
             .unchecked_transaction()
@@ -922,7 +929,11 @@ impl Store {
     }
     /// Source, category and state filters; text conditions are added separately.
     fn archive_filters(&self, query: &ArchiveQuery) -> Result<(Vec<String>, Vec<Value>), String> {
-        let mut filters = vec!["1=1".to_string()];
+        let mut filters = vec![if query.trashed {
+            format!("NOT {NOT_TRASHED}")
+        } else {
+            NOT_TRASHED.to_string()
+        }];
         let mut values: Vec<Value> = Vec::new();
         if let Some(source) = &query.source_id {
             self.source(source)?;
@@ -988,7 +999,7 @@ impl Store {
         })
     }
     fn archive_categories(&self, source_id: Option<&str>) -> Result<Vec<String>, String> {
-        let mut categories_statement=self.connection.prepare("SELECT DISTINCT category FROM documents WHERE category IS NOT NULL AND category<>'' AND (?1 IS NULL OR source_id=?1) ORDER BY category").map_err(|e|e.to_string())?;
+        let mut categories_statement=self.connection.prepare(&format!("SELECT DISTINCT d.category FROM documents d WHERE d.category IS NOT NULL AND d.category<>'' AND (?1 IS NULL OR d.source_id=?1) AND {NOT_TRASHED} ORDER BY d.category")).map_err(|e|e.to_string())?;
         let categories = categories_statement
             .query_map([source_id], |r| r.get(0))
             .map_err(|e| e.to_string())?
@@ -1226,7 +1237,7 @@ impl Store {
         })
     }
     pub(crate) fn archive_summary(&self) -> Result<ArchiveSummary, String> {
-        self.connection.query_row("SELECT COUNT(*),COALESCE(SUM(COALESCE(u.is_read,0)=0),0),COALESCE(SUM(COALESCE(u.saved,0)=1),0),COALESCE(SUM(d.historical=0 AND d.collected_at>=COALESCE(s.previous_success,'1970')),0),(SELECT COALESCE(SUM(bytes),0) FROM (SELECT MAX(bytes) bytes FROM resources WHERE status='downloaded' GROUP BY local_path)) FROM documents d JOIN sources s ON s.id=d.source_id LEFT JOIN document_state u ON u.document_id=d.id",[],|r|Ok(ArchiveSummary {documents:r.get::<_,i64>(0)? as u64,unread:r.get::<_,i64>(1)? as u64,saved:r.get::<_,i64>(2)? as u64,new_since_sync:r.get::<_,i64>(3)? as u64,resource_bytes:r.get::<_,i64>(4)? as u64})).map_err(|e|e.to_string())
+        self.connection.query_row(&format!("SELECT COUNT(*),COALESCE(SUM(COALESCE(u.is_read,0)=0),0),COALESCE(SUM(COALESCE(u.saved,0)=1),0),COALESCE(SUM(d.historical=0 AND d.collected_at>=COALESCE(s.previous_success,'1970')),0),(SELECT COALESCE(SUM(bytes),0) FROM (SELECT MAX(bytes) bytes FROM resources WHERE status='downloaded' GROUP BY local_path)),(SELECT COUNT(*) FROM trashed_documents) FROM documents d JOIN sources s ON s.id=d.source_id LEFT JOIN document_state u ON u.document_id=d.id WHERE {NOT_TRASHED}"),[],|r|Ok(ArchiveSummary {documents:r.get::<_,i64>(0)? as u64,unread:r.get::<_,i64>(1)? as u64,saved:r.get::<_,i64>(2)? as u64,new_since_sync:r.get::<_,i64>(3)? as u64,resource_bytes:r.get::<_,i64>(4)? as u64,trashed:r.get::<_,i64>(5)? as u64})).map_err(|e|e.to_string())
     }
     pub(crate) fn document(
         &self,

@@ -630,6 +630,7 @@ fn list_preview_marks_only_bodies_longer_than_the_excerpt() {
             category: None,
             saved_only: false,
             unread_only: false,
+            trashed: false,
             ascending: false,
             offset: 0,
             limit: None,
@@ -1526,7 +1527,7 @@ fn schema_ten_upgrade_keeps_archive_and_adds_skipped_articles() {
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices;
                  PRAGMA user_version=10;",
             )
             .unwrap();
@@ -1578,7 +1579,7 @@ fn schema_eleven_upgrade_retries_mislabeled_and_newly_allowed_resources() {
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices;
                  PRAGMA user_version=11;"
             ))
             .unwrap();
@@ -1611,7 +1612,7 @@ fn retired_eng_newsletter_row_is_removed_but_archived_data_is_kept() {
             .execute_batch(
                 "DROP TABLE cybercampus_tasks; DROP TABLE cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices;
                  PRAGMA user_version=16",
             )
             .unwrap();
@@ -1763,7 +1764,7 @@ fn schema_twenty_upgrade_keeps_every_subscription_with_groups_on() {
         store
             .connection
             .execute_batch(
-                "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format;
+                "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices;
                  PRAGMA user_version=20;",
             )
             .unwrap();
@@ -1792,4 +1793,183 @@ fn every_public_board_belongs_to_a_known_group() {
             Some(group) => assert!(groups.iter().any(|g| g.id == group), "{group}"),
         }
     }
+}
+#[test]
+fn trash_hides_and_restores_then_purge_leaves_a_tombstone_across_reopen() {
+    let (directory, store) = database();
+    let (kept, _) = store
+        .upsert_article(
+            "one",
+            &article("1", "장학금 안내", "장학 본문", "2026-11-01"),
+            false,
+        )
+        .unwrap();
+    let (trashed, _) = store
+        .upsert_article(
+            "one",
+            &article("2", "휴학 신청", "휴학 본문", "2026-11-02"),
+            false,
+        )
+        .unwrap();
+    store.set_document_state(trashed, None, Some(true)).unwrap();
+    let listed = |store: &Store, trashed: bool| {
+        store
+            .archive_query(&ArchiveQuery {
+                trashed,
+                ..Default::default()
+            })
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>()
+    };
+
+    store.trash_documents(&[trashed, trashed]).unwrap();
+    assert_eq!(listed(&store, false), [kept]);
+    assert_eq!(listed(&store, true), [trashed]);
+    let search = store
+        .archive_query(&ArchiveQuery {
+            query: "휴학".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(search.items.is_empty());
+    let summary = store.archive_summary().unwrap();
+    assert_eq!(
+        (summary.documents, summary.saved, summary.trashed),
+        (1, 0, 1)
+    );
+    assert!(store
+        .sources()
+        .unwrap()
+        .iter()
+        .any(|s| s.definition.id == "one" && s.unread == 1));
+    // The reader still opens it from 휴지통.
+    let detail = store.document(trashed, None).unwrap();
+    assert!(detail.item.trashed && detail.item.saved);
+    assert!(store.trash_documents(&[999]).is_err());
+    assert!(store.trash_documents(&[]).is_err());
+
+    // Restoring brings back the notice with its saved state.
+    store.restore_documents(&[trashed]).unwrap();
+    assert_eq!(listed(&store, false), [trashed, kept]);
+    assert_eq!(store.archive_summary().unwrap().saved, 1);
+
+    // Only a notice in 휴지통 can be deleted permanently.
+    assert!(store.purge_trashed(Some(&[kept])).is_err());
+    store.trash_documents(&[trashed]).unwrap();
+    store.purge_trashed(None).unwrap();
+    assert!(store.document(trashed, None).is_err());
+    assert!(store.notice_deleted("one", "2").unwrap());
+    assert!(!store.notice_deleted("two", "2").unwrap());
+    assert_eq!(store.archive_summary().unwrap().trashed, 0);
+    assert_archive_integrity(&store);
+    drop(store);
+
+    let store = Store::open(&directory.path().join("db")).unwrap();
+    assert!(store
+        .upsert_article(
+            "one",
+            &article("2", "휴학 신청", "휴학 본문", "2026-11-02"),
+            false
+        )
+        .is_err());
+    // The same external ID on another board is a different notice.
+    assert!(store
+        .upsert_article(
+            "two",
+            &article("2", "휴학 신청", "휴학 본문", "2026-11-02"),
+            false
+        )
+        .is_ok());
+    assert_eq!(listed(&store, false).len(), 2);
+}
+#[test]
+fn purge_returns_only_files_no_other_notice_uses() {
+    let (_directory, store) = database();
+    let mut ids = Vec::new();
+    for external in ["1", "2"] {
+        let (id, _) = store
+            .upsert_article(
+                "one",
+                &article(external, "공지", "본문", "2026-11-01"),
+                false,
+            )
+            .unwrap();
+        ids.push(id);
+    }
+    let revision = |id: i64| store.document(id, None).unwrap().revision_id;
+    let hash = "a".repeat(64);
+    for (id, url, path) in [
+        (
+            ids[0],
+            "https://www.sogang.ac.kr/a.png",
+            "resources/shared.png",
+        ),
+        (
+            ids[1],
+            "https://www.sogang.ac.kr/b.png",
+            "resources/shared.png",
+        ),
+        (
+            ids[0],
+            "https://www.sogang.ac.kr/c.png",
+            "resources/own.png",
+        ),
+    ] {
+        let resource = store
+            .add_resource_for_test(id, revision(id), url, "x.png", "image")
+            .unwrap();
+        store
+            .resource_result(
+                resource,
+                "downloaded",
+                Some("image/png"),
+                Some(1),
+                Some(path),
+                Some(&hash),
+                None,
+            )
+            .unwrap();
+    }
+    store.trash_documents(&[ids[0]]).unwrap();
+    assert_eq!(
+        store.purge_trashed(Some(&[ids[0]])).unwrap(),
+        ["resources/own.png"]
+    );
+    assert_eq!(store.document(ids[1], None).unwrap().resources.len(), 1);
+}
+#[test]
+fn trashed_notices_leave_automatic_ai_work() {
+    let (_directory, store) = database();
+    let (kept, _) = store
+        .upsert_article(
+            "one",
+            &article("1", "장학금 안내", "장학 본문", "2026-11-01"),
+            false,
+        )
+        .unwrap();
+    let (trashed, _) = store
+        .upsert_article(
+            "one",
+            &article("2", "휴학 신청", "휴학 본문", "2026-11-02"),
+            false,
+        )
+        .unwrap();
+    store.trash_documents(&[trashed]).unwrap();
+    let backlog = store
+        .ai_backlog_candidates(10, false)
+        .unwrap()
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect::<Vec<_>>();
+    assert_eq!(backlog, [kept]);
+    let recent = store
+        .ai_recent_candidates("1970-01-01T00:00:00Z", 10, false)
+        .unwrap()
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect::<Vec<_>>();
+    assert_eq!(recent, [kept]);
 }

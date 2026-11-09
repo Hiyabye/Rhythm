@@ -295,8 +295,12 @@ async fn notices<H: Http>(
         sync::active(cancel)?;
         let external_id = format!("{}-{}", course.key, row.seq);
         let marker = fingerprint(&row);
-        current.discovered += 1;
         let existing = with_store(store, |s| s.document_id(SOURCE_ID, &external_id))?;
+        // Fetching would count as another eClass view of a notice the user deleted.
+        if existing.is_none() && with_store(store, |s| s.notice_deleted(SOURCE_ID, &external_id))? {
+            continue;
+        }
+        current.discovered += 1;
         if existing.is_some()
             && with_store(store, |s| {
                 s.listing_unchanged(SOURCE_ID, &external_id, &marker)

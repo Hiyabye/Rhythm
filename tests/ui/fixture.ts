@@ -121,6 +121,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       title: `한국어 공지 ${String(index + 1).padStart(2, '0')}`, author: '교학팀', category: index % 2 ? '학사' : '장학',
       published_at: '2026-10-24', collected_at: '2026-10-24 12:00:00', is_read: false,
       saved: options.saved ?? false, historical: true, snippet: '컴퓨터 Computer 장학금 경제 공지 본문', content_status: 'complete',
+      trashed: false,
     }));
     let sources = [{ id: 'computing-updates', name: '소식', organization: '소프트웨어융합대학',
       description: '학교 공개 소식', url: 'https://computing.sogang.ac.kr/ko/community/news/list', family: 'computing', supported: true,
@@ -251,7 +252,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       setNotificationAuthorization: (status: string) => { notificationAuthorization = status; },
       modelDirectoryResolvers: [] as Array<() => void>,
       releaseModelDirectory() { this.modelDirectoryResolvers.splice(0).forEach((release) => release()); },
-      dialogs: [] as string[], dialogAnswers: [] as ('ok' | 'cancel')[],
+      dialogs: [] as string[], dialogAnswers: [] as ('ok' | 'cancel')[], trashCalls: [] as { command: string; ids: number[] | null }[],
       stateDelay: 0, subscribeError: false, snapshotFailures: 0, resultsFailures: 0, documentJobs: [] as any[], retryMessage: '자료를 내려받지 못했습니다. 연결을 확인해 주세요.',
       queryResolvers: [] as Array<() => void>,
       emitUpdater: (payload: unknown) => {
@@ -595,16 +596,20 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             return { cached: null, job: copy(job) };
           }
           case 'ai_cancel': { const job = [...ai.jobs, ...fixture.documentJobs].find((job) => job.id === args.id); if (job) job.status = 'cancelled'; if (ai.progress?.job_id === args.id) ai.progress = null; return null; }
-          case 'archive_sources': { const result = copy(sources).map((source) => ({ ...source, unread: entries.filter((x) => x.source_id === source.id && !x.is_read).length })); await wait(fixture.sourceDelay); return result; }
-          case 'archive_summary': return { documents: entries.length, unread: entries.filter((x) => !x.is_read).length,
-            saved: entries.filter((x) => x.saved).length, new_since_sync: 0, resource_bytes: 0 };
+          case 'archive_sources': { const result = copy(sources).map((source) => ({ ...source, unread: entries.filter((x) => x.source_id === source.id && !x.is_read && !x.trashed).length })); await wait(fixture.sourceDelay); return result; }
+          case 'archive_summary': {
+            // As the store: notices in 휴지통 count only as trashed.
+            const live = entries.filter((x) => !x.trashed);
+            return { documents: live.length, unread: live.filter((x) => !x.is_read).length,
+              saved: live.filter((x) => x.saved).length, new_since_sync: 0, resource_bytes: 0, trashed: entries.length - live.length };
+          }
           case 'archive_status': return copy(sync);
           case 'archive_query':
           case 'archive_ranked_query': {
             const query = args.query;
             if (options.queryError) throw '로컬 검색을 완료하지 못했습니다.';
             const terms = query.query.trim().split(/\s+/).filter(Boolean);
-            const passes = (entry: DocumentItem) => (!query.saved_only || entry.saved) && (!query.unread_only || !entry.is_read)
+            const passes = (entry: DocumentItem) => entry.trashed === Boolean(query.trashed) && (!query.saved_only || entry.saved) && (!query.unread_only || !entry.is_read)
               && (!query.source_id || entry.source_id === query.source_id) && (!query.category || entry.category === query.category);
             const filtered = copy(entries.filter((entry) => passes(entry)
               && terms.every((term: string) => `${entry.title} ${entry.snippet}`.toLowerCase().includes(term.toLowerCase()))));
@@ -644,6 +649,19 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             const item = entries.find((entry) => entry.id === args.id)!;
             if (args.isRead !== null) item.is_read = args.isRead;
             if (args.saved !== null) item.saved = args.saved;
+            return null;
+          }
+          case 'archive_trash':
+          case 'archive_restore':
+            for (const entry of entries) if (args.ids.includes(entry.id)) entry.trashed = command === 'archive_trash';
+            fixture.trashCalls.push({ command, ids: [...args.ids] });
+            return null;
+          case 'archive_purge': {
+            if (args.ids && args.ids.some((id: number) => !entries.find((entry) => entry.id === id)?.trashed)) throw '휴지통에 있는 공지만 영구 삭제할 수 있습니다.';
+            fixture.trashCalls.push({ command, ids: args.ids === null ? null : [...args.ids] });
+            for (let index = entries.length - 1; index >= 0; index -= 1) {
+              if (entries[index].trashed && (args.ids === null || args.ids.includes(entries[index].id))) entries.splice(index, 1);
+            }
             return null;
           }
           case 'archive_subscribe':

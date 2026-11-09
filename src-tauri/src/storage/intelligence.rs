@@ -894,6 +894,7 @@ impl Store {
                    ))
                    AND NOT EXISTS(SELECT 1 FROM ai_jobs j WHERE j.document_id=d.id AND j.revision_id=r.id)
                    AND (?3=0 OR d.source_id<>?4)
+                   AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
                  ORDER BY r.collected_at DESC,r.id DESC LIMIT ?2",
             )
             .map_err(|e| e.to_string())?
@@ -920,6 +921,7 @@ impl Store {
                  WHERE length(trim(d.body_text))>0
                    AND NOT EXISTS(SELECT 1 FROM ai_jobs j WHERE j.document_id=d.id AND j.revision_id=r.id)
                    AND (?2=0 OR d.source_id<>?3)
+                   AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
                  ORDER BY d.published_at DESC,d.id DESC LIMIT ?1",
             )
             .map_err(|e| e.to_string())?
@@ -954,6 +956,7 @@ impl Store {
                          AND c.model_sha256=?1 AND c.config_hash=?2
                    )
                    AND (?4=0 OR d.source_id<>?5)
+                   AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
                  ORDER BY r.collected_at DESC,r.id DESC LIMIT ?3",
             )
             .map_err(|e| e.to_string())?
@@ -1152,6 +1155,7 @@ impl Store {
                  JOIN sources s ON s.id=d.source_id
                  JOIN notice_embeddings e ON e.document_id=d.id AND e.model_sha256=?1
                    AND e.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id)
+                 WHERE NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
                  ORDER BY d.published_at DESC,d.id DESC
                  LIMIT ?2",
             )
@@ -1404,6 +1408,6 @@ impl Store {
     }
     pub fn ai_recent_results(&self, limit: u32) -> Result<Vec<AiResult>, String> {
         // One latest result per current revision, not a history/regeneration flood.
-        self.connection.prepare(&format!("SELECT {RESULT_COLUMNS} FROM ai_results a WHERE a.id=(SELECT MAX(b.id) FROM ai_results b WHERE b.document_id=a.document_id AND b.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=a.document_id)) ORDER BY a.id DESC LIMIT ?1")).map_err(|e|e.to_string())?.query_map([limit.min(MAX_LIST_LIMIT)],result_row).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())
+        self.connection.prepare(&format!("SELECT {RESULT_COLUMNS} FROM ai_results a WHERE a.id=(SELECT MAX(b.id) FROM ai_results b WHERE b.document_id=a.document_id AND b.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=a.document_id)) AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=a.document_id) ORDER BY a.id DESC LIMIT ?1")).map_err(|e|e.to_string())?.query_map([limit.min(MAX_LIST_LIMIT)],result_row).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())
     }
 }

@@ -155,6 +155,7 @@ pub(super) fn map_candidate(
             is_read: row.get(10)?,
             snippet: row.get(11)?,
             content_status: row.get(13)?,
+            trashed: false,
         },
         feedback,
         source_subscribed: row.get(15)?,
@@ -463,6 +464,7 @@ impl Store {
             format!(
                 "UNION SELECT id FROM (
                     SELECT d.id FROM documents d JOIN active_sources a ON a.source_id=d.source_id
+                    AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
                     WHERE d.source_id IN ({ids})
                     ORDER BY d.published_at DESC,d.id DESC LIMIT {SOURCE_CANDIDATE_LIMIT}
                 )"
@@ -471,6 +473,7 @@ impl Store {
         let updated_union = format!(
             "UNION SELECT id FROM (
                 SELECT d.id FROM documents d JOIN active_sources a ON a.source_id=d.source_id
+                    AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
                 WHERE d.last_revision_at IS NOT NULL
                 ORDER BY d.last_revision_at DESC,d.id DESC LIMIT {RECENT_COLLECTION_LIMIT}
             )"
@@ -483,6 +486,7 @@ impl Store {
         {
             "UNION SELECT id FROM (
                 SELECT d.id FROM documents d JOIN active_sources a ON a.source_id=d.source_id
+                    AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
                 WHERE d.category COLLATE NOCASE IN (
                     SELECT name FROM personalization_interests
                     UNION SELECT j.value FROM personalization_interests p,json_each(p.aliases_json) j
@@ -514,6 +518,7 @@ impl Store {
                     SELECT d.id FROM documents_fts
                     JOIN documents d ON d.id=documents_fts.rowid
                     JOIN active_sources a ON a.source_id=d.source_id
+                    AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
                     WHERE documents_fts MATCH ?1
                     ORDER BY d.published_at DESC,d.id DESC LIMIT {FTS_CANDIDATE_LIMIT}
                 )"
@@ -541,6 +546,7 @@ impl Store {
                     SELECT d.id FROM documents_fts
                     JOIN documents d ON d.id=documents_fts.rowid
                     JOIN active_sources a ON a.source_id=d.source_id
+                    AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
                     WHERE {short_conditions}
                     ORDER BY d.published_at DESC,d.id DESC LIMIT {FTS_CANDIDATE_LIMIT}
                 )"
@@ -551,21 +557,25 @@ impl Store {
             "WITH active_sources(source_id) AS ({ACTIVE_SOURCES_SQL}), candidates(id) AS (
                 SELECT id FROM (
                     SELECT d.id FROM documents d JOIN active_sources a ON a.source_id=d.source_id
+                    AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
                     ORDER BY d.published_at DESC,d.id DESC LIMIT {RECENT_CANDIDATE_LIMIT}
                 )
                 UNION SELECT id FROM (
                     SELECT d.id FROM documents d JOIN active_sources a ON a.source_id=d.source_id
+                    AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
                     WHERE d.historical=0 ORDER BY d.collected_at DESC,d.id DESC LIMIT {RECENT_COLLECTION_LIMIT}
                 )
                 {updated_union}
                 UNION SELECT document_id FROM (
                     SELECT u.document_id FROM document_state u
                     JOIN documents d ON d.id=u.document_id JOIN active_sources a ON a.source_id=d.source_id
+                    AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
                     WHERE u.saved=1 ORDER BY u.saved_at DESC,u.document_id DESC LIMIT {SAVED_CANDIDATE_LIMIT}
                 )
                 UNION SELECT document_id FROM (
                     SELECT f.document_id FROM personalization_feedback f
                     JOIN documents d ON d.id=f.document_id JOIN active_sources a ON a.source_id=d.source_id
+                    AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
                     ORDER BY f.updated_at DESC,f.document_id DESC LIMIT {FEEDBACK_CANDIDATE_LIMIT}
                 )
                 {source_union}
@@ -733,6 +743,7 @@ impl Store {
              FROM documents d
              JOIN sources s ON s.id=d.source_id
              JOIN active_sources a ON a.source_id=d.source_id
+                    AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
              LEFT JOIN document_state u ON u.document_id=d.id
              LEFT JOIN personalization_feedback f ON f.document_id=d.id
              WHERE d.id IN ({id_placeholders})"

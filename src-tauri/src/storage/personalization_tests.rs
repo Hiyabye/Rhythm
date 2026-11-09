@@ -1896,3 +1896,24 @@ fn notification_score_reaches_documents_outside_every_recommendation_pool() {
     assert!(score.reasons.is_empty());
     assert!(score.positive_interest_matches.is_empty());
 }
+
+#[test]
+fn trashed_notices_are_not_recommended_until_restored() {
+    let (_directory, store) = store();
+    save_interest(&store, "AI", 5);
+    let ids = |store: &Store| {
+        store
+            .personalization_recommendations(10)
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| item.item.id)
+            .collect::<Vec<_>>()
+    };
+    assert!(ids(&store).contains(&1));
+    store.trash_documents(&[1]).unwrap();
+    assert!(!ids(&store).contains(&1));
+    assert!(!ids(&store).is_empty());
+    store.restore_documents(&[1]).unwrap();
+    assert!(ids(&store).contains(&1));
+}

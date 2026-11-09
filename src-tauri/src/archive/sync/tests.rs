@@ -3562,3 +3562,119 @@ async fn a_board_subscribed_during_a_job_of_every_board_joins_it() {
         assert!(!controller.join(with_store(&store, |s| s.source(COMPUTING)).unwrap()));
     }
 }
+
+struct Recording<'a, T> {
+    inner: &'a T,
+    urls: Mutex<Vec<String>>,
+}
+impl<T: Transport + Sync> Transport for Recording<'_, T> {
+    async fn fetch<'a>(
+        &'a self,
+        url: &'a Url,
+        validators: Option<(Option<String>, Option<String>)>,
+        limit: usize,
+        cancel: &AtomicBool,
+        access: network::Access,
+    ) -> Result<network::Fetch, String> {
+        self.urls.lock().unwrap().push(url.to_string());
+        self.inner
+            .fetch(url, validators, limit, cancel, access)
+            .await
+    }
+}
+
+#[tokio::test]
+async fn trashed_notices_stay_in_sync_and_deleted_ones_are_never_fetched_again() {
+    let (dir, store) = setup(&["se-notices"]);
+    let fake = SemiconductorFake {
+        revision: AtomicU64::new(1),
+    };
+    let controller = Controller::new();
+    assert!(controller
+        .execute(
+            &store,
+            dir.path(),
+            &fake,
+            sources(&store, &["se-notices"]),
+            "historical",
+            Budget::default()
+        )
+        .await
+        .is_ok());
+    assert_eq!(items(&store).len(), 32);
+    let id = with_store(&store, |s| s.document_id("se-notices", "39"))
+        .unwrap()
+        .unwrap();
+    let shared = with_store(&store, |s| s.document(id, None))
+        .unwrap()
+        .resources;
+    assert!(shared.iter().all(|r| r.status == "downloaded"));
+
+    // In 휴지통 the notice keeps its content and still counts as archived.
+    with_store(&store, |s| s.trash_documents(&[id])).unwrap();
+    assert_eq!(items(&store).len(), 31);
+    assert!(controller
+        .execute(
+            &store,
+            dir.path(),
+            &fake,
+            sources(&store, &["se-notices"]),
+            "incremental",
+            Budget::default()
+        )
+        .await
+        .is_ok());
+    assert_eq!(items(&store).len(), 31);
+    assert!(
+        with_store(&store, |s| s.document(id, None))
+            .unwrap()
+            .item
+            .trashed
+    );
+
+    // Its downloaded files are handed back for removal; other notices keep theirs.
+    let mut orphaned = with_store(&store, |s| s.purge_trashed(Some(&[id]))).unwrap();
+    let mut expected = shared
+        .iter()
+        .filter_map(|r| r.local_path.clone())
+        .collect::<Vec<_>>();
+    orphaned.sort();
+    expected.sort();
+    expected.dedup();
+    assert_eq!(orphaned, expected);
+    for item in items(&store) {
+        for resource in with_store(&store, |s| s.document(item.id, None))
+            .unwrap()
+            .resources
+        {
+            assert!(!orphaned.contains(resource.local_path.as_ref().unwrap()));
+        }
+    }
+
+    let recording = Recording {
+        inner: &fake,
+        urls: Mutex::new(Vec::new()),
+    };
+    assert!(controller
+        .execute(
+            &store,
+            dir.path(),
+            &recording,
+            sources(&store, &["se-notices"]),
+            "incremental",
+            Budget::default()
+        )
+        .await
+        .is_ok());
+    let urls = recording.urls.into_inner().unwrap();
+    assert!(urls.iter().any(|url| url.contains("board_list.php")));
+    assert!(!urls
+        .iter()
+        .any(|url| url.contains("board_view.php") && url.contains("no=39")));
+    assert!(with_store(&store, |s| s.document_id("se-notices", "39"))
+        .unwrap()
+        .is_none());
+    assert_eq!(items(&store).len(), 31);
+    let source = with_store(&store, |s| s.source("se-notices")).unwrap();
+    assert_eq!(source.failed, 0);
+}

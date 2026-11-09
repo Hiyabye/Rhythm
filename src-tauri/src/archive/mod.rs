@@ -178,6 +178,30 @@ pub async fn archive_state(
     with_store(&state.store, |s| s.set_document_state(id, is_read, saved))
 }
 #[tauri::command]
+pub async fn archive_trash(state: State<'_, AppState>, ids: Vec<i64>) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
+    with_store(&state.store, |s| s.trash_documents(&ids))
+}
+#[tauri::command]
+pub async fn archive_restore(state: State<'_, AppState>, ids: Vec<i64>) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
+    with_store(&state.store, |s| s.restore_documents(&ids))
+}
+/// Permanently deletes the given trashed notices, or all of 휴지통 without `ids`.
+#[tauri::command]
+pub async fn archive_purge(
+    state: State<'_, AppState>,
+    ids: Option<Vec<i64>>,
+) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
+    let orphaned = with_store(&state.store, |s| s.purge_trashed(ids.as_deref()))?;
+    // The rows are gone, so a file left behind is only unused disk space.
+    for path in orphaned {
+        let _ = tokio::fs::remove_file(state.data_root.join(path)).await;
+    }
+    Ok(())
+}
+#[tauri::command]
 pub async fn archive_start(
     state: State<'_, AppState>,
     source_ids: Option<Vec<String>>,

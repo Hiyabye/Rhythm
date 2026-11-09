@@ -1705,3 +1705,16 @@ fn seed_bootstrap_state_is_durable() {
     let store = Store::open(&path).unwrap();
     assert!(store.seed_complete("one").unwrap());
 }
+
+#[test]
+fn trashed_notice_revisions_are_inactive_so_they_are_suppressed() {
+    let (_directory, store) = store();
+    add_source(&store, "one");
+    add_document(&store, 1, "one", false);
+    store.trash_documents(&[1]).unwrap();
+    let candidates = store.proactive_candidates(10).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert!(!candidates[0].source_active);
+    store.restore_documents(&[1]).unwrap();
+    assert!(store.proactive_candidates(10).unwrap()[0].source_active);
+}
