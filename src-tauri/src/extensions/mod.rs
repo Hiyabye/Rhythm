@@ -96,7 +96,7 @@ impl Registry {
                     id,
                     display_name,
                     description,
-                    available: id != STUDIUM,
+                    available: true,
                     enabled: store.enabled(id)?,
                 })
             })
@@ -153,11 +153,8 @@ mod tests {
                 STUDIUM
             ]
         );
-        // A new profile starts with every extension off. Studium remains
-        // unavailable in the UI until its screen is included.
-        assert!(listed
-            .iter()
-            .all(|e| !e.enabled && e.available == (e.id != STUDIUM)));
+        // A new profile starts with every extension off.
+        assert!(listed.iter().all(|e| !e.enabled && e.available));
         registry.set(&store, NOTICES, true).unwrap();
         registry.set(&store, AI, true).unwrap();
         let enabled = registry.list(&store).unwrap();
