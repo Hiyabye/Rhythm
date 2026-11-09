@@ -557,8 +557,28 @@
         "purpose": "Refresh icon only while a sync runs."
       },
       {
+        "name": "state-entry",
+        "value": "fade/fly/slide 140-200ms cubicOut; fly 4-12px",
+        "purpose": "Views, panes, reader, setup steps, banners, save notice, AI results; page and step swaps animate entry only."
+      },
+      {
+        "name": "popover-entry",
+        "value": "opacity .14s, translate .14s via @starting-style",
+        "purpose": "Popovers drop 4px into place; no exit animation."
+      },
+      {
+        "name": "list-flip",
+        "value": "flip 200ms cubicOut",
+        "purpose": "Notice and recommendation rows moving after save, feedback or duplicate expansion."
+      },
+      {
+        "name": "progress-tween",
+        "value": "Tween 400ms cubicOut",
+        "purpose": "Download bars easing between status polls."
+      },
+      {
         "name": "reduced-motion",
-        "value": "prefers-reduced-motion: reduce disables all animation and transition",
+        "value": "prefers-reduced-motion: reduce disables all animation and transition (CSS rule plus src/lib/motion.ts for Svelte motion)",
         "purpose": "Accessibility."
       }
     ],
@@ -690,7 +710,7 @@
       "One system-blue accent; calendar-style family colours always paired with text",
       "Pretendard at system sizes on a 13px base, tabular numerals for every count and date",
       "Flat depth: hairlines and tonal steps between bg, sidebar and pane",
-      "Native-quick 140–150ms fades; no decorative motion"
+      "Native-quick 140–200ms state-change motion; no decorative motion"
     ],
     "rules": [
       {

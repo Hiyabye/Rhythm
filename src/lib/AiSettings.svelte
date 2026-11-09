@@ -7,6 +7,8 @@
   import Icon from './Icon.svelte';
   import Hint from './Hint.svelte';
   import Popover from './Popover.svelte';
+  import Progress from './Progress.svelte';
+  import { fade } from './motion';
 
   let { desktop, onsetup }: { desktop: boolean; onsetup?: () => void } = $props();
   let data = $state<AiSnapshot | null>(null);
@@ -181,7 +183,7 @@
 </script>
 
 {#snippet removeConfirm(model: AiModel)}
-  <div class="ai-confirm" role="group" aria-label={`${model.name} 삭제 확인`}>
+  <div class="ai-confirm" in:fade role="group" aria-label={`${model.name} 삭제 확인`}>
     <p>{model.kind === 'embedding' ? (model.ownership === 'external' ? '분류 모델 참조만 해제합니다. 외부 원본 파일과 공지·요약 결과는 유지되며, 이 모델의 분류 결과는 삭제됩니다.' : '분류 모델 파일을 삭제할까요? 공지와 요약 결과는 유지되며, 이 모델의 분류 결과는 삭제됩니다.') : (model.ownership === 'external' ? '등록된 참조만 해제합니다. 외부 원본 파일은 삭제하지 않습니다.' : '모델 파일을 삭제할까요? 공지와 기존 AI 분석은 유지됩니다.')}</p>
     {#if model.ownership === 'managed'}<p class="footnote">폴더에 접근할 수 없거나 다른 위치에 다시 설치하려면 파일을 남기고 목록에서 제거하세요.</p>{/if}
     <div class="popover-actions">
@@ -232,7 +234,7 @@
           <p class="row-detail">연결 확인은 공지 내용을 보내지 않고 짧은 시험 요청 한 번만 보냅니다.</p>
         </div>
         {#if !data.preferences.remote_consent}
-          <div class="ai-confirm" role="group" aria-label="원격 AI 사용 동의">
+          <div class="ai-confirm" in:fade role="group" aria-label="원격 AI 사용 동의">
             <p><strong>{data.remote_host ?? '입력한 API 주소'}</strong>로 공지 제목·본문과 분석 지시문을 보냅니다. 관심사, 프로필, 피드백, 저장·읽음 상태, 보관함 식별자, 기기 정보는 보내지 않습니다. 보낸 내용에는 제공자의 데이터 정책이 적용됩니다.</p>
             <p class="footnote">주소를 바꾸면 동의가 초기화됩니다. 원격 전송을 원하지 않으면 로컬 엔진을 사용하세요.</p>
             <div class="popover-actions"><button class="button secondary small" disabled={controlsBusy || !data.preferences.remote_base_url || !data.preferences.remote_model} onclick={() => preference({ remote_consent: true }, '원격 AI 사용에 동의했습니다.')}>동의하고 사용</button></div>
@@ -307,14 +309,14 @@
           <p class="model-meta">{model?.ownership === 'external' ? '외부 파일' : entry?.use_case ?? ''} · {archiveSize(model ? (model.bytes || model.downloaded_bytes || entry?.bytes || 0) : entry?.bytes ?? 0)}</p>
           {#if retired}<p class="model-note">더 이상 제공하지 않는 모델</p>{/if}
           {#if model && ['downloading', 'pending'].includes(model.status)}
-            <label class="ai-progress"><span class="sr-only">모델 다운로드</span><progress max={model.expected_bytes || 1} value={model.downloaded_bytes}></progress><span>{archiveSize(model.downloaded_bytes)} / {archiveSize(model.expected_bytes ?? 0)}</span></label>
+            <label class="ai-progress"><span class="sr-only">모델 다운로드</span><Progress max={model.expected_bytes || 1} value={model.downloaded_bytes} /><span>{archiveSize(model.downloaded_bytes)} / {archiveSize(model.expected_bytes ?? 0)}</span></label>
           {:else if model?.status === 'verifying'}<p class="model-note" role="status">무결성 확인 중</p>
           {:else if model && model.status !== 'installed'}<p class="model-note">{modelStatus[model.status] ?? model.status}</p>{/if}
           {#if model?.error}<p class="archive-error" role="alert">{model.error}</p>{/if}
           {#if model && projectorSpec && model.status === 'installed' && model.ownership !== 'external'}
             {#if projector && ['pending', 'downloading'].includes(projector.status)}
               <p class="model-note" role="status">{projectorStatus[projector.status]}</p>
-              <label class="ai-progress"><span class="sr-only">이미지 인식 모듈 다운로드</span><progress max={projector.expected_bytes || 1} value={projector.downloaded_bytes}></progress><span>{archiveSize(projector.downloaded_bytes)} / {archiveSize(projector.expected_bytes)}</span></label>
+              <label class="ai-progress"><span class="sr-only">이미지 인식 모듈 다운로드</span><Progress max={projector.expected_bytes || 1} value={projector.downloaded_bytes} /><span>{archiveSize(projector.downloaded_bytes)} / {archiveSize(projector.expected_bytes)}</span></label>
             {:else if projector?.status === 'verifying'}<p class="model-note" role="status">이미지 인식 모듈 확인 중</p>
             {:else if projector?.status === 'installed'}<p class="model-note">이미지 인식 사용 중 · 예상 메모리 {archiveSize(projectorSpec.memory_bytes)}(실측 최대치 아님)</p>
             {:else if projector}<p class="model-note">{projectorStatus[projector.status] ?? projector.status}</p>{#if projector.error}<p class="archive-error" role="alert">{projector.error}</p>{/if}{/if}
@@ -335,7 +337,7 @@
               {:else}<button class="button small" disabled={busy || data.busy} aria-label={`${name} 이미지 인식 다시 설치`} onclick={() => action('ai_install_projector', { modelId: model.id }, '이미지 인식 모듈 다운로드를 다시 시작했습니다.')}>다시 설치</button>{/if}
             </div>
             {#if projectorRemoval === model.id}
-              <div class="ai-confirm" role="group" aria-label={`${model.name} 이미지 인식 모듈 제거 확인`}>
+              <div class="ai-confirm" in:fade role="group" aria-label={`${model.name} 이미지 인식 모듈 제거 확인`}>
                 <p>이미지 인식 모듈 파일을 삭제할까요? 모델과 기존 분석은 유지되며, 이후 분석은 텍스트만 읽습니다.</p>
                 <div class="popover-actions">
                   <button class="button secondary small" disabled={busy || data.busy} onclick={async () => { await action('ai_remove_projector', { modelId: model.id, confirmed: true }, '이미지 인식 모듈을 제거했습니다. 이후 분석은 텍스트만 읽습니다.'); projectorRemoval = null; }}>확인하고 제거</button>
@@ -378,7 +380,7 @@
             {:else}{@render removeConfirm(embeddingModel)}{/if}
             {#if classificationState === 'failed'}<button class="text-button" disabled={busy || data.busy} onclick={() => action('ai_classification_preferences', { enabled: data?.preferences.classification_enabled ?? true }, '분류를 다시 준비했습니다.')}>분류 다시 시도</button>{/if}
           {:else if embeddingModel && ['pending', 'downloading'].includes(embeddingModel.status)}
-            <label class="ai-progress"><span class="sr-only">분류 모델 다운로드</span><progress max={embeddingModel.expected_bytes || 1} value={embeddingModel.downloaded_bytes}></progress><span>{archiveSize(embeddingModel.downloaded_bytes)} / {archiveSize(embeddingModel.expected_bytes ?? 0)}</span></label>
+            <label class="ai-progress"><span class="sr-only">분류 모델 다운로드</span><Progress max={embeddingModel.expected_bytes || 1} value={embeddingModel.downloaded_bytes} /><span>{archiveSize(embeddingModel.downloaded_bytes)} / {archiveSize(embeddingModel.expected_bytes ?? 0)}</span></label>
             <button class="button secondary small" disabled={cancelling} onclick={() => interrupt('ai_cancel_download', {}, '분류 모델 다운로드를 중단했습니다. 받은 부분은 이어받기용으로 남겨 둡니다.')}>중단</button>
           {:else if embeddingModel && embeddingModel.status === 'verifying'}
             <p class="row-detail" role="status">무결성 확인 중</p>

@@ -15,6 +15,7 @@
   import ExtensionSettings from './lib/ExtensionSettings.svelte';
   import { contributed, enabledExtensions, navigation, settingsPanes, sourceExtensions, type SettingsPane } from './lib/extensions';
   import Hint from './lib/Hint.svelte';
+  import { fade, fly, slide } from './lib/motion';
   import './lib/ai.css';
   import { archiveError as message, archiveDay, localDayKey, openTask } from './lib/archive-format';
   import type { ArchiveSummary, EnergyProfile, Settings, Snapshot, SourceInfo, SyncStatus, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusTask } from './lib/types';
@@ -365,14 +366,14 @@
   <main id="main" tabindex="-1" class:with-week-pane={weekPane}>
     <header class="page-header"><h1>{scopedBoard?.name ?? heading}</h1>{#if scopedBoard}<p>{organizationLabel(scopedBoard.organization)} · 받은 소식</p>{/if}{#if page === 'today'}<p>{date}{#if summary}{' · '}읽지 않은 공지 {summary.unread.toLocaleString('ko-KR')}{#if summary.new_since_sync}{' · '}최근 동기화로 새 공지 {summary.new_since_sync.toLocaleString('ko-KR')}{/if}{/if}</p>{/if}</header>
     {#if !desktop && !loading}<div class="banner browser-notice" role="status"><Icon name="info" /><div><strong>데스크톱 앱에서 시작해 주세요</strong><p>브라우저에서는 화면만 둘러볼 수 있습니다. 설정 저장과 로컬 데이터 접근은 Rhythm 앱에서 사용할 수 있습니다.</p></div></div>{/if}
-    {#if error}<div class="banner error" role="alert"><Icon name="info" /><div><strong>작업을 완료하지 못했습니다</strong><p>{error}</p></div>{#if !snapshot && desktop}<button class="text-button" onclick={load}>다시 시도</button>{/if}</div>{/if}
-    {#if restoreOutcome}<div class="banner" role="status"><Icon name="info" /><div><strong>백업 복원을 마쳤습니다</strong><p>공지 {restoreOutcome.documents.toLocaleString('ko-KR')}건과 첨부 자료 {restoreOutcome.resources.toLocaleString('ko-KR')}개를 복원하고 무결성을 확인했습니다.{#if restoreOutcome.unavailable_resources} 백업 당시 내려받지 못한 첨부 자료 {restoreOutcome.unavailable_resources.toLocaleString('ko-KR')}개는 포함되지 않았습니다.{/if}{#if restoreOutcome.models_needing_reinstall} 사용할 수 없는 AI 모델 {restoreOutcome.models_needing_reinstall.toLocaleString('ko-KR')}개는 다시 등록하거나 설치해 주세요.{/if} 이전 데이터는 데이터 폴더에 복구용으로 보관되어 있습니다.</p></div><button class="text-button" onclick={() => restoreOutcome = null}>닫기</button></div>{/if}
-    {#if desktop && availableUpdate && dismissedUpdate !== availableUpdate.version && page !== 'settings'}<div class="banner" role="status"><Icon name="info" /><div><strong>Rhythm {availableUpdate.version} 버전을 설치할 수 있습니다</strong><p>설정 → 데이터 및 정보에서 내려받으면 업데이트 서명을 확인한 뒤 설치 여부를 묻습니다. 그 전에는 아무것도 바뀌지 않습니다.</p></div><button class="text-button" onclick={updateSettings}>업데이트 보기</button><button class="text-button" onclick={() => dismissedUpdate = availableUpdate?.version ?? ''}>나중에</button></div>{/if}
-    {#if desktop && setupNeeded && enabled.has('ai') && page !== 'settings'}<div class="banner ai-setup-banner" role="status"><Icon name="cpu" /><div><strong>나의 기기에서 공지의 핵심을 정리하세요</strong><p>로컬 AI 모델을 선택하면 한국어 요약과 일정의 근거를 확인할 수 있습니다. 준비 전이나 오프라인에서도 공지는 계속 읽을 수 있습니다.</p></div><button class="text-button" onclick={aiSettings}>로컬 AI 설정하기</button><button class="text-button" onclick={() => setupNeeded = false}>나중에</button></div>{/if}
-    <div class="save-notice" class:visible={Boolean(notice)} role="status" aria-live="polite">{#if notice}<Icon name="check" size={15} />{notice}{/if}</div>
+    {#if error}<div class="banner error" role="alert" transition:slide><Icon name="info" /><div><strong>작업을 완료하지 못했습니다</strong><p>{error}</p></div>{#if !snapshot && desktop}<button class="text-button" onclick={load}>다시 시도</button>{/if}</div>{/if}
+    {#if restoreOutcome}<div class="banner" role="status" transition:slide><Icon name="info" /><div><strong>백업 복원을 마쳤습니다</strong><p>공지 {restoreOutcome.documents.toLocaleString('ko-KR')}건과 첨부 자료 {restoreOutcome.resources.toLocaleString('ko-KR')}개를 복원하고 무결성을 확인했습니다.{#if restoreOutcome.unavailable_resources} 백업 당시 내려받지 못한 첨부 자료 {restoreOutcome.unavailable_resources.toLocaleString('ko-KR')}개는 포함되지 않았습니다.{/if}{#if restoreOutcome.models_needing_reinstall} 사용할 수 없는 AI 모델 {restoreOutcome.models_needing_reinstall.toLocaleString('ko-KR')}개는 다시 등록하거나 설치해 주세요.{/if} 이전 데이터는 데이터 폴더에 복구용으로 보관되어 있습니다.</p></div><button class="text-button" onclick={() => restoreOutcome = null}>닫기</button></div>{/if}
+    {#if desktop && availableUpdate && dismissedUpdate !== availableUpdate.version && page !== 'settings'}<div class="banner" role="status" transition:slide><Icon name="info" /><div><strong>Rhythm {availableUpdate.version} 버전을 설치할 수 있습니다</strong><p>설정 → 데이터 및 정보에서 내려받으면 업데이트 서명을 확인한 뒤 설치 여부를 묻습니다. 그 전에는 아무것도 바뀌지 않습니다.</p></div><button class="text-button" onclick={updateSettings}>업데이트 보기</button><button class="text-button" onclick={() => dismissedUpdate = availableUpdate?.version ?? ''}>나중에</button></div>{/if}
+    {#if desktop && setupNeeded && enabled.has('ai') && page !== 'settings'}<div class="banner ai-setup-banner" role="status" transition:slide><Icon name="cpu" /><div><strong>나의 기기에서 공지의 핵심을 정리하세요</strong><p>로컬 AI 모델을 선택하면 한국어 요약과 일정의 근거를 확인할 수 있습니다. 준비 전이나 오프라인에서도 공지는 계속 읽을 수 있습니다.</p></div><button class="text-button" onclick={aiSettings}>로컬 AI 설정하기</button><button class="text-button" onclick={() => setupNeeded = false}>나중에</button></div>{/if}
+    <div class="save-notice" role="status" aria-live="polite">{#if notice}<span class="save-notice-body" transition:fly={{ y: 8 }}><Icon name="check" size={15} />{notice}</span>{/if}</div>
 
     {#if page === 'settings'}
-      <div class="settings-layout">
+      <div class="settings-layout" in:fade>
         <nav class="settings-nav" aria-label="설정 항목">
           <ul>
             {#each panes as item (item.id)}
@@ -383,6 +384,7 @@
         <section class="settings-pane" aria-labelledby="settings-pane-title" aria-busy={busy || loading}>
           <h2 id="settings-pane-title" class="pane-title" tabindex="-1">{paneLabel}</h2>
           {#if loading}<p class="loading" role="status">저장된 설정을 불러오는 중입니다…</p>{/if}
+          {#key settingsPane}<div in:fade>
           {#if settingsPane === 'general'}
             <div class="settings-group">
               <div class="settings-row"><span class="row-label">화면 테마</span><div class="segmented" role="group" aria-label="화면 테마">{#each themes as option}<button disabled={!snapshot || busy} class:selected={theme === option.id} aria-pressed={theme === option.id} onclick={() => save({ theme: option.id })}><Icon name={option.icon} size={15} />{option.label}</button>{/each}</div></div>
@@ -412,6 +414,7 @@
             <BackupSettings {desktop} />
             <UpdaterSettings {desktop} />
           {/if}
+          </div>{/key}
         </section>
       </div>
     {:else if page === 'tasks'}

@@ -4,6 +4,7 @@
   import type { CybercampusTask } from './types';
   import { archiveError, kstInstant as instant, openTask } from './archive-format';
   import Icon from './Icon.svelte';
+  import { fade } from './motion';
 
   let { desktop, onsettings }: { desktop: boolean; onsettings: () => void } = $props();
   let tasks = $state<CybercampusTask[]>([]);
@@ -82,7 +83,7 @@
   </li>
 {/snippet}
 
-<div class="cybercampus-tasks" aria-busy={loading}>
+<div class="cybercampus-tasks" aria-busy={loading} in:fade>
   <p class="footnote">사이버캠퍼스에서 마지막으로 가져온 과제와 할 일입니다. 제출은 사이버캠퍼스에서 해 주세요. 새로고침하면 최신 상태로 바뀝니다.</p>
   {#if error}<p class="archive-error" role="alert">{error}</p>{/if}
   {#if loading}<p class="loading" role="status">과제와 마감을 불러오는 중입니다…</p>

@@ -4,6 +4,7 @@
   import contract from './analysis-contract.json' with { type: 'json' };
   import type { AiJob, AiResult, AiSnapshot } from './types';
   import { archiveDate, archiveError } from './archive-format';
+  import { fade } from './motion';
 
   let { documentId, revisionId, onsettings, onchange }: { documentId: number; revisionId: number; onsettings: () => void; onchange: () => void } = $props();
   let results = $state<AiResult[]>([]);
@@ -96,7 +97,7 @@
   {#if error || jobError}<p class="archive-error" role="alert">{error || jobError}</p>{/if}
   {#if fetchError}<p class="archive-error" role="alert">{fetchError}</p><button class="text-button" onclick={refresh}>분석 정보 다시 확인</button>{/if}
   <p class="ai-feedback" role="status">{feedback}</p>
-  {#if processing}<div class="ai-operation"><p role="status">{progress ? (phaseLabel[progress.phase] ?? '로컬 AI 작업을 처리하고 있습니다') : job?.status === 'running' ? '이 기기에서 공지를 분석하고 있습니다…' : '다른 분석이 끝나기를 기다리고 있습니다…'}{#if progress}{' · 경과 '}{(progress.elapsed_ms / 1000).toFixed(0)}초{/if}</p><button class="text-button" disabled={submitting} onclick={cancel}>이 공지 분석 취소</button></div>{/if}
+  {#if processing}<div class="ai-operation" in:fade><p role="status">{progress ? (phaseLabel[progress.phase] ?? '로컬 AI 작업을 처리하고 있습니다') : job?.status === 'running' ? '이 기기에서 공지를 분석하고 있습니다…' : '다른 분석이 끝나기를 기다리고 있습니다…'}{#if progress}{' · 경과 '}{(progress.elapsed_ms / 1000).toFixed(0)}초{/if}</p><button class="text-button" disabled={submitting} onclick={cancel}>이 공지 분석 취소</button></div>{/if}
   {#if current}
     {#if current.model_identity.engine === 'openai-compatible'}
       <p class="ai-caution" role="note">이 결과는 지정한 원격 API가 만들었습니다. 공지 제목과 본문이 해당 제공자에게 전송되었으며, 제공자의 데이터 정책이 적용됩니다.</p>
@@ -106,7 +107,7 @@
     {#if outdated}<p class="ai-caution">이 결과는 현재 모델 또는 분석 방식·설정과 다릅니다. 기존 결과를 그대로 읽거나 다시 생성할 수 있습니다.</p>{/if}
     {#if (current.model_identity.images_available ?? 0) > (current.model_identity.images_used ?? 0)}<p class="ai-caution" role="note">보관된 이미지 {(current.model_identity.images_available ?? 0) - (current.model_identity.images_used ?? 0)}장은 이 분석에 쓰지 않았습니다. 이미지 인식 모듈 설치 여부와 이미지 파일 상태를 확인한 뒤 다시 분석해 주세요.</p>{/if}
     {#if current.partial}<p class="ai-caution" role="note">긴 공지의 일부만 분석했습니다 ({current.processed_chars.toLocaleString('ko-KR')} / {current.total_chars.toLocaleString('ko-KR')}자). 일부 구간의 일정이나 조건이 빠졌을 수 있습니다. 원문 전체를 확인하세요.</p>{/if}
-    <p class="ai-short-summary">{current.result.short_summary}</p><p class="ai-summary">{current.result.summary}</p>
+    <p class="ai-short-summary" in:fade>{current.result.short_summary}</p><p class="ai-summary" in:fade>{current.result.summary}</p>
     {#if current.result.facts.length}<h4>일정과 해야 할 일</h4><p class="footnote">각 항목의 근거는 정보가 나온 구간을 보여 줍니다. 이미지에서 읽은 항목은 원문 텍스트로 확인할 수 없습니다. 근거가 있어도 AI의 해석은 틀릴 수 있습니다.</p><ul class="ai-facts">{#each current.result.facts as fact}<li><strong>{fact.label}</strong><p>{fact.value}{#if fact.date} <time datetime={fact.date}>· {fact.date} {fact.origin === 'image' ? '(이미지에서 읽은 날짜 · 확정 아님)' : '(AI가 원문에서 읽은 날짜)'}</time>{/if}{#if fact.uncertainty !== 'clear'} <span class="muted">· {fact.uncertainty === 'unknown' ? '확인 필요' : '해석이 모호함'}</span>{/if}</p>{#if fact.origin === 'image'}<details><summary>이미지 근거</summary><p class="muted">보관된 이미지에서 읽은 내용입니다. 이미지 속 글자는 원문 텍스트로 확인할 수 없습니다.</p></details>{:else}<details><summary>원문 근거</summary><blockquote>{fact.evidence}</blockquote></details>{/if}</li>{/each}</ul>{/if}
     <details class="ai-provenance"><summary>분석 정보와 이전 결과</summary><p>{archiveDate(current.created_at, true)} · {(current.duration_ms / 1000).toFixed(1)}초 · 공지 버전 {current.revision_id} · 프롬프트 {current.prompt_version} / 형식 {current.schema_version}</p><code>모델 SHA-256 {current.model_sha256}</code>{#if results.length > 1}<label class="field-label" for={`analysis-history-${documentId}`}>저장된 분석 선택</label><select id={`analysis-history-${documentId}`} value={current.id} onchange={(event) => selected = Number(event.currentTarget.value)}>{#each results as result}<option value={result.id}>{archiveDate(result.created_at, true)} · {result.model_identity.name ?? '로컬 모델'} · #{result.id}</option>{/each}</select>{/if}</details>
   {:else if !loading && !processing && !fetchError}{#if remote}<p class="muted">아직 분석하지 않은 공지입니다. 선택한 원격 API({remoteHost})로 공지 제목·본문과 분석 지시문을 보내 한국어 요약과 일정의 근거를 정리합니다. 관심사, 프로필, 피드백, 저장·읽음 상태는 보내지 않습니다. 보관된 이미지와 첨부 파일은 원격 분석에 포함하지 않습니다. 결과는 참고용이며 틀릴 수 있습니다.</p>{:else}<p class="muted">아직 분석하지 않은 공지입니다. 원문을 외부로 보내지 않고 이 기기에서 한국어 요약과 일정의 근거를 정리합니다. 본문과 보관된 이미지를 분석하며, 이미지는 선택한 모델에 이미지 인식 모듈을 설치했을 때만 사용합니다. 첨부 파일은 포함하지 않습니다. 결과는 참고용이며 틀릴 수 있습니다.</p>{/if}{/if}
