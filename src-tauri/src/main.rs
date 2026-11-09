@@ -541,6 +541,8 @@ fn main() {
             intelligence::commands::ai_classification_preferences,
             archive::archive_sources,
             archive::archive_subscribe,
+            archive::archive_source_groups,
+            archive::archive_set_group,
             archive::archive_summary,
             archive::archive_query,
             archive::archive_ranked_query,

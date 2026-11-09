@@ -39,7 +39,7 @@ export interface FixtureOptions {
   aiModelStorageAvailable?: number | null;
   sourceCount?: number;
   // Replaces the default two-board catalog.
-  sourceList?: { id: string; name: string; organization: string; supported: boolean; subscribed?: boolean; family?: string; last_error?: string | null; skipped_count?: number; skipped?: { external_id: string; url: string; reason: string; skipped_at: string; archived: boolean }[] }[];
+  sourceList?: { id: string; name: string; organization: string; supported: boolean; subscribed?: boolean; group?: string | null; family?: string; last_error?: string | null; skipped_count?: number; skipped?: { external_id: string; url: string; reason: string; skipped_at: string; archived: boolean }[] }[];
   sourceDelay?: number;
   initialNotificationsEnabled?: boolean;
   capabilitiesError?: boolean;
@@ -102,6 +102,8 @@ export interface FixtureOptions {
   // Saved Cybercampus login ID; `cybercampus_save_login` accepts only the password "right".
   cybercampusId?: string | null;
   cybercampusTasks?: CybercampusTask[];
+  // Nested board groups; sources name theirs through `group`.
+  sourceGroups?: { id: string; name: string; parent: string | null; enabled?: boolean }[];
 }
 
 // Only the IPC boundary is faked: tests exercise the production Svelte build,
@@ -126,7 +128,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     if (options.sourceList) {
       sources = options.sourceList.map((source) => ({ ...sources[0], family: 'computing', subscribed: false, last_error: null, ...source }));
     }
-    for (const source of sources) Object.assign(source, { extension: source.family === 'cybercampus' ? 'cybercampus' : 'sogang_notices' });
+    for (const source of sources) Object.assign(source, { extension: source.family === 'cybercampus' ? 'cybercampus' : 'sogang_notices', group: (source as { group?: string | null }).group ?? null, selected: source.subscribed });
+    let sourceGroups = (options.sourceGroups ?? []).map((group) => ({ enabled: true, ...group }));
+    // As the store: a grouped board is subscribed only while every enclosing group is on.
+    const groupOn = (id: string | null): boolean => {
+      const group = sourceGroups.find((item) => item.id === id);
+      return !group || (group.enabled && groupOn(group.parent));
+    };
+    const reconcile = () => { sources = sources.map((source) => ({ ...source, subscribed: source.selected && groupOn(source.group) })); };
     if ((options.sourceCount ?? 0) > sources.length) {
       sources.push(...Array.from({ length: options.sourceCount! - sources.length }, (_, index) => ({
         ...sources[0], id: `extra-source-${index}`, name: `추가 정보원 ${index + 1}`,
@@ -583,8 +592,16 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'archive_subscribe':
             await wait(fixture.subscribeDelay);
             if (fixture.subscribeError) throw '구독 설정을 저장하지 못했습니다.';
-            sources = sources.map((source) => source.id === args.id ? { ...source, subscribed: args.subscribed } : source);
-            return copy({ sources, joined: args.subscribed && sync.running && sync.mode === 'refresh' });
+            if (!groupOn(sources.find((source) => source.id === args.id)!.group)) throw '상위 그룹을 먼저 켜 주세요.';
+            sources = sources.map((source) => source.id === args.id ? { ...source, selected: args.subscribed } : source);
+            reconcile();
+            return copy({ sources, groups: sourceGroups, joined: args.subscribed && sync.running && sync.mode === 'refresh' });
+          case 'archive_source_groups': return copy(sourceGroups);
+          case 'archive_set_group':
+            await wait(fixture.subscribeDelay);
+            sourceGroups = sourceGroups.map((group) => group.id === args.id ? { ...group, enabled: args.enabled } : group);
+            reconcile();
+            return copy({ sources, groups: sourceGroups, joined: false });
           case 'archive_start': sync = { running: true, mode: args.mode, message: '공개 공지를 가져오는 중입니다.', active: [board(args.mode)] }; return copy(sync);
           case 'archive_cancel': sync = { ...sync, running: false, message: '가져오기를 중단했습니다.', active: [] }; return copy(sync);
           case 'archive_resource_image':

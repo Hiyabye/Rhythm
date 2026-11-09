@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { SourceInfo, SubscribeResult, SyncStatus } from './types';
+  import type { SourceGroup, SourceInfo, SubscribeResult, SyncStatus } from './types';
   import { archiveDate, archiveError, sourceStatus } from './archive-format';
   import Icon from './Icon.svelte';
   import Hint from './Hint.svelte';
@@ -12,6 +12,7 @@
   let { enabled, extension }: { enabled: boolean; extension: string } = $props();
   let catalog = $state<SourceInfo[]>([]);
   let sources = $derived(catalog.filter((source) => source.extension === extension));
+  let groupList = $state<SourceGroup[]>([]);
   let status = $state<SyncStatus | null>(null);
   let loading = $state(true);
   let busy = $state(false);
@@ -21,9 +22,11 @@
   let polling = false;
   let refreshGeneration = 0;
   let subscribed = $derived(sources.filter((source) => source.subscribed && source.supported));
-  let supportedGroups = $derived(groups(sources.filter((source) => source.supported)));
-  let unsupportedGroups = $derived(groups(sources.filter((source) => !source.supported)));
-  let unsupportedCount = $derived(sources.filter((source) => !source.supported).length);
+  let tree = $derived(nodes(null));
+  let ungrouped = $derived(sources.filter((source) => !source.group));
+  let supportedGroups = $derived(groups(ungrouped.filter((source) => source.supported)));
+  let unsupportedGroups = $derived(groups(ungrouped.filter((source) => !source.supported)));
+  let unsupportedCount = $derived(ungrouped.filter((source) => !source.supported).length);
   // Subscriptions stay open while a job runs; only starting another job waits.
   let switchesLocked = $derived(!enabled || busy || loading);
   let locked = $derived(switchesLocked || Boolean(status?.running));
@@ -49,6 +52,18 @@
     return [...map];
   }
 
+  type GroupNode = { group: SourceGroup; boards: SourceInfo[]; children: GroupNode[]; total: SourceInfo[] };
+
+  // Groups nest by `parent`; a group with no board of this extension anywhere
+  // below it is left out.
+  function nodes(parent: string | null): GroupNode[] {
+    return groupList.filter((group) => group.parent === parent).map((group) => {
+      const boards = sources.filter((source) => source.group === group.id);
+      const children = nodes(group.id);
+      return { group, boards, children, total: [...boards, ...children.flatMap((child) => child.total)] };
+    }).filter((node) => node.total.length);
+  }
+
   function organizationLabel(organization: string): string {
     return organization.replace(/^서강대학교\s*·\s*/, '') || organization;
   }
@@ -57,9 +72,10 @@
     const request = ++refreshGeneration;
     if (showLoading) { loading = true; error = ''; }
     try {
-      const [nextSources, nextStatus] = await Promise.all([invoke<SourceInfo[]>('archive_sources'), invoke<SyncStatus>('archive_status')]);
+      const [nextSources, nextGroups, nextStatus] = await Promise.all([invoke<SourceInfo[]>('archive_sources'), invoke<SourceGroup[]>('archive_source_groups'), invoke<SyncStatus>('archive_status')]);
       if (!active || request !== refreshGeneration) return;
       catalog = nextSources;
+      groupList = nextGroups;
       status = nextStatus;
     } catch (reason) { if (active && request === refreshGeneration) error = archiveError(reason); }
     finally { if (active && request === refreshGeneration) loading = false; }
@@ -70,16 +86,37 @@
     busy = true;
     refreshGeneration++;
     error = '';
-    const subscribed = !source.subscribed;
+    const subscribed = !source.selected;
     try {
       const next = await invoke<SubscribeResult>('archive_subscribe', { id: source.id, subscribed });
       if (!active) return;
       catalog = next.sources;
+      groupList = next.groups;
       const running = Boolean(status?.running);
       feedback = !subscribed ? `${source.name} 구독을 해제했습니다.${running ? ' 이 게시판의 가져오기만 멈춥니다.' : ''} 보관한 공지는 남습니다.`
         : next.joined ? `${source.name} 구독을 시작했습니다. 진행 중인 새로고침에서 함께 가져옵니다.`
         : running ? `${source.name} 구독을 시작했습니다. 지금 진행 중인 작업이 끝난 뒤 새로고침을 눌러야 수집합니다.`
         : `${source.name} 구독을 시작했습니다. 가져오기를 눌러야 수집합니다.`;
+    } catch (reason) { if (active) error = archiveError(reason); }
+    finally { if (active) busy = false; }
+  }
+
+  async function setGroup(node: GroupNode) {
+    if (busy || loading || !enabled) return;
+    busy = true;
+    refreshGeneration++;
+    error = '';
+    const on = !node.group.enabled;
+    try {
+      const next = await invoke<SubscribeResult>('archive_set_group', { id: node.group.id, enabled: on });
+      if (!active) return;
+      catalog = next.sources;
+      groupList = next.groups;
+      const running = Boolean(status?.running);
+      feedback = !on ? `${node.group.name} 그룹을 껐습니다. 아래 게시판은 수집하지 않으며, 고른 게시판과 보관한 공지는 그대로 남습니다.`
+        : next.joined ? `${node.group.name} 그룹을 켰습니다. 진행 중인 새로고침에서 고른 게시판을 함께 가져옵니다.`
+        : running ? `${node.group.name} 그룹을 켰습니다. 지금 진행 중인 작업이 끝난 뒤 새로고침을 눌러야 수집합니다.`
+        : `${node.group.name} 그룹을 켰습니다. 전에 고른 게시판을 다시 구독합니다.`;
     } catch (reason) { if (active) error = archiveError(reason); }
     finally { if (active) busy = false; }
   }
@@ -141,8 +178,8 @@
 
   {#snippet tile(source: SourceInfo, organization: string)}
     {@const running = status?.running && status.active.some((board) => board.source_id === source.id)}
-    <li class="board-tile" class:on={source.subscribed} class:unsupported={!source.supported}>
-      <button class="board-switch" role="switch" aria-checked={source.subscribed} aria-label={`${organization} ${source.name} 구독`} aria-describedby={source.last_error ? `board-alert-${source.id}` : undefined} disabled={switchesLocked || !source.supported} onclick={() => subscribe(source)}>
+    <li class="board-tile" class:on={source.selected} class:unsupported={!source.supported}>
+      <button class="board-switch" role="switch" aria-checked={source.selected} aria-label={`${organization} ${source.name} 구독`} aria-describedby={source.last_error ? `board-alert-${source.id}` : undefined} disabled={switchesLocked || !source.supported} onclick={() => subscribe(source)}>
         <span class="board-mark" aria-hidden="true">{#if source.subscribed}<Icon name="check" size={13} />{/if}</span>
         <span class="board-name">{source.name}</span>
         {#if running}<span class="board-state spinning" aria-hidden="true"><Icon name="refresh" size={14} /></span>
@@ -173,6 +210,23 @@
       {/if}
     </li>
   {/snippet}
+
+  {#snippet group(node: GroupNode, level: number)}
+    {@const on = node.total.filter((source) => source.subscribed).length}
+    <section class="board-group" class:off={!node.group.enabled} data-level={level} role="group" aria-labelledby={`board-group-${node.group.id}`}>
+      <div class="board-group-head">
+        <span class="board-group-name" id={`board-group-${node.group.id}`} role="heading" aria-level={level + 2}>{node.group.name}</span>
+        <span class="board-group-count">{node.group.enabled ? `구독 ${on}/${node.total.length}` : `꺼짐 · 게시판 ${node.total.length}개`}</span>
+        <button class="switch" class:on={node.group.enabled} role="switch" aria-checked={node.group.enabled} aria-label={`${node.group.name} 전체`} disabled={switchesLocked} onclick={() => setGroup(node)}><span></span></button>
+      </div>
+      {#if node.group.enabled}
+        {#if node.boards.length}<ul class="board-grid" aria-label={`${node.group.name} 게시판`}>{#each node.boards as source (source.id)}{@render tile(source, node.group.name)}{/each}</ul>{/if}
+        {#each node.children as child (child.group.id)}{@render group(child, level + 1)}{/each}
+      {/if}
+    </section>
+  {/snippet}
+
+  {#each tree as node (node.group.id)}{@render group(node, 1)}{/each}
 
   {#each supportedGroups as [organization, members] (organization)}
     <h3 class="settings-group-title">{organizationLabel(organization)}</h3>

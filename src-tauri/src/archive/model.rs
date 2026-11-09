@@ -9,12 +9,29 @@ pub struct SourceDefinition {
     pub url: String,
     pub family: String,
     pub supported: bool,
+    /// The innermost settings group (`SourceGroup`) the board is listed under.
+    #[serde(default)]
+    pub group: Option<String>,
+}
+/// A nested settings group of boards. Turning a group off stops every board
+/// under it without changing each board's own pick.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SourceGroup {
+    pub id: String,
+    pub name: String,
+    pub parent: Option<String>,
+    pub enabled: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourceInfo {
     #[serde(flatten)]
     pub definition: SourceDefinition,
+    /// Effective subscription: the board's pick with every enclosing group on.
+    /// Collection, scheduling, ranking and notifications read only this.
     pub subscribed: bool,
+    /// The user's own pick, kept while an enclosing group is off.
+    #[serde(default)]
+    pub selected: bool,
     pub last_attempt: Option<String>,
     pub last_success: Option<String>,
     pub last_error: Option<String>,
@@ -162,6 +179,7 @@ pub struct SyncStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubscribeResult {
     pub sources: Vec<SourceInfo>,
+    pub groups: Vec<SourceGroup>,
     pub joined: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]

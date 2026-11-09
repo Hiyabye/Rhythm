@@ -982,6 +982,95 @@ button svg {
 .board-tile.on .board-info:focus-visible {
   outline-color: var(--accent-text);
 }
+/* Nested board groups: each level sits inside its parent, behind a guide rule. */
+.board-group {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.board-group + .board-group {
+  margin-top: 10px;
+}
+.board-group .board-group {
+  margin-left: 6px;
+  padding: 10px 0 2px 14px;
+  border: 0;
+  border-left: 2px solid var(--line-strong);
+  border-radius: 0;
+  background: transparent;
+}
+.board-group .board-group + .board-group {
+  margin-top: 2px;
+}
+.board-group.off .board-group-name {
+  color: var(--secondary);
+}
+.board-group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.board-group-name {
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text);
+}
+.board-group[data-level="2"] > .board-group-head .board-group-name {
+  font-size: 14px;
+}
+.board-group[data-level="3"] > .board-group-head .board-group-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.board-group-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.board-group .board-grid {
+  grid-template-columns: repeat(auto-fill,minmax(132px,1fr));
+  gap: 6px;
+}
+.board-group .board-switch {
+  min-height: 0;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 8px 36px 8px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+.board-group .board-tile.on .board-switch {
+  box-shadow: 0 2px 8px rgb(10 98 208 / .22);
+}
+.board-group .board-mark {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+}
+.board-group .board-name {
+  padding-right: 0;
+}
+.board-group .board-info {
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+}
+.board-group .board-state {
+  position: static;
+  margin-left: auto;
+}
+.board-group + .settings-group-title {
+  margin-top: 22px;
+}
 .board-unsupported {
   margin-top: 26px;
 }

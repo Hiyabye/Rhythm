@@ -75,6 +75,7 @@ fn read_samples(path: &Path, ids: &[i64]) -> Result<Vec<ArchivedSample>, String>
                             url: row.get(17)?,
                             family: row.get(18)?,
                             supported: row.get(19)?,
+                            group: None,
                         },
                         article: ArticleInput {
                             external_id: row.get(3)?,

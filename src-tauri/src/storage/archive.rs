@@ -4,7 +4,7 @@ use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, Row};
 use sha2::{Digest, Sha256};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
-const SOURCE_COLUMNS: &str = "id,name,organization,description,url,family,supported,subscribed,last_attempt,last_success,last_error,next_page,history_complete,status,discovered,archived,failed,(SELECT COUNT(*) FROM skipped_articles k WHERE k.source_id=sources.id),(SELECT extension_id FROM source_extensions se WHERE se.source_id=sources.id),(SELECT COUNT(*) FROM documents d LEFT JOIN document_state u ON u.document_id=d.id WHERE d.source_id=sources.id AND COALESCE(u.is_read,0)=0)";
+const SOURCE_COLUMNS: &str = "id,name,organization,description,url,family,supported,subscribed,selected,group_id,last_attempt,last_success,last_error,next_page,history_complete,status,discovered,archived,failed,(SELECT COUNT(*) FROM skipped_articles k WHERE k.source_id=sources.id),(SELECT extension_id FROM source_extensions se WHERE se.source_id=sources.id),(SELECT COUNT(*) FROM documents d LEFT JOIN document_state u ON u.document_id=d.id WHERE d.source_id=sources.id AND COALESCE(u.is_read,0)=0)";
 macro_rules! item_columns {
     ($snippet:literal) => {
         concat!("d.id,d.source_id,s.name,d.title,d.author,d.category,d.published_at,d.collected_at,COALESCE(u.is_read,0),COALESCE(u.saved,0),d.historical,", $snippet, ",CASE WHEN EXISTS(SELECT 1 FROM resources a WHERE a.document_id=d.id AND a.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id) AND a.status<>'downloaded') THEN 'missing_resources' ELSE 'archived' END")
@@ -20,6 +20,43 @@ const RESOURCE_COLUMNS: &str = "id,url,filename,kind,status,mime,bytes,local_pat
 
 type Validators = (Option<String>, Option<String>);
 
+/// `off`: every group that is off itself or lies under a group that is off.
+const GROUPS_OFF: &str = "off(id) AS (SELECT id FROM source_groups WHERE enabled=0
+    UNION SELECT g.id FROM source_groups g JOIN off ON g.parent_id=off.id)";
+
+/// Recomputes the effective subscription of the grouped boards under `root`
+/// (all grouped boards when `None`) and returns the ids that changed. Boards
+/// without a group keep `subscribed` as written by `subscribe`.
+fn reconcile_groups(
+    connection: &rusqlite::Connection,
+    root: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let scope = "scope(id) AS (SELECT id FROM source_groups WHERE ?1 IS NULL OR id=?1
+        UNION SELECT g.id FROM source_groups g JOIN scope ON g.parent_id=scope.id)";
+    let effective = "(selected=1 AND supported=1 AND group_id NOT IN (SELECT id FROM off))";
+    let mut statement = connection
+        .prepare(&format!(
+            "WITH RECURSIVE {GROUPS_OFF}, {scope}
+             SELECT id FROM sources WHERE group_id IN (SELECT id FROM scope) AND subscribed<>{effective}"
+        ))
+        .map_err(|e| e.to_string())?;
+    let changed = statement
+        .query_map([root], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    connection
+        .execute(
+            &format!(
+                "WITH RECURSIVE {GROUPS_OFF}, {scope}
+                 UPDATE sources SET subscribed={effective} WHERE group_id IN (SELECT id FROM scope)"
+            ),
+            [root],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(changed)
+}
+
 fn source_row(row: &Row<'_>) -> rusqlite::Result<SourceInfo> {
     Ok(SourceInfo {
         definition: SourceDefinition {
@@ -30,21 +67,23 @@ fn source_row(row: &Row<'_>) -> rusqlite::Result<SourceInfo> {
             url: row.get(4)?,
             family: row.get(5)?,
             supported: row.get(6)?,
+            group: row.get(9)?,
         },
         subscribed: row.get(7)?,
-        last_attempt: row.get(8)?,
-        last_success: row.get(9)?,
-        last_error: row.get(10)?,
-        next_page: row.get(11)?,
-        history_complete: row.get(12)?,
-        status: row.get(13)?,
-        discovered: row.get::<_, i64>(14)? as u64,
-        archived: row.get::<_, i64>(15)? as u64,
-        failed: row.get::<_, i64>(16)? as u64,
-        skipped_count: row.get::<_, i64>(17)? as u64,
+        selected: row.get(8)?,
+        last_attempt: row.get(10)?,
+        last_success: row.get(11)?,
+        last_error: row.get(12)?,
+        next_page: row.get(13)?,
+        history_complete: row.get(14)?,
+        status: row.get(15)?,
+        discovered: row.get::<_, i64>(16)? as u64,
+        archived: row.get::<_, i64>(17)? as u64,
+        failed: row.get::<_, i64>(18)? as u64,
+        skipped_count: row.get::<_, i64>(19)? as u64,
         skipped: Vec::new(),
-        extension: row.get(18)?,
-        unread: row.get::<_, i64>(19)? as u64,
+        extension: row.get(20)?,
+        unread: row.get::<_, i64>(21)? as u64,
     })
 }
 /// Bounds the notices listed per source; the count covers all of them.
@@ -226,6 +265,15 @@ impl Store {
             .connection
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
+        for (position, group) in crate::archive::groups().iter().enumerate() {
+            transaction
+                .execute(
+                    "INSERT INTO source_groups(id,name,parent_id,position) VALUES(?1,?2,?3,?4)
+                     ON CONFLICT(id) DO UPDATE SET name=excluded.name,parent_id=excluded.parent_id,position=excluded.position",
+                    params![group.id, group.name, group.parent, position as i64],
+                )
+                .map_err(|e| e.to_string())?;
+        }
         for definition in definitions {
             if !valid_id(&definition.id)
                 || definition.name.trim().is_empty()
@@ -233,7 +281,7 @@ impl Store {
             {
                 return Err("정보원 정의를 확인해 주세요.".into());
             }
-            transaction.execute("INSERT INTO sources(id,name,organization,description,url,family,supported) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET name=excluded.name,organization=excluded.organization,description=excluded.description,url=excluded.url,family=excluded.family,supported=excluded.supported",params![definition.id,definition.name,definition.organization,definition.description,definition.url,definition.family,definition.supported]).map_err(|e|e.to_string())?;
+            transaction.execute("INSERT INTO sources(id,name,organization,description,url,family,supported,group_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET name=excluded.name,organization=excluded.organization,description=excluded.description,url=excluded.url,family=excluded.family,supported=excluded.supported,group_id=excluded.group_id",params![definition.id,definition.name,definition.organization,definition.description,definition.url,definition.family,definition.supported,definition.group]).map_err(|e|e.to_string())?;
             transaction
                 .execute(
                     "INSERT INTO source_extensions(source_id,extension_id) VALUES(?1,?2)
@@ -242,8 +290,52 @@ impl Store {
                 )
                 .map_err(|e| e.to_string())?;
         }
+        reconcile_groups(&transaction, None)?;
         transaction.commit().map_err(|e| e.to_string())?;
         self.sources()
+    }
+    pub(crate) fn source_groups(&self) -> Result<Vec<SourceGroup>, String> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT id,name,parent_id,enabled FROM source_groups ORDER BY position,id")
+            .map_err(|e| e.to_string())?;
+        let groups = statement
+            .query_map([], |row| {
+                Ok(SourceGroup {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    parent: row.get(2)?,
+                    enabled: row.get(3)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string());
+        groups
+    }
+    /// Turns a settings group on or off and returns the boards whose effective
+    /// subscription changed, so the caller can stop or join their collection.
+    pub(crate) fn set_source_group(
+        &self,
+        id: &str,
+        enabled: bool,
+    ) -> Result<Vec<SourceInfo>, String> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let changed = transaction
+            .execute(
+                "UPDATE source_groups SET enabled=?2 WHERE id=?1",
+                params![id, enabled],
+            )
+            .map_err(|e| e.to_string())?;
+        if changed == 0 {
+            return Err("게시판 그룹을 찾을 수 없습니다.".into());
+        }
+        let changed = reconcile_groups(&transaction, Some(id))?;
+        transaction.commit().map_err(|e| e.to_string())?;
+        changed.iter().map(|id| self.source(id)).collect()
     }
     pub(crate) fn sources(&self) -> Result<Vec<SourceInfo>, String> {
         let mut statement = self
@@ -412,9 +504,22 @@ impl Store {
         if subscribed && !source.definition.supported {
             return Err("아직 지원하지 않는 정보원입니다.".into());
         }
+        let off: bool = self
+            .connection
+            .query_row(
+                &format!(
+                    "WITH RECURSIVE {GROUPS_OFF} SELECT EXISTS(SELECT 1 FROM off WHERE id=?1)"
+                ),
+                [&source.definition.group],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if off {
+            return Err("상위 그룹을 먼저 켜 주세요.".into());
+        }
         self.connection
             .execute(
-                "UPDATE sources SET subscribed=?2 WHERE id=?1",
+                "UPDATE sources SET selected=?2,subscribed=?2 WHERE id=?1",
                 params![id, subscribed],
             )
             .map_err(|e| e.to_string())?;
