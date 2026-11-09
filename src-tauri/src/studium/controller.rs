@@ -14,6 +14,19 @@ use std::{
 };
 use tokio::sync::Notify;
 
+const RATE_LIMITED: &str =
+    "학교 서버가 요청을 제한했습니다. 잠시 기다린 후 지금 확인을 다시 눌러 주세요.";
+
+/// The shared transport's 429 text asks notice users to sync again; a seat
+/// check is repeated only with the 지금 확인 button.
+fn seat_error(error: &str) -> &str {
+    if error == crate::archive::network::RATE_LIMITED {
+        RATE_LIMITED
+    } else {
+        error
+    }
+}
+
 struct Job {
     id: u64,
     cancel: AtomicBool,
@@ -137,7 +150,7 @@ impl Controller {
                 _ = cancelled(&job.cancel) => Err("좌석 확인을 취소했습니다.".into()),
             };
             if let Err(error) = outcome {
-                owner.fail_pending(&job, &error);
+                owner.fail_pending(&job, seat_error(&error));
             }
         });
         Ok(())
@@ -264,6 +277,7 @@ impl Controller {
                             if error == crate::archive::network::RATE_LIMITED
                                 || error.contains("HTTP 429") =>
                         {
+                            let error = seat_error(&error).to_owned();
                             self.publish(job, store, failed(id, error.clone()))?;
                             return Err(error);
                         }
