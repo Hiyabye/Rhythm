@@ -10,6 +10,8 @@ pub const WEEK: &str = "week";
 pub const CALENDAR: &str = "calendar";
 pub const AI: &str = "ai";
 pub const PROACTIVE: &str = "proactive";
+#[cfg(test)]
+pub const STUDIUM: &str = "studium";
 
 #[derive(Serialize)]
 pub struct ExtensionInfo {
