@@ -20,6 +20,8 @@ pub enum Access {
     /// and that host's robots.txt (user decision, #78). School hosts stay limited
     /// to their verified routes.
     EmbeddedImage,
+    /// Manual reading-room lookup, exact host/port/routes only. No retries.
+    Studium,
 }
 /// Hosts a job collects from at once, and so requests one client has in flight.
 pub const MAX_HOSTS: usize = 3;
@@ -63,7 +65,8 @@ impl Client {
             return Err("허용된 다운로드 크기를 초과했습니다.".into());
         }
         let _permit = tokio::select! {value=self.inflight.acquire()=>value.map_err(|_|"다운로드 작업이 종료되었습니다.")?, _=cancelled(cancel)=>return Err("사용자가 동기화를 중단했습니다.".into())};
-        for attempt in 0..3 {
+        let attempts = if access == Access::Studium { 1 } else { 3 };
+        for attempt in 0..attempts {
             if cancel.load(Ordering::Acquire) {
                 return Err("사용자가 동기화를 중단했습니다.".into());
             }
@@ -74,7 +77,7 @@ impl Client {
             match outcome {
                 Ok(value) => return Ok(value),
                 Err(Failure::Fatal(message)) => return Err(message),
-                Err(Failure::Retry(message)) if attempt == 2 => return Err(message),
+                Err(Failure::Retry(message)) if attempt + 1 == attempts => return Err(message),
                 Err(Failure::Retry(_)) => {
                     tokio::select! {_=tokio::time::sleep(Duration::from_secs(1<<attempt))=>{},_=cancelled(cancel)=>return Err("사용자가 동기화를 중단했습니다.".into())}
                 }
@@ -110,7 +113,10 @@ impl Client {
         let host = url
             .host_str()
             .ok_or_else(|| Failure::Fatal("학교 서버 주소가 올바르지 않습니다.".into()))?;
-        let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, 443))
+        let port = url
+            .port_or_known_default()
+            .ok_or_else(|| Failure::Fatal(BLOCKED.into()))?;
+        let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
             .await
             .map_err(|_| {
                 Failure::Retry(
@@ -125,8 +131,18 @@ impl Client {
         }
         // Resolve once, validate every answer, and pin this connection to those
         // answers. Automatic redirects/proxies must not bypass the same policy.
-        let client = reqwest::Client::builder()
-            .use_preconfigured_tls(super::tls::config().map_err(Failure::Fatal)?)
+        // The seat server negotiates TLS 1.2 cipher suites outside rustls's
+        // supported set. Only the exact Studium origin uses OS TLS, retaining
+        // normal certificate/hostname verification and TLS 1.2 as the minimum.
+        let builder = reqwest::Client::builder();
+        let builder = if access == Access::Studium {
+            builder
+                .use_native_tls()
+                .min_tls_version(reqwest::tls::Version::TLS_1_2)
+        } else {
+            builder.use_preconfigured_tls(super::tls::config().map_err(Failure::Fatal)?)
+        };
+        let client = builder
             .https_only(true)
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -152,6 +168,9 @@ impl Client {
                 "text/html,application/pdf,image/*,application/octet-stream;q=0.8"
             },
         );
+        if access == Access::Studium {
+            request = request.header(header::CACHE_CONTROL, "no-cache");
+        }
         // Conditional headers are tied to the original document, never forwarded
         // across an origin-changing redirect.
         if url.origin() == original.origin() {
@@ -170,6 +189,11 @@ impl Client {
             })?;
         let status = response.status();
         if [301, 302, 307, 308].contains(&status.as_u16()) || status.as_u16() == 303 {
+            if access == Access::Studium {
+                return Err(Failure::Fatal(
+                    "좌석 서버의 이동 응답을 거부했습니다.".into(),
+                ));
+            }
             let location = response
                 .headers()
                 .get(header::LOCATION)
@@ -200,6 +224,19 @@ impl Client {
                 "학교 서버에 일시적인 오류가 발생했습니다. (HTTP {})",
                 status.as_u16()
             )));
+        }
+        // Only an absent policy means no restrictions for this exact origin.
+        // Authentication failures and rate limits must never become allow-all.
+        if access == Access::Studium
+            && url.path() == "/robots.txt"
+            && matches!(status.as_u16(), 404 | 410)
+        {
+            return Ok(Fetch::Body {
+                bytes: Vec::new(),
+                etag: None,
+                last_modified: None,
+                mime: Some("text/plain".into()),
+            });
         }
         // RFC 9309: an unavailable (4xx) robots.txt places no restrictions. Only
         // other hosts get this reading; a school host's error stays an error.
@@ -285,6 +322,9 @@ pub const RATE_LIMITED: &str =
     "학교 서버가 요청을 제한했습니다. 잠시 기다린 후 다시 동기화해 주세요.";
 const BLOCKED: &str = "검증된 학교 공개 자료 주소가 아니어서 자동 다운로드하지 않았습니다.";
 pub fn validate(url: &Url, access: Access) -> Result<(), String> {
+    if access == Access::Studium {
+        return crate::studium::network::validate_url(url);
+    }
     if validate_url(url).is_ok() || (access == Access::EmbeddedImage && third_party_image(url)) {
         Ok(())
     } else {
