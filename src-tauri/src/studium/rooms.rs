@@ -1,5 +1,6 @@
 use super::model::Room;
 
+#[cfg(test)]
 pub const STATUS_URL: &str = "https://libseat.sogang.ac.kr:444/SEAT/domian5.asp";
 
 // Library room identities/capacities observed in the Studium handoff. A changed
@@ -56,6 +57,7 @@ pub fn get(id: &str) -> Result<&'static Room, String> {
         .ok_or_else(|| "지원하지 않는 열람실입니다.".into())
 }
 
+#[cfg(test)]
 pub fn all() -> Vec<Room> {
     ROOMS.to_vec()
 }

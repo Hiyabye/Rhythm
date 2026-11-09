@@ -1,4 +1,6 @@
-use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Room {
@@ -9,6 +11,7 @@ pub struct Room {
 }
 
 impl Room {
+    #[cfg(test)]
     pub fn url(&self) -> String {
         format!(
             "https://libseat.sogang.ac.kr:444/SEAT/roomview5.asp?room_no={}",
@@ -17,12 +20,14 @@ impl Room {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Preferences {
     pub room_ids: Vec<String>,
     pub view_room: String,
 }
 
+#[cfg(test)]
 impl Default for Preferences {
     fn default() -> Self {
         Self {
@@ -32,6 +37,7 @@ impl Default for Preferences {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SeatData {
     pub total: u32,
