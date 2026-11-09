@@ -4,7 +4,7 @@ Copyright (c) Microsoft Corporation. All rights reserved.
 Rhythm's Windows package includes unmodified x64 redistributable files
 msvcp140.dll, vcruntime140.dll and vcruntime140_1.dll from the installed
 Microsoft Visual Studio 2022 VC/Redist/MSVC directory. These Microsoft files
-are not covered by Rhythm's MIT license.
+are not covered by Rhythm's GPL-3.0-or-later license.
 
 The files are deployed beside the application. Microsoft signature, x64 image
 type, matching runtime version and copied SHA-256 are checked when staging.

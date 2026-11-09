@@ -4,6 +4,7 @@
     "useLocalToolsDir": true,
     "targets": ["nsis"],
     "resources": {
+      "../LICENSE": "licenses/Rhythm-GPL-3.0.txt",
       "../assets/licenses/Pretendard-OFL.txt": "licenses/Pretendard-OFL.txt",
       "../assets/licenses/Tauri-template-MIT.txt": "licenses/Tauri-template-MIT.txt",
       "../assets/licenses/llama.cpp-MIT.txt": "licenses/llama.cpp-MIT.txt",

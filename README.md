@@ -177,6 +177,6 @@ npm run desktop:build    # 릴리스 빌드 (결과물: target/release/distribut
 
 ## 라이선스
 
-Rhythm은 [MIT 라이선스](LICENSE), © Jihoon Lee로 배포합니다. 자체 제작한 Beat 로고도 같은 라이선스를 따릅니다. [Pretendard](https://github.com/orioncactus/pretendard)는 SIL Open Font License 1.1이며 [라이선스 사본](assets/licenses/Pretendard-OFL.txt)을 저장소와 앱에 포함합니다. 앱에 포함된 [llama.cpp](https://github.com/ggml-org/llama.cpp)는 MIT 라이선스입니다. Qwen3.5와 Gemma 4 모델은 Apache-2.0이며 앱에 포함되지 않습니다(모델 출처: [unsloth](https://huggingface.co/unsloth), [Qwen](https://huggingface.co/Qwen)). 의존성은 각각의 라이선스를 따릅니다.
+Rhythm은 © Jihoon Lee와 기여자들의 저작물이며, [GNU General Public License 버전 3](LICENSE) 또는 (선택에 따라) 그 이후 버전(GPL-3.0-or-later)으로 배포합니다. Rhythm이나 수정본을 배포할 때는 같은 라이선스로 소스 코드를 함께 제공해야 합니다. 자체 제작한 Beat 로고도 같은 라이선스를 따릅니다. v1.7.1 이하 릴리스는 배포 당시의 MIT 라이선스를 그대로 따릅니다. [Pretendard](https://github.com/orioncactus/pretendard)는 SIL Open Font License 1.1이며 [라이선스 사본](assets/licenses/Pretendard-OFL.txt)을 저장소와 앱에 포함합니다. 앱에 포함된 [llama.cpp](https://github.com/ggml-org/llama.cpp)는 MIT 라이선스입니다. Qwen3.5와 Gemma 4 모델은 Apache-2.0이며 앱에 포함되지 않습니다(모델 출처: [unsloth](https://huggingface.co/unsloth), [Qwen](https://huggingface.co/Qwen)). 의존성은 각각의 라이선스를 따릅니다.
 
 학교 공지와 첨부 자료의 권리는 원저작자에게 있으며, Rhythm의 라이선스가 학교 자료의 재배포 권한을 부여하지는 않습니다.

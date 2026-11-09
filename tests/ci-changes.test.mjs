@@ -29,6 +29,7 @@ test('each area selects only its own jobs', () => {
   assert.deepEqual(classify(['Cargo.lock']), { ...none, rust: true, packaging: true });
   assert.deepEqual(classify(['scripts/desktop.mjs']), { ...none, frontend: true, packaging: true });
   assert.deepEqual(classify(['src-tauri/tauri.windows.conf.json']), { ...none, rust: true, packaging: true });
+  assert.deepEqual(classify(['LICENSE']), { ...none, packaging: true });
 });
 
 test('frontend files read by Rust tests also run the Rust jobs', () => {
