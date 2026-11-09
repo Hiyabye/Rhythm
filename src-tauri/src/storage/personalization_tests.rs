@@ -15,6 +15,7 @@ fn source_definition() -> SourceDefinition {
         url: "https://example.edu/".into(),
         family: "main".into(),
         supported: true,
+        group: None,
     }
 }
 
@@ -945,6 +946,7 @@ fn subscribed_source_is_a_small_explainable_preference() {
                     url: "https://research.example.edu/".into(),
                     family: "research".into(),
                     supported: true,
+                    group: None,
                 },
             ],
         )
@@ -1465,6 +1467,7 @@ fn source_diversity_is_bounded_and_explained_when_it_changes_selection() {
                     url: "https://research.example.edu/".into(),
                     family: "research".into(),
                     supported: true,
+                    group: None,
                 },
             ],
         )

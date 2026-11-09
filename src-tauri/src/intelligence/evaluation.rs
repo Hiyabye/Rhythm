@@ -73,6 +73,7 @@ pub(super) fn seed(store: &Store) {
             url: "https://www.sogang.ac.kr/".into(),
             family: "main".into(),
             supported: true,
+            group: None,
         }])
         .unwrap();
 }

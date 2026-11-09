@@ -219,6 +219,7 @@ fn fixture() -> (tempfile::TempDir, SharedStore, i64, i64) {
             url: "https://www.sogang.ac.kr/".into(),
             family: "main".into(),
             supported: true,
+            group: None,
         }])
         .unwrap();
     let (id, _) = store

@@ -576,3 +576,59 @@ test('sidebar boards scope the inbox and badges describe their counts', async ({
   await page.getByRole('combobox', { name: '정보원', exact: true }).selectOption('');
   await expect(sidebar.getByRole('button', { name: '소프트웨어융합대학 소식', exact: true })).not.toHaveAttribute('aria-current');
 });
+
+test('board groups nest by level, and a group off hides and stops its subtree but keeps each pick', async ({ page }) => {
+  const board = (id: string, name: string, group: string, subscribed = false) => ({ id, name, organization: '서강대학교', supported: true, subscribed, group });
+  await mockDesktop(page, {
+    sourceGroups: [
+      { id: 'sogang', name: '서강대학교', parent: null },
+      { id: 'sogang-eng', name: '공과대학', parent: 'sogang' },
+      { id: 'sogang-me', name: '기계공학과', parent: 'sogang-eng' },
+      { id: 'sogang-computing', name: '소프트웨어융합대학', parent: 'sogang' },
+    ],
+    sourceList: [
+      board('sogang-academic', '학부 학사공지', 'sogang', true),
+      board('eng-research', '연구공지', 'sogang-eng', true),
+      board('eng-general', '일반공지', 'sogang-eng'),
+      board('me-general', '기계 일반공지', 'sogang-me', true),
+      board('computing-updates', '소식', 'sogang-computing'),
+    ],
+  });
+  await page.goto('/');
+  await openSettings(page, '게시판');
+  const group = (name: string) => page.getByRole('group', { name, exact: true });
+  const toggle = (name: string) => page.getByRole('switch', { name: `${name} 전체`, exact: true });
+  const pick = (name: string) => page.getByRole('switch', { name: `${name} 구독`, exact: true });
+
+  // Each level sits inside its parent, with its own boards as small switches.
+  await expect(group('서강대학교').getByRole('heading', { name: '공과대학', level: 4 })).toBeVisible();
+  await expect(group('공과대학').getByRole('heading', { name: '기계공학과', level: 5 })).toBeVisible();
+  await expect(group('공과대학').getByRole('list', { name: '공과대학 게시판' }).getByRole('switch')).toHaveCount(2);
+  await expect(group('서강대학교').locator('.board-group-count').first()).toHaveText('구독 3/5');
+
+  // Level 2 off: its boards and departments disappear, its sibling stays.
+  await toggle('공과대학').press('Space');
+  await expect(toggle('공과대학')).toHaveAttribute('aria-checked', 'false');
+  await expect(pick('공과대학 연구공지')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '기계공학과' })).toHaveCount(0);
+  await expect(pick('소프트웨어융합대학 소식')).toBeVisible();
+  await expect(group('공과대학')).toContainText('꺼짐 · 게시판 3개');
+  await expect(page.locator('.source-manager .archive-feedback')).toContainText('고른 게시판과 보관한 공지는 그대로 남습니다');
+  await expect(page.locator('.collect-status')).toHaveText('구독 1개');
+
+  // Level 1 off hides everything below it.
+  await toggle('서강대학교').click();
+  await expect(page.locator('.board-tile')).toHaveCount(0);
+  await expect(toggle('공과대학')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '새로고침', exact: true })).toBeDisabled();
+
+  // Back on, each group returns to its own state and each board to its pick.
+  await toggle('서강대학교').click();
+  await expect(toggle('공과대학')).toHaveAttribute('aria-checked', 'false');
+  await toggle('공과대학').click();
+  await expect(pick('공과대학 연구공지')).toHaveAttribute('aria-checked', 'true');
+  await expect(pick('공과대학 일반공지')).toHaveAttribute('aria-checked', 'false');
+  await expect(pick('기계공학과 기계 일반공지')).toHaveAttribute('aria-checked', 'true');
+  await expect(page.locator('.collect-status')).toHaveText('구독 3개');
+  expect(await callCount(page, 'archive_set_group')).toBe(4);
+});

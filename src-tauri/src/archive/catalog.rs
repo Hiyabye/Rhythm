@@ -1,4 +1,29 @@
-use super::model::SourceDefinition;
+use super::model::{SourceDefinition, SourceGroup};
+
+/// Settings groups, parents before children, in display order. Every board in
+/// `definitions` except Cybercampus belongs to exactly one of them.
+pub fn groups() -> Vec<SourceGroup> {
+    [
+        ("sogang", "서강대학교", None),
+        ("sogang-eng", "공과대학", Some("sogang")),
+        ("sogang-ee", "전자공학과", Some("sogang-eng")),
+        ("sogang-me", "기계공학과", Some("sogang-eng")),
+        ("sogang-sse", "시스템반도체공학과", Some("sogang-eng")),
+        ("sogang-se", "반도체공학과", Some("sogang-eng")),
+        ("sogang-computing", "소프트웨어융합대학", Some("sogang")),
+        ("sogang-dorm", "벨라르미노 학사", Some("sogang")),
+    ]
+    .into_iter()
+    .map(
+        |(id, name, parent): (&str, &str, Option<&str>)| SourceGroup {
+            id: id.into(),
+            name: name.into(),
+            parent: parent.map(Into::into),
+            enabled: true,
+        },
+    )
+    .collect()
+}
 
 /// Stable identities follow the owner's public reference catalog. Catalog presence is
 /// not support: each enabled family needs full article and local-resource verification.
@@ -8,6 +33,7 @@ pub fn definitions() -> Vec<SourceDefinition> {
                    name: &str,
                    organization: &str,
                    family: &str,
+                   group: &str,
                    url: String,
                    supported| {
         sources.push(SourceDefinition {
@@ -22,6 +48,7 @@ pub fn definitions() -> Vec<SourceDefinition> {
             url,
             family: family.into(),
             supported,
+            group: Some(group.into()),
         });
     };
     add(
@@ -29,6 +56,7 @@ pub fn definitions() -> Vec<SourceDefinition> {
         "학부 학사공지",
         "서강대학교",
         "main",
+        "sogang",
         "https://www.sogang.ac.kr/ko/academic-support/notices".into(),
         true,
     );
@@ -44,6 +72,7 @@ pub fn definitions() -> Vec<SourceDefinition> {
             name,
             "서강대학교 · 소프트웨어융합대학",
             "computing",
+            "sogang-computing",
             format!("https://computing.sogang.ac.kr/ko/community/{board}/list"),
             true,
         );
@@ -59,6 +88,7 @@ pub fn definitions() -> Vec<SourceDefinition> {
             name,
             "서강대학교 · 공과대학",
             "engineering",
+            "sogang-eng",
             format!("https://eng.sogang.ac.kr/board/{board}"),
             true,
         );
@@ -73,6 +103,7 @@ pub fn definitions() -> Vec<SourceDefinition> {
             name,
             "서강대학교 · 벨라르미노 학사",
             "dormitory",
+            "sogang-dorm",
             format!("https://new-cms.sogang.ac.kr/sgdormitory/{menu}/subview.do"),
             true,
         );
@@ -90,6 +121,7 @@ pub fn definitions() -> Vec<SourceDefinition> {
             name,
             "서강대학교 · 전자공학과",
             "community",
+            "sogang-ee",
             format!("https://ee.sogang.ac.kr/kor/{path}"),
             true,
         );
@@ -108,6 +140,7 @@ pub fn definitions() -> Vec<SourceDefinition> {
             name,
             "서강대학교 · 기계공학과",
             "mechanical",
+            "sogang-me",
             format!("https://me.sogang.ac.kr/ko/board/{board}"),
             true,
         );
@@ -122,6 +155,7 @@ pub fn definitions() -> Vec<SourceDefinition> {
             name,
             "서강대학교 · 시스템반도체공학과",
             "community",
+            "sogang-sse",
             format!("https://sse.sogang.ac.kr/kor/community/{path}.php"),
             true,
         );
@@ -138,6 +172,7 @@ pub fn definitions() -> Vec<SourceDefinition> {
             name,
             "서강대학교 · 반도체공학과",
             "semiconductor",
+            "sogang-se",
             format!("https://se.sogang.ac.kr/board/board_list.php?board_id={board}"),
             true,
         );
@@ -152,6 +187,7 @@ pub fn definitions() -> Vec<SourceDefinition> {
         url: "https://eclass.sogang.ac.kr/ilos/main/main_form.acl".into(),
         family: super::cybercampus::FAMILY.into(),
         supported: true,
+        group: None,
     });
     sources
 }

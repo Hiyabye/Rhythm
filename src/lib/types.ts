@@ -152,7 +152,12 @@ export interface SourceInfo {
   url: string;
   family: string;
   supported: boolean;
+  /** Effective subscription: `selected` with every enclosing group on. */
   subscribed: boolean;
+  /** The user's own pick, kept while an enclosing group is off. */
+  selected: boolean;
+  /** The innermost settings group, or null for an ungrouped source. */
+  group: string | null;
   last_attempt: string | null;
   last_success: string | null;
   last_error: string | null;
@@ -358,8 +363,16 @@ export interface ActiveSource {
   message: string;
 }
 /** `joined`: a running refresh of every subscribed board also collects this board. */
+/** A nested settings group of boards; off stops every board under it. */
+export interface SourceGroup {
+  id: string;
+  name: string;
+  parent: string | null;
+  enabled: boolean;
+}
 export interface SubscribeResult {
   sources: SourceInfo[];
+  groups: SourceGroup[];
   joined: boolean;
 }
 

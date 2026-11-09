@@ -10,6 +10,7 @@ fn definition(id: &str, supported: bool) -> SourceDefinition {
         url: format!("https://www.sogang.ac.kr/{id}"),
         family: "main".into(),
         supported,
+        group: None,
     }
 }
 fn article(external_id: &str, title: &str, text: &str, date: &str) -> ArticleInput {
@@ -1524,6 +1525,7 @@ fn schema_ten_upgrade_keeps_archive_and_adds_skipped_articles() {
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups;
                  PRAGMA user_version=10;",
             )
             .unwrap();
@@ -1575,6 +1577,7 @@ fn schema_eleven_upgrade_retries_mislabeled_and_newly_allowed_resources() {
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups;
                  PRAGMA user_version=11;"
             ))
             .unwrap();
@@ -1607,6 +1610,7 @@ fn retired_eng_newsletter_row_is_removed_but_archived_data_is_kept() {
             .execute_batch(
                 "DROP TABLE cybercampus_tasks; DROP TABLE cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups;
                  PRAGMA user_version=16",
             )
             .unwrap();
@@ -1655,4 +1659,136 @@ fn retired_eng_newsletter_row_is_removed_but_archived_data_is_kept() {
         .unwrap()
         .body_text
         .contains("보관 본문"));
+}
+fn subscribed_ids(store: &Store) -> Vec<String> {
+    let mut ids: Vec<_> = store
+        .sources()
+        .unwrap()
+        .into_iter()
+        .filter(|source| source.subscribed)
+        .map(|source| source.definition.id)
+        .collect();
+    ids.sort();
+    ids
+}
+#[test]
+fn source_groups_stop_their_subtree_and_restore_each_pick() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    let store = Store::open(&path).unwrap();
+    store.catalog(&crate::archive::definitions()).unwrap();
+    for id in [
+        "sogang-academic",
+        "eng-research",
+        "me-general",
+        "computing-academic",
+    ] {
+        store.subscribe(id, true).unwrap();
+    }
+    let all = [
+        "computing-academic",
+        "eng-research",
+        "me-general",
+        "sogang-academic",
+    ];
+    assert_eq!(subscribed_ids(&store), all);
+
+    // Level 2 stops itself and the departments under it, not its siblings.
+    let changed = store.set_source_group("sogang-eng", false).unwrap();
+    let mut changed: Vec<_> = changed.into_iter().map(|s| s.definition.id).collect();
+    changed.sort();
+    assert_eq!(changed, ["eng-research", "me-general"]);
+    assert_eq!(
+        subscribed_ids(&store),
+        ["computing-academic", "sogang-academic"]
+    );
+    let me = store.source("me-general").unwrap();
+    assert!(me.selected && !me.subscribed);
+    assert_eq!(me.definition.group.as_deref(), Some("sogang-me"));
+    assert_eq!(
+        store.subscribe("me-awards", true).unwrap_err(),
+        "상위 그룹을 먼저 켜 주세요."
+    );
+
+    // Level 1 stops everything; turning it back on keeps level 2 off.
+    store.set_source_group("sogang", false).unwrap();
+    assert!(subscribed_ids(&store).is_empty());
+    assert!(store.subscribe("sogang-academic", false).is_err());
+    store.set_source_group("sogang", true).unwrap();
+    assert_eq!(
+        subscribed_ids(&store),
+        ["computing-academic", "sogang-academic"]
+    );
+
+    // State survives reopening and a catalog refresh.
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    store.catalog(&crate::archive::definitions()).unwrap();
+    let groups = store.source_groups().unwrap();
+    assert_eq!(groups[0].id, "sogang");
+    assert!(
+        !groups
+            .iter()
+            .find(|g| g.id == "sogang-eng")
+            .unwrap()
+            .enabled
+    );
+    assert_eq!(
+        subscribed_ids(&store),
+        ["computing-academic", "sogang-academic"]
+    );
+    store.set_source_group("sogang-eng", true).unwrap();
+    assert_eq!(subscribed_ids(&store), all);
+    // A department off leaves its parent's own boards subscribed.
+    store.set_source_group("sogang-me", false).unwrap();
+    assert_eq!(
+        subscribed_ids(&store),
+        ["computing-academic", "eng-research", "sogang-academic"]
+    );
+    assert_eq!(
+        store.set_source_group("missing", false).unwrap_err(),
+        "게시판 그룹을 찾을 수 없습니다."
+    );
+}
+#[test]
+fn schema_twenty_upgrade_keeps_every_subscription_with_groups_on() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    {
+        let store = Store::open(&path).unwrap();
+        store.catalog(&crate::archive::definitions()).unwrap();
+        store.subscribe("se-news", true).unwrap();
+        store.subscribe("dorm-menu", true).unwrap();
+        store
+            .connection
+            .execute_batch(
+                "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups;
+                 PRAGMA user_version=20;",
+            )
+            .unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, super::SCHEMA_VERSION);
+    assert!(store.source("se-news").unwrap().selected);
+    store.catalog(&crate::archive::definitions()).unwrap();
+    assert_eq!(subscribed_ids(&store), ["dorm-menu", "se-news"]);
+    assert!(store.source_groups().unwrap().iter().all(|g| g.enabled));
+    assert_eq!(store.source_groups().unwrap().len(), 8);
+}
+#[test]
+fn every_public_board_belongs_to_a_known_group() {
+    let groups = crate::archive::groups();
+    for (index, group) in groups.iter().enumerate() {
+        // Parents come first so the settings tree can be built in order.
+        assert!(group
+            .parent
+            .as_ref()
+            .is_none_or(|parent| groups[..index].iter().any(|g| &g.id == parent)));
+    }
+    for source in crate::archive::definitions() {
+        match source.group {
+            None => assert_eq!(source.family, "cybercampus"),
+            Some(group) => assert!(groups.iter().any(|g| g.id == group), "{group}"),
+        }
+    }
 }
