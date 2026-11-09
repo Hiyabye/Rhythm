@@ -623,6 +623,7 @@ async fn post_json(
 ) -> Result<Vec<u8>, Failure> {
     cancellation.check().map_err(|_| Failure::Cancelled)?;
     let mut builder = reqwest::Client::builder()
+        .use_rustls_tls()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(CONNECT_TIMEOUT)
