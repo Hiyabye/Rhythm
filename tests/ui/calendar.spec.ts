@@ -44,7 +44,7 @@ test('todos are added, completed, moved and deleted from the selected day', asyn
   await expect(today).toHaveAccessibleName('10월 24일 토요일, 오늘');
 
   // Moving a todo to another day selects that day, so it stays in view.
-  await list.getByRole('button', { name: '보고서 제출 고치기' }).click();
+  await list.getByRole('button', { name: '보고서 제출 수정' }).click();
   await panel.getByLabel('날짜').fill('2026-11-02');
   await panel.getByRole('button', { name: '저장' }).click();
   await expect(page.getByRole('heading', { name: '2026년 11월' })).toBeVisible();

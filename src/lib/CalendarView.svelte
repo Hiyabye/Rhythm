@@ -277,7 +277,7 @@
               {#if todo.memo}<span class="todo-memo">{todo.memo}</span>{/if}
             </div>
             <div class="todo-buttons">
-              <button class="text-button" disabled={busy || editing !== null} onclick={() => startEdit(todo)} aria-label={`${todo.title} 고치기`}>고치기</button>
+              <button class="text-button" disabled={busy || editing !== null} onclick={() => startEdit(todo)} aria-label={`${todo.title} 수정`}>수정</button>
               <button class="text-button danger" disabled={busy || editing !== null} onclick={() => void remove(todo)} aria-label={`${todo.title} 삭제`}>삭제</button>
             </div>
           {/if}
