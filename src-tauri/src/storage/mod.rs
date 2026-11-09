@@ -19,7 +19,6 @@ mod personalization_tests;
 pub mod proactive;
 #[cfg(test)]
 mod proactive_tests;
-#[cfg(test)]
 pub mod studium;
 pub(crate) const SCHEMA_VERSION: i64 = 23;
 
