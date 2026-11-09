@@ -10,7 +10,6 @@ pub const WEEK: &str = "week";
 pub const CALENDAR: &str = "calendar";
 pub const AI: &str = "ai";
 pub const PROACTIVE: &str = "proactive";
-#[cfg(test)]
 pub const STUDIUM: &str = "studium";
 
 #[derive(Serialize)]
@@ -24,7 +23,7 @@ pub struct ExtensionInfo {
 
 /// Every feature beyond the core shell is a built-in extension, listed in the
 /// order the UI shows them. Nothing is loaded from outside the app.
-const BUILT_IN: [(&str, &str, &str); 9] = [
+const BUILT_IN: [(&str, &str, &str); 10] = [
     (
         NOTICES,
         "서강대학교 공지",
@@ -62,6 +61,11 @@ const BUILT_IN: [(&str, &str, &str); 9] = [
         "알림·백그라운드",
         "앱이 켜져 있는 동안 새 공지를 확인하고 알림을 보냅니다. 로그인 시 실행과 트레이도 여기서 정합니다.",
     ),
+    (
+        STUDIUM,
+        "Studium",
+        "선택한 열람실의 빈 좌석 수와 번호를 직접 확인합니다.",
+    ),
 ];
 
 /// The extension that owns a catalog source family.
@@ -75,10 +79,14 @@ pub fn owner(family: &str) -> &'static str {
 
 pub struct Registry {
     jobs: std::sync::Arc<crate::archive::sync::Controller>,
+    studium: std::sync::Arc<crate::studium::controller::Controller>,
 }
 impl Registry {
-    pub fn new(jobs: std::sync::Arc<crate::archive::sync::Controller>) -> Self {
-        Self { jobs }
+    pub fn new(
+        jobs: std::sync::Arc<crate::archive::sync::Controller>,
+        studium: std::sync::Arc<crate::studium::controller::Controller>,
+    ) -> Self {
+        Self { jobs, studium }
     }
     pub fn list(&self, store: &Store) -> Result<Vec<ExtensionInfo>, String> {
         BUILT_IN
@@ -88,7 +96,7 @@ impl Registry {
                     id,
                     display_name,
                     description,
-                    available: true,
+                    available: id != STUDIUM,
                     enabled: store.enabled(id)?,
                 })
             })
@@ -105,10 +113,15 @@ impl Registry {
         if !enabled && matches!(id, NOTICES | CYBERCAMPUS) {
             self.jobs.cancel();
         }
+        if !enabled && id == STUDIUM {
+            self.studium.cancel();
+            self.studium.clear();
+        }
         store.set_enabled(id, enabled)
     }
     pub fn stop_all(&self) {
         self.jobs.cancel();
+        self.studium.cancel();
     }
 }
 
@@ -120,7 +133,10 @@ mod tests {
     fn operational_extension_preserves_preferences_without_automatic_networking() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(&directory.path().join("rhythm.db")).unwrap();
-        let registry = Registry::new(crate::archive::sync::Controller::new());
+        let registry = Registry::new(
+            crate::archive::sync::Controller::new(),
+            crate::studium::controller::Controller::new(),
+        );
         let listed = registry.list(&store).unwrap();
         assert_eq!(
             listed.iter().map(|e| e.id).collect::<Vec<_>>(),
@@ -133,11 +149,15 @@ mod tests {
                 WEEK,
                 CALENDAR,
                 AI,
-                PROACTIVE
+                PROACTIVE,
+                STUDIUM
             ]
         );
-        // A new profile starts with every extension off.
-        assert!(listed.iter().all(|e| !e.enabled && e.available));
+        // A new profile starts with every extension off. Studium remains
+        // unavailable in the UI until its screen is included.
+        assert!(listed
+            .iter()
+            .all(|e| !e.enabled && e.available == (e.id != STUDIUM)));
         registry.set(&store, NOTICES, true).unwrap();
         registry.set(&store, AI, true).unwrap();
         let enabled = registry.list(&store).unwrap();
@@ -153,5 +173,24 @@ mod tests {
     fn cybercampus_family_has_its_own_extension() {
         assert_eq!(owner(crate::archive::cybercampus::FAMILY), CYBERCAMPUS);
         assert_eq!(owner("engineering"), NOTICES);
+    }
+
+    #[test]
+    fn studium_can_toggle_without_changing_targets_or_starting_work() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(&directory.path().join("rhythm.db")).unwrap();
+        let registry = Registry::new(
+            crate::archive::sync::Controller::new(),
+            crate::studium::controller::Controller::new(),
+        );
+        assert!(!store.enabled(STUDIUM).unwrap());
+        registry.set(&store, STUDIUM, true).unwrap();
+        store
+            .studium_save_preferences(&["5".into(), "6".into()], "6")
+            .unwrap();
+        registry.set(&store, STUDIUM, false).unwrap();
+        assert!(!store.enabled(STUDIUM).unwrap());
+        assert_eq!(store.studium_preferences().unwrap().view_room, "6");
+        assert_eq!(store.studium_preferences().unwrap().room_ids, ["5", "6"]);
     }
 }
