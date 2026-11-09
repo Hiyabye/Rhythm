@@ -240,16 +240,35 @@ pub async fn set_extension(
     if !enabled && id == extensions::PROACTIVE {
         set_launch_at_login(&app, state.inner(), false)?;
     }
-    {
+    let studium_completion = {
         let store = state
             .store
             .lock()
             .map_err(|_| "저장소에 접근할 수 없습니다.")?;
         state.registry.set(&store, &id, enabled)?;
-    }
+        if !enabled && id == extensions::STUDIUM {
+            state.studium.completion()
+        } else {
+            None
+        }
+    };
     if !enabled {
         match id.as_str() {
             extensions::NOTICES | extensions::CYBERCAMPUS => state.archive.wait().await,
+            extensions::STUDIUM => {
+                if let Some(completion) = studium_completion {
+                    completion.wait().await;
+                }
+                let store = state
+                    .store
+                    .lock()
+                    .map_err(|_| "저장소에 접근할 수 없습니다.")?;
+                // A later enable may have won while disable awaited. Never
+                // clear a newly admitted generation's results in that case.
+                if !store.enabled(extensions::STUDIUM)? {
+                    state.studium.clear();
+                }
+            }
             extensions::AI => {
                 crate::intelligence::commands::stop_for_disabled_extension(state.inner()).await?
             }
