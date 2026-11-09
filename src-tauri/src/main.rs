@@ -12,6 +12,8 @@ mod personalization;
 mod platform_support;
 mod proactive;
 mod storage;
+#[cfg(test)]
+mod studium;
 mod updater;
 use extensions::Registry;
 use intelligence::Worker;
