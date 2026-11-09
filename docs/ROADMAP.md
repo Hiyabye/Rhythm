@@ -1,6 +1,6 @@
 # Roadmap
 
-Rhythm stays local-first and Korean-first. The current release is **v1.7.1**. Support targets macOS Apple Silicon and Windows 11 x64; Linux and Intel Macs are not supported. Planned work is tracked in [GitHub issues](https://github.com/Hiyabye/Rhythm/issues); this page records the current state and what has actually been verified.
+Rhythm stays local-first and Korean-first. The current release is **v1.8.0**. Support targets macOS Apple Silicon and Windows 11 x64; Linux and Intel Macs are not supported. Planned work is tracked in [GitHub issues](https://github.com/Hiyabye/Rhythm/issues); this page records the current state and what has actually been verified.
 
 ## Current state
 
@@ -8,6 +8,7 @@ Rhythm stays local-first and Korean-first. The current release is **v1.7.1**. Su
 - **Local AI:** upstream `llama-server` (llama.cpp b12068, bundled and supervised by Rhythm) on both platforms. Catalog: Qwen3.5 2B/4B and Gemma 4 E2B/E4B plus an optional vision projector per model, and Qwen3-Embedding 0.6B for classification, similar notices and semantic search. Opt-in idle backlog analysis (up to 20 notices per hour).
 - **Remote AI:** opt-in OpenAI-compatible engine; the local engine stays the default.
 - **Personalization, lifecycle and notifications:** deterministic ranking, opt-in background sync and notifications, backup and restore (schema 19).
+- **Calendar:** opt-in month view of open eClass deadlines, AI reference dates and local todos (never sent anywhere, no reminders); unfinished todos also show in 앞으로 7일.
 - **First-run setup:** a new profile opens a guided setup (theme, boards, interests, AI, background, notifications) before the app; it can be rerun from Settings and resets nothing.
 - **Windows 11 x64:** per-user unsigned NSIS installer, CPU and NVIDIA Vulkan AI, WinRT notifications. See [Windows](WINDOWS.md).
 - **Distribution:** ad-hoc-signed macOS DMG and unsigned Windows installer, with signed in-app updates and a daily automatic update check (announce-only), built by the tag-triggered `release.yml` into a draft release.
