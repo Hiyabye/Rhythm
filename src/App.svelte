@@ -68,6 +68,8 @@
   let sourceRequest = $state({ id: '', token: 0 });
   let activeSource = $state('');
   let weekPane = $state(false);
+  // A new token asks the calendar page to select `day`.
+  let calendarRequest = $state({ day: '', token: 0 });
   let boards = $derived(sources.filter((item) => item.supported && item.subscribed));
   let primaryNavigation = $derived(contributed(navigation, enabled));
   // Each enabled source extension gets a sidebar group of its subscribed boards.
@@ -424,6 +426,8 @@
         onsourcechange={(id) => activeSource = id}
         onweekpane={(visible) => weekPane = visible}
         ontasks={() => void navigate('tasks')}
+        {calendarRequest}
+        oncalendar={(day) => void navigate('calendar').then(() => { calendarRequest = { day, token: calendarRequest.token + 1 }; })}
         oncontext={(context) => { if (context.summary) summary = context.summary; if (context.sources) sources = context.sources; syncStatus = context.status; }} />
     {/if}
   </main>

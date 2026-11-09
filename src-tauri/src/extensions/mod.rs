@@ -7,6 +7,7 @@ pub const SEARCH: &str = "search";
 pub const SAVED: &str = "saved";
 pub const RECOMMENDATIONS: &str = "recommendations";
 pub const WEEK: &str = "week";
+pub const CALENDAR: &str = "calendar";
 pub const AI: &str = "ai";
 pub const PROACTIVE: &str = "proactive";
 
@@ -21,7 +22,7 @@ pub struct ExtensionInfo {
 
 /// Every feature beyond the core shell is a built-in extension, listed in the
 /// order the UI shows them. Nothing is loaded from outside the app.
-const BUILT_IN: [(&str, &str, &str); 8] = [
+const BUILT_IN: [(&str, &str, &str); 9] = [
     (
         NOTICES,
         "서강대학교 공지",
@@ -43,6 +44,11 @@ const BUILT_IN: [(&str, &str, &str); 8] = [
         WEEK,
         "앞으로 7일",
         "다가오는 일주일의 공지와 마감을 날짜별로 보여 줍니다.",
+    ),
+    (
+        CALENDAR,
+        "캘린더",
+        "과제 마감과 AI 참고 일정을 달력으로 보고, 직접 만든 할 일을 앞으로 7일에도 표시합니다.",
     ),
     (
         AI,
@@ -123,6 +129,7 @@ mod tests {
                 SAVED,
                 RECOMMENDATIONS,
                 WEEK,
+                CALENDAR,
                 AI,
                 PROACTIVE
             ]
@@ -132,7 +139,7 @@ mod tests {
         registry.set(&store, NOTICES, true).unwrap();
         registry.set(&store, AI, true).unwrap();
         let enabled = registry.list(&store).unwrap();
-        assert!(enabled[0].enabled && enabled[6].enabled);
+        assert!(enabled[0].enabled && enabled[7].enabled);
         assert!(!enabled[1].enabled);
         registry.set(&store, NOTICES, false).unwrap();
         assert!(!registry.list(&store).unwrap()[0].enabled);

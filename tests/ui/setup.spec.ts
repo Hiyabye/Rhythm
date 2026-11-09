@@ -5,7 +5,7 @@ import { callCount, mockDesktop, openSettings } from './fixture';
 function title(page: Page, name: string) {
   return page.getByRole('heading', { level: 1, name, exact: true });
 }
-const none = { sogang_notices: false, cybercampus: false, search: false, saved: false, recommendations: false, week: false, ai: false, proactive: false };
+const none = { sogang_notices: false, cybercampus: false, search: false, saved: false, recommendations: false, week: false, calendar: false, ai: false, proactive: false };
 // With every extension on (the fixture default), each contributed step appears.
 const allSteps = ['사용할 기능 고르기', '받아 볼 게시판', '사이버캠퍼스 연결', '관심사', 'AI 요약', '백그라운드 실행', '알림', '준비가 끝났습니다'];
 async function next(page: Page, name: string) {

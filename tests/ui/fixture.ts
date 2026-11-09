@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import analysisContract from '../../src/lib/analysis-contract.json' with { type: 'json' };
-import type { AiOperation, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation } from '../../src/lib/types';
+import type { AiOperation, CalendarTodo, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation } from '../../src/lib/types';
 
 export interface FixtureOptions {
   count?: number;
@@ -102,6 +102,7 @@ export interface FixtureOptions {
   // Saved Cybercampus login ID; `cybercampus_save_login` accepts only the password "right".
   cybercampusId?: string | null;
   cybercampusTasks?: CybercampusTask[];
+  calendarTodos?: CalendarTodo[];
   // Nested board groups; sources name theirs through `group`.
   sourceGroups?: { id: string; name: string; parent: string | null; enabled?: boolean }[];
 }
@@ -163,7 +164,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     };
     const snapshot = { settings: { theme: 'light', energy_profile: 'eco', interests: '' },
       extensions: ([['sogang_notices', '서강대학교 공지'], ['cybercampus', '사이버캠퍼스'], ['search', '탐색'], ['saved', '보관함'],
-        ['recommendations', '나를 위한 소식'], ['week', '앞으로 7일'], ['ai', 'AI 분석'], ['proactive', '알림·백그라운드']] as const).map(([id, display_name]) => ({
+        ['recommendations', '나를 위한 소식'], ['week', '앞으로 7일'], ['calendar', '캘린더'], ['ai', 'AI 분석'], ['proactive', '알림·백그라운드']] as const).map(([id, display_name]) => ({
         id, display_name, description: `${display_name} 설명`, available: true,
         enabled: options.extensions?.[id] ?? (id === 'sogang_notices' ? options.enabled ?? true : true) })),
       storage: { path: '/isolated/rhythm.sqlite3', bytes: 4096, schema_version: 5 },
@@ -260,6 +261,8 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         if (current.cancelling) throw 'AI 작업을 취소했습니다.';
       } finally { if (ai.operation === current) ai.operation = null; }
     }
+    let calendarTodos = copy(options.calendarTodos ?? []);
+    let calendarId = Math.max(0, ...calendarTodos.map((todo) => todo.id));
     const cybercampus = { id: options.cybercampusId ?? null, rejected: false, courses: options.cybercampusId ? [{ course_key: 'A1', name: '자료구조실습', year: 2026, term: '3' }] : [] };
     Object.assign(window, { isTauri: true, __fixture: fixture, __TAURI_EVENT_PLUGIN_INTERNALS__: {
       unregisterListener: (event: string, _id: number) => {
@@ -621,6 +624,27 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             return copy(cybercampus);
           case 'cybercampus_forget_login': cybercampus.id = null; return copy(cybercampus);
           case 'cybercampus_tasks': return copy(options.cybercampusTasks ?? []);
+          // Mirrors storage/calendar: inclusive range, untimed first, then time and id.
+          case 'calendar_todos': return copy(calendarTodos.filter((todo) => todo.day >= args.from && todo.day <= args.to)
+            .sort((a, b) => a.day.localeCompare(b.day) || Number(a.time !== null) - Number(b.time !== null) || (a.time ?? '').localeCompare(b.time ?? '') || a.id - b.id));
+          case 'calendar_create_todo': {
+            if (!args.todo.title.trim()) throw '할 일 제목은 1자에서 200자 사이로 입력해 주세요.';
+            const todo = { id: ++calendarId, title: args.todo.title.trim(), day: args.todo.day, time: args.todo.time || null, memo: args.todo.memo.trim(), done: false };
+            calendarTodos.push(todo);
+            return copy(todo);
+          }
+          case 'calendar_update_todo': {
+            const todo = calendarTodos.find((item) => item.id === args.id);
+            if (!todo) throw '할 일을 찾을 수 없습니다. 이미 삭제되었을 수 있습니다.';
+            Object.assign(todo, { title: args.todo.title.trim(), day: args.todo.day, time: args.todo.time || null, memo: args.todo.memo.trim() });
+            return copy(todo);
+          }
+          case 'calendar_set_todo_done': {
+            const todo = calendarTodos.find((item) => item.id === args.id)!;
+            todo.done = args.done;
+            return copy(todo);
+          }
+          case 'calendar_delete_todo': calendarTodos = calendarTodos.filter((item) => item.id !== args.id); return null;
           default: throw `테스트에서 예상하지 않은 명령: ${command}`;
         }
       },

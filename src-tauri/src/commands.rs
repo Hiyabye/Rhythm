@@ -1,10 +1,15 @@
 //! Tauri commands for settings, onboarding, lifecycle preferences, extensions and
 //! the worker status. Startup and shared state stay in `main.rs`.
 use crate::{
+    archive::sync::with_store as locked,
     core,
     extensions::{self, ExtensionInfo},
     intelligence::WorkerStatus,
-    storage::{proactive::ProactiveSettings, Settings, StorageInfo},
+    storage::{
+        calendar::{CalendarTodo, TodoInput},
+        proactive::ProactiveSettings,
+        Settings, StorageInfo,
+    },
     AppState,
 };
 use serde::Serialize;
@@ -272,4 +277,47 @@ pub async fn worker_status(state: tauri::State<'_, AppState>) -> Result<WorkerSt
         Ok(mut worker) => Ok(worker.refresh().await),
         Err(_) => Ok(runtime_status(&state)),
     }
+}
+#[tauri::command]
+pub async fn calendar_todos(
+    state: tauri::State<'_, AppState>,
+    from: String,
+    to: String,
+) -> Result<Vec<CalendarTodo>, String> {
+    let _lease = state.operation_gate.shared().await?;
+    locked(&state.store, |s| s.calendar_todos(&from, &to))
+}
+#[tauri::command]
+pub async fn calendar_create_todo(
+    state: tauri::State<'_, AppState>,
+    todo: TodoInput,
+) -> Result<CalendarTodo, String> {
+    let _lease = state.operation_gate.shared().await?;
+    locked(&state.store, |s| s.calendar_create_todo(&todo))
+}
+#[tauri::command]
+pub async fn calendar_update_todo(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+    todo: TodoInput,
+) -> Result<CalendarTodo, String> {
+    let _lease = state.operation_gate.shared().await?;
+    locked(&state.store, |s| s.calendar_update_todo(id, &todo))
+}
+#[tauri::command]
+pub async fn calendar_set_todo_done(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+    done: bool,
+) -> Result<CalendarTodo, String> {
+    let _lease = state.operation_gate.shared().await?;
+    locked(&state.store, |s| s.calendar_set_todo_done(id, done))
+}
+#[tauri::command]
+pub async fn calendar_delete_todo(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
+    locked(&state.store, |s| s.calendar_delete_todo(id))
 }
