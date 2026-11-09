@@ -7,6 +7,7 @@
   import DocumentReader from './DocumentReader.svelte';
   import Highlighted from './Highlighted.svelte';
   import Icon from './Icon.svelte';
+  import { fade, flip, slide } from './motion';
 
   let { page, desktop, enabled, sourceRequest, activation, onactivationhandled, onsettings, onaisettings, onsetup, onextensions, onsourcechange, oncontext, onweekpane, ontasks }: {
     page: string; desktop: boolean; enabled: Set<string>; sourceRequest: { id: string; token: number };
@@ -411,7 +412,7 @@
 {#if readerId !== null}
   {#key `${readerId}:${readerRevisionId ?? ''}`}<DocumentReader id={readerId} initialRevisionId={readerRevisionId} enabledSources={sources.filter((item) => item.extension && enabled.has(item.extension)).map((item) => item.id)} {ai} onclose={closeReader} onchange={changed} {onaisettings} onopen={(id) => void openDocument(id, `notice-${id}`)} />{/key}
 {:else}
-  <section class="archive-view" aria-busy={loading}>
+  <section class="archive-view" aria-busy={loading} in:fade>
     {#if page === 'today' && !showRecommendations && !showWeek}
       <section class="empty-state today-blank" aria-labelledby="today-blank-heading">
         <span class="empty-icon"><Icon name="extensions" size={30} /></span>
@@ -447,7 +448,7 @@
               <ul class="pick-list">
                 {#each recommendations as recommendation (recommendation.item.id)}
                   {@const item = recommendation.item}
-                  <li class:notice-unread={!item.is_read}>
+                  <li class:notice-unread={!item.is_read} animate:flip>
                     <button class="pick-open" id={`notice-${item.id}`} title={item.title} onclick={() => void open(item)}>
                       <span class="pick-title"><span class="notice-read-dot" aria-hidden="true"></span><strong>{item.title}</strong><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}</span></span>
                       <span class="pick-meta">{#if recommendation.feedback}<span class="pick-feedback">{recommendation.feedback === 'interested' ? '관심' : '관심 없음'}</span>{/if}<span class={`board-swatch family-${familyOf(item.source_id)}`} aria-hidden="true"></span><span class="pick-source">{item.source_name}</span><time datetime={item.published_at}>{pickDate(item.published_at)}</time></span>
@@ -548,7 +549,7 @@
         {#each listRows as { item, folded, member } (item.id)}
           {@const analysis = analyses.find((value) => value.document_id === item.id)}
           {@const hiddenUnread = expandedDuplicates[item.id] ? 0 : folded.filter((copy) => !copy.is_read).length}
-          <li class:notice-unread={!item.is_read || hiddenUnread > 0} class:notice-duplicate-member={member} class:has-duplicates={folded.length > 0}>
+          <li class:notice-unread={!item.is_read || hiddenUnread > 0} class:notice-duplicate-member={member} class:has-duplicates={folded.length > 0} animate:flip in:slide={{ duration: member ? 180 : 0 }}>
             <button class="notice-open" id={`notice-${item.id}`} onclick={() => open(item)}>
               <span class="notice-title"><span class="notice-read-dot" aria-hidden="true"></span><Highlighted text={item.title} {query} /><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}{hiddenUnread ? `, 접힌 같은 공지 ${hiddenUnread}건 읽지 않음` : ''}</span></span>
               <span class="notice-meta"><span>{item.source_name}</span><time datetime={item.published_at}>{archiveDate(item.published_at)}</time>{#if item.category}<span>{item.category}</span>{/if}</span>

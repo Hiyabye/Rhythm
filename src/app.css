@@ -769,6 +769,16 @@ button svg {
 :root[data-theme=dark] .popover {
   box-shadow: 0 10px 32px rgb(0 0 0 / .45),0 1px 3px rgb(0 0 0 / .3);
 }
+/* Entry only: animating the exit needs `overlay`, which WebKit lacks. */
+.popover:popover-open {
+  transition: opacity .14s ease-out,translate .14s ease-out;
+}
+@starting-style {
+  .popover:popover-open {
+    opacity: 0;
+    translate: 0 -4px;
+  }
+}
 .popover p+p,.popover p+code,.popover code+p {
   margin-top: 6px;
 }
@@ -1523,7 +1533,10 @@ textarea::placeholder {
   font-size: 12px;
   pointer-events: none;
 }
-.save-notice.visible {
+.save-notice-body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 12px 17px;
   border: 1px solid var(--line);
   border-radius: 5px;

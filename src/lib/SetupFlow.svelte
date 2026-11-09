@@ -7,6 +7,8 @@
   import PersonalizationSettings from './PersonalizationSettings.svelte';
   import ProactiveSettings from './ProactiveSettings.svelte';
   import ExtensionSettings from './ExtensionSettings.svelte';
+  import Progress from './Progress.svelte';
+  import { fade, fly } from './motion';
   import { contributed, enabledExtensions } from './extensions';
   import { archiveError, archiveSize } from './archive-format';
   import type { AiSnapshot, AutoUpdateCheck, CatalogEntry, EnergyProfile, ProactiveActivation, ProactiveSnapshot, Settings, Snapshot, SourceInfo, Theme } from './types';
@@ -54,6 +56,8 @@
   // Tracked by id, so turning extensions on or off on the 기능 step keeps the place.
   let current = $state<StepId>('start');
   let step = $derived(Math.max(0, steps.findIndex((item) => item.id === current)));
+  // Each step slides in from the side the user is moving towards.
+  let direction = $state(1);
   let sourcesOn = $derived(enabled.has('sogang_notices') || enabled.has('cybercampus'));
   let chosen = $derived(snapshot.extensions.filter((extension) => extension.enabled).map((extension) => extension.display_name));
 
@@ -119,6 +123,7 @@
   }
 
   function go(next: number) {
+    direction = next < step ? -1 : 1;
     current = steps[next].id;
     void focusHeading();
   }
@@ -179,6 +184,7 @@
       <header class="setup-header"><h1 id="setup-title" tabindex="-1">{steps[step].title}</h1><p>{steps[step].line}</p></header>
       {#if error}<p class="archive-error" role="alert">{error}</p>{/if}
 
+      {#key current}<div in:fly={{ x: 12 * direction, y: 0 }}>
       {#if current === 'start'}
         <div class="settings-group">
           <div class="settings-row"><span class="row-label">화면 테마</span><div class="segmented" role="group" aria-label="화면 테마">{#each themes as option}<button disabled={busy} class:selected={theme === option.id} aria-pressed={theme === option.id} onclick={() => onsave({ theme: option.id })}><Icon name={option.icon} size={15} />{option.label}</button>{/each}</div></div>
@@ -215,10 +221,10 @@
                   <div class="model-heading"><h4>{entry.name}</h4>{#if model?.status === 'installed'}<span class="model-check"><Icon name="check" size={13} /><span>설치됨</span></span>{/if}</div>
                   <p class="model-meta">{entry.use_case} · {archiveSize(entry.bytes)}</p>
                   {#if model && ['downloading', 'pending'].includes(model.status)}
-                    <label class="ai-progress"><span class="sr-only">{entry.name} 다운로드</span><progress max={model.expected_bytes || 1} value={model.downloaded_bytes}></progress><span>{archiveSize(model.downloaded_bytes)} / {archiveSize(model.expected_bytes ?? 0)}</span></label>
+                    <label class="ai-progress"><span class="sr-only">{entry.name} 다운로드</span><Progress max={model.expected_bytes || 1} value={model.downloaded_bytes} /><span>{archiveSize(model.downloaded_bytes)} / {archiveSize(model.expected_bytes ?? 0)}</span></label>
                   {:else if model?.status === 'verifying'}<p class="model-note" role="status">무결성 확인 중</p>{/if}
                   {#if model && removal === model.id}
-                    <div class="model-confirm" role="group" aria-label={`${entry.name} 삭제 확인`}>
+                    <div class="model-confirm" role="group" aria-label={`${entry.name} 삭제 확인`} in:fade>
                       <p class="model-note">{external ? '등록된 참조만 해제합니다. 외부 원본 파일은 삭제하지 않습니다.' : '모델 파일을 삭제할까요? 공지와 기존 AI 분석은 유지됩니다.'}</p>
                       <div class="model-actions"><button class="button secondary small" disabled={aiBusy || ai.busy} onclick={() => remove(model.id)}>확인하고 {external ? '참조 해제' : '삭제'}</button><button class="text-button" onclick={() => removal = null}>취소</button></div>
                     </div>
@@ -252,6 +258,7 @@
           {#if sourcesOn}<div class="settings-row"><span class="row-label">지금 공지 가져오기<Hint label="지금 공지 가져오기">구독한 게시판의 새 소식을 확인하고 이전 공지를 차례로 가져옵니다. 진행 상황은 사이드바와 각 게시판 설정에 표시됩니다.</Hint>{#if syncMessage}<span class="row-detail" role="status">{syncMessage}</span>{/if}</span><button class="button secondary small" disabled={syncBusy || Boolean(syncMessage) || !subscribed.length} onclick={syncNow}>가져오기</button></div>{/if}
         </div>
       {/if}
+      </div>{/key}
     </main>
 
     <footer class="setup-footer">

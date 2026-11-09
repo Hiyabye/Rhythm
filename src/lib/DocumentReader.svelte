@@ -5,6 +5,7 @@
   import { archiveDate, archiveError, archiveSize, resourceStatus } from './archive-format';
   import Icon from './Icon.svelte';
   import AnalysisPanel from './AnalysisPanel.svelte';
+  import { fly } from './motion';
 
   // `enabledSources` lists the sources whose extension is on: only those may download more files.
   let { id, initialRevisionId = null, enabledSources, ai, onclose, onchange, onaisettings, onopen }: {
@@ -295,7 +296,7 @@
   }
 </script>
 
-<section class="archive-reader" aria-label="보관된 공지 읽기" aria-busy={loading}>
+<section class="archive-reader" aria-label="보관된 공지 읽기" aria-busy={loading} in:fly={{ y: 4 }}>
   <button class="text-button reader-back" onclick={onclose}>← 목록으로 돌아가기 <span class="muted">Esc</span></button>
   {#if error}<p class="archive-error" role="alert">{error}</p>{/if}
   <p class="archive-feedback" role="status">{feedback}</p>

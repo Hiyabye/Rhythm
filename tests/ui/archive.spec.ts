@@ -244,6 +244,29 @@ test('settings failure rolls back optimistic theme; system theme follows OS', as
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 });
 
+for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+  test(`Svelte motion ${reducedMotion === 'reduce' ? 'is skipped under' : 'runs without'} reduced motion`, async ({ page }) => {
+    // Svelte transitions call Element.animate, which the reduced-motion CSS rule cannot stop.
+    await page.addInitScript(() => {
+      const animate = Element.prototype.animate;
+      (window as any).__animations = 0;
+      Element.prototype.animate = function (...args) {
+        (window as any).__animations++;
+        return animate.apply(this, args);
+      };
+    });
+    await page.emulateMedia({ reducedMotion });
+    await mockDesktop(page);
+    await page.goto('/');
+    await openSettings(page, '일반');
+    await page.getByRole('button', { name: '다크', exact: true }).click();
+    await expect(page.locator('.save-notice')).toContainText('설정을 저장했습니다.');
+    const animations = await page.evaluate(() => (window as any).__animations);
+    if (reducedMotion === 'reduce') expect(animations).toBe(0);
+    else expect(animations).toBeGreaterThan(0);
+  });
+}
+
 test('subscriptions have no automatic collection, protect refreshing state, show errors and cancel', async ({ page }) => {
   await mockDesktop(page);
   await page.goto('/');
