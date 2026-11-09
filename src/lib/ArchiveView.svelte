@@ -5,6 +5,7 @@
   import analysisContract from './analysis-contract.json' with { type: 'json' };
   import { archiveDate, archiveDay, archiveError, kstInstant, localDayKey, wallTime } from './archive-format';
   import { clock } from './clock.svelte';
+  import { confirmAction } from './confirm';
   import CalendarView from './CalendarView.svelte';
   import DocumentReader from './DocumentReader.svelte';
   import Highlighted from './Highlighted.svelte';
@@ -55,6 +56,10 @@
   let error = $state('');
   let feedback = $state('');
   let pendingSaves = $state<Record<number, boolean>>({});
+  // Bulk selection covers the rows on the current page only.
+  let selecting = $state(false);
+  let chosen = $state<Set<number>>(new Set());
+  let trashBusy = $state(false);
   let restoreListFocus = false;
   let readerId = $state<number | null>(null);
   let readerRevisionId = $state<number | null>(null);
@@ -83,6 +88,8 @@
     source = request.id;
     category = '';
     unread = false;
+    selecting = false;
+    chosen = new Set();
     sort = currentPage === 'search' ? 'relevance' : 'newest';
     offset = 0;
     calendarDay = localDayKey(new Date());
@@ -104,7 +111,7 @@
   });
   $effect(() => {
     const filters = { query, source_id: source || null, category: category || null,
-      saved_only: page === 'bookmark', unread_only: unread, ascending: sort === 'oldest', offset, limit: pageSize };
+      saved_only: page === 'bookmark', unread_only: unread, trashed: page === 'trash', ascending: sort === 'oldest', offset, limit: pageSize };
     const ranked = page === 'search' && sort === 'relevance' && query !== '';
     void revision;
     // The calendar shows no notice list; it uses only deadlines and AI dates.
@@ -308,6 +315,9 @@
         return;
       }
       result = next;
+      // A row that left this page (moved, restored, deleted) is no longer selected.
+      const visible = new Set(next.items.map((item) => item.id));
+      if ([...chosen].some((id) => !visible.has(id))) chosen = new Set([...chosen].filter((id) => visible.has(id)));
       if (category && !next.categories.includes(category)) category = '';
       await loadEmbeddingLabels(next.items.map((item) => item.id));
     } catch (reason) { if (active && current === requestId) error = archiveError(reason); }
@@ -340,6 +350,58 @@
       await refreshContext();
     } catch (reason) { if (active) error = archiveError(reason); }
     finally { if (active) pendingSaves = { ...pendingSaves, [item.id]: false }; }
+  }
+
+  function choose(id: number) {
+    const next = new Set(chosen);
+    if (!next.delete(id)) next.add(id);
+    chosen = next;
+  }
+  let allChosen = $derived(result.items.length > 0 && result.items.every((item) => chosen.has(item.id)));
+  function chooseAll() {
+    chosen = allChosen ? new Set() : new Set(result.items.map((item) => item.id));
+  }
+  function stopSelecting() {
+    selecting = false;
+    chosen = new Set();
+  }
+  // 휴지통 keeps the content, so moving there or back needs no confirmation.
+  async function moveToTrash(ids: number[], trash: boolean) {
+    if (trashBusy || !ids.length) return;
+    trashBusy = true;
+    error = '';
+    feedback = '';
+    try {
+      await invoke(trash ? 'archive_trash' : 'archive_restore', { ids });
+      if (!active) return;
+      feedback = trash ? `${ids.length}개 공지를 휴지통으로 옮겼습니다. 휴지통에서 언제든 복원할 수 있습니다.` : `${ids.length}개 공지를 복원했습니다.`;
+      stopSelecting();
+      revision++;
+      await refreshContext();
+    } catch (reason) { if (active) error = archiveError(reason); }
+    finally { if (active) trashBusy = false; }
+  }
+  // `null` empties 휴지통.
+  async function deletePermanently(ids: number[] | null) {
+    if (trashBusy || (ids !== null && !ids.length)) return;
+    const count = ids?.length ?? result.total;
+    let confirmed = false;
+    try {
+      confirmed = await confirmAction(`${ids === null ? '휴지통의 공지' : '선택한 공지'} ${count}개를 영구 삭제할까요? 본문, 첨부 자료, AI 결과가 이 기기에서 지워지고, 학교 사이트에 남아 있어도 다시 가져오지 않습니다.`, '영구 삭제');
+    } catch (reason) { if (active) error = archiveError(reason); return; }
+    if (!confirmed || !active) return;
+    trashBusy = true;
+    error = '';
+    feedback = '';
+    try {
+      await invoke('archive_purge', { ids });
+      if (!active) return;
+      feedback = ids === null ? '휴지통을 비웠습니다.' : `${count}개 공지를 영구 삭제했습니다.`;
+      stopSelecting();
+      revision++;
+      await refreshContext();
+    } catch (reason) { if (active) error = archiveError(reason); }
+    finally { if (active) trashBusy = false; }
   }
 
   function changed() {
@@ -577,7 +639,20 @@
       </div>
       {#if page === 'inbox'}<label class="archive-checkbox"><input type="checkbox" bind:checked={unread} onchange={() => offset = 0} disabled={!desktop} /> 읽지 않은 공지만</label>{/if}
     </div>
-    <div class="collection-heading archive-list-heading"><h2 bind:this={listHeading} tabindex="-1">{page === 'bookmark' ? '저장한 공지' : query ? '검색 결과' : '보관된 공지'} <span class="muted">{result.total.toLocaleString('ko-KR')}</span></h2><button class="text-button" disabled={!desktop || loading} onclick={() => { revision++; void refreshContext(); }}>목록 새로고침</button></div>
+    <div class="collection-heading archive-list-heading"><h2 bind:this={listHeading} tabindex="-1">{page === 'trash' ? '휴지통' : page === 'bookmark' ? '저장한 공지' : query ? '검색 결과' : '보관된 공지'} <span class="muted">{result.total.toLocaleString('ko-KR')}</span></h2><div class="heading-actions">{#if result.items.length}<button class="text-button" aria-pressed={selecting} disabled={!desktop} onclick={() => selecting ? stopSelecting() : selecting = true}>{selecting ? '선택 끝내기' : '선택'}</button>{/if}{#if page === 'trash' && result.total}<button class="text-button danger" disabled={!desktop || trashBusy} onclick={() => void deletePermanently(null)}>휴지통 비우기</button>{/if}<button class="text-button" disabled={!desktop || loading} onclick={() => { revision++; void refreshContext(); }}>목록 새로고침</button></div></div>
+    {#if page === 'trash'}<p class="footnote">휴지통의 공지는 직접 비우기 전까지 이 기기에 보관되며 목록, 검색, 추천과 알림에는 나타나지 않습니다. 영구 삭제한 공지는 학교 사이트에 남아 있어도 다시 가져오지 않습니다.</p>{/if}
+    {#if selecting && result.items.length}
+      <div class="bulk-bar" role="group" aria-label="선택한 공지 작업">
+        <label class="archive-checkbox"><input type="checkbox" checked={allChosen} indeterminate={chosen.size > 0 && !allChosen} onchange={chooseAll} /> 이 페이지 전체 선택</label>
+        <span class="bulk-count" aria-live="polite">{chosen.size}개 선택</span>
+        {#if page === 'trash'}
+          <button class="button secondary small" disabled={!chosen.size || trashBusy} onclick={() => void moveToTrash([...chosen], false)}>복원</button>
+          <button class="button secondary small danger" disabled={!chosen.size || trashBusy} onclick={() => void deletePermanently([...chosen])}>영구 삭제</button>
+        {:else}
+          <button class="button secondary small" disabled={!chosen.size || trashBusy} onclick={() => void moveToTrash([...chosen], true)}><Icon name="trash" size={16} />휴지통으로 이동</button>
+        {/if}
+      </div>
+    {/if}
     {#if error}<div class="archive-error" role="alert">{error}<button class="text-button" onclick={() => { revision++; void refreshContext(); }}>다시 시도</button></div>{/if}
     <p class="sr-only archive-result-status" role="status">{loading ? '로컬 공지를 불러오는 중입니다.' : error ? '목록을 새로 불러오지 못했습니다.' : `공지 ${result.total.toLocaleString('ko-KR')}개${result.total ? ` · ${offset + 1}–${Math.min(offset + pageSize, result.total)}` : ''}`}</p>
     <p class="archive-feedback" role="status">{feedback}</p>
@@ -587,7 +662,8 @@
         {#each listRows as { item, folded, member } (item.id)}
           {@const analysis = analyses.find((value) => value.document_id === item.id)}
           {@const hiddenUnread = expandedDuplicates[item.id] ? 0 : folded.filter((copy) => !copy.is_read).length}
-          <li class:notice-unread={!item.is_read || hiddenUnread > 0} class:notice-duplicate-member={member} class:has-duplicates={folded.length > 0} animate:flip in:slide={{ duration: member ? 180 : 0 }}>
+          <li class:notice-unread={!item.is_read || hiddenUnread > 0} class:notice-duplicate-member={member} class:has-duplicates={folded.length > 0} class:is-selecting={selecting} class:in-trash={page === 'trash'} animate:flip in:slide={{ duration: member ? 180 : 0 }}>
+            {#if selecting}<input class="notice-select" type="checkbox" aria-label={`${item.title} 선택`} checked={chosen.has(item.id)} onchange={() => choose(item.id)} />{/if}
             <button class="notice-open" id={`notice-${item.id}`} onclick={() => open(item)}>
               <span class="notice-title"><span class="notice-read-dot" aria-hidden="true"></span><Highlighted text={item.title} {query} /><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}{hiddenUnread ? `, 접힌 같은 공지 ${hiddenUnread}건 읽지 않음` : ''}</span></span>
               <span class="notice-meta"><span>{item.source_name}</span><time datetime={item.published_at}>{archiveDate(item.published_at)}</time>{#if item.category}<span>{item.category}</span>{/if}</span>
@@ -597,14 +673,19 @@
               {#if page === 'search' && item.snippet}<span class="notice-snippet"><Highlighted text={item.snippet} {query} /></span>{/if}
               {#if item.content_status === 'missing_resources'}<span class="notice-resource-warning">일부 첨부 자료 미저장</span>{/if}
             </button>
-            <button class="notice-save icon-button" aria-label={`${item.title} ${item.saved ? '저장 해제' : '보관함에 저장'}`} class:is-saved={item.saved} disabled={pendingSaves[item.id]} onclick={() => save(item)}><Icon name="bookmark" size={19} /></button>
+            {#if page === 'trash'}
+              <div class="notice-trash-actions"><button class="text-button" aria-label={`${item.title} 복원`} disabled={trashBusy} onclick={() => void moveToTrash([item.id], false)}>복원</button><button class="text-button danger" aria-label={`${item.title} 영구 삭제`} disabled={trashBusy} onclick={() => void deletePermanently([item.id])}>영구 삭제</button></div>
+            {:else}
+              <button class="notice-trash icon-button" aria-label={`${item.title} 휴지통으로 이동`} disabled={trashBusy} onclick={() => void moveToTrash([item.id], true)}><Icon name="trash" size={18} /></button>
+              <button class="notice-save icon-button" aria-label={`${item.title} ${item.saved ? '저장 해제' : '보관함에 저장'}`} class:is-saved={item.saved} disabled={pendingSaves[item.id]} onclick={() => save(item)}><Icon name="bookmark" size={19} /></button>
+            {/if}
             {#if folded.length}<button class="text-button notice-duplicate-toggle" aria-expanded={Boolean(expandedDuplicates[item.id])} onclick={() => expandedDuplicates = { ...expandedDuplicates, [item.id]: !expandedDuplicates[item.id] }}>{expandedDuplicates[item.id] ? `같은 공지 ${folded.length}건 접기` : `같은 공지 ${folded.length}건 펼치기${hiddenUnread ? ` · 읽지 않음 ${hiddenUnread}건` : ''}`}</button>{/if}
           </li>
         {/each}
       </ul>
       <nav class="archive-pagination" aria-label="공지 목록 페이지"><button class="button secondary small" disabled={offset === 0 || loading} onclick={() => paginate(-1)}>이전</button><span aria-live="polite">{offset + 1}–{Math.min(offset + pageSize, result.total)} / {result.total}</span><button class="button secondary small" disabled={offset + pageSize >= result.total || loading} onclick={() => paginate(1)}>다음</button></nav>
     {:else if !loading && !error}
-      <div class="empty-state archive-empty"><span class="empty-icon"><Icon name={page === 'bookmark' ? 'bookmark' : page === 'search' ? 'search' : 'inbox'} size={30} /></span><h2>{query || source || category || unread ? '조건에 맞는 공지가 없습니다' : page === 'bookmark' ? '아직 저장한 공지가 없습니다' : '아직 보관된 공지가 없습니다'}</h2><p>{query || source || category || unread ? '검색어 또는 필터를 바꿔 보세요. 이미 보관한 내용만 검색하며 인터넷 연결은 필요하지 않습니다.' : page === 'bookmark' ? '공지 옆의 저장 버튼으로 중요한 정보를 모아 보세요. 확장 기능을 꺼도 보관함은 유지됩니다.' : '설정에서 정보원을 구독하고 공개된 공지를 가져오세요. 한 번 보관한 본문은 오프라인에서도 읽을 수 있습니다.'}</p>{#if page !== 'bookmark' && !query}<button class="button secondary" onclick={() => onsettings()}>정보원 설정하기 <Icon name="arrow" size={16} /></button>{/if}</div>
+      <div class="empty-state archive-empty"><span class="empty-icon"><Icon name={page === 'trash' ? 'trash' : page === 'bookmark' ? 'bookmark' : page === 'search' ? 'search' : 'inbox'} size={30} /></span><h2>{query || source || category || unread ? '조건에 맞는 공지가 없습니다' : page === 'trash' ? '휴지통이 비어 있습니다' : page === 'bookmark' ? '아직 저장한 공지가 없습니다' : '아직 보관된 공지가 없습니다'}</h2><p>{query || source || category || unread ? '검색어 또는 필터를 바꿔 보세요. 이미 보관한 내용만 검색하며 인터넷 연결은 필요하지 않습니다.' : page === 'trash' ? '공지 옆의 휴지통 버튼이나 선택 기능으로 필요 없는 공지를 옮기면 여기에 모입니다. 비우기 전까지 언제든 복원할 수 있습니다.' : page === 'bookmark' ? '공지 옆의 저장 버튼으로 중요한 정보를 모아 보세요. 확장 기능을 꺼도 보관함은 유지됩니다.' : '설정에서 정보원을 구독하고 공개된 공지를 가져오세요. 한 번 보관한 본문은 오프라인에서도 읽을 수 있습니다.'}</p>{#if page !== 'bookmark' && page !== 'trash' && !query}<button class="button secondary" onclick={() => onsettings()}>정보원 설정하기 <Icon name="arrow" size={16} /></button>{/if}</div>
     {/if}
     {/if}
   </section>

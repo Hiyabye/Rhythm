@@ -223,6 +223,8 @@ export interface DocumentItem {
   historical: boolean;
   snippet: string;
   content_status: string;
+  /** In 휴지통: hidden from every list except the trash itself. */
+  trashed: boolean;
 }
 export interface ResourceRecord {
   id: number;
@@ -355,6 +357,8 @@ export interface ArchiveQuery {
   category: string | null;
   saved_only: boolean;
   unread_only: boolean;
+  /** Lists 휴지통 instead of the notices outside it. */
+  trashed: boolean;
   ascending: boolean;
   offset: number;
   limit: number | null;
@@ -374,6 +378,7 @@ export interface ArchiveSummary {
   saved: number;
   new_since_sync: number;
   resource_bytes: number;
+  trashed: number;
 }
 /** Boards on different hosts collect at once; `active` lists those collecting now. */
 export interface SyncStatus {

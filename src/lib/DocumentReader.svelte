@@ -4,6 +4,7 @@
   import type { AiClassification, DocumentDetail, SimilarNotice, SyncStatus } from './types';
   import { archiveDate, archiveError, archiveSize, resourceStatus } from './archive-format';
   import { clock } from './clock.svelte';
+  import { confirmAction } from './confirm';
   import Icon from './Icon.svelte';
   import AnalysisPanel from './AnalysisPanel.svelte';
   import { fly } from './motion';
@@ -253,6 +254,40 @@
       if (!disposed && request === busyGeneration && documentId === id) error = archiveError(reason);
     } finally { if (!disposed && request === busyGeneration) busy = false; }
   }
+  // 휴지통 keeps the content, so moving there needs no confirmation; deleting permanently does.
+  async function moveToTrash(trash: boolean) {
+    if (!detail || busy) return;
+    const request = ++busyGeneration;
+    busy = true;
+    error = '';
+    try {
+      await invoke(trash ? 'archive_trash' : 'archive_restore', { ids: [id] });
+      onchange();
+      if (disposed || request !== busyGeneration || !detail) return;
+      detail.item.trashed = trash;
+      feedback = trash ? '휴지통으로 옮겼습니다. 휴지통에서 언제든 복원할 수 있습니다.' : '휴지통에서 복원했습니다.';
+    } catch (reason) {
+      if (!disposed && request === busyGeneration) error = archiveError(reason);
+    } finally { if (!disposed && request === busyGeneration) busy = false; }
+  }
+  async function deletePermanently() {
+    if (!detail || busy) return;
+    let confirmed = false;
+    try {
+      confirmed = await confirmAction('이 공지를 영구 삭제할까요? 본문, 첨부 자료, AI 결과가 이 기기에서 지워지고, 학교 사이트에 남아 있어도 다시 가져오지 않습니다.', '영구 삭제');
+    } catch (reason) { error = archiveError(reason); return; }
+    if (!confirmed || disposed) return;
+    const request = ++busyGeneration;
+    busy = true;
+    error = '';
+    try {
+      await invoke('archive_purge', { ids: [id] });
+      if (disposed) return;
+      onclose();
+    } catch (reason) {
+      if (!disposed && request === busyGeneration) error = archiveError(reason);
+    } finally { if (!disposed && request === busyGeneration) busy = false; }
+  }
   async function setDocumentFeedback(value: string | null) {
     if (busy) return;
     const request = ++feedbackWriteGeneration;
@@ -306,11 +341,19 @@
     <header class="reader-header">
       <span class="section-kicker">{detail.item.source_name}</span>
       <h2 bind:this={heading} tabindex="-1">{detail.item.title}</h2>
+      {#if detail.item.trashed}
+        <div class="reader-trash" role="note">
+          <span>휴지통에 있는 공지입니다. 목록, 검색, 추천과 알림에 나타나지 않습니다.</span>
+          <button class="button secondary small" disabled={busy} onclick={() => void moveToTrash(false)}>복원</button>
+          <button class="button secondary small danger" disabled={busy} onclick={() => void deletePermanently()}>영구 삭제</button>
+        </div>
+      {/if}
       <div class="notice-meta"><time datetime={detail.item.published_at}>{archiveDate(detail.item.published_at)}</time>{#if detail.item.author}<span>{detail.item.author}</span>{/if}{#if detail.item.category}<span>{detail.item.category}</span>{/if}{#if ai && classification}<span class="ai-tag">분류 · {classification.category}{classification.low_confidence ? ' · 확신 낮음' : ''}</span>{/if}</div>
       <div class="reader-actions">
         <button class="button secondary small" disabled={busy} onclick={() => updateState('is_read')}>{detail.item.is_read ? '읽지 않음으로 표시' : '읽음으로 표시'}</button>
         <button class="button secondary small" disabled={busy} onclick={() => updateState('saved')}><Icon name="bookmark" size={16} />{detail.item.saved ? '저장 해제' : '보관함에 저장'}</button>
         <button class="text-button" onclick={() => external(detail!.canonical_url)}>학교 원문 열기 ↗</button>
+        {#if !detail.item.trashed}<button class="text-button" disabled={busy} onclick={() => void moveToTrash(true)}><Icon name="trash" size={16} />휴지통으로 이동</button>{/if}
       </div>
       <div class="reader-actions" role="group" aria-label="관심 피드백">
         <span>이 공지가 도움이 되었나요?</span>

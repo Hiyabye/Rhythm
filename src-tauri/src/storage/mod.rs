@@ -20,7 +20,8 @@ pub mod proactive;
 #[cfg(test)]
 mod proactive_tests;
 pub mod studium;
-pub(crate) const SCHEMA_VERSION: i64 = 24;
+pub(crate) mod trash;
+pub(crate) const SCHEMA_VERSION: i64 = 25;
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
     let migrations = [
@@ -48,6 +49,7 @@ fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
         include_str!("../../migrations/022_calendar.sql"),
         include_str!("../../migrations/023_studium.sql"),
         include_str!("../../migrations/024_clock_format.sql"),
+        include_str!("../../migrations/025_trash.sql"),
     ];
     for (index, migration) in migrations.iter().enumerate().skip(version as usize) {
         let transaction = connection.transaction().map_err(|e| e.to_string())?;
@@ -447,7 +449,7 @@ mod tests {
                            VALUES('cybercampus','사이버캠퍼스','서강대학교','','https://eclass.sogang.ac.kr/','cybercampus',1,{subscribed}),
                                  ('sogang-academic','학사','서강대학교','','https://www.sogang.ac.kr/','sogang',1,1);
                          INSERT INTO source_extensions VALUES('cybercampus','sogang_notices'),('sogang-academic','sogang_notices');
-                         ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format;
+                         ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices;
                          PRAGMA user_version=19;",
                         notices = notices as i32,
                         subscribed = subscribed as i32,
@@ -487,7 +489,7 @@ mod tests {
             .unwrap()
             .connection
             .execute_batch(
-                "ALTER TABLE settings DROP COLUMN clock_format;
+                "ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices;
                  UPDATE settings SET theme='dark',energy_profile='eco',interests='장학금';
                  PRAGMA user_version=23;",
             )
@@ -541,7 +543,7 @@ mod tests {
             db.set_enabled("search", true).unwrap();
             db.connection
                 .execute_batch(
-                    "DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format;
+                    "DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices;
                      DELETE FROM extension_preferences WHERE extension_id='calendar';
                      PRAGMA user_version=21;",
                 )

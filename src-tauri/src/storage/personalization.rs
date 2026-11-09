@@ -654,6 +654,7 @@ impl Store {
                  WHERE e.created_at>=strftime('%Y-%m-%dT%H:%M:%fZ','now','-'||?1||' days')
                    AND ((e.kind='feedback' AND f.value='interested')
                     OR (e.kind='saved' AND s.saved=1))
+                   AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=e.document_id)
                    AND NOT EXISTS(
                        SELECT 1 FROM personalization_interests p
                        WHERE p.normalized=e.topic AND p.origin='explicit'

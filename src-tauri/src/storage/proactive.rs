@@ -507,7 +507,7 @@ impl Store {
                      CASE WHEN f.revision_id=r.id THEN 'new' ELSE 'revision' END,
                     r.title,d.source_id,s.name,d.category,d.published_at,
                     r.collected_at,d.historical,
-                    CASE WHEN s.supported=1 AND s.subscribed=1 AND (
+                    CASE WHEN s.supported=1 AND s.subscribed=1 AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id) AND (
                       NOT EXISTS(SELECT 1 FROM source_extensions se WHERE se.source_id=s.id)
                       OR EXISTS(
                         SELECT 1 FROM source_extensions se
@@ -556,7 +556,7 @@ impl Store {
             .query_row(
                 "SELECT e.document_id,e.revision_id,e.event_type,r.title,d.source_id,
                         s.name,d.category,d.published_at,r.collected_at,d.historical,
-                        CASE WHEN s.supported=1 AND s.subscribed=1 AND (
+                        CASE WHEN s.supported=1 AND s.subscribed=1 AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id) AND (
                           NOT EXISTS(SELECT 1 FROM source_extensions se WHERE se.source_id=s.id)
                           OR EXISTS(
                             SELECT 1 FROM source_extensions se

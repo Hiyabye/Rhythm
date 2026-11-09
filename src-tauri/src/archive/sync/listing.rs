@@ -157,12 +157,18 @@ impl Board<'_> {
                 active(self.cancel)?;
                 let existing_id =
                     with_store(store, |s| s.document_id(&definition.id, &entry.external_id))?;
-                let exists = existing_id.is_some();
+                // A permanently deleted notice is known, so it neither extends
+                // discovery nor is fetched again.
+                let deleted = existing_id.is_none()
+                    && with_store(store, |s| {
+                        s.notice_deleted(&definition.id, &entry.external_id)
+                    })?;
+                let exists = existing_id.is_some() || deleted;
                 if !entry.pinned {
                     known_regular_frontier = true;
                     all_regular_known &= exists;
                 }
-                if !seen.insert(entry.external_id.clone()) {
+                if !seen.insert(entry.external_id.clone()) || deleted {
                     continue;
                 }
                 if historical {

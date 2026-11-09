@@ -1912,6 +1912,74 @@ select:focus-visible {
   top: 10px;
   right: 4px;
 }
+/* The trash button stays out of the way until the row is hovered or focused. */
+.notice-trash {
+  position: absolute;
+  top: 10px;
+  right: 44px;
+  opacity: 0;
+}
+.notice-list li:hover .notice-trash,
+.notice-list li:focus-within .notice-trash,
+.notice-list li.is-selecting .notice-trash {
+  opacity: 1;
+}
+.notice-list li:not(.in-trash) .notice-open {
+  padding-right: 92px;
+}
+.notice-list li.in-trash .notice-open {
+  padding-right: 150px;
+}
+.notice-trash-actions {
+  position: absolute;
+  top: 12px;
+  right: 8px;
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+}
+.notice-select {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  margin: 15px 0 0 12px;
+}
+.notice-list li.is-selecting .notice-open {
+  padding-left: 12px;
+}
+.heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.bulk-bar .archive-checkbox {
+  padding-bottom: 0;
+}
+.bulk-count {
+  color: var(--secondary);
+  font-variant-numeric: tabular-nums;
+}
+.reader-trash {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin: 10px 0 14px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--soft);
+  font-size: 12px;
+}
 .notice-save.is-saved {
   color: var(--accent);
   background: var(--soft);

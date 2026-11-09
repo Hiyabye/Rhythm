@@ -101,6 +101,9 @@ pub struct DocumentItem {
     pub historical: bool,
     pub snippet: String,
     pub content_status: String,
+    /// In 휴지통: hidden from every list except the trash itself.
+    #[serde(default)]
+    pub trashed: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResourceRecord {
@@ -141,6 +144,9 @@ pub struct ArchiveQuery {
     pub saved_only: bool,
     #[serde(default)]
     pub unread_only: bool,
+    /// Lists 휴지통 instead of the notices outside it.
+    #[serde(default)]
+    pub trashed: bool,
     #[serde(default)]
     pub ascending: bool,
     #[serde(default)]
@@ -166,6 +172,7 @@ pub struct ArchiveSummary {
     pub saved: u64,
     pub new_since_sync: u64,
     pub resource_bytes: u64,
+    pub trashed: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SyncStatus {

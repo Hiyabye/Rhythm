@@ -77,7 +77,9 @@
   // A new token asks the calendar page to select `day`.
   let calendarRequest = $state({ day: '', token: 0 });
   let boards = $derived(sources.filter((item) => item.supported && item.subscribed));
-  let primaryNavigation = $derived(contributed(navigation, enabled));
+  // 휴지통 belongs to the notice sources, but stays reachable while it still holds notices.
+  let primaryNavigation = $derived(contributed(navigation, enabled).filter((item) => item.id !== 'trash'
+    || sourceExtensions.some((owner) => enabled.has(owner.id)) || Boolean(summary?.trashed)));
   // Each enabled source extension gets a sidebar group of its subscribed boards.
   // Board names repeat across institutions ("학사 공지" / "학사공지"), so a group lists them by organization.
   let sidebarGroups = $derived(sourceExtensions.filter((owner) => enabled.has(owner.id)).map((owner) => {
@@ -113,7 +115,8 @@
       : id === 'inbox' ? summary && { count: summary.unread, label: '읽지 않은 공지' }
       : id === 'search' ? summary && { count: summary.documents, label: '보관된 공지' }
       : id === 'bookmark' ? summary && { count: summary.saved, label: '저장한 공지' }
-      : id === 'tasks' ? { count: openTasks, label: '남은 과제' } : null;
+      : id === 'tasks' ? { count: openTasks, label: '남은 과제' }
+      : id === 'trash' ? summary && { count: summary.trashed, label: '휴지통의 공지' } : null;
     return entry?.count ? entry : null;
   }
   let lastChecked = $derived(boards.reduce<string | null>((latest, item) => !item.last_success || (latest && latest >= item.last_success) ? latest : item.last_success, null));
