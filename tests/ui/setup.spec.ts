@@ -22,6 +22,11 @@ test('a fresh profile walks through setup, saving each choice without starting n
 
   await page.getByRole('group', { name: '화면 테마' }).getByRole('button', { name: '다크' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  const formats = page.getByRole('group', { name: '시간 표시' });
+  await expect(formats.getByRole('button', { name: '12시간' })).toHaveAttribute('aria-pressed', 'true');
+  await formats.getByRole('button', { name: '24시간' }).click();
+  await expect(formats.getByRole('button', { name: '24시간' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.settings-row', { has: formats })).toContainText('21:30');
   await expect(page.getByRole('group', { name: '전원 모드' })).toBeVisible();
 
   await next(page, '사용할 기능 고르기');
