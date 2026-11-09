@@ -29,7 +29,8 @@ test('todos are added, completed, moved and deleted from the selected day', asyn
   const add = panel.getByRole('button', { name: '추가', exact: true });
   await expect(add).toBeDisabled();
   await panel.getByRole('textbox', { name: '제목' }).fill('보고서 제출');
-  await panel.getByLabel('시간 (선택)').fill('09:30');
+  await panel.getByRole('combobox', { name: '시' }).selectOption('9');
+  await panel.getByRole('combobox', { name: '분' }).selectOption('30');
   await panel.getByRole('textbox', { name: '메모 (선택)' }).fill('학과 사무실');
   await add.click();
   await expect(panel.getByRole('status')).toHaveText('할 일을 추가했습니다.');
@@ -44,12 +45,20 @@ test('todos are added, completed, moved and deleted from the selected day', asyn
   await expect(today).toHaveAccessibleName('10월 24일 토요일, 오늘');
 
   // Moving a todo to another day selects that day, so it stays in view.
-  await list.getByRole('button', { name: '보고서 제출 고치기' }).click();
+  await list.getByRole('button', { name: '보고서 제출 수정' }).click();
+  const am = panel.getByRole('button', { name: '오전', exact: true });
+  const pm = panel.getByRole('button', { name: '오후', exact: true });
+  await expect(am).toHaveAttribute('aria-pressed', 'true');
+  await expect(panel.getByRole('combobox', { name: '시' })).toHaveValue('9');
+  await expect(panel.getByRole('combobox', { name: '분' })).toHaveValue('30');
+  await pm.click();
+  await expect(pm).toHaveAttribute('aria-pressed', 'true');
+  await expect(am).toHaveAttribute('aria-pressed', 'false');
   await panel.getByLabel('날짜').fill('2026-11-02');
   await panel.getByRole('button', { name: '저장' }).click();
   await expect(page.getByRole('heading', { name: '2026년 11월' })).toBeVisible();
   const moved = page.getByRole('region', { name: /11월 2일 월요일/ });
-  await expect(moved.getByRole('list')).toContainText('보고서 제출');
+  await expect(moved.getByRole('list')).toContainText('21:30 보고서 제출');
 
   await page.evaluate(() => (window as any).__fixture.dialogAnswers.push('cancel'));
   await moved.getByRole('button', { name: '보고서 제출 삭제' }).click();
