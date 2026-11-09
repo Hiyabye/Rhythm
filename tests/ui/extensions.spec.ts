@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { mockDesktop, openSettings } from './fixture';
 
-const none = { sogang_notices: false, cybercampus: false, search: false, saved: false, recommendations: false, week: false, ai: false, proactive: false };
+const none = { sogang_notices: false, cybercampus: false, search: false, saved: false, recommendations: false, week: false, calendar: false, ai: false, proactive: false };
 
 test('a blank profile shows only Today and the core settings', async ({ page }) => {
   await mockDesktop(page, { extensions: none });
@@ -26,7 +26,7 @@ test('turning an extension on adds its page, widget and settings, and off remove
   const panes = page.getByRole('navigation', { name: '설정 항목', exact: true });
   await openSettings(page, '확장 기능');
   const toggle = (name: string) => page.getByRole('switch', { name: `${name} 사용 설정`, exact: true }).click();
-  for (const [extension, nav] of [['서강대학교 공지', '받은 소식'], ['탐색', '탐색'], ['보관함', '보관함'], ['사이버캠퍼스', '과제·마감']]) {
+  for (const [extension, nav] of [['서강대학교 공지', '받은 소식'], ['탐색', '탐색'], ['보관함', '보관함'], ['사이버캠퍼스', '과제·마감'], ['캘린더', '캘린더']]) {
     await toggle(extension);
     await expect(sidebar.getByRole('button', { name: nav, exact: true })).toBeVisible();
   }

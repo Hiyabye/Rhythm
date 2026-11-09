@@ -2429,6 +2429,17 @@ mark {
   color: var(--accent);
 }
 
+/* Todos are also the user's own, but quieter than deadlines someone else set. */
+.event-todo .event-bar {
+  background: var(--text-2);
+}
+
+.ai-mark.todo-mark {
+  border-color: transparent;
+  background: var(--soft);
+  color: var(--text-2);
+}
+
 .event-ai .event-bar {
   background: repeating-linear-gradient(var(--muted) 0 3px, transparent 3px 6px);
 }

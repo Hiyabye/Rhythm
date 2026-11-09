@@ -418,3 +418,28 @@ export interface CybercampusTask {
   pending: boolean;
   updated_at: string;
 }
+
+// storage/calendar `CalendarTodo`. `day` (`YYYY-MM-DD`) and `time` (`HH:MM`)
+// are local wall-clock values.
+export interface CalendarTodo {
+  id: number;
+  title: string;
+  day: string;
+  time: string | null;
+  memo: string;
+  done: boolean;
+}
+export interface TodoInput {
+  title: string;
+  day: string;
+  time: string | null;
+  memo: string;
+}
+// An AI-extracted date of a current analysis, as the week pane and calendar show it.
+export interface ReferenceDate {
+  key: string;
+  day: string;
+  label: string;
+  documentId: number;
+  title: string;
+}

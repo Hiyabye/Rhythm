@@ -1525,7 +1525,7 @@ fn schema_ten_upgrade_keeps_archive_and_adds_skipped_articles() {
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos;
                  PRAGMA user_version=10;",
             )
             .unwrap();
@@ -1577,7 +1577,7 @@ fn schema_eleven_upgrade_retries_mislabeled_and_newly_allowed_resources() {
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos;
                  PRAGMA user_version=11;"
             ))
             .unwrap();
@@ -1610,7 +1610,7 @@ fn retired_eng_newsletter_row_is_removed_but_archived_data_is_kept() {
             .execute_batch(
                 "DROP TABLE cybercampus_tasks; DROP TABLE cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos;
                  PRAGMA user_version=16",
             )
             .unwrap();
@@ -1762,7 +1762,7 @@ fn schema_twenty_upgrade_keeps_every_subscription_with_groups_on() {
         store
             .connection
             .execute_batch(
-                "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups;
+                "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos;
                  PRAGMA user_version=20;",
             )
             .unwrap();

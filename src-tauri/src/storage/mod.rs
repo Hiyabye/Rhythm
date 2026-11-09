@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 mod archive;
+pub mod calendar;
 pub mod cybercampus;
 pub(crate) use archive::search_terms;
 #[cfg(test)]
@@ -18,7 +19,7 @@ mod personalization_tests;
 pub mod proactive;
 #[cfg(test)]
 mod proactive_tests;
-pub(crate) const SCHEMA_VERSION: i64 = 21;
+pub(crate) const SCHEMA_VERSION: i64 = 22;
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
     let migrations = [
@@ -43,6 +44,7 @@ fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
         include_str!("../../migrations/019_onboarding.sql"),
         include_str!("../../migrations/020_extensions.sql"),
         include_str!("../../migrations/021_source_groups.sql"),
+        include_str!("../../migrations/022_calendar.sql"),
     ];
     for (index, migration) in migrations.iter().enumerate().skip(version as usize) {
         let transaction = connection.transaction().map_err(|e| e.to_string())?;
@@ -424,7 +426,7 @@ mod tests {
                            VALUES('cybercampus','사이버캠퍼스','서강대학교','','https://eclass.sogang.ac.kr/','cybercampus',1,{subscribed}),
                                  ('sogang-academic','학사','서강대학교','','https://www.sogang.ac.kr/','sogang',1,1);
                          INSERT INTO source_extensions VALUES('cybercampus','sogang_notices'),('sogang-academic','sogang_notices');
-                         ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups;
+                         ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos;
                          PRAGMA user_version=19;",
                         notices = notices as i32,
                         subscribed = subscribed as i32,
@@ -455,6 +457,32 @@ mod tests {
                 .unwrap();
             assert_eq!(owner, "cybercampus");
         }
+    }
+    #[test]
+    fn schema_twenty_one_upgrade_adds_calendar_off_and_keeps_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        {
+            let db = Store::open(&path).unwrap();
+            db.set_enabled("week", true).unwrap();
+            db.set_enabled("search", true).unwrap();
+            db.connection
+                .execute_batch(
+                    "DROP TABLE calendar_todos;
+                     DELETE FROM extension_preferences WHERE extension_id='calendar';
+                     PRAGMA user_version=21;",
+                )
+                .unwrap();
+        }
+        let db = Store::open(&path).unwrap();
+        assert_eq!(db.info().unwrap().schema_version, SCHEMA_VERSION);
+        assert!(db.enabled("week").unwrap() && db.enabled("search").unwrap());
+        assert!(!db.enabled("ai").unwrap());
+        assert!(!db.enabled("calendar").unwrap());
+        assert!(db
+            .calendar_todos("2026-11-01", "2026-11-30")
+            .unwrap()
+            .is_empty());
     }
     #[test]
     fn new_profile_starts_with_every_extension_off() {
