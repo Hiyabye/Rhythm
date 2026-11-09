@@ -848,7 +848,7 @@ mod articles;
 mod listing;
 mod pdf;
 mod resources;
-mod robots;
+pub(crate) mod robots;
 use articles::*;
 use pdf::*;
 pub use resources::*;

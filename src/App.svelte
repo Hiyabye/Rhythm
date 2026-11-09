@@ -11,6 +11,7 @@
   import UpdaterSettings from './lib/UpdaterSettings.svelte';
   import ProactiveSettings from './lib/ProactiveSettings.svelte';
   import CybercampusTasks from './lib/CybercampusTasks.svelte';
+  import StudiumView from './lib/StudiumView.svelte';
   import SetupFlow from './lib/SetupFlow.svelte';
   import ExtensionSettings from './lib/ExtensionSettings.svelte';
   import { contributed, enabledExtensions, navigation, settingsPanes, sourceExtensions, type SettingsPane } from './lib/extensions';
@@ -333,7 +334,7 @@
         {#each primaryNavigation as item}
           {@const count = navCount(item.id)}
           <li><button class="source-item" class:active={page === item.id && !activeSource} aria-label={item.label} aria-current={page === item.id && !activeSource ? 'page' : undefined} aria-describedby={count ? `nav-count-${item.id}` : undefined} onclick={() => navigate(item.id)}>
-            <Icon name={item.id} size={17} /><span class="source-label">{item.label}</span>
+            <Icon name={item.id === 'studium' ? 'boards' : item.id} size={17} /><span class="source-label">{item.label}</span>
             {#if count}<span class="count" aria-hidden="true">{count.count.toLocaleString('ko-KR')}</span><span class="sr-only" id={`nav-count-${item.id}`}>{count.label} {count.count}개</span>{/if}
           </button></li>
         {/each}
@@ -421,6 +422,8 @@
       </div>
     {:else if page === 'tasks'}
       <CybercampusTasks {desktop} onsettings={() => openSettings('cybercampus')} />
+    {:else if page === 'studium'}
+      <StudiumView {desktop} />
     {:else}
       <ArchiveView {page} {desktop} {enabled} onsetup={openSetup} onextensions={() => openSettings('extensions')} {sourceRequest} activation={proactiveActivation} onactivationhandled={() => proactiveActivation = null} onsettings={(pane) => openSettings(pane ?? 'extensions')} onaisettings={aiSettings}
         onsourcechange={(id) => activeSource = id}

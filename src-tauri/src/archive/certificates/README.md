@@ -34,6 +34,27 @@ unknown future issuer must fail normally rather than trigger automatic CA downlo
 When maintaining these files, verify issuer/root relationships and fingerprint any
 replacement; do not repair connectivity by promoting intermediates to trust anchors.
 
+## Studium seat-server root
+
+`libseat.sogang.ac.kr:444` offers only TLS 1.2 CBC suites (`ECDHE-RSA-AES128-SHA`,
+`AES128-SHA`, `AES256-SHA`, observed 2026-11-09), which Rustls does not implement, so
+that origin alone uses OS TLS (`archive/network.rs`, `Access::Studium`). It sends its
+complete chain: the `*.sogang.ac.kr` leaf and the same Sectigo OV R36 intermediate as
+above. Its OS root store is replaced by `sectigo-r46-root.pem`, so a root that a user,
+employer or other software installed cannot vouch for the seat server:
+
+| Certificate | SHA-256 of DER |
+| --- | --- |
+| Sectigo Public Server Authentication Root R46 (valid until 2046-03-21) | `7B:B6:47:A6:2A:EE:AC:88:BF:25:7A:A5:22:D0:1F:FE:A3:95:E0:AB:45:C7:3F:93:F6:56:54:EC:38:F2:5A:06` |
+
+Source: exported from the macOS system root keychain on 2026-11-09; the fingerprint
+matches the Mozilla-derived `webpki-roots` 1.0.11 entry, and `openssl verify` accepted the
+intermediate the server sent against it. On macOS Secure Transport trusts only this
+anchor. On Windows Schannel first validates normally against the system store and the
+chain must then contain this certificate. Hostname, validity and signature checks stay
+on. If the school moves to another CA, seat checks fail closed until this file is
+reviewed and replaced; never fall back to the OS store or an intermediate anchor.
+
 ## Deterministic verification fixture
 
 `www-leaf-test.pem` is a public leaf captured with `openssl s_client -showcerts`

@@ -1,7 +1,7 @@
 mod catalog;
 pub mod cybercampus;
 pub mod model;
-mod network;
+pub(crate) mod network;
 mod parser;
 mod pdf;
 pub mod sync;

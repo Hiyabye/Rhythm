@@ -7,13 +7,13 @@ const ASP_SOURCE_HOST: &str = "scc.sogang.ac.kr";
 /// which fails the policy only when the group applies to Rhythm.
 pub(super) type RobotGroup = (Vec<String>, Vec<(String, bool)>, Option<f64>);
 #[derive(Debug)]
-pub(super) struct Robots {
-    pub(super) origin: String,
-    pub(super) rules: Vec<(String, bool)>,
-    pub(super) delay: f64,
+pub(crate) struct Robots {
+    pub(crate) origin: String,
+    pub(crate) rules: Vec<(String, bool)>,
+    pub(crate) delay: f64,
 }
 impl Robots {
-    pub(super) async fn load<T: Transport>(
+    pub(crate) async fn load<T: Transport>(
         transport: &T,
         url: &Url,
         cancel: &AtomicBool,
@@ -41,7 +41,7 @@ impl Robots {
             _ => Err("학교의 수집 정책을 확인하지 못했습니다.".into()),
         }
     }
-    pub(super) fn parse(url: &Url, body: &str) -> Result<Self, String> {
+    pub(crate) fn parse(url: &Url, body: &str) -> Result<Self, String> {
         // An HTTP-200 error page is not an empty allow-all robots policy.
         let start = body.trim_start_matches('\u{feff}').trim_start();
         if start.starts_with('<') || start.contains('\0') {
@@ -112,7 +112,7 @@ impl Robots {
         }
         Ok(policy)
     }
-    pub(super) fn permits(&self, url: &Url) -> bool {
+    pub(crate) fn permits(&self, url: &Url) -> bool {
         // Automatic cross-origin resource fetching is not needed for verified boards.
         if url.origin().ascii_serialization() != self.origin {
             return false;

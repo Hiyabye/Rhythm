@@ -1,5 +1,29 @@
 export type Theme = 'system' | 'light' | 'dark';
 export type EnergyProfile = 'eco' | 'balanced' | 'performance';
+export interface StudiumRoom { id: string; name: string; label: string; capacity: number }
+export interface StudiumPreferences { room_ids: string[]; view_room: string }
+export interface StudiumSeatData {
+  total: number;
+  used: number;
+  remaining: number;
+  source_time: string;
+  seat_numbers: number[] | null;
+  source_url: string;
+}
+export interface StudiumRoomState {
+  room_id: string;
+  status: 'not_checked' | 'loading' | 'ready' | 'count_only' | 'failed' | 'cancelled';
+  result: StudiumSeatData | null;
+  error: string | null;
+  checked_at: string | null;
+}
+export interface StudiumSnapshot {
+  rooms: StudiumRoom[];
+  preferences: StudiumPreferences;
+  job_id: number | null;
+  running: boolean;
+  results: StudiumRoomState[];
+}
 export interface PersonalizationProfile {
   university: string;
   department: string;

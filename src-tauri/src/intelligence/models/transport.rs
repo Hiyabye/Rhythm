@@ -120,6 +120,7 @@ impl Transport for HttpsTransport {
                 return Err("공개 인터넷이 아닌 모델 서버 연결을 차단했습니다.".into());
             }
             let client = reqwest::Client::builder()
+                .use_rustls_tls()
                 .https_only(true)
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())

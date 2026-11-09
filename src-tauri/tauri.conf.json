@@ -36,6 +36,11 @@
       "../LICENSE": "licenses/Rhythm-GPL-3.0.txt",
       "../assets/licenses/Pretendard-OFL.txt": "licenses/Pretendard-OFL.txt",
       "../assets/licenses/eclass-cli-MIT.txt": "licenses/eclass-cli-MIT.txt",
+      "../assets/licenses/chrono-LICENSE.txt": "licenses/chrono-LICENSE.txt",
+      "../assets/licenses/encoding_rs-NOTICE.txt": "licenses/encoding_rs-NOTICE.txt",
+      "../assets/licenses/native-tls-MIT.txt": "licenses/native-tls-MIT.txt",
+      "../assets/licenses/hyper-tls-MIT.txt": "licenses/hyper-tls-MIT.txt",
+      "../assets/licenses/tokio-native-tls-MIT.txt": "licenses/tokio-native-tls-MIT.txt",
       "binaries/llama/": "llama/"
     },
     "icon": [

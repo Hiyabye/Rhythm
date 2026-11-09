@@ -12,6 +12,7 @@ mod personalization;
 mod platform_support;
 mod proactive;
 mod storage;
+mod studium;
 mod updater;
 use extensions::Registry;
 use intelligence::Worker;
@@ -31,6 +32,7 @@ pub(crate) struct AppState {
     launch_at_login: Mutex<()>,
     pub(crate) proactive: Arc<proactive::Scheduler>,
     pub(crate) archive: Arc<archive::sync::Controller>,
+    pub(crate) studium: Arc<studium::controller::Controller>,
     network: archive::Client,
     registry: Registry,
     pub(crate) worker: Arc<tokio::sync::Mutex<Worker>>,
@@ -105,6 +107,10 @@ impl AppState {
             armed: true,
         };
         self.archive.cancel();
+        {
+            let _store = self.store.lock().map_err(|_| "설정 잠금 오류")?;
+            self.studium.cancel();
+        }
         self.analysis.stop();
         self.models.cancel();
         self.ai_operation.cancel();
@@ -115,6 +121,7 @@ impl AppState {
         drop(ai_gate);
         self.proactive.quiesce().await;
         self.archive.wait().await;
+        self.studium.wait().await;
         self.analysis.wait().await;
         self.models.wait().await;
         let gate = preparation
@@ -396,6 +403,7 @@ fn main() {
             }
             let operation_gate = Arc::new(operation_gate::AdmissionGate::default());
             let archive = archive::sync::Controller::new();
+            let studium = studium::controller::Controller::new();
             let network = archive::client().map_err(std::io::Error::other)?;
             let proactive = proactive::Scheduler::new(
                 store.clone(),
@@ -434,7 +442,8 @@ fn main() {
                 lifecycle,
                 tray_available,
                 proactive: Arc::new(proactive),
-                registry: Registry::new(archive.clone()),
+                registry: Registry::new(archive.clone(), studium.clone()),
+                studium,
                 archive,
                 network,
                 worker: Arc::new(tokio::sync::Mutex::new(worker)),
@@ -472,6 +481,12 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            studium::commands::studium_snapshot,
+            studium::commands::studium_status,
+            studium::commands::studium_save_preferences,
+            studium::commands::studium_set_view_room,
+            studium::commands::studium_start,
+            studium::commands::studium_cancel,
             backup::backup_create,
             backup::backup_inspect,
             backup::backup_restore,
@@ -591,6 +606,11 @@ fn main() {
             state
                 .maintenance_shutdown
                 .store(true, std::sync::atomic::Ordering::Release);
+            // Serialize cancellation against a start already admitted by the
+            // gate but not yet registered. Starts recheck shutdown under Store.
+            if let Ok(_store) = state.store.lock() {
+                state.studium.cancel();
+            }
             state.registry.stop_all();
             state.ai_operation.cancel();
             state.analysis.stop();
@@ -598,6 +618,7 @@ fn main() {
             tauri::async_runtime::block_on(async {
                 state.proactive.shutdown().await;
                 state.archive.wait().await;
+                state.studium.wait().await;
                 state.analysis.wait().await;
                 state.models.wait().await;
                 state.classifier.shutdown().await;
