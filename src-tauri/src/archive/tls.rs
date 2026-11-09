@@ -113,7 +113,7 @@ pub fn config() -> Result<ClientConfig, String> {
         .with_no_client_auth())
 }
 
-fn decode_pem(pem: &str) -> Result<Vec<CertificateDer<'static>>, String> {
+pub(super) fn decode_pem(pem: &str) -> Result<Vec<CertificateDer<'static>>, String> {
     if pem.len() > 32 * 1024 {
         return Err("중간 인증서 파일이 너무 큽니다.".into());
     }

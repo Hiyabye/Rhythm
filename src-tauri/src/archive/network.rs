@@ -131,14 +131,17 @@ impl Client {
         }
         // Resolve once, validate every answer, and pin this connection to those
         // answers. Automatic redirects/proxies must not bypass the same policy.
-        // The seat server negotiates TLS 1.2 cipher suites outside rustls's
-        // supported set. Only the exact Studium origin uses OS TLS, retaining
-        // normal certificate/hostname verification and TLS 1.2 as the minimum.
+        // The seat server offers only TLS 1.2 CBC cipher suites, which rustls
+        // does not implement. Only the exact Studium origin uses OS TLS, with
+        // hostname/chain verification, TLS 1.2 as the minimum and the OS root
+        // store replaced by the one root that issues the school's chain.
         let builder = reqwest::Client::builder();
         let builder = if access == Access::Studium {
             builder
                 .use_native_tls()
                 .min_tls_version(reqwest::tls::Version::TLS_1_2)
+                .tls_built_in_root_certs(false)
+                .add_root_certificate(studium_root().map_err(Failure::Fatal)?)
         } else {
             builder.use_preconfigured_tls(super::tls::config().map_err(Failure::Fatal)?)
         };
@@ -315,6 +318,13 @@ async fn cancelled(cancel: &AtomicBool) {
     while !cancel.load(Ordering::Acquire) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+/// Sectigo Public Server Authentication Root R46, the root of the
+/// `libseat.sogang.ac.kr` chain (provenance in `certificates/README.md`).
+const STUDIUM_ROOT: &[u8] = include_bytes!("certificates/sectigo-r46-root.pem");
+fn studium_root() -> Result<reqwest::Certificate, String> {
+    reqwest::Certificate::from_pem(STUDIUM_ROOT)
+        .map_err(|_| "좌석 서버 인증서 정보를 준비하지 못했습니다.".into())
 }
 /// A 429 response. The sync stops the board on it instead of requesting the
 /// rest of the page from a server that asked it to slow down.
@@ -658,6 +668,18 @@ pub(super) fn public_ip(address: IpAddr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn studium_pins_exactly_the_sectigo_r46_root() {
+        use sha2::{Digest, Sha256};
+        let certificates =
+            super::super::tls::decode_pem(std::str::from_utf8(STUDIUM_ROOT).unwrap()).unwrap();
+        assert_eq!(certificates.len(), 1);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(certificates[0].as_ref())),
+            "7bb647a62aeeac88bf257aa522d01ffea395e0ab45c73f93f65654ec38f25a06"
+        );
+        studium_root().unwrap();
+    }
     #[test]
     fn address_policy_rejects_private_redirect_targets_and_unverified_domains() {
         for value in [
