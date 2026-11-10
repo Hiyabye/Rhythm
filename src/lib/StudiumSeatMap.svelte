@@ -11,6 +11,7 @@
   const mapId = $props.id();
   let open = $state(false);
   let zoom = $state(100);
+  let resetGeneration = $state(0);
   let viewport = $state<HTMLDivElement>();
   let toggle = $state<HTMLButtonElement>();
   let previousIdentity = '';
@@ -73,12 +74,17 @@
 
   async function resetView() {
     const currentViewport = viewport;
+    const restoreFocus = document.hasFocus() && document.activeElement === currentViewport;
+    const currentIdentity = identity;
+    const generation = ++resetGeneration;
     zoom = 100;
-    // Reset the scroll origin against the updated SVG size.
+    // A new scroll box cannot inherit the old box's pending native scrolling.
     await tick();
-    if (currentViewport?.isConnected && currentViewport === viewport) {
-      currentViewport.scrollTo({ left: 0, top: 0, behavior: 'instant' });
-    }
+    if (!restoreFocus || generation !== resetGeneration || currentIdentity !== identity
+      || !open || !viewport?.isConnected || !document.hasFocus()) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active !== currentViewport) return;
+    viewport.focus({ preventScroll: true });
   }
 
   function sourceClock() {
@@ -98,6 +104,7 @@
       <p class="map-help" id={`${mapId}-help`}>번호의 상대 위치만 표시합니다. 실제 좌석의 크기·형태나 벽·문을 나타내지 않습니다. 번호 목록도 함께 이용할 수 있습니다.</p>
       <ul class="map-legend" id={`${mapId}-legend`} aria-label="배치도 기호"><li>○ 빈 좌석</li><li>× 사용 중</li><li>★ 선호 설정</li>{#if searchNumber !== null}<li><span class="search-example">밑줄</span> 검색한 빈 좌석</li>{/if}</ul>
       <div class="map-controls" role="group" aria-label="배치도 보기 조절"><button class="button secondary small" disabled={zoom <= 50} onclick={() => zoom = Math.max(50, zoom - 25)}>배치도 축소</button><output aria-label="배치도 확대 비율" aria-live="polite">{zoom}%</output><button class="button secondary small" disabled={zoom >= 200} onclick={() => zoom = Math.min(200, zoom + 25)}>배치도 확대</button><button class="button secondary small" onclick={resetView}>배치도 보기 초기화</button></div>
+      {#key resetGeneration}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex (Native overflow scrolling needs keyboard focus.) -->
       <div class="map-viewport" bind:this={viewport} tabindex="0" role="region" aria-label={`${roomLabel} 좌석 배치도 · 방향키로 이동`} aria-describedby={`${mapId}-summary ${mapId}-legend ${mapId}-help`}>
         <svg width={(sourceWidth + padding * 2) * zoom / 100} height={(sourceHeight + padding * 2) * zoom / 100} viewBox={`${-padding} ${-padding} ${sourceWidth + padding * 2} ${sourceHeight + padding * 2}`} aria-hidden="true" focusable="false">
@@ -113,6 +120,7 @@
           {/each}
         </svg>
       </div>
+      {/key}
       <p class="map-help">배치도에 포커스를 두고 방향키나 스크롤로 이동합니다. 확대·이동·검색은 새로 조회하지 않습니다.</p>
     </div>
   {/if}
