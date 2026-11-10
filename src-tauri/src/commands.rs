@@ -55,11 +55,13 @@ pub async fn save_settings(
 ) -> Result<Snapshot, String> {
     let _lease = state.operation_gate.shared().await?;
     {
-        state
+        let store = state
             .store
             .lock()
-            .map_err(|_| "저장소에 접근할 수 없습니다.")?
+            .map_err(|_| "저장소에 접근할 수 없습니다.")?;
+        store
             .save(&settings)
+            .and_then(|()| store.auto_trash_old())
             .map_err(storage_error)?;
     }
     snapshot(&state).await

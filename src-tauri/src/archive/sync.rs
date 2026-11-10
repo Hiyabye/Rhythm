@@ -502,6 +502,11 @@ impl Controller {
                     Err(error) => Err(error),
                 };
             }
+            // Before the job reports done, so the refresh it triggers already
+            // leaves out the old notices this job archived.
+            if let Err(error) = with_store(&store, |store| store.auto_trash_old()) {
+                eprintln!("Archive: 오래된 공지를 휴지통으로 옮기지 못했습니다: {error}");
+            }
             let task_outcome = TaskOutcome {
                 result: outcome.clone(),
                 cancelled: outcome.is_err() && controller.cancel.load(Ordering::Acquire),

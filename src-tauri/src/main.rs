@@ -469,6 +469,10 @@ fn main() {
                 app.handle().clone(),
                 maintenance_shutdown.clone(),
             ));
+            tauri::async_runtime::spawn(archive::run_auto_trash(
+                app.handle().clone(),
+                maintenance_shutdown.clone(),
+            ));
             tauri::async_runtime::spawn(intelligence::maintenance::run(
                 app.handle().clone(),
                 maintenance_shutdown,

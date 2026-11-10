@@ -8,6 +8,8 @@ use rusqlite::{params_from_iter, OptionalExtension};
 /// notices outside 휴지통.
 pub(crate) const NOT_TRASHED: &str =
     "NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)";
+/// Choices for moving old notices to 휴지통 automatically, in months; 0 never.
+pub(crate) const AUTO_TRASH_MONTHS: [u32; 6] = [0, 1, 3, 6, 12, 24];
 /// One list selection; a page holds at most 100 notices.
 const MAX_SELECTION: usize = 200;
 
@@ -184,6 +186,31 @@ impl Store {
         tx.commit().map_err(|e| e.to_string())?;
         self.recompute_learned()?;
         Ok(orphaned)
+    }
+    /// Moves notices published more than the chosen number of months ago to
+    /// 휴지통. `published_at` is a Korean calendar date, so the cutoff is too.
+    /// Saved notices stay, and a notice without a date is never treated as old.
+    /// Returns how many notices moved.
+    pub(crate) fn auto_trash_old(&self) -> Result<usize, String> {
+        let moved = self
+            .connection
+            .execute(
+                &format!(
+                    "INSERT INTO trashed_documents(document_id)
+                     SELECT d.id FROM documents d, settings s
+                     WHERE s.id=1 AND s.auto_trash_months>0
+                       AND d.published_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'
+                       AND d.published_at<date('now','+9 hours','-'||s.auto_trash_months||' months')
+                       AND NOT EXISTS(SELECT 1 FROM document_state st WHERE st.document_id=d.id AND st.saved=1)
+                       AND {NOT_TRASHED}"
+                ),
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        if moved > 0 {
+            self.recompute_learned()?;
+        }
+        Ok(moved)
     }
     /// Whether the user permanently deleted this notice.
     pub(crate) fn notice_deleted(&self, source: &str, external: &str) -> Result<bool, String> {

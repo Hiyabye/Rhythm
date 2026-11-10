@@ -1527,7 +1527,7 @@ fn schema_ten_upgrade_keeps_archive_and_adds_skipped_articles() {
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                  PRAGMA user_version=10;",
             )
             .unwrap();
@@ -1579,7 +1579,7 @@ fn schema_eleven_upgrade_retries_mislabeled_and_newly_allowed_resources() {
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                  PRAGMA user_version=11;"
             ))
             .unwrap();
@@ -1612,7 +1612,7 @@ fn retired_eng_newsletter_row_is_removed_but_archived_data_is_kept() {
             .execute_batch(
                 "DROP TABLE cybercampus_tasks; DROP TABLE cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                  PRAGMA user_version=16",
             )
             .unwrap();
@@ -1764,7 +1764,7 @@ fn schema_twenty_upgrade_keeps_every_subscription_with_groups_on() {
         store
             .connection
             .execute_batch(
-                "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices;
+                "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                  PRAGMA user_version=20;",
             )
             .unwrap();
@@ -1884,6 +1884,62 @@ fn trash_hides_and_restores_then_purge_leaves_a_tombstone_across_reopen() {
         )
         .is_ok());
     assert_eq!(listed(&store, false).len(), 2);
+}
+#[test]
+fn auto_trash_moves_only_old_unsaved_notices_and_keeps_them_restorable() {
+    let (_directory, store) = database();
+    // Days away from the month cutoff, so month lengths cannot change the answer.
+    let today = (chrono::Utc::now() + chrono::Duration::hours(9)).date_naive();
+    let days_ago = |days: i64| (today - chrono::Duration::days(days)).to_string();
+    let notice = |id: &str, date: String| {
+        store
+            .upsert_article("one", &article(id, "공지", "본문", &date), false)
+            .unwrap()
+            .0
+    };
+    let recent = notice("1", days_ago(80));
+    let old = notice("2", days_ago(100));
+    let saved = notice("3", days_ago(400));
+    let ancient = notice("4", "2001-03-02".into());
+    store.set_document_state(saved, None, Some(true)).unwrap();
+    let trashed = |store: &Store| {
+        let mut ids = store
+            .archive_query(&ArchiveQuery {
+                trashed: true,
+                ..Default::default()
+            })
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids
+    };
+
+    // 안 함 is the default and moves nothing.
+    assert_eq!(store.auto_trash_old().unwrap(), 0);
+    let mut settings = store.settings().unwrap();
+    settings.auto_trash_months = 3;
+    store.save(&settings).unwrap();
+    assert_eq!(store.auto_trash_old().unwrap(), 2);
+    assert_eq!(trashed(&store), [old, ancient]);
+    // Running again finds nothing new.
+    assert_eq!(store.auto_trash_old().unwrap(), 0);
+
+    // A trashed notice keeps its content and comes back on restore.
+    store.restore_documents(&[old]).unwrap();
+    assert_eq!(store.document(old, None).unwrap().item.title, "공지");
+    settings.auto_trash_months = 12;
+    store.save(&settings).unwrap();
+    assert_eq!(store.auto_trash_old().unwrap(), 0);
+    assert_eq!(trashed(&store), [ancient]);
+    // Unsaving makes an old notice eligible.
+    store.set_document_state(saved, None, Some(false)).unwrap();
+    assert_eq!(store.auto_trash_old().unwrap(), 1);
+    assert_eq!(trashed(&store), [saved, ancient]);
+    assert!(!trashed(&store).contains(&recent));
+    assert_archive_integrity(&store);
 }
 #[test]
 fn purge_returns_only_files_no_other_notice_uses() {
