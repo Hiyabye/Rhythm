@@ -13,6 +13,7 @@ use crate::{
     AppState,
 };
 use serde::Serialize;
+use tauri::Emitter;
 
 #[derive(Serialize)]
 pub struct Snapshot {
@@ -50,6 +51,7 @@ pub async fn get_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot,
 }
 #[tauri::command]
 pub async fn save_settings(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     settings: Settings,
 ) -> Result<Snapshot, String> {
@@ -64,6 +66,9 @@ pub async fn save_settings(
             .and_then(|()| store.auto_trash_old())
             .map_err(storage_error)?;
     }
+    let _ = app.emit("rhythm://theme-changed", &settings.theme);
+    let _ = app.emit("rhythm://clock-format-changed", &settings.clock_format);
+    state.studium_views.refresh();
     snapshot(&state).await
 }
 /// Ends the first-run setup flow. A rerun from Settings ends the same way, so
@@ -242,14 +247,19 @@ pub async fn set_extension(
     if !enabled && id == extensions::PROACTIVE {
         set_launch_at_login(&app, state.inner(), false)?;
     }
-    let (studium_completion, notification_completion) = change_extension_with_notifications(
-        &state.registry,
-        &state.store,
-        &state.studium,
-        &id,
-        enabled,
-    )?;
+    let (studium_completion, notification_completion, view_ticket) =
+        change_extension_with_notifications(
+            &state.registry,
+            &state.store,
+            &state.studium,
+            &id,
+            enabled,
+        )?;
     if !enabled {
+        let view_result = match view_ticket {
+            Some(ticket) => state.studium_views.disable(ticket).await,
+            None => Ok(()),
+        };
         if let Some(completion) = notification_completion {
             completion.wait().await;
         }
@@ -263,9 +273,11 @@ pub async fn set_extension(
             }
             _ => {}
         }
+        view_result?;
     } else if matches!(id.as_str(), extensions::STUDIUM | extensions::PROACTIVE) {
         state.studium_notifications.resume_after_quiesce().await;
     }
+    state.studium_views.refresh();
     snapshot(&state).await
 }
 
@@ -278,8 +290,14 @@ pub(crate) fn change_extension(
     enabled: bool,
 ) -> Result<Option<crate::studium::controller::CompletionHandle>, String> {
     change_extension_with_notifications(registry, shared_store, studium, id, enabled)
-        .map(|(completion, _)| completion)
+        .map(|(completion, _, _)| completion)
 }
+
+type ExtensionCompletions = (
+    Option<crate::studium::controller::CompletionHandle>,
+    Option<crate::studium::notification::Completion>,
+    Option<crate::studium::views::CloseTicket>,
+);
 
 fn change_extension_with_notifications(
     registry: &extensions::Registry,
@@ -287,19 +305,18 @@ fn change_extension_with_notifications(
     studium: &crate::studium::controller::Controller,
     id: &str,
     enabled: bool,
-) -> Result<
-    (
-        Option<crate::studium::controller::CompletionHandle>,
-        Option<crate::studium::notification::Completion>,
-    ),
-    String,
-> {
+) -> Result<ExtensionCompletions, String> {
     let store = shared_store
         .lock()
         .map_err(|_| "저장소에 접근할 수 없습니다.")?;
     registry.set(&store, id, enabled)?;
     let notifications = if !enabled && matches!(id, extensions::STUDIUM | extensions::PROACTIVE) {
         studium.cancel_notifications()
+    } else {
+        None
+    };
+    let view_ticket = if !enabled && id == extensions::STUDIUM {
+        studium.capture_views_close()
     } else {
         None
     };
@@ -310,6 +327,7 @@ fn change_extension_with_notifications(
             None
         },
         notifications,
+        view_ticket,
     ))
 }
 

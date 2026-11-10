@@ -34,6 +34,7 @@ pub(crate) struct AppState {
     pub(crate) archive: Arc<archive::sync::Controller>,
     pub(crate) studium: Arc<studium::controller::Controller>,
     pub(crate) studium_notifications: Arc<studium::notification::Notifications>,
+    pub(crate) studium_views: Arc<studium::views::Views>,
     network: archive::Client,
     registry: Registry,
     pub(crate) worker: Arc<tokio::sync::Mutex<Worker>>,
@@ -53,6 +54,7 @@ pub(crate) struct AppMaintenanceGuard {
     _gate: operation_gate::MaintenanceGuard,
     proactive: Arc<proactive::Scheduler>,
     studium_notifications: Arc<studium::notification::Notifications>,
+    studium_views: Arc<studium::views::Views>,
     analysis: Arc<intelligence::analysis::Controller>,
     classifier_guard: Option<intelligence::classification::PauseGuard>,
 }
@@ -80,6 +82,9 @@ impl Drop for AppMaintenanceGuard {
         if let Err(error) = self.studium_notifications.start() {
             eprintln!("Studium: 유지보수 후 알림 수신을 다시 시작하지 못했습니다: {error}");
         }
+        if let Err(error) = self.studium_views.start() {
+            eprintln!("Studium: 표시 재개 실패: {error}");
+        }
     }
 }
 
@@ -87,6 +92,7 @@ struct MaintenancePreparation {
     reservation: Option<operation_gate::MaintenanceReservation>,
     proactive: Arc<proactive::Scheduler>,
     studium_notifications: Arc<studium::notification::Notifications>,
+    studium_views: Arc<studium::views::Views>,
     analysis: Arc<intelligence::analysis::Controller>,
     armed: bool,
 }
@@ -99,9 +105,11 @@ impl Drop for MaintenancePreparation {
         self.analysis.resume();
         let proactive = self.proactive.clone();
         let studium_notifications = self.studium_notifications.clone();
+        let studium_views = self.studium_views.clone();
         tauri::async_runtime::spawn(async move {
             proactive.resume_after_quiesce().await;
             studium_notifications.resume_after_quiesce().await;
+            studium_views.resume_after_quiesce().await;
         });
     }
 }
@@ -117,6 +125,7 @@ impl AppState {
             reservation: Some(reservation),
             proactive: self.proactive.clone(),
             studium_notifications: self.studium_notifications.clone(),
+            studium_views: self.studium_views.clone(),
             analysis: self.analysis.clone(),
             armed: true,
         };
@@ -131,6 +140,7 @@ impl AppState {
         drop(ai_gate);
         self.proactive.quiesce().await;
         self.studium_notifications.quiesce().await;
+        self.studium_views.quiesce().await;
         self.archive.wait().await;
         if let Some(completion) = studium_completion {
             completion.wait().await;
@@ -151,6 +161,7 @@ impl AppState {
             _gate: gate,
             proactive: self.proactive.clone(),
             studium_notifications: self.studium_notifications.clone(),
+            studium_views: self.studium_views.clone(),
             analysis: self.analysis.clone(),
             classifier_guard: Some(classifier_guard),
         })
@@ -432,6 +443,8 @@ fn main() {
                 store.clone(), Arc::downgrade(&studium), operation_gate.clone(), app.handle().clone(),
             );
             studium.attach_notifications(&studium_notifications);
+            let studium_views = studium::views::Views::new(store.clone(), Arc::downgrade(&studium), operation_gate.clone(), app.handle().clone());
+            studium.attach_views(&studium_views);
             let network = archive::client().map_err(std::io::Error::other)?;
             let proactive = proactive::Scheduler::new(
                 store.clone(),
@@ -473,6 +486,7 @@ fn main() {
                 registry: Registry::new(archive.clone(), studium.clone()),
                 studium,
                 studium_notifications: studium_notifications.clone(),
+                studium_views: studium_views.clone(),
                 archive,
                 network,
                 worker: Arc::new(tokio::sync::Mutex::new(worker)),
@@ -490,6 +504,7 @@ fn main() {
             if let Err(error) = studium_notifications.start() {
                 eprintln!("Studium: 알림 수신을 시작하지 못했습니다: {error}");
             }
+            if let Err(error) = studium_views.start() { eprintln!("Studium: 표시 수신 시작 실패: {error}"); }
             dispatch_notification_arguments(app.handle(), &std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>());
             #[cfg(windows)]
             notification_launches_ready(app.handle());
@@ -527,6 +542,11 @@ fn main() {
             studium::commands::studium_save_favorites,
             studium::commands::studium_save_alert,
             studium::commands::studium_notification_activation,
+            studium::views::studium_open_mini,
+            studium::views::studium_close_mini,
+            studium::views::studium_mini_status,
+            studium::views::studium_mini_set_on_top,
+            studium::views::studium_mini_show_main,
             studium::commands::studium_automatic_start,
             studium::commands::studium_automatic_pause,
             backup::backup_create,
@@ -648,6 +668,7 @@ fn main() {
             let Some(state) = handle.try_state::<AppState>() else {
                 return; // A rejected second launch never opened the store or worker.
             };
+            state.studium_views.save_exit_geometry();
             state
                 .maintenance_shutdown
                 .store(true, std::sync::atomic::Ordering::Release);
@@ -662,6 +683,7 @@ fn main() {
             state.analysis.stop();
             state.models.cancel();
             tauri::async_runtime::block_on(async {
+                state.studium_views.shutdown().await;
                 state.studium_notifications.shutdown().await;
                 state.proactive.shutdown().await;
                 state.archive.wait().await;
