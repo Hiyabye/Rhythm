@@ -244,6 +244,8 @@ fn fixture() -> Snapshot {
                     } else {
                         rooms::STATUS_URL.into()
                     },
+                    layout: None,
+                    layout_error: None,
                 }),
             })
             .collect(),
