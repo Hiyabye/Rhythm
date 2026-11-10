@@ -73,6 +73,54 @@ fn schema_one_upgrade_preserves_every_preference() {
         SCHEMA_VERSION
     );
 }
+
+#[test]
+fn studium_interval_upgrade_preserves_released_trash_state_and_settings() {
+    let (directory, store) = database();
+    let path = directory.path().join("db");
+    let id = store
+        .upsert_article(
+            "one",
+            &article("keep", "보존할 공지", "본문", "2025-01-01"),
+            true,
+        )
+        .unwrap()
+        .0;
+    store.trash_documents(&[id]).unwrap();
+    let mut settings = store.settings().unwrap();
+    settings.clock_format = "24h".into();
+    settings.auto_trash_months = 3;
+    store.save(&settings).unwrap();
+    store
+        .connection
+        .execute_batch(
+            "INSERT INTO deleted_notices(source_id,external_id) VALUES('one','removed');
+             ALTER TABLE studium_preferences DROP COLUMN interval_minutes;
+             PRAGMA user_version=26;",
+        )
+        .unwrap();
+    drop(store);
+
+    let upgraded = Store::open(&path).unwrap();
+    assert_eq!(upgraded.info().unwrap().schema_version, SCHEMA_VERSION);
+    assert_eq!(upgraded.settings().unwrap().clock_format, "24h");
+    assert_eq!(upgraded.settings().unwrap().auto_trash_months, 3);
+    assert_eq!(upgraded.studium_auto_interval().unwrap(), 5);
+    assert_eq!(
+        upgraded
+            .connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM trashed_documents WHERE document_id=?1),
+                        EXISTS(SELECT 1 FROM deleted_notices WHERE source_id='one' AND external_id='removed'),
+                        (SELECT title FROM documents WHERE id=?1)",
+                [id],
+                |row| Ok((row.get::<_, bool>(0)?, row.get::<_, bool>(1)?, row.get::<_, String>(2)?)),
+            )
+            .unwrap(),
+        (true, true, "보존할 공지".to_owned())
+    );
+}
+
 #[test]
 fn migration_failure_rolls_back_all_schema_two_changes() {
     let directory = tempfile::tempdir().unwrap();
