@@ -242,34 +242,13 @@ pub async fn set_extension(
     if !enabled && id == extensions::PROACTIVE {
         set_launch_at_login(&app, state.inner(), false)?;
     }
-    let studium_completion = {
-        let store = state
-            .store
-            .lock()
-            .map_err(|_| "저장소에 접근할 수 없습니다.")?;
-        state.registry.set(&store, &id, enabled)?;
-        if !enabled && id == extensions::STUDIUM {
-            state.studium.completion()
-        } else {
-            None
-        }
-    };
+    let studium_completion =
+        change_extension(&state.registry, &state.store, &state.studium, &id, enabled)?;
     if !enabled {
         match id.as_str() {
             extensions::NOTICES | extensions::CYBERCAMPUS => state.archive.wait().await,
             extensions::STUDIUM => {
-                if let Some(completion) = studium_completion {
-                    completion.wait().await;
-                }
-                let store = state
-                    .store
-                    .lock()
-                    .map_err(|_| "저장소에 접근할 수 없습니다.")?;
-                // A later enable may have won while disable awaited. Never
-                // clear a newly admitted generation's results in that case.
-                if !store.enabled(extensions::STUDIUM)? {
-                    state.studium.clear();
-                }
+                finish_studium_disable(&state.store, &state.studium, studium_completion).await?;
             }
             extensions::AI => {
                 crate::intelligence::commands::stop_for_disabled_extension(state.inner()).await?
@@ -278,6 +257,43 @@ pub async fn set_extension(
         }
     }
     snapshot(&state).await
+}
+
+pub(crate) fn change_extension(
+    registry: &extensions::Registry,
+    shared_store: &crate::archive::sync::SharedStore,
+    studium: &crate::studium::controller::Controller,
+    id: &str,
+    enabled: bool,
+) -> Result<Option<crate::studium::controller::CompletionHandle>, String> {
+    let store = shared_store
+        .lock()
+        .map_err(|_| "저장소에 접근할 수 없습니다.")?;
+    registry.set(&store, id, enabled)?;
+    Ok(if !enabled && id == extensions::STUDIUM {
+        studium.completion()
+    } else {
+        None
+    })
+}
+
+pub(crate) async fn finish_studium_disable(
+    shared_store: &crate::archive::sync::SharedStore,
+    studium: &crate::studium::controller::Controller,
+    completion: Option<crate::studium::controller::CompletionHandle>,
+) -> Result<(), String> {
+    if let Some(completion) = completion {
+        completion.wait().await;
+    }
+    let store = shared_store
+        .lock()
+        .map_err(|_| "저장소에 접근할 수 없습니다.")?;
+    // A later enable may have won while disable awaited. Never clear a newly
+    // admitted generation's results in that case.
+    if !store.enabled(extensions::STUDIUM)? {
+        studium.clear();
+    }
+    Ok(())
 }
 fn runtime_status(state: &AppState) -> WorkerStatus {
     state
