@@ -52,6 +52,9 @@
   let notice = $state('');
   let desktop = $state(false);
   let proactiveActivation = $state<ProactiveActivation | null>(null);
+  let studiumActivation = $state(0);
+  let pendingStudiumRoom: string | null = null;
+  let studiumEventGeneration = 0;
   const handledActivations = new Set<string>();
   let setupNeeded = $state(false);
   // The first-run setup flow replaces the shell until it is finished or skipped.
@@ -139,6 +142,7 @@
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     let mounted = true;
     let unlistenNotification: (() => void) | undefined;
+    let unlistenStudiumNotification: (() => void) | undefined;
     let unlistenUpdate: (() => void) | undefined;
     systemDark = media.matches;
     const update = () => { systemDark = media.matches; };
@@ -167,6 +171,18 @@
           });
         }
       });
+      void listen<string>('studium://notification-clicked', (event) => {
+        if (!isStudiumRoom(event.payload)) return;
+        studiumEventGeneration++;
+        handleStudiumActivation(event.payload);
+      }).then((unlisten) => {
+        if (!mounted) { unlisten(); return null; }
+        unlistenStudiumNotification = unlisten;
+        const generation = studiumEventGeneration;
+        return invoke<string | null>('studium_notification_activation').then((roomId) => {
+          if (mounted && generation === studiumEventGeneration && roomId) handleStudiumActivation(roomId);
+        });
+      }).catch(() => { /* Optional click recovery must not block the shell. */ });
     } else loading = false;
     const healthTimer = window.setInterval(() => {
       dayKey = localDayKey(new Date());
@@ -180,6 +196,7 @@
     return () => {
       mounted = false;
       unlistenNotification?.();
+      unlistenStudiumNotification?.();
       unlistenUpdate?.();
       media.removeEventListener('change', update);
       window.clearInterval(healthTimer);
@@ -216,6 +233,21 @@
     void openProactiveDocument(payload.document_id, payload.revision_id, payload.event_id, payload.attempt_count, eventIds);
   }
 
+  function isStudiumRoom(roomId: unknown): roomId is string {
+    return typeof roomId === 'string' && ['19', '5', '6', '11', '15', '16', '18'].includes(roomId);
+  }
+
+  function handleStudiumActivation(roomId: string) {
+    if (!isStudiumRoom(roomId)) return;
+    if (!snapshot || showSetup) { pendingStudiumRoom = roomId; return; }
+    pendingStudiumRoom = null;
+    if (!enabled.has('studium')) return;
+    // Native activation already validated the token and persisted the view room.
+    // Refresh an open page to read it, with no new seat check or notification.
+    studiumActivation++;
+    void navigate('studium');
+  }
+
   $effect(() => { if (snapshot) clock.format = snapshot.settings.clock_format; });
 
   async function load() {
@@ -237,6 +269,7 @@
         setupNeeded = !ai.preferences.setup_completed && ai.preferences.engine !== 'openai-compatible';
       }
       catch { /* AI availability must not prevent archive access. Settings exposes recovery. */ }
+      if (pendingStudiumRoom) handleStudiumActivation(pendingStudiumRoom);
     } catch (reason) {
       error = message(reason);
     } finally {
@@ -275,6 +308,7 @@
       snapshot = await invoke<Snapshot>('complete_onboarding');
       showSetup = false;
       await navigate('today');
+      if (pendingStudiumRoom) handleStudiumActivation(pendingStudiumRoom);
     } catch (reason) { error = message(reason); }
   }
 
@@ -445,7 +479,7 @@
     {:else if page === 'tasks'}
       <CybercampusTasks {desktop} onsettings={() => openSettings('cybercampus')} />
     {:else if page === 'studium'}
-      <StudiumView {desktop} />
+      <StudiumView {desktop} activation={studiumActivation} proactiveEnabled={enabled.has('proactive')} onactivation={handleProactiveActivation} onsettings={() => openSettings(enabled.has('proactive') ? 'notifications' : 'extensions')} />
     {:else}
       <ArchiveView {page} {desktop} {enabled} onsetup={openSetup} onextensions={() => openSettings('extensions')} {sourceRequest} activation={proactiveActivation} onactivationhandled={() => proactiveActivation = null} onsettings={(pane) => openSettings(pane ?? 'extensions')} onaisettings={aiSettings}
         onsourcechange={(id) => activeSource = id}
