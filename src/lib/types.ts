@@ -1,6 +1,8 @@
 export type Theme = 'system' | 'light' | 'dark';
 export type EnergyProfile = 'eco' | 'balanced' | 'performance';
 export type ClockFormat = '12h' | '24h';
+/** Months after publication when a notice moves to 휴지통; 0 never. */
+export type AutoTrashMonths = 0 | 1 | 3 | 6 | 12 | 24;
 export interface StudiumRoom { id: string; name: string; label: string; capacity: number }
 export interface StudiumPreferences { room_ids: string[]; view_room: string }
 export interface StudiumSeatData {
@@ -68,6 +70,7 @@ export interface Settings {
   energy_profile: EnergyProfile;
   interests: string;
   clock_format: ClockFormat;
+  auto_trash_months: AutoTrashMonths;
 }
 export type NotificationSensitivity = 'important' | 'interested' | 'all';
 export interface QuietHours { enabled: boolean; start: string; end: string }

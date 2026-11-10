@@ -15,10 +15,13 @@ use model::*;
 pub use network::Client;
 use std::{
     collections::HashMap,
-    sync::{LazyLock, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, LazyLock, Mutex,
+    },
 };
 use sync::with_store;
-use tauri::State;
+use tauri::{Manager, State};
 use url::Url;
 
 /// Parses each distinct CSS selector once. Callers pass literals or values built
@@ -201,6 +204,22 @@ pub async fn archive_purge(
     }
     Ok(())
 }
+/// Moves old notices to 휴지통 at launch and then hourly while the app is open,
+/// so a notice that crosses the chosen age moves without a sync or a settings
+/// change. Sync jobs and saving settings also run it.
+pub async fn run_auto_trash(app: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
+    while !shutdown.load(Ordering::Acquire) {
+        if let Some(state) = app.try_state::<AppState>() {
+            if let Ok(_lease) = state.operation_gate.shared().await {
+                if let Err(error) = with_store(&state.store, |s| s.auto_trash_old()) {
+                    eprintln!("Archive: 오래된 공지를 휴지통으로 옮기지 못했습니다: {error}");
+                }
+            }
+        }
+        tokio::time::sleep(AUTO_TRASH_WAKE).await;
+    }
+}
+const AUTO_TRASH_WAKE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 #[tauri::command]
 pub async fn archive_start(
     state: State<'_, AppState>,

@@ -20,7 +20,7 @@
   import './lib/ai.css';
   import { archiveError as message, archiveDay, localDayKey, openTask, timeOptions } from './lib/archive-format';
   import { clock } from './lib/clock.svelte';
-  import type { ArchiveSummary, ClockFormat, EnergyProfile, Settings, Snapshot, SourceInfo, SyncStatus, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusTask } from './lib/types';
+  import type { ArchiveSummary, AutoTrashMonths, ClockFormat, EnergyProfile, Settings, Snapshot, SourceInfo, SyncStatus, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusTask } from './lib/types';
 
   const themes: { id: Theme; label: string; icon: string }[] = [
     { id: 'light', label: '라이트', icon: 'today' },
@@ -35,6 +35,14 @@
   const clockFormats: { id: ClockFormat; label: string }[] = [
     { id: '12h', label: '12시간' },
     { id: '24h', label: '24시간' },
+  ];
+  const autoTrashChoices: { months: AutoTrashMonths; label: string }[] = [
+    { months: 0, label: '안 함' },
+    { months: 1, label: '1개월' },
+    { months: 3, label: '3개월' },
+    { months: 6, label: '6개월' },
+    { months: 12, label: '1년' },
+    { months: 24, label: '2년' },
   ];
   let page = $state('today');
   let snapshot = $state<Snapshot | null>(null);
@@ -422,6 +430,9 @@
             <ProactiveSettings {desktop} part="background" onopen={openProactiveDocument} onactivation={handleProactiveActivation} />
             <ProactiveSettings {desktop} part="notifications" onopen={openProactiveDocument} onactivation={handleProactiveActivation} />
           {:else}
+            <div class="settings-group">
+              <div class="settings-row"><span class="row-label"><label for="auto-trash">오래된 공지 정리</label><Hint label="오래된 공지 정리">게시일이 선택한 기간보다 오래된 공지를 휴지통으로 옮깁니다. 저장한 공지는 옮기지 않습니다. 휴지통의 공지는 내용이 그대로 남아 언제든 복원할 수 있고, 저절로 영구 삭제되지 않습니다. 설정을 바꿀 때, 동기화가 끝날 때, 앱이 열려 있는 동안 1시간마다 확인합니다.</Hint></span><select id="auto-trash" value={snapshot?.settings.auto_trash_months ?? 0} disabled={!snapshot || busy} onchange={(event) => save({ auto_trash_months: Number(event.currentTarget.value) as AutoTrashMonths })}>{#each autoTrashChoices as choice}<option value={choice.months}>{choice.label}</option>{/each}</select></div>
+            </div>
             <div class="settings-group">
               <div class="settings-row"><span class="row-label">로컬 데이터<Hint label="로컬 데이터">프로필, 관심사, 피드백과 공지는 이 기기의 SQLite{#if snapshot} (스키마 {snapshot.storage.schema_version}){/if}에만 저장합니다. 클라우드 저장소, 원격 추론, 사용 정보 수집은 없습니다.{#if snapshot}<code class="popover-code">{snapshot.storage.path}</code>{/if}</Hint></span><span class="value">{snapshot ? storageSize(snapshot.storage.bytes) : '—'}</span></div>
             </div>

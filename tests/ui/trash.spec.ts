@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { mockDesktop, answerDialogs, dialogMessages } from './fixture';
+import { mockDesktop, answerDialogs, dialogMessages, openSettings } from './fixture';
 
 async function navigate(page: Page, name: string) {
   await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name, exact: true }).click();
@@ -72,4 +72,20 @@ test('the reader moves a notice to 휴지통, then deletes it permanently after 
   await expect(list(page).locator('li')).toHaveCount(1);
   expect((await dialogMessages(page)).at(-1)).toContain('다시 가져오지 않습니다');
   expect((await trashCalls(page)).at(-1)).toEqual({ command: 'archive_purge', ids: [1] });
+});
+
+test('the old-notice period is saved with the other settings and survives reopening the pane', async ({ page }) => {
+  await mockDesktop(page, { count: 1 });
+  await page.goto('/');
+  await openSettings(page, '데이터 및 정보');
+  const period = page.getByRole('combobox', { name: '오래된 공지 정리' });
+  await expect(period).toHaveValue('0');
+  await period.selectOption({ label: '6개월' });
+  await expect(page.getByText('설정을 저장했습니다.')).toBeVisible();
+  const saved = await page.evaluate(() => (window as Window & { __fixture: { calls: { command: string; args: { settings: Record<string, unknown> } }[] } })
+    .__fixture.calls.filter((call) => call.command === 'save_settings').map((call) => call.args.settings));
+  expect(saved).toEqual([{ theme: 'light', energy_profile: 'eco', interests: '', clock_format: '12h', auto_trash_months: 6 }]);
+  await openSettings(page, '일반');
+  await openSettings(page, '데이터 및 정보');
+  await expect(page.getByRole('combobox', { name: '오래된 공지 정리' })).toHaveValue('6');
 });

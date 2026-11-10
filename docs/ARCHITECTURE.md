@@ -80,6 +80,7 @@ Rust owns persistence; browser previews never substitute localStorage or simulat
 | `023_studium` | `studium_selected_rooms` and single-row `studium_preferences` (display room), defaulting to room `5` (로욜라 인벤툼 II); the `studium` extension is off on new and upgraded profiles. No seat-result, raw-response or history tables |
 | `024_clock_format` | `settings.clock_format` (`12h`, the default, or `24h`): how the UI shows and edits times. Stored times (UTC timestamps, todo `HH:MM`, quiet hours) are unchanged |
 | `025_trash` | `trashed_documents` (notices in 휴지통, cascading with the document) and `deleted_notices` (`(source_id, external_id)` tombstones of permanently deleted notices) |
+| `026_auto_trash` | `settings.auto_trash_months` (`0` never, the default, or 1, 3, 6, 12, 24): unsaved notices whose `published_at` (Korean calendar date) is older than that many months before today in KST move to 휴지통 when settings are saved, when an archive job ends, and at launch and hourly while the app is open. Undated notices never move; nothing leaves 휴지통 automatically |
 | `019_onboarding` | `settings.onboarding_completed`: defaults to done for upgraded profiles; `migrate` clears it only for a profile created from scratch, which then shows the first-run setup flow once. Finishing or skipping sets it; a rerun from Settings never clears it |
 
 ### Archive tables
