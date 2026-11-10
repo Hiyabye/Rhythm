@@ -10,6 +10,8 @@
   let { desktop }: { desktop: boolean } = $props();
   let snapshot = $state<StudiumSnapshot | null>(null);
   let draft = $state<string[]>([]);
+  let intervalDraft = $state<number | undefined>(5);
+  let intervalEditing = $state(false);
   let viewRoom = $state('');
   let loading = $state(true);
   let busy = $state(false);
@@ -22,6 +24,8 @@
   let polling = false;
   let startButton = $state<HTMLButtonElement>();
   let cancelButton = $state<HTMLButtonElement>();
+  let automaticButton = $state<HTMLButtonElement>();
+  let keepAutomaticFocus = false;
   // Set when the user operates 지금 확인/확인 취소: disabling or removing the
   // pressed button would otherwise drop keyboard focus to the page body.
   let keepActionFocus = false;
@@ -29,11 +33,15 @@
   let room = $derived(snapshot?.rooms.find((item) => item.id === viewRoom));
   let result = $derived(snapshot?.results.find((item) => item.room_id === viewRoom));
   let dirty = $derived(Boolean(snapshot && (draft.length !== snapshot.preferences.room_ids.length || draft.some((id) => !snapshot?.preferences.room_ids.includes(id)))));
+  let intervalDirty = $derived(Boolean(snapshot && intervalDraft !== snapshot.automatic.interval_minutes));
+  let intervalInvalid = $derived(intervalDraft === undefined || !Number.isInteger(intervalDraft) || intervalDraft < 2 || intervalDraft > 60);
 
-  function apply(value: StudiumSnapshot, resetDraft = false) {
+  function apply(value: StudiumSnapshot, resetDraft = false, resetInterval = false) {
     snapshot = value;
     viewRoom = value.preferences.view_room;
     if (resetDraft) draft = [...value.preferences.room_ids];
+    if (resetInterval) intervalEditing = false;
+    if (!intervalEditing) intervalDraft = value.automatic.interval_minutes;
   }
 
   async function load() {
@@ -44,7 +52,7 @@
     pollError = '';
     try {
       const value = await invoke<StudiumSnapshot>('studium_snapshot');
-      if (mounted && token === generation) apply(value, true);
+      if (mounted && token === generation) apply(value, true, true);
     } catch (reason) {
       if (mounted && token === generation) error = archiveError(reason);
     } finally {
@@ -53,7 +61,7 @@
   }
 
   async function poll() {
-    if (!mounted || !snapshot?.running || busy || polling) return;
+    if (!mounted || !snapshot || (!snapshot.running && !snapshot.automatic.active) || busy || polling) return;
     polling = true;
     const token = generation;
     try {
@@ -64,7 +72,7 @@
     } finally { polling = false; }
   }
 
-  async function act(command: string, args: Record<string, unknown> = {}, resetDraft = false, success = '') {
+  async function act(command: string, args: Record<string, unknown> = {}, resetDraft = false, success = '', resetInterval = false) {
     if (!snapshot || busy) return;
     const token = ++generation;
     busy = true;
@@ -73,7 +81,7 @@
     notice = '';
     try {
       const value = await invoke<StudiumSnapshot>(command, args);
-      if (mounted && token === generation) { apply(value, resetDraft); notice = success; }
+      if (mounted && token === generation) { apply(value, resetDraft, resetInterval); notice = success; }
     } catch (reason) {
       if (mounted && token === generation) {
         viewRoom = snapshot.preferences.view_room;
@@ -92,6 +100,27 @@
     if (!draft.length || !snapshot) return;
     const nextView = draft.includes(viewRoom) ? viewRoom : snapshot.rooms.find((item) => draft.includes(item.id))!.id;
     void act('studium_save_preferences', { roomIds: draft, viewRoom: nextView }, true, '확인할 열람실을 저장했습니다.');
+  }
+
+  function saveInterval() {
+    if (intervalInvalid || !intervalDirty) return;
+    void act('studium_save_interval', { intervalMinutes: intervalDraft }, false, '자동 확인 간격을 저장했습니다.', true);
+  }
+
+  function cancelIntervalEdit() {
+    intervalEditing = false;
+    intervalDraft = snapshot?.automatic.interval_minutes ?? 5;
+  }
+
+  function toggleAutomatic() {
+    keepAutomaticFocus = true;
+    void act(snapshot?.automatic.active ? 'studium_automatic_pause' : 'studium_automatic_start');
+  }
+
+  function automaticStatus(value: StudiumSnapshot): string {
+    if (!value.automatic.active) return value.automatic.error ? '자동 확인이 중단되었습니다.' : '자동 확인이 꺼져 있습니다.';
+    if (value.running) return `자동 확인이 켜져 있습니다. 진행 중인 확인을 마친 뒤 ${value.automatic.interval_minutes}분 후 다음 확인을 시작합니다.`;
+    return value.automatic.next_check_at ? `다음 자동 확인: ${clock(value.automatic.next_check_at)}` : '자동 확인을 준비하고 있습니다.';
   }
 
   function stateLabel(value: StudiumRoomState | undefined): string {
@@ -135,6 +164,12 @@
     if (active && active !== document.body) return;
     target.focus();
     if (target === startButton) keepActionFocus = false;
+  });
+
+  $effect(() => {
+    if (!keepAutomaticFocus || busy || !automaticButton || automaticButton.disabled) return;
+    if (document.activeElement === document.body) automaticButton.focus();
+    keepAutomaticFocus = false;
   });
 
   function runAction(command: string, args: Record<string, unknown> = {}) {
@@ -181,6 +216,22 @@
         <div class="target-actions"><button class="button secondary small" disabled={busy || snapshot.running || !dirty || !draft.length} onclick={saveTargets}>선택 저장</button>{#if !draft.length}<span class="validation" role="status">열람실을 하나 이상 선택해 주세요.</span>{:else if dirty}<span class="muted">아직 저장하지 않은 선택입니다.</span>{/if}</div>
       </section>
 
+      <section aria-labelledby="studium-automatic-title">
+        <div class="section-heading"><h2 id="studium-automatic-title">자동 확인</h2><Hint label="자동 확인">시작하면 저장한 열람실을 바로 확인합니다. 이미 확인 중이면 그 작업을 마친 뒤 저장한 간격만큼 기다립니다. 일시정지는 진행 중인 자동 확인을 취소하고, 직접 시작한 확인은 계속합니다.</Hint></div>
+        <form class="automatic-interval" onsubmit={(event) => { event.preventDefault(); saveInterval(); }}>
+          <label for="studium-interval">자동 확인 간격 (분)</label>
+          <input id="studium-interval" type="number" min="2" max="60" step="1" inputmode="numeric" bind:value={intervalDraft} oninput={() => intervalEditing = true} disabled={busy} aria-invalid={intervalInvalid ? 'true' : undefined} aria-describedby={intervalInvalid ? 'studium-interval-help studium-interval-error' : 'studium-interval-help'} />
+          <button class="button secondary small" type="submit" disabled={busy || !intervalDirty || intervalInvalid}>간격 저장</button>
+          <button class="button secondary small" type="button" disabled={busy || !intervalEditing} onclick={cancelIntervalEdit}>간격 변경 취소</button>
+        </form>
+        <p class="automatic-help" id="studium-interval-help">2–60분 · 저장한 간격 {snapshot.automatic.interval_minutes}분. 간격 저장만으로 확인을 시작하지 않습니다. 변경한 간격은 다음 확인이 끝난 뒤 적용됩니다.</p>
+        {#if intervalInvalid}<p class="validation automatic-help" id="studium-interval-error" role="status">2부터 60 사이의 정수를 입력해 주세요.</p>{/if}
+        <button class="button secondary" bind:this={automaticButton} disabled={busy} onclick={toggleAutomatic}>{snapshot.automatic.active ? '자동 확인 일시정지' : '자동 확인 시작'}</button>
+        <p class="automatic-status" role="status" aria-live="polite" aria-atomic="true">{automaticStatus(snapshot)}</p>
+        {#if snapshot.automatic.error}<p class="archive-error" role="alert">{snapshot.automatic.error}</p>{/if}
+        <p class="automatic-help">앱 실행 중에만 동작하며, 앱을 다시 실행하면 자동 확인은 꺼집니다. 간격만 저장됩니다.</p>
+      </section>
+
       <section aria-labelledby="studium-results-title">
         <div class="section-heading results-heading"><h2 id="studium-results-title">좌석 현황</h2><div class="actions"><button class="button primary" bind:this={startButton} disabled={busy || snapshot.running} onclick={() => runAction('studium_start')}>지금 확인</button>{#if snapshot.running}<button class="button secondary" bind:this={cancelButton} disabled={busy || snapshot.job_id === null} onclick={() => runAction('studium_cancel', { jobId: snapshot!.job_id })}>확인 취소</button>{/if}</div></div>
         <p class="live-status" role="status" aria-live="polite" aria-atomic="true">{cycleStatus(snapshot)}</p>
@@ -222,6 +273,11 @@
   .validation, .stale, .detail-error { color: var(--danger); }
   .results-heading { justify-content: space-between; flex-wrap: wrap; }
   .actions { display: flex; gap: 8px; }
+  .automatic-interval { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+  .automatic-interval input { width: 64px; padding: 5px 8px; color: var(--text); background: var(--field); border: 1px solid var(--line-strong); border-radius: 6px; }
+  .automatic-help { margin: 8px 0 12px; color: var(--secondary); font-size: 12px; line-height: 1.6; }
+  .automatic-help.validation { color: var(--danger); }
+  .automatic-status { margin: 10px 0 0; font-size: 13px; line-height: 1.6; color: var(--secondary); }
   .live-status { margin: 0 0 10px; min-height: 20px; color: var(--secondary); font-size: 12px; }
   .room-summary { list-style: none; padding: 0; margin: 0 0 18px; border-top: 1px solid var(--line); }
   .room-summary li { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; border-bottom: 1px solid var(--line); padding: 10px 0; font-size: 13px; }
