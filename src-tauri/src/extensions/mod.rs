@@ -63,7 +63,7 @@ const BUILT_IN: [(&str, &str, &str); 10] = [
     ),
     (
         STUDIUM,
-        "Studium",
+        "열람실",
         "선택한 열람실의 빈 좌석 수와 번호를 직접 확인합니다.",
     ),
 ];

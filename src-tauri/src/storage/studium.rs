@@ -42,7 +42,7 @@ impl Store {
         if self.enabled(crate::extensions::STUDIUM)? {
             Ok(())
         } else {
-            Err("Studium 확장 기능이 꺼져 있습니다.".into())
+            Err("열람실 확장 기능이 꺼져 있습니다.".into())
         }
     }
 

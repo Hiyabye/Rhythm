@@ -57,7 +57,7 @@ pub(crate) async fn studium_start(state: tauri::State<'_, AppState>) -> Result<S
         return Err("Rhythm을 종료하고 있습니다.".into());
     }
     if !store.enabled(crate::extensions::STUDIUM)? {
-        return Err("Studium 확장 기능이 꺼져 있습니다.".into());
+        return Err("열람실 확장 기능이 꺼져 있습니다.".into());
     }
     state.studium.start(
         store.studium_preferences()?,
