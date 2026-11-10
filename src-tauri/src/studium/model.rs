@@ -68,4 +68,5 @@ pub struct Snapshot {
     pub running: bool,
     pub results: Vec<RoomState>,
     pub automatic: AutomaticStatus,
+    pub favorites: std::collections::BTreeMap<String, Vec<u32>>,
 }

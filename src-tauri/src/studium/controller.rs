@@ -153,6 +153,7 @@ impl Controller {
                 .as_ref()
                 .is_some_and(|j| !j.finished.load(Ordering::Acquire)),
             automatic: automatic::snapshot(&state),
+            favorites: std::collections::BTreeMap::new(),
         })
     }
     /// Caller holds Store's mutex, the same boundary as extension disable and

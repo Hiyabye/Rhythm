@@ -17,7 +17,29 @@ fn snapshot_with_store(
 ) -> Result<Snapshot, String> {
     let mut value = controller.snapshot(store.studium_preferences()?)?;
     value.automatic.interval_minutes = store.studium_auto_interval()?;
+    value.favorites = store.studium_favorites()?;
     Ok(value)
+}
+
+#[tauri::command]
+pub(crate) async fn studium_save_favorites(
+    state: tauri::State<'_, AppState>,
+    room_id: String,
+    seat_numbers: Vec<u32>,
+) -> Result<Snapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
+    let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
+    save_favorites_with_store(&state.studium, &store, &room_id, &seat_numbers)
+}
+
+fn save_favorites_with_store(
+    controller: &super::controller::Controller,
+    store: &Store,
+    room_id: &str,
+    seat_numbers: &[u32],
+) -> Result<Snapshot, String> {
+    store.studium_save_favorites(room_id, seat_numbers)?;
+    snapshot_with_store(controller, store)
 }
 
 #[tauri::command]
