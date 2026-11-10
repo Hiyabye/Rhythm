@@ -27,6 +27,7 @@ export interface StudiumSnapshot {
   running: boolean;
   results: StudiumRoomState[];
   automatic: { active: boolean; interval_minutes: number; next_check_at: string | null; error: string | null };
+  favorites: Record<string, number[]>;
 }
 export interface PersonalizationProfile {
   university: string;
