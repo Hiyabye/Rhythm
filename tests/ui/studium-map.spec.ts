@@ -139,6 +139,35 @@ test('map zoom is bounded and its keyboard scroll region pans and resets locally
   expect(await callCount(page, 'studium_automatic_start')).toBe(0);
 });
 
+test('repeated resets at normal zoom preserve viewport, control and outside focus', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true }, studium: { preferences: { room_ids: ['6'], view_room: '6' }, results: [row('6')] } });
+  await page.setViewportSize({ width: 640, height: 900 });
+  await openStudium(page);
+  await openMap(page);
+  const reset = page.getByRole('button', { name: '배치도 보기 초기화', exact: true });
+  const search = page.getByRole('searchbox', { name: '빈 좌석 번호 검색', exact: true });
+  for (const focus of ['viewport', 'control', 'outside']) {
+    await viewport(page).focus();
+    await page.keyboard.press('ArrowDown');
+    await expect.poll(() => viewport(page).evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+    if (focus === 'control') {
+      await reset.focus();
+      await page.keyboard.press('Enter');
+      await expect(reset).toBeFocused();
+    } else {
+      await reset.evaluate((button, moveOutside) => {
+        (button as HTMLButtonElement).click();
+        if (moveOutside) document.getElementById('studium-seat-search')?.focus();
+      }, focus === 'outside');
+      await expect(focus === 'outside' ? search : viewport(page)).toBeFocused();
+    }
+    await expect(map(page).locator('output')).toHaveText('100%');
+    await expect.poll(() => viewport(page).evaluate((node) => [node.scrollLeft, node.scrollTop])).toEqual([0, 0]);
+  }
+  expect(await callCount(page, 'studium_start')).toBe(0);
+  expect(await callCount(page, 'studium_automatic_start')).toBe(0);
+});
+
 test('a layout-only error and invalid geometry preserve the verified counts and number list', async ({ page }) => {
   const ready = row();
   ready.result!.layout = null;
