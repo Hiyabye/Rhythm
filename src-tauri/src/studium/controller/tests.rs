@@ -222,6 +222,258 @@ fn map(id: &str, available: &[u32], clock: &str) -> String {
         room.name, room.capacity, room.capacity - available.len() as u32, available.len())
 }
 
+fn positioned_map(id: &str, available: &[u32], clock: &str, columns: u32) -> String {
+    let mut html = map(id, available, clock);
+    for number in 1..=rooms::get(id).unwrap().capacity {
+        let x = 100 + ((number - 1) % columns) * 30;
+        let y = 100 + ((number - 1) / columns) * 30;
+        html = html.replace(
+            &format!("id=\"Layer{number}\""),
+            &format!("id=\"Layer{number}\" style=\"position:absolute;left:{x}px;top:{y}px\""),
+        );
+    }
+    html
+}
+
+#[tokio::test(start_paused = true)]
+async fn detail_layout_and_numbers_are_published_together_without_extra_requests() {
+    let h = Harness::new(&["5", "6"]);
+    let time = clock(0);
+    let fake = Fake::new(vec![
+        (COMMON, Reply::Html(summary(&time))),
+        (
+            "/SEAT/roomview5.asp?room_no=5",
+            Reply::Html(positioned_map("5", &[4], &time, 12)),
+        ),
+        (
+            "/SEAT/roomview5.asp?room_no=6",
+            Reply::Html(positioned_map("6", &[8, 16, 24], &time, 16)),
+        ),
+    ]);
+    h.start(fake.clone()).await;
+    h.wait().await;
+    fake.exhausted();
+    let snapshot = h.snapshot();
+    for (state, id, available) in [
+        (&snapshot.results[0], "5", vec![4]),
+        (&snapshot.results[1], "6", vec![8, 16, 24]),
+    ] {
+        assert_eq!(state.status, "ready");
+        let result = state.result.as_ref().unwrap();
+        assert_eq!(result.source_url, rooms::get(id).unwrap().url());
+        assert_eq!(result.remaining, available.len() as u32);
+        assert_eq!(result.seat_numbers.as_ref(), Some(&available));
+        assert!(result.layout_error.is_none());
+        let layout = result.layout.as_ref().unwrap();
+        assert_eq!(
+            layout.points.len(),
+            rooms::get(id).unwrap().capacity as usize
+        );
+        assert_eq!(layout.points.first().unwrap().number, 1);
+        assert_eq!(layout.points.last().unwrap().number, result.total);
+        assert!(layout.width > 0 && layout.height > 0);
+        assert!(layout
+            .points
+            .iter()
+            .all(|point| point.x <= layout.width && point.y <= layout.height));
+    }
+    assert_ne!(
+        snapshot.results[0].result.as_ref().unwrap().layout,
+        snapshot.results[1].result.as_ref().unwrap().layout
+    );
+    assert_eq!(
+        fake.requests(),
+        [
+            "/robots.txt",
+            COMMON,
+            "/SEAT/roomview5.asp?room_no=5",
+            "/SEAT/roomview5.asp?room_no=6"
+        ]
+    );
+
+    let before = fake.requests();
+    for id in ["6", "5", "6"] {
+        let preferences = h.store.lock().unwrap().studium_set_view_room(id).unwrap();
+        let displayed = h.controller.snapshot(preferences).unwrap();
+        assert_eq!(displayed.job_id, snapshot.job_id);
+        assert_eq!(displayed.results[0].result, snapshot.results[0].result);
+        assert_eq!(displayed.results[1].result, snapshot.results[1].result);
+    }
+    assert_eq!(fake.requests(), before);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_new_cycle_clears_and_replaces_the_complete_layout_number_and_time_result() {
+    let h = Harness::new(&["5"]);
+    let time = clock(0);
+    let first = Fake::new(vec![
+        (COMMON, Reply::Html(summary(&time))),
+        (
+            "/SEAT/roomview5.asp?room_no=5",
+            Reply::Html(positioned_map("5", &[4], &time, 12)),
+        ),
+    ]);
+    h.start(first.clone()).await;
+    h.wait().await;
+    let old = h.snapshot();
+    let old_data = old.results[0].result.as_ref().unwrap().clone();
+    assert!(old_data.layout.is_some());
+    let block = Block::new();
+    let later = clock(1);
+    let new_detail = positioned_map("5", &[9, 10], &later, 8);
+    let fake = Fake::new(vec![
+        (COMMON, Reply::Blocked(summary(&time), block.clone())),
+        (
+            "/SEAT/roomview5.asp?room_no=5",
+            Reply::Html(new_detail.clone()),
+        ),
+    ]);
+    h.start(fake.clone()).await;
+    block.entered().await;
+    assert_eq!(h.snapshot().results[0].status, "loading");
+    assert!(h.snapshot().results[0].result.is_none());
+    block.release.add_permits(1);
+    h.wait().await;
+    let current = h.snapshot();
+    assert!(current.job_id > old.job_id);
+    let data = current.results[0].result.as_ref().unwrap();
+    assert_eq!(data.seat_numbers, Some(vec![9, 10]));
+    assert_eq!(data.remaining, 2);
+    assert_ne!(data.source_time, old_data.source_time);
+    assert_ne!(data.layout, old_data.layout);
+    assert_eq!(
+        *data,
+        parser::parse_seats(&new_detail, "5", chrono::Utc::now().timestamp()).unwrap()
+    );
+    fake.exhausted();
+    assert_eq!(fake.requests().len(), 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn geometry_failure_does_not_reuse_old_layout_or_discard_new_valid_numbers() {
+    let h = Harness::new(&["5"]);
+    let time = clock(0);
+    h.start(Fake::new(vec![
+        (COMMON, Reply::Html(summary(&time))),
+        (
+            "/SEAT/roomview5.asp?room_no=5",
+            Reply::Html(positioned_map("5", &[4], &time, 12)),
+        ),
+    ]))
+    .await;
+    h.wait().await;
+    assert!(h.snapshot().results[0]
+        .result
+        .as_ref()
+        .unwrap()
+        .layout
+        .is_some());
+    let changed = positioned_map("5", &[9], &time, 12)
+        .replace("left:100px;top:100px", "left:broken;top:100px");
+    let fake = Fake::new(vec![
+        (COMMON, Reply::Html(summary(&time))),
+        ("/SEAT/roomview5.asp?room_no=5", Reply::Html(changed)),
+    ]);
+    h.start(fake.clone()).await;
+    h.wait().await;
+    let snapshot = h.snapshot();
+    assert_eq!(snapshot.results[0].status, "ready");
+    assert!(snapshot.results[0].error.is_none());
+    let result = snapshot.results[0].result.as_ref().unwrap();
+    assert_eq!(result.remaining, 1);
+    assert_eq!(result.seat_numbers, Some(vec![9]));
+    assert!(result.layout.is_none());
+    assert!(result.layout_error.is_some());
+    assert_eq!(result.source_url, rooms::get("5").unwrap().url());
+    fake.exhausted();
+    assert_eq!(fake.requests().len(), 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn older_or_wrong_room_detail_cannot_restore_the_previous_layout_or_numbers() {
+    for wrong_room in [false, true] {
+        let h = Harness::new(&["5"]);
+        let time = clock(0);
+        h.start(Fake::new(vec![
+            (COMMON, Reply::Html(summary(&time))),
+            (
+                "/SEAT/roomview5.asp?room_no=5",
+                Reply::Html(positioned_map("5", &[4], &time, 12)),
+            ),
+        ]))
+        .await;
+        h.wait().await;
+        assert!(h.snapshot().results[0]
+            .result
+            .as_ref()
+            .unwrap()
+            .layout
+            .is_some());
+        let bad_detail = if wrong_room {
+            positioned_map("6", &[88], &time, 16)
+        } else {
+            positioned_map("5", &[9], &clock(-30), 8)
+        };
+        let fake = Fake::new(vec![
+            (COMMON, Reply::Html(summary(&time))),
+            ("/SEAT/roomview5.asp?room_no=5", Reply::Html(bad_detail)),
+        ]);
+        h.start(fake.clone()).await;
+        h.wait().await;
+        let snapshot = h.snapshot();
+        assert_eq!(snapshot.results[0].status, "count_only");
+        assert!(snapshot.results[0].error.is_some());
+        let result = snapshot.results[0].result.as_ref().unwrap();
+        assert_eq!(result.remaining, 2);
+        assert_eq!(result.seat_numbers, None);
+        assert_eq!(result.layout, None);
+        assert_eq!(result.source_url, rooms::STATUS_URL);
+        fake.exhausted();
+        assert_eq!(fake.requests().len(), 3);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_late_valid_layout_from_an_old_job_cannot_populate_a_new_loading_generation() {
+    let h = Harness::new(&["5"]);
+    let first = Block::new();
+    h.start(Fake::new(vec![(
+        COMMON,
+        Reply::Blocked(summary(&clock(0)), first.clone()),
+    )]))
+    .await;
+    first.entered().await;
+    let old = h.controller.state.lock().unwrap().job.clone().unwrap();
+    h.controller.cancel();
+    h.wait().await;
+    let next = Block::new();
+    h.start(Fake::new(vec![(
+        COMMON,
+        Reply::Blocked(summary(&clock(0)), next.clone()),
+    )]))
+    .await;
+    next.entered().await;
+    let data = parser::parse_seats(
+        &positioned_map("5", &[4], &clock(0), 12),
+        "5",
+        chrono::Utc::now().timestamp(),
+    )
+    .unwrap();
+    assert!(data.layout.is_some());
+    // Isolate generation fencing from the old job's cancellation flag.
+    old.cancel.store(false, Ordering::Release);
+    assert!(h
+        .controller
+        .publish(&old, &h.store, result("5", "ready", data, None))
+        .is_err());
+    let snapshot = h.snapshot();
+    assert!(snapshot.job_id.unwrap() > old.id);
+    assert_eq!(snapshot.results[0].status, "loading");
+    assert!(snapshot.results[0].result.is_none());
+    h.controller.cancel();
+    h.wait().await;
+}
+
 #[tokio::test]
 async fn common_is_fetched_once_and_each_selected_room_has_one_detail_request() {
     let h = Harness::new(&["5", "6", "11"]);
