@@ -110,6 +110,10 @@ impl Registry {
         if !BUILT_IN.iter().any(|&(known, ..)| known == id) {
             return Err("등록되지 않은 확장 기능입니다.".into());
         }
+        // The caller holds Store's lock, which also protects admission. Commit
+        // the preference before irreversible cancellation/clearing so a failed
+        // write leaves the currently enabled extension and its work intact.
+        store.set_enabled(id, enabled)?;
         if !enabled && matches!(id, NOTICES | CYBERCAMPUS) {
             self.jobs.cancel();
         }
@@ -117,7 +121,7 @@ impl Registry {
             self.studium.cancel();
             self.studium.clear();
         }
-        store.set_enabled(id, enabled)
+        Ok(())
     }
     pub fn stop_all(&self) {
         self.jobs.cancel();
