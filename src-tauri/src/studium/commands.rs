@@ -18,7 +18,38 @@ fn snapshot_with_store(
     let mut value = controller.snapshot(store.studium_preferences()?)?;
     value.automatic.interval_minutes = store.studium_auto_interval()?;
     value.favorites = store.studium_favorites()?;
+    value.alert_rules = store.studium_alert_rules()?;
     Ok(value)
+}
+
+#[tauri::command]
+pub(crate) async fn studium_save_alert(
+    state: tauri::State<'_, AppState>,
+    room_id: String,
+    enabled: bool,
+    kind: String,
+    minimum: u32,
+) -> Result<Snapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
+    let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
+    store.studium_save_alert_rule(
+        &room_id,
+        &super::model::AlertRuleInput {
+            enabled,
+            kind,
+            minimum,
+        },
+    )?;
+    // Rule editing invalidates old candidates but never observes old results.
+    snapshot(&state, &store)
+}
+
+#[tauri::command]
+pub(crate) async fn studium_notification_activation(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let _lease = state.operation_gate.shared().await?;
+    state.studium_notifications.take_activation()
 }
 
 #[tauri::command]

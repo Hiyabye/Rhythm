@@ -111,11 +111,41 @@ struct State {
 pub(crate) struct Controller {
     state: Mutex<State>,
     changed: Notify,
+    notifications: Mutex<std::sync::Weak<super::notification::Notifications>>,
 }
 
 impl Controller {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+    pub(crate) fn attach_notifications(
+        &self,
+        notifications: &Arc<super::notification::Notifications>,
+    ) {
+        if let Ok(mut saved) = self.notifications.lock() {
+            *saved = Arc::downgrade(notifications);
+        }
+    }
+    fn notifications(&self) -> Option<Arc<super::notification::Notifications>> {
+        self.notifications
+            .lock()
+            .ok()
+            .and_then(|saved| saved.upgrade())
+    }
+    pub(crate) fn cancel_notifications(&self) -> Option<super::notification::Completion> {
+        self.notifications()
+            .and_then(|notifications| notifications.cancel())
+    }
+    pub(crate) fn notification_current(&self, candidate: &super::model::AlertCandidate) -> bool {
+        self.state.lock().ok().is_some_and(|state| {
+            state.job.as_ref().is_some_and(|job| {
+                job.id == candidate.job_id && !job.cancel.load(Ordering::Acquire)
+            }) && state.results.iter().any(|room| {
+                room.room_id == candidate.room_id
+                    && matches!(room.status.as_str(), "ready" | "count_only")
+                    && room.result.as_ref() == Some(&candidate.data)
+            })
+        })
     }
     pub(crate) fn ensure_idle(&self) -> Result<(), String> {
         let state = self.state.lock().map_err(|_| "좌석 작업 잠금 오류")?;
@@ -154,6 +184,10 @@ impl Controller {
                 .is_some_and(|j| !j.finished.load(Ordering::Acquire)),
             automatic: automatic::snapshot(&state),
             favorites: std::collections::BTreeMap::new(),
+            alert_rules: std::collections::BTreeMap::new(),
+            alert_error: self
+                .notifications()
+                .and_then(|notifications| notifications.last_error()),
         })
     }
     /// Caller holds Store's mutex, the same boundary as extension disable and
@@ -229,6 +263,7 @@ impl Controller {
             }
         }
         self.changed.notify_waiters();
+        self.cancel_notifications();
     }
     pub(crate) fn cancel_job(&self, id: u64) -> Result<(), String> {
         let state = self.state.lock().map_err(|_| "좌석 작업 잠금 오류")?;
@@ -300,6 +335,15 @@ impl Controller {
             .iter_mut()
             .find(|r| r.room_id == value.room_id)
         {
+            if let Some(notifications) = self.notifications() {
+                match saved.studium_alert_observe(job.id, &value) {
+                    Ok(candidate) => notifications.observe(&value.room_id, candidate),
+                    Err(error) => {
+                        notifications.observe(&value.room_id, None);
+                        notifications.record_error(error);
+                    }
+                }
+            }
             *target = value;
         }
         Ok(())
