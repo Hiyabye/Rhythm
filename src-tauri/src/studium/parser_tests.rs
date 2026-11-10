@@ -94,6 +94,26 @@ fn status_schema_time_and_count_failures_are_not_zero_seats() {
 }
 
 #[test]
+fn layout_table_rows_do_not_duplicate_the_nested_room_rows() {
+    let page = status(CLOCK);
+    let nested = format!(
+        "<table><tr><td>열람실 현황<table><tr><td>{page}</td></tr></table></td></tr></table>"
+    );
+    let parsed = parse_status(&nested, now()).unwrap();
+    assert_eq!(parsed.len(), 7);
+    for room in rooms::all() {
+        assert_eq!(parsed[room.id].as_ref().unwrap().remaining, 2);
+    }
+
+    // Actual duplicate data rows still fail instead of choosing one table.
+    let duplicated = format!("<table><tr><td>{page}{page}</td></tr></table>");
+    assert!(parse_status(&duplicated, now())
+        .unwrap()
+        .values()
+        .all(Result::is_err));
+}
+
+#[test]
 fn exact_freshness_boundaries_are_inclusive_and_utc_normalized() {
     for age in [-60, 0, 300] {
         assert!(parse_status(&status(CLOCK), now() + age).is_ok());
