@@ -41,7 +41,7 @@ const MAX_TASK_ID_CHARS: usize = 128;
 /// Advance the persisted rate-window clock monotonically, then discard rows
 /// older than every supported query window. A wall-clock rollback therefore
 /// pauses aging instead of resurrecting deleted attempts.
-fn advance_delivery_clock(connection: &Connection) -> Result<String, String> {
+pub(crate) fn advance_delivery_clock(connection: &Connection) -> Result<String, String> {
     connection
         .execute(
             &format!(
@@ -67,7 +67,28 @@ fn advance_delivery_clock(connection: &Connection) -> Result<String, String> {
             [&watermark],
         )
         .map_err(|e| e.to_string())?;
+    connection.execute(
+        "DELETE FROM studium_alert_attempts WHERE attempted_at<strftime('%Y-%m-%dT%H:%M:%fZ',?1,'-604800 seconds')",
+        [&watermark],
+    ).map_err(|e| e.to_string())?;
     Ok(watermark)
+}
+
+pub(crate) fn delivery_attempt_count(
+    connection: &Connection,
+    watermark: &str,
+    seconds: u64,
+) -> Result<i64, String> {
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM (
+           SELECT attempted_at FROM proactive_delivery_attempts
+           UNION ALL SELECT attempted_at FROM studium_alert_attempts
+         ) WHERE attempted_at>=strftime('%Y-%m-%dT%H:%M:%fZ',?1,'-'||?2||' seconds')",
+            params![watermark, seconds as i64],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())
 }
 
 const SETTINGS_COLUMNS: &str = "close_to_background,launch_at_login,start_hidden,\
@@ -337,6 +358,11 @@ impl Store {
                        AND reason='조용한 시간에는 알림을 보내지 않습니다.'",
                     [],
                 )
+                .map_err(|e| e.to_string())?;
+        }
+        if was_notifications_enabled && !settings.notifications_enabled {
+            transaction
+                .execute("DELETE FROM studium_alert_tokens", [])
                 .map_err(|e| e.to_string())?;
         }
         if (!was_scheduler_enabled && settings.scheduler_enabled)
@@ -628,16 +654,7 @@ impl Store {
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
         let watermark = advance_delivery_clock(&transaction)?;
-        let count: i64 = transaction
-            .query_row(
-                "SELECT COUNT(*) FROM proactive_delivery_attempts
-                 WHERE attempted_at>=strftime(
-                     '%Y-%m-%dT%H:%M:%fZ',?1,'-'||?2||' seconds'
-                 )",
-                params![watermark, window_seconds as i64],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())?;
+        let count = delivery_attempt_count(&transaction, &watermark, window_seconds)?;
         transaction.commit().map_err(|e| e.to_string())?;
         u32::try_from(count).map_err(|_| "알림 시도를 확인할 수 없습니다.".into())
     }
@@ -688,16 +705,7 @@ impl Store {
             }
         }
         let watermark = advance_delivery_clock(&transaction)?;
-        let current: i64 = transaction
-            .query_row(
-                "SELECT COUNT(*) FROM proactive_delivery_attempts
-                 WHERE attempted_at>=strftime(
-                   '%Y-%m-%dT%H:%M:%fZ',?1,'-600 seconds'
-                 )",
-                [&watermark],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())?;
+        let current = delivery_attempt_count(&transaction, &watermark, 600)?;
         if current + additions > MAX_DELIVERY_ATTEMPTS as i64 {
             transaction.commit().map_err(|e| e.to_string())?;
             return Ok(false);

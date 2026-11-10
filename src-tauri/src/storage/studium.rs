@@ -56,6 +56,12 @@ impl Store {
                 room.capacity
             ));
         }
+        let current = self.studium_favorites()?;
+        let mut sorted = seat_numbers.to_vec();
+        sorted.sort_unstable();
+        if current[room_id] == sorted {
+            return Ok(current);
+        }
         let transaction = self
             .connection
             .unchecked_transaction()
@@ -74,6 +80,20 @@ impl Store {
                 )
                 .map_err(|e| e.to_string())?;
         }
+        // Favorite changes alter preferred-seat eligibility, so pending
+        // capabilities/candidates from the preceding rule version are stale.
+        transaction
+            .execute(
+                "UPDATE studium_alert_rules SET version=version+1,armed=1 WHERE room_id=?1",
+                [room_id],
+            )
+            .map_err(|e| e.to_string())?;
+        transaction
+            .execute(
+                "DELETE FROM studium_alert_tokens WHERE room_id=?1",
+                [room_id],
+            )
+            .map_err(|e| e.to_string())?;
         let favorites = self.studium_favorites()?;
         transaction.commit().map_err(|e| e.to_string())?;
         Ok(favorites)
@@ -210,6 +230,9 @@ impl Store {
         for id in current.room_ids {
             if !selected.contains(id.as_str()) {
                 transaction
+                    .execute("DELETE FROM studium_alert_tokens WHERE room_id=?1", [&id])
+                    .map_err(|e| e.to_string())?;
+                transaction
                     .execute("DELETE FROM studium_selected_rooms WHERE room_id=?1", [&id])
                     .map_err(|e| e.to_string())?;
             }
@@ -253,7 +276,7 @@ mod tests {
         store
             .connection
             .execute_batch(
-                "DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                "DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
              DELETE FROM extension_preferences WHERE extension_id='studium';
              PRAGMA user_version=22;",
             )
@@ -381,7 +404,7 @@ mod tests {
         store.studium_save_auto_interval(18).unwrap();
         store
             .connection
-            .execute_batch("DROP TABLE studium_favorite_seats; PRAGMA user_version=27;")
+            .execute_batch("DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; PRAGMA user_version=27;")
             .unwrap();
         drop(store);
         let upgraded = Store::open(&path).unwrap();
@@ -409,7 +432,7 @@ mod tests {
         store
             .connection
             .execute_batch(
-                "DROP TABLE studium_favorite_seats;
+                "DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats;
              CREATE TABLE studium_favorite_seats(sentinel TEXT);
              INSERT INTO studium_favorite_seats VALUES('keep');
              PRAGMA user_version=27;",
@@ -516,7 +539,7 @@ mod tests {
             .connection
             .execute_batch(
                 "UPDATE settings SET theme='dark',clock_format='24h',auto_trash_months=3;
-                 DROP TABLE studium_favorite_seats;
+                 DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats;
                  ALTER TABLE studium_preferences DROP COLUMN interval_minutes;
                  PRAGMA user_version=26;",
             )
@@ -543,7 +566,7 @@ mod tests {
         store.studium_save_auto_interval(17).unwrap();
         store
             .connection
-            .execute_batch("DROP TABLE studium_favorite_seats; PRAGMA user_version=26;")
+            .execute_batch("DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; PRAGMA user_version=26;")
             .unwrap();
         drop(store);
         // An unexpected pre-existing column makes 027 fail instead of silently
@@ -755,7 +778,7 @@ mod tests {
         assert_eq!(restored.studium_favorites().unwrap(), favorites);
         assert_eq!(restored.connection.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'studium_%'", [], |row| row.get::<_, i64>(0),
-        ).unwrap(), 3);
+        ).unwrap(), 6);
         let columns = restored
             .connection
             .prepare("SELECT name FROM pragma_table_info('studium_preferences') ORDER BY cid")

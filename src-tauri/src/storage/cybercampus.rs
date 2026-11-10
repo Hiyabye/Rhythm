@@ -320,7 +320,7 @@ mod tests {
                 .execute_batch(
                     "DROP TABLE cybercampus_tasks; DROP TABLE cybercampus_courses;
                      ALTER TABLE settings DROP COLUMN onboarding_completed;
-                     ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                     ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                      PRAGMA user_version=17;",
                 )
                 .unwrap();

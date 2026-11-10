@@ -20,8 +20,9 @@ pub mod proactive;
 #[cfg(test)]
 mod proactive_tests;
 pub mod studium;
+pub(crate) mod studium_alerts;
 pub(crate) mod trash;
-pub(crate) const SCHEMA_VERSION: i64 = 28;
+pub(crate) const SCHEMA_VERSION: i64 = 29;
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
     let migrations = [
@@ -53,6 +54,7 @@ fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
         include_str!("../../migrations/026_auto_trash.sql"),
         include_str!("../../migrations/027_studium_interval.sql"),
         include_str!("../../migrations/028_studium_favorites.sql"),
+        include_str!("../../migrations/029_studium_alerts.sql"),
     ];
     for (index, migration) in migrations.iter().enumerate().skip(version as usize) {
         let transaction = connection.transaction().map_err(|e| e.to_string())?;
@@ -245,8 +247,22 @@ impl Store {
             .map_err(|e| e.to_string())
     }
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), String> {
-        self.connection.execute("INSERT INTO extension_preferences(extension_id,enabled) VALUES(?1,?2) ON CONFLICT(extension_id) DO UPDATE SET enabled=excluded.enabled",params![id,enabled]).map_err(|e|e.to_string())?;
-        Ok(())
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        transaction.execute("INSERT INTO extension_preferences(extension_id,enabled) VALUES(?1,?2) ON CONFLICT(extension_id) DO UPDATE SET enabled=excluded.enabled",params![id,enabled]).map_err(|e|e.to_string())?;
+        if !enabled
+            && matches!(
+                id,
+                crate::extensions::STUDIUM | crate::extensions::PROACTIVE
+            )
+        {
+            transaction
+                .execute("DELETE FROM studium_alert_tokens", [])
+                .map_err(|e| e.to_string())?;
+        }
+        transaction.commit().map_err(|e| e.to_string())
     }
     pub fn info(&self) -> Result<StorageInfo, String> {
         let bytes = std::fs::metadata(&self.path)
@@ -382,7 +398,8 @@ mod tests {
             .unwrap()
             .connection
             .execute_batch(
-                "DROP TABLE studium_favorite_seats;
+                "DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules;
+                 DROP TABLE studium_favorite_seats;
                  ALTER TABLE studium_preferences DROP COLUMN interval_minutes;
                  ALTER TABLE settings DROP COLUMN auto_trash_months;
                  UPDATE settings SET theme='dark',clock_format='24h';
@@ -519,7 +536,7 @@ mod tests {
                            VALUES('cybercampus','사이버캠퍼스','서강대학교','','https://eclass.sogang.ac.kr/','cybercampus',1,{subscribed}),
                                  ('sogang-academic','학사','서강대학교','','https://www.sogang.ac.kr/','sogang',1,1);
                          INSERT INTO source_extensions VALUES('cybercampus','sogang_notices'),('sogang-academic','sogang_notices');
-                         ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                         ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                          PRAGMA user_version=19;",
                         notices = notices as i32,
                         subscribed = subscribed as i32,
@@ -559,7 +576,8 @@ mod tests {
             .unwrap()
             .connection
             .execute_batch(
-                "DROP TABLE studium_favorite_seats;
+                "DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules;
+                 DROP TABLE studium_favorite_seats;
                  ALTER TABLE studium_preferences DROP COLUMN interval_minutes;
                  ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                  UPDATE settings SET theme='dark',energy_profile='eco',interests='장학금';
@@ -615,7 +633,7 @@ mod tests {
             db.set_enabled("search", true).unwrap();
             db.connection
                 .execute_batch(
-                    "DROP TABLE calendar_todos; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                    "DROP TABLE calendar_todos; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                      DELETE FROM extension_preferences WHERE extension_id='calendar';
                      PRAGMA user_version=21;",
                 )
