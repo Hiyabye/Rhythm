@@ -115,6 +115,7 @@ test('map zoom is bounded and its keyboard scroll region pans and resets locally
   const larger = page.getByRole('button', { name: '배치도 확대', exact: true });
   const smaller = page.getByRole('button', { name: '배치도 축소', exact: true });
   await expect(map(page).locator('output')).toHaveText('100%');
+  const normalWidth = await map(page).locator('svg').getAttribute('width');
   for (let step = 0; step < 4; step++) await larger.click();
   await expect(map(page).locator('output')).toHaveText('200%');
   await expect(larger).toBeDisabled();
@@ -127,7 +128,9 @@ test('map zoom is bounded and its keyboard scroll region pans and resets locally
   await expect(viewport(page)).toHaveCSS('outline-style', 'solid');
   await page.getByRole('button', { name: '배치도 보기 초기화', exact: true }).click();
   await expect(map(page).locator('output')).toHaveText('100%');
-  expect(await viewport(page).evaluate((node) => [node.scrollLeft, node.scrollTop])).toEqual([0, 0]);
+  await expect.poll(() => viewport(page).evaluate((node) => ({
+    width: node.querySelector('svg')?.getAttribute('width'), left: node.scrollLeft, top: node.scrollTop,
+  }))).toEqual({ width: normalWidth, left: 0, top: 0 });
   for (let step = 0; step < 2; step++) await smaller.click();
   await expect(map(page).locator('output')).toHaveText('50%');
   await expect(smaller).toBeDisabled();
