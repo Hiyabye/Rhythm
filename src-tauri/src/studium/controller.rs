@@ -112,11 +112,31 @@ pub(crate) struct Controller {
     state: Mutex<State>,
     changed: Notify,
     notifications: Mutex<std::sync::Weak<super::notification::Notifications>>,
+    views: Mutex<std::sync::Weak<super::views::Views>>,
+    view_changed: Notify,
 }
 
 impl Controller {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+    pub(crate) fn attach_views(&self, views: &Arc<super::views::Views>) {
+        if let Ok(mut saved) = self.views.lock() {
+            *saved = Arc::downgrade(views);
+        }
+    }
+    pub(crate) fn capture_views_close(&self) -> Option<super::views::CloseTicket> {
+        self.views
+            .lock()
+            .ok()
+            .and_then(|saved| saved.upgrade())
+            .and_then(|views| views.capture_close())
+    }
+    pub(crate) fn refresh_views(&self) {
+        self.view_changed.notify_one();
+    }
+    pub(crate) async fn wait_for_view_change(&self) {
+        self.view_changed.notified().await;
     }
     pub(crate) fn attach_notifications(
         &self,
@@ -231,6 +251,7 @@ impl Controller {
             .collect();
         state.job = Some(job.clone());
         self.changed.notify_waiters();
+        self.refresh_views();
         let owner = self.clone();
         // The completion guard releases the task-owned admission lease and
         // signals waiters even if the task unwinds or is dropped.
@@ -264,6 +285,7 @@ impl Controller {
         }
         self.changed.notify_waiters();
         self.cancel_notifications();
+        self.refresh_views();
     }
     pub(crate) fn cancel_job(&self, id: u64) -> Result<(), String> {
         let state = self.state.lock().map_err(|_| "좌석 작업 잠금 오류")?;
@@ -295,6 +317,7 @@ impl Controller {
             state.results.clear();
             automatic::clear(&mut state);
         }
+        self.refresh_views();
     }
     fn fail_pending(&self, job: &Job, error: &str) {
         if let Ok(mut state) = self.state.lock() {
@@ -346,6 +369,7 @@ impl Controller {
             }
             *target = value;
         }
+        self.refresh_views();
         Ok(())
     }
     async fn execute<T: Transport>(
@@ -464,6 +488,7 @@ impl Drop for Completion {
         self.job.finished.store(true, Ordering::Release);
         self.job.done.notify_waiters();
         self.owner.changed.notify_waiters();
+        self.owner.refresh_views();
     }
 }
 

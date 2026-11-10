@@ -5,6 +5,7 @@ pub(crate) mod network;
 pub(crate) mod notification;
 pub(crate) mod parser;
 pub(crate) mod rooms;
+pub(crate) mod views;
 
 #[cfg(test)]
 mod live_tests;

@@ -484,6 +484,9 @@ impl Notifications {
             store.studium_set_view_room(&room)?;
             room
         };
+        if let Some(controller) = self.controller.upgrade() {
+            controller.refresh_views();
+        }
         if self.cancelled(run) {
             return Ok(false);
         }
