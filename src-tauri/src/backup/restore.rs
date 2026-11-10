@@ -653,19 +653,24 @@ pub(super) fn restore_fault_point(name: &str) {
 pub(super) fn restore_fault_point(_name: &str) {}
 
 /// Tokens refer to an earlier app installation's identities; never resurrect
-/// them from a backup. Pre-schema-7 databases get an empty table on upgrade.
+/// them from a backup. Older schemas get empty capability tables on upgrade.
 pub(super) fn clear_restored_activation_tokens(stage: &Path) -> Result<(), String> {
     let database = stage.join("rhythm.sqlite3");
     let connection = rusqlite::Connection::open(&database)
         .map_err(|_| "복원 데이터베이스를 열지 못했습니다.")?;
-    let exists: bool = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='notification_activation_tokens')",
-        [], |row| row.get(0),
-    ).map_err(|_| "복원 알림 상태를 확인하지 못했습니다.")?;
-    if exists {
-        connection
-            .execute("DELETE FROM notification_activation_tokens", [])
-            .map_err(|_| "복원 알림 상태를 초기화하지 못했습니다.")?;
+    for table in ["notification_activation_tokens", "studium_alert_tokens"] {
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                [table],
+                |row| row.get(0),
+            )
+            .map_err(|_| "복원 알림 상태를 확인하지 못했습니다.")?;
+        if exists {
+            connection
+                .execute(&format!("DELETE FROM {table}"), [])
+                .map_err(|_| "복원 알림 상태를 초기화하지 못했습니다.")?;
+        }
     }
     drop(connection);
     sync_file(&database)
