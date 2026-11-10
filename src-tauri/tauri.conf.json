@@ -41,6 +41,8 @@
       "../assets/licenses/native-tls-MIT.txt": "licenses/native-tls-MIT.txt",
       "../assets/licenses/hyper-tls-MIT.txt": "licenses/hyper-tls-MIT.txt",
       "../assets/licenses/tokio-native-tls-MIT.txt": "licenses/tokio-native-tls-MIT.txt",
+      "../assets/licenses/mac-usernotifications-MIT.txt": "licenses/mac-usernotifications-MIT.txt",
+      "../assets/licenses/mac-usernotifications-Apache-2.0.txt": "licenses/mac-usernotifications-Apache-2.0.txt",
       "binaries/llama/": "llama/"
     },
     "icon": [
