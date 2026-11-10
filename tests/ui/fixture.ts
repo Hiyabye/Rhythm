@@ -6,6 +6,9 @@ export interface FixtureOptions {
   studium?: Partial<StudiumSnapshot>;
   studiumSaveError?: boolean;
   studiumStartError?: boolean;
+  studiumAlertSaveError?: boolean;
+  pendingStudiumActivation?: string;
+  studiumActivationGate?: boolean;
   count?: number;
   saved?: boolean;
   queryError?: boolean;
@@ -187,6 +190,8 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       preferences: { room_ids: ['5'], view_room: '5' }, job_id: null, running: false, results: [],
       automatic: { active: false, interval_minutes: 5, next_check_at: null, error: null },
       favorites: Object.fromEntries(['19', '5', '6', '11', '15', '16', '18'].map((id) => [id, []])),
+      alert_rules: Object.fromEntries(['19', '5', '6', '11', '15', '16', '18'].map((id) => [id, { enabled: false, kind: 'remaining' as const, minimum: 1, version: 0 }])),
+      alert_error: null,
       ...copy(options.studium ?? {}),
     };
     const studiumStates = (status: 'not_checked' | 'loading' | 'cancelled') => studium.preferences.room_ids.map((room_id) => ({ room_id, status, result: null, error: null, checked_at: null }));
@@ -250,7 +255,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     let availableHandler: number | null = null;
     let autoUpdateCheck = options.autoUpdateCheck ?? true;
     let notificationHandler: number | null = null;
-    const fixture = { ai, analyses, options, entries, studium, studiumStatusDelay: 0, studiumSaveError: options.studiumSaveError ?? false, studiumCancelRequested: null as number | null, studiumJobAutomatic: studium.automatic.active && studium.running, calls: [] as { command: string; args: any }[], sourceDelay: options.sourceDelay ?? 0,
+    let studiumNotificationHandler: number | null = null;
+    let pendingStudiumActivation = options.pendingStudiumActivation ?? null;
+    const fixture = { ai, analyses, options, entries, studium, studiumStatusDelay: 0, studiumSaveError: options.studiumSaveError ?? false, studiumAlertSaveError: options.studiumAlertSaveError ?? false, studiumCancelRequested: null as number | null, studiumJobAutomatic: studium.automatic.active && studium.running, calls: [] as { command: string; args: any }[], sourceDelay: options.sourceDelay ?? 0,
       finishStudiumCancel() {
         if (this.studiumCancelRequested !== studium.job_id || !studium.running) return;
         studium.running = false;
@@ -266,6 +273,10 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         if (studium.automatic.active) studium.automatic.next_check_at = new Date(Date.now() + studium.automatic.interval_minutes * 60_000).toISOString();
       },
       setNotificationAuthorization: (status: string) => { notificationAuthorization = status; },
+      setNotificationSettings: (patch: Partial<ProactiveSettings>) => { Object.assign(proactiveSettings, copy(patch)); },
+      studiumActivationResolvers: [] as Array<() => void>,
+      studiumActivationCompleted: false,
+      releaseStudiumActivation() { this.studiumActivationResolvers.splice(0).forEach((release) => release()); },
       modelDirectoryResolvers: [] as Array<() => void>,
       releaseModelDirectory() { this.modelDirectoryResolvers.splice(0).forEach((release) => release()); },
       dialogs: [] as string[], dialogAnswers: [] as ('ok' | 'cancel')[], trashCalls: [] as { command: string; ids: number[] | null }[],
@@ -282,6 +293,11 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         const activation = { ...copy(payload), attempt_count: payload.attempt_count ?? 1, event_ids: [payload.event_id] };
         if (keepPending) pendingActivation = copy(activation);
         if (notificationHandler !== null) callbacks.get(notificationHandler)?.({ event: 'proactive://notification-clicked', id: eventId, payload: activation });
+      },
+      emitStudiumNotification: (roomId: string, keepPending = false) => {
+        if (studium.preferences.room_ids.includes(roomId) && snapshot.extensions.some((extension) => extension.id === 'studium' && extension.enabled)) studium.preferences.view_room = roomId;
+        if (keepPending) pendingStudiumActivation = roomId;
+        if (studiumNotificationHandler !== null) callbacks.get(studiumNotificationHandler)?.({ event: 'studium://notification-clicked', id: ++eventId, payload: roomId });
       },
       completeSync: () => { sync = { ...sync, running: false, message: '가져오기를 마쳤습니다.', active: [] }; },
       syncMode: (mode: string, page = 1) => { sync = { ...sync, running: true, mode, active: [board(mode, page)] }; },
@@ -304,6 +320,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         if (event === 'updater://progress') updaterHandler = null;
         if (event === 'updater://available') availableHandler = null;
         if (event === 'proactive://notification-clicked') notificationHandler = null;
+        if (event === 'studium://notification-clicked') studiumNotificationHandler = null;
       },
     }, __TAURI_INTERNALS__: {
       transformCallback: (callback: (event: { event: string; id: number; payload: unknown }) => void) => {
@@ -318,12 +335,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (args.event === 'updater://progress') updaterHandler = args.handler;
             if (args.event === 'updater://available') availableHandler = args.handler;
             if (args.event === 'proactive://notification-clicked') notificationHandler = args.handler;
+            if (args.event === 'studium://notification-clicked') studiumNotificationHandler = args.handler;
             eventId += 1;
             return eventId;
           case 'plugin:event|unlisten':
             if (args.event === 'updater://progress') updaterHandler = null;
             if (args.event === 'updater://available') availableHandler = null;
             if (args.event === 'proactive://notification-clicked') notificationHandler = null;
+            if (args.event === 'studium://notification-clicked') studiumNotificationHandler = null;
             return null;
           case 'plugin:dialog|message': {
             if (options.dialogError) throw '대화상자를 열 권한이 없습니다.';
@@ -419,6 +438,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             }
             return copy(snapshot);
           case 'studium_snapshot': return copy(studium);
+          case 'studium_notification_activation': {
+            const roomId = pendingStudiumActivation;
+            pendingStudiumActivation = null;
+            if (roomId && studium.preferences.room_ids.includes(roomId) && snapshot.extensions.some((extension) => extension.id === 'studium' && extension.enabled)) studium.preferences.view_room = roomId;
+            if (options.studiumActivationGate) await new Promise<void>((resolve) => fixture.studiumActivationResolvers.push(resolve));
+            fixture.studiumActivationCompleted = true;
+            return roomId;
+          }
           case 'studium_status': {
             const value = copy(studium);
             await wait(fixture.studiumStatusDelay);
@@ -444,6 +471,13 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             const numbers = args.seatNumbers as number[];
             if (!room || !Array.isArray(numbers) || numbers.some((number) => !Number.isSafeInteger(number) || number < 1 || number > room.capacity) || new Set(numbers).size !== numbers.length) throw '선호 좌석 번호를 확인해 주세요.';
             studium.favorites[args.roomId] = [...numbers].sort((a, b) => a - b);
+            return copy(studium);
+          }
+          case 'studium_save_alert': {
+            if (fixture.studiumAlertSaveError) throw '좌석 알림 조건을 저장하지 못했습니다.';
+            const room = studium.rooms.find((value) => value.id === args.roomId);
+            if (!room || !['remaining', 'preferred'].includes(args.kind) || !Number.isSafeInteger(args.minimum) || args.minimum < 1 || args.minimum > room.capacity || (args.enabled && args.kind === 'preferred' && !studium.favorites[args.roomId]?.length)) throw '좌석 알림 조건을 확인해 주세요.';
+            studium.alert_rules[args.roomId] = { enabled: Boolean(args.enabled), kind: args.kind, minimum: args.minimum, version: (studium.alert_rules[args.roomId]?.version ?? 0) + 1 };
             return copy(studium);
           }
           case 'studium_save_interval':
