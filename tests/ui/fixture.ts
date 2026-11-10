@@ -1,14 +1,22 @@
 import type { Page } from '@playwright/test';
 import analysisContract from '../../src/lib/analysis-contract.json' with { type: 'json' };
-import type { AiOperation, CalendarTodo, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation, StudiumSnapshot } from '../../src/lib/types';
+import type { AiOperation, CalendarTodo, ClockFormat, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation, StudiumMiniStatus, StudiumSnapshot, Theme } from '../../src/lib/types';
 
 export interface FixtureOptions {
+  clockFormat?: ClockFormat;
   studium?: Partial<StudiumSnapshot>;
   studiumSaveError?: boolean;
   studiumStartError?: boolean;
   studiumAlertSaveError?: boolean;
   pendingStudiumActivation?: string;
   studiumActivationGate?: boolean;
+  studiumSnapshotError?: boolean;
+  mini?: Partial<StudiumMiniStatus>;
+  miniOpenError?: boolean;
+  miniOnTopError?: boolean;
+  miniCloseError?: boolean;
+  miniShowMainError?: boolean;
+  miniSettingsGate?: boolean;
   count?: number;
   saved?: boolean;
   queryError?: boolean;
@@ -169,7 +177,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       if (consumeActivation) pendingActivation = null;
       return snapshot;
     };
-    const snapshot = { settings: { theme: 'light', energy_profile: 'eco', interests: '', clock_format: '12h', auto_trash_months: 0 },
+    const snapshot = { settings: { theme: 'light', energy_profile: 'eco', interests: '', clock_format: options.clockFormat ?? '12h', auto_trash_months: 0 },
       extensions: ([['sogang_notices', '서강대학교 공지'], ['cybercampus', '사이버캠퍼스'], ['search', '탐색'], ['saved', '보관함'],
         ['recommendations', '나를 위한 소식'], ['week', '앞으로 7일'], ['calendar', '캘린더'], ['ai', 'AI 분석'], ['proactive', '알림·백그라운드'], ['studium', '열람실']] as const).map(([id, display_name]) => ({
         id, display_name, description: `${display_name} 설명`, available: true,
@@ -257,7 +265,22 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     let notificationHandler: number | null = null;
     let studiumNotificationHandler: number | null = null;
     let pendingStudiumActivation = options.pendingStudiumActivation ?? null;
-    const fixture = { ai, analyses, options, entries, studium, studiumStatusDelay: 0, studiumSaveError: options.studiumSaveError ?? false, studiumAlertSaveError: options.studiumAlertSaveError ?? false, studiumCancelRequested: null as number | null, studiumJobAutomatic: studium.automatic.active && studium.running, calls: [] as { command: string; args: any }[], sourceDelay: options.sourceDelay ?? 0,
+    const stateListeners = new Map<number, number>();
+    const themeListeners = new Map<number, number>();
+    const clockListeners = new Map<number, number>();
+    const mini: StudiumMiniStatus = { open: new URLSearchParams(location.search).get('studium-mini') === '1', always_on_top: false, ...copy(options.mini ?? {}) };
+    const emitStudiumState = () => {
+      for (const [id, handler] of stateListeners) callbacks.get(handler)?.({ event: 'studium://state-changed', id, payload: null });
+    };
+    const emitTheme = (value: Theme) => {
+      snapshot.settings.theme = value;
+      for (const [id, handler] of themeListeners) callbacks.get(handler)?.({ event: 'rhythm://theme-changed', id, payload: value });
+    };
+    const emitClockFormat = (value: ClockFormat) => {
+      snapshot.settings.clock_format = value;
+      for (const [id, handler] of clockListeners) callbacks.get(handler)?.({ event: 'rhythm://clock-format-changed', id, payload: value });
+    };
+    const fixture = { ai, analyses, options, entries, studium, mini, emitStudiumState, emitTheme, emitClockFormat, studiumStateListenerCount: () => stateListeners.size, themeListenerCount: () => themeListeners.size, clockListenerCount: () => clockListeners.size, miniSettingsResolvers: [] as Array<() => void>, releaseMiniSettings() { this.miniSettingsResolvers.splice(0).forEach((release) => release()); }, studiumSnapshotGate: false, studiumSnapshotResolvers: [] as Array<() => void>, releaseStudiumSnapshots() { this.studiumSnapshotResolvers.splice(0).forEach((release) => release()); }, studiumStatusDelay: 0, studiumSaveError: options.studiumSaveError ?? false, studiumAlertSaveError: options.studiumAlertSaveError ?? false, studiumCancelRequested: null as number | null, studiumJobAutomatic: studium.automatic.active && studium.running, calls: [] as { command: string; args: any }[], sourceDelay: options.sourceDelay ?? 0,
       finishStudiumCancel() {
         if (this.studiumCancelRequested !== studium.job_id || !studium.running) return;
         studium.running = false;
@@ -265,12 +288,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         this.studiumCancelRequested = null;
         this.studiumJobAutomatic = false;
         if (studium.automatic.active) studium.automatic.next_check_at = new Date(Date.now() + studium.automatic.interval_minutes * 60_000).toISOString();
+        emitStudiumState();
       },
       finishStudiumCycle(results: StudiumSnapshot['results']) {
         studium.results = copy(results);
         studium.running = false;
         this.studiumJobAutomatic = false;
         if (studium.automatic.active) studium.automatic.next_check_at = new Date(Date.now() + studium.automatic.interval_minutes * 60_000).toISOString();
+        emitStudiumState();
       },
       setNotificationAuthorization: (status: string) => { notificationAuthorization = status; },
       setNotificationSettings: (patch: Partial<ProactiveSettings>) => { Object.assign(proactiveSettings, copy(patch)); },
@@ -316,11 +341,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     let calendarId = Math.max(0, ...calendarTodos.map((todo) => todo.id));
     const cybercampus = { id: options.cybercampusId ?? null, rejected: false, courses: options.cybercampusId ? [{ course_key: 'A1', name: '자료구조실습', year: 2026, term: '3' }] : [] };
     Object.assign(window, { isTauri: true, __fixture: fixture, __TAURI_EVENT_PLUGIN_INTERNALS__: {
-      unregisterListener: (event: string, _id: number) => {
+      unregisterListener: (event: string, id: number) => {
         if (event === 'updater://progress') updaterHandler = null;
         if (event === 'updater://available') availableHandler = null;
         if (event === 'proactive://notification-clicked') notificationHandler = null;
         if (event === 'studium://notification-clicked') studiumNotificationHandler = null;
+        if (event === 'studium://state-changed') stateListeners.delete(id);
+        if (event === 'rhythm://theme-changed') themeListeners.delete(id);
+        if (event === 'rhythm://clock-format-changed') clockListeners.delete(id);
       },
     }, __TAURI_INTERNALS__: {
       transformCallback: (callback: (event: { event: string; id: number; payload: unknown }) => void) => {
@@ -336,6 +364,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (args.event === 'updater://available') availableHandler = args.handler;
             if (args.event === 'proactive://notification-clicked') notificationHandler = args.handler;
             if (args.event === 'studium://notification-clicked') studiumNotificationHandler = args.handler;
+            if (args.event === 'studium://state-changed') stateListeners.set(eventId + 1, args.handler);
+            if (args.event === 'rhythm://theme-changed') themeListeners.set(eventId + 1, args.handler);
+            if (args.event === 'rhythm://clock-format-changed') clockListeners.set(eventId + 1, args.handler);
             eventId += 1;
             return eventId;
           case 'plugin:event|unlisten':
@@ -343,6 +374,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (args.event === 'updater://available') availableHandler = null;
             if (args.event === 'proactive://notification-clicked') notificationHandler = null;
             if (args.event === 'studium://notification-clicked') studiumNotificationHandler = null;
+            if (args.event === 'studium://state-changed') stateListeners.delete(args.eventId);
+            if (args.event === 'rhythm://theme-changed') themeListeners.delete(args.eventId);
+            if (args.event === 'rhythm://clock-format-changed') clockListeners.delete(args.eventId);
             return null;
           case 'plugin:dialog|message': {
             if (options.dialogError) throw '대화상자를 열 권한이 없습니다.';
@@ -396,7 +430,11 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (options.notificationRequestError) throw '알림 권한 요청을 사용할 수 없습니다.';
             notificationAuthorization = options.notificationRequestResult ?? 'authorized';
             return { status: notificationAuthorization, test_notification_requested: options.notificationTestRequested ?? Boolean(options.windows) };
-          case 'get_snapshot': return copy(snapshot);
+          case 'get_snapshot': {
+            const value = copy(snapshot);
+            if (options.miniSettingsGate) await new Promise<void>((resolve) => fixture.miniSettingsResolvers.push(resolve));
+            return value;
+          }
           case 'proactive_snapshot': return copy(proactiveSnapshot(true));
           case 'proactive_history': return copy(history.slice(0, args.limit ?? 200));
           case 'proactive_save':
@@ -428,16 +466,39 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           }
           case 'save_settings':
             if (options.settingsError) throw '설정을 저장하지 못했습니다.';
-            snapshot.settings = copy(args.settings); return copy(snapshot);
+            snapshot.settings = copy(args.settings); emitTheme(snapshot.settings.theme as Theme); emitClockFormat(snapshot.settings.clock_format); return copy(snapshot);
           case 'set_extension':
             snapshot.extensions.find((extension) => extension.id === args.id)!.enabled = args.enabled;
             if (args.id === 'studium' && !args.enabled) {
               studium.running = false; studium.job_id = null; studium.results = studiumStates('not_checked');
               studium.automatic = { ...studium.automatic, active: false, next_check_at: null, error: null };
               fixture.studiumCancelRequested = null; fixture.studiumJobAutomatic = false;
+              mini.open = false; mini.always_on_top = false;
+              emitStudiumState();
             }
             return copy(snapshot);
-          case 'studium_snapshot': return copy(studium);
+          case 'studium_open_mini':
+            if (options.miniOpenError) throw '미니 창을 열지 못했습니다.';
+            mini.open = true;
+            return copy(mini);
+          case 'studium_close_mini':
+            if (options.miniCloseError) throw '미니 창을 닫지 못했습니다.';
+            mini.open = false; mini.always_on_top = false; emitStudiumState();
+            return null;
+          case 'studium_mini_status': return copy(mini);
+          case 'studium_mini_set_on_top':
+            if (options.miniOnTopError) throw '항상 위 표시를 바꾸지 못했습니다.';
+            mini.always_on_top = Boolean(args.enabled);
+            return copy(mini);
+          case 'studium_mini_show_main':
+            if (options.miniShowMainError) throw '기본 창을 열지 못했습니다.';
+            return null;
+          case 'studium_snapshot': {
+            if (options.studiumSnapshotError) throw '좌석 현황을 불러오지 못했습니다.';
+            const value = copy(studium);
+            if (fixture.studiumSnapshotGate) await new Promise<void>((resolve) => fixture.studiumSnapshotResolvers.push(resolve));
+            return value;
+          }
           case 'studium_notification_activation': {
             const roomId = pendingStudiumActivation;
             pendingStudiumActivation = null;
@@ -458,12 +519,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (!ids.length || ids.length > 7 || new Set(ids).size !== ids.length || ids.some((id) => !studium.rooms.some((room) => room.id === id)) || !ids.includes(args.viewRoom)) throw '확인할 열람실을 확인해 주세요.';
             studium.preferences = { room_ids: studium.rooms.filter((room) => ids.includes(room.id)).map((room) => room.id), view_room: args.viewRoom };
             studium.results = studium.preferences.room_ids.map((room_id) => studium.results.find((value) => value.room_id === room_id) ?? { room_id, status: 'not_checked', result: null, error: null, checked_at: null });
+            emitStudiumState();
             return copy(studium);
           }
           case 'studium_set_view_room':
             if (fixture.studiumSaveError) throw '표시할 열람실을 저장하지 못했습니다.';
             if (!studium.preferences.room_ids.includes(args.roomId)) throw '선택한 열람실을 확인해 주세요.';
             studium.preferences.view_room = args.roomId;
+            emitStudiumState();
             return copy(studium);
           case 'studium_save_favorites': {
             if (fixture.studiumSaveError) throw '선호 좌석을 저장하지 못했습니다.';
@@ -471,6 +534,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             const numbers = args.seatNumbers as number[];
             if (!room || !Array.isArray(numbers) || numbers.some((number) => !Number.isSafeInteger(number) || number < 1 || number > room.capacity) || new Set(numbers).size !== numbers.length) throw '선호 좌석 번호를 확인해 주세요.';
             studium.favorites[args.roomId] = [...numbers].sort((a, b) => a - b);
+            emitStudiumState();
             return copy(studium);
           }
           case 'studium_save_alert': {
@@ -478,12 +542,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             const room = studium.rooms.find((value) => value.id === args.roomId);
             if (!room || !['remaining', 'preferred'].includes(args.kind) || !Number.isSafeInteger(args.minimum) || args.minimum < 1 || args.minimum > room.capacity || (args.enabled && args.kind === 'preferred' && !studium.favorites[args.roomId]?.length)) throw '좌석 알림 조건을 확인해 주세요.';
             studium.alert_rules[args.roomId] = { enabled: Boolean(args.enabled), kind: args.kind, minimum: args.minimum, version: (studium.alert_rules[args.roomId]?.version ?? 0) + 1 };
+            emitStudiumState();
             return copy(studium);
           }
           case 'studium_save_interval':
             if (fixture.studiumSaveError) throw '자동 확인 간격을 저장하지 못했습니다.';
             if (!Number.isInteger(args.intervalMinutes) || args.intervalMinutes < 2 || args.intervalMinutes > 60) throw '2부터 60 사이의 정수를 입력해 주세요.';
             studium.automatic.interval_minutes = args.intervalMinutes;
+            emitStudiumState();
             return copy(studium);
           case 'studium_automatic_start':
             if (options.studiumStartError) throw '좌석 확인을 시작하지 못했습니다.';
@@ -496,6 +562,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
                 fixture.studiumJobAutomatic = true;
               }
             }
+            emitStudiumState();
             return copy(studium);
           case 'studium_automatic_pause':
             studium.automatic.active = false;
@@ -504,6 +571,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
               fixture.studiumCancelRequested = studium.job_id;
               fixture.finishStudiumCancel();
             }
+            emitStudiumState();
             return copy(studium);
           case 'studium_start':
             if (options.studiumStartError) throw '좌석 확인을 시작하지 못했습니다.';
@@ -514,12 +582,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             fixture.studiumJobAutomatic = false;
             studium.automatic.next_check_at = null;
             studium.results = studiumStates('loading');
+            emitStudiumState();
             return copy(studium);
           case 'studium_cancel':
             if (args.jobId === studium.job_id) {
               // A cancellation request does not complete the owning task. Tests
               // explicitly release it after checking the still-running state.
               fixture.studiumCancelRequested = args.jobId;
+              emitStudiumState();
             }
             return copy(studium);
           case 'complete_onboarding': snapshot.onboarding_completed = true; return copy(snapshot);
