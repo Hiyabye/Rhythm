@@ -20,7 +20,7 @@ test('Studium is opt-in and opening or selecting rooms never starts a lookup', a
   await page.goto('/');
   await expect(nav(page).getByRole('button', { name: '열람실', exact: true })).toHaveCount(0);
   await openSettings(page, '확장 기능');
-  await page.getByRole('switch', { name: 'Studium 사용 설정', exact: true }).click();
+  await page.getByRole('switch', { name: '열람실 사용 설정', exact: true }).click();
   await nav(page).getByRole('button', { name: '열람실', exact: true }).click();
   await expect(page.getByRole('region', { name: '로욜라 인벤툼 II 좌석 정보' })).toContainText('아직 확인하지 않았습니다');
   await expect.poll(() => callCount(page, 'studium_snapshot')).toBe(1);
@@ -189,9 +189,9 @@ test('turning Studium off clears memory and re-enabling never queries automatica
   await openStudium(page);
   await expect(page.locator('.seat-numbers')).toContainText('84번');
   await openSettings(page, '확장 기능');
-  await page.getByRole('switch', { name: 'Studium 사용 설정', exact: true }).click();
+  await page.getByRole('switch', { name: '열람실 사용 설정', exact: true }).click();
   await expect(nav(page).getByRole('button', { name: '열람실', exact: true })).toHaveCount(0);
-  await page.getByRole('switch', { name: 'Studium 사용 설정', exact: true }).click();
+  await page.getByRole('switch', { name: '열람실 사용 설정', exact: true }).click();
   await nav(page).getByRole('button', { name: '열람실', exact: true }).click();
   await expect(page.getByRole('region', { name: '로욜라 인벤툼 II 좌석 정보' })).toContainText('아직 확인하지 않았습니다');
   expect(await callCount(page, 'studium_start')).toBe(0);
