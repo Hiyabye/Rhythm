@@ -5,6 +5,7 @@ export type ClockFormat = '12h' | '24h';
 export type AutoTrashMonths = 0 | 1 | 3 | 6 | 12 | 24;
 export interface StudiumRoom { id: string; name: string; label: string; capacity: number }
 export interface StudiumPreferences { room_ids: string[]; view_room: string }
+export interface StudiumAlertRule { enabled: boolean; kind: 'remaining' | 'preferred'; minimum: number; version: number }
 export interface StudiumSeatData {
   total: number;
   used: number;
@@ -28,6 +29,8 @@ export interface StudiumSnapshot {
   results: StudiumRoomState[];
   automatic: { active: boolean; interval_minutes: number; next_check_at: string | null; error: string | null };
   favorites: Record<string, number[]>;
+  alert_rules: Record<string, StudiumAlertRule>;
+  alert_error: string | null;
 }
 export interface PersonalizationProfile {
   university: string;

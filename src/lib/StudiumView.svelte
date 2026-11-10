@@ -1,13 +1,13 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { archiveError, timeOptions } from './archive-format';
+  import { archiveError, timeOptions, wallTime } from './archive-format';
   import { clock as clockSetting } from './clock.svelte';
   import Hint from './Hint.svelte';
   import { fade } from './motion';
-  import type { StudiumRoomState, StudiumSnapshot } from './types';
+  import type { NotificationAuthorization, ProactiveActivation, ProactiveSettings, ProactiveSnapshot, StudiumAlertRule, StudiumRoomState, StudiumSnapshot } from './types';
 
-  let { desktop }: { desktop: boolean } = $props();
+  let { desktop, activation, proactiveEnabled, onactivation, onsettings }: { desktop: boolean; activation: number; proactiveEnabled: boolean; onactivation: (activation: ProactiveActivation) => void; onsettings: () => void } = $props();
   let snapshot = $state<StudiumSnapshot | null>(null);
   let draft = $state<string[]>([]);
   let intervalDraft = $state<number | undefined>(5);
@@ -16,6 +16,14 @@
   let favoritesDraft = $state('');
   let favoritesEditing = $state(false);
   let searchDraft = $state('');
+  let alertEditing = $state(false);
+  let alertEnabled = $state(false);
+  let alertKind = $state<StudiumAlertRule['kind']>('remaining');
+  let alertMinimum = $state<number | undefined>(1);
+  let notificationSettings = $state<ProactiveSettings | null>(null);
+  let notificationAuthorization = $state<NotificationAuthorization>('unknown');
+  let notificationLoading = $state(false);
+  let notificationError = $state('');
   let viewRoom = $state('');
   let loading = $state(true);
   let busy = $state(false);
@@ -23,7 +31,8 @@
   let pollError = $state('');
   let notice = $state('');
   let now = $state(Date.now());
-  let mounted = false;
+  let mounted = $state(false);
+  let handledActivation = 0;
   let generation = 0;
   let polling = false;
   let startButton = $state<HTMLButtonElement>();
@@ -31,6 +40,7 @@
   let automaticButton = $state<HTMLButtonElement>();
   let favoritesInput = $state<HTMLInputElement>();
   let searchInput = $state<HTMLInputElement>();
+  let alertToggle = $state<HTMLInputElement>();
   let keepAutomaticFocus = false;
   // Set when the user operates 지금 확인/확인 취소: disabling or removing the
   // pressed button would otherwise drop keyboard focus to the page body.
@@ -47,10 +57,15 @@
   let searchActive = $derived(searchDraft.trim() !== '');
   let searchInvalid = $derived(searchActive && (!/^\d+$/.test(searchDraft.trim()) || !Number.isSafeInteger(Number(searchDraft)) || Number(searchDraft) < 1 || Number(searchDraft) > (room?.capacity ?? 0)));
   let filteredNumbers = $derived(result?.result?.seat_numbers?.filter((number) => !searchActive || (!searchInvalid && number === Number(searchDraft))) ?? []);
+  let savedAlert = $derived(snapshot?.alert_rules[viewRoom] ?? { enabled: false, kind: 'remaining' as const, minimum: 1, version: 0 });
+  let effectiveAlertMinimum = $derived(alertKind === 'preferred' ? 1 : alertMinimum);
+  let alertInvalid = $derived(effectiveAlertMinimum === undefined || !Number.isInteger(effectiveAlertMinimum) || effectiveAlertMinimum < 1 || effectiveAlertMinimum > (room?.capacity ?? 0) || (alertEnabled && alertKind === 'preferred' && !savedFavorites.length));
+  let alertDirty = $derived(alertEnabled !== savedAlert.enabled || alertKind !== savedAlert.kind || effectiveAlertMinimum !== savedAlert.minimum);
 
-  function apply(value: StudiumSnapshot, resetDraft = false, resetInterval = false, resetFavorites = false) {
+  function apply(value: StudiumSnapshot, resetDraft = false, resetInterval = false, resetFavorites = false, resetAlert = false) {
     if (favoritesRoom !== value.preferences.view_room) {
       favoritesEditing = false;
+      alertEditing = false;
       searchDraft = '';
     }
     if (resetFavorites) favoritesEditing = false;
@@ -61,9 +76,11 @@
     if (resetInterval) intervalEditing = false;
     if (!intervalEditing) intervalDraft = value.automatic.interval_minutes;
     if (!favoritesEditing) favoritesDraft = (value.favorites[viewRoom] ?? []).join(', ');
+    if (resetAlert) alertEditing = false;
+    if (!alertEditing) applyAlertDraft(value.alert_rules[viewRoom]);
   }
 
-  async function load() {
+  async function load(resetEditors = false) {
     if (!desktop) return;
     const token = ++generation;
     loading = true;
@@ -71,7 +88,10 @@
     pollError = '';
     try {
       const value = await invoke<StudiumSnapshot>('studium_snapshot');
-      if (mounted && token === generation) apply(value, true, true);
+      if (mounted && token === generation) {
+        if (resetEditors) searchDraft = '';
+        apply(value, true, true, resetEditors, resetEditors);
+      }
     } catch (reason) {
       if (mounted && token === generation) error = archiveError(reason);
     } finally {
@@ -91,7 +111,7 @@
     } finally { polling = false; }
   }
 
-  async function act(command: string, args: Record<string, unknown> = {}, resetDraft = false, success = '', resetInterval = false, resetFavorites = false) {
+  async function act(command: string, args: Record<string, unknown> = {}, resetDraft = false, success = '', resetInterval = false, resetFavorites = false, resetAlert = false) {
     if (!snapshot || busy) return;
     const token = ++generation;
     busy = true;
@@ -100,7 +120,7 @@
     notice = '';
     try {
       const value = await invoke<StudiumSnapshot>(command, args);
-      if (mounted && token === generation) { apply(value, resetDraft, resetInterval, resetFavorites); notice = success; }
+      if (mounted && token === generation) { apply(value, resetDraft, resetInterval, resetFavorites, resetAlert); notice = success; }
     } catch (reason) {
       if (mounted && token === generation) {
         viewRoom = snapshot.preferences.view_room;
@@ -167,6 +187,54 @@
     return available.length ? `이번 조회에서 빈 선호 좌석: ${available.join(', ')}번` : '이번 조회에서 빈 선호 좌석이 없습니다.';
   }
 
+  function applyAlertDraft(rule: StudiumAlertRule | undefined) {
+    alertEnabled = rule?.enabled ?? false;
+    alertKind = rule?.kind ?? 'remaining';
+    alertMinimum = rule?.minimum ?? 1;
+  }
+
+  function cancelAlertEdit() {
+    alertEditing = false;
+    applyAlertDraft(savedAlert);
+    alertToggle?.focus();
+  }
+
+  async function saveAlert() {
+    if (!alertDirty || alertInvalid) return;
+    await act('studium_save_alert', { roomId: viewRoom, enabled: alertEnabled, kind: alertKind, minimum: effectiveAlertMinimum }, false, '좌석 알림 조건을 저장했습니다.', false, false, true);
+    await tick();
+    const active = document.activeElement;
+    if (mounted && (active === document.body || active?.id === 'main' || (active instanceof HTMLButtonElement && active.disabled && alertToggle?.closest('form')?.contains(active)))) alertToggle?.focus();
+  }
+
+  async function loadNotificationContext() {
+    if (!desktop || notificationLoading) return;
+    notificationLoading = true;
+    notificationError = '';
+    const [settings, authorization] = await Promise.allSettled([
+      invoke<ProactiveSnapshot>('proactive_snapshot'), invoke<string>('notification_authorization'),
+    ]);
+    if (!mounted) return;
+    if (settings.status === 'fulfilled') {
+      notificationSettings = settings.value.settings;
+      if (settings.value.pending_activation) onactivation(settings.value.pending_activation);
+    } else { notificationSettings = null; notificationError = archiveError(settings.reason); }
+    if (authorization.status === 'fulfilled') {
+      const value = authorization.value;
+      notificationAuthorization = ['authorized', 'provisional', 'ephemeral', 'granted'].includes(value) ? 'granted'
+        : value === 'denied' || value === 'not_determined' || value === 'unavailable' ? value : 'unknown';
+    } else notificationAuthorization = 'unavailable';
+    notificationLoading = false;
+  }
+
+  function notificationPolicyStatus(): string {
+    if (!proactiveEnabled) return '알림·백그라운드 확장 기능이 꺼져 있어 좌석 알림을 보내지 않습니다.';
+    if (!notificationSettings) return '전체 알림 설정을 확인하지 못했습니다.';
+    if (!notificationSettings.notifications_enabled) return '전체 운영체제 알림이 꺼져 있어 좌석 알림을 보내지 않습니다.';
+    const labels = { granted: '운영체제 알림 권한이 허용되어 있습니다.', denied: '운영체제 알림 권한이 거부되어 있습니다. 알림 설정에서 허용해 주세요.', not_determined: '운영체제 알림 권한을 아직 허용하지 않았습니다. 알림 설정에서 직접 권한을 확인해 주세요.', unavailable: '이 환경에서는 운영체제 알림을 사용할 수 없습니다.', unknown: '운영체제 알림 권한을 확인할 수 없습니다.' };
+    return labels[notificationAuthorization];
+  }
+
   function toggleAutomatic() {
     keepAutomaticFocus = true;
     void act(snapshot?.automatic.active ? 'studium_automatic_pause' : 'studium_automatic_start');
@@ -213,6 +281,13 @@
   }
 
   $effect(() => {
+    const token = activation;
+    if (!mounted || token === handledActivation) return;
+    handledActivation = token;
+    void load(true);
+  });
+
+  $effect(() => {
     const target = snapshot?.running ? cancelButton : busy ? undefined : startButton;
     if (!keepActionFocus || !target || target.disabled) return;
     const active = document.activeElement;
@@ -233,9 +308,11 @@
   }
 
   onMount(() => {
+    handledActivation = activation;
     mounted = true;
     if (desktop) void load();
     else loading = false;
+    if (desktop) void loadNotificationContext();
     const pollTimer = window.setInterval(() => void poll(), 500);
     const tick = () => now = Date.now();
     const clockTimer = window.setInterval(tick, 1000);
@@ -258,7 +335,7 @@
   {:else}
     {#if error || pollError}<p class="archive-error" role="alert">{error || pollError}</p>{/if}
     {#if loading}<p class="loading" role="status">열람실 설정을 불러오는 중입니다…</p>
-    {:else if !snapshot}<button class="button secondary" onclick={load}>다시 불러오기</button>
+    {:else if !snapshot}<button class="button secondary" onclick={() => void load()}>다시 불러오기</button>
     {:else}
       <section aria-labelledby="studium-targets-title">
         <div class="section-heading"><h2 id="studium-targets-title">확인할 열람실</h2><Hint label="확인할 열람실">선택하고 저장한 열람실을 지금 확인 버튼으로 한 번에 확인합니다. 선택만 바꾸면 학교에 요청하지 않습니다. 조회 결과는 앱을 종료하면 지워집니다.</Hint></div>
@@ -311,6 +388,26 @@
             <p class="favorite-availability" role="status">{favoriteAvailability()}</p>
             <p class="editor-help">표시할 열람실을 바꾸면 저장하지 않은 선호 번호와 검색을 초기화합니다. 조회 대상에서 뺀 방의 선호 설정은 유지합니다.</p>
           </section>
+          <section class="alert-editor" aria-labelledby="studium-alert-title">
+            <h4 id="studium-alert-title">좌석 알림 조건</h4>
+            <form onsubmit={(event) => { event.preventDefault(); void saveAlert(); }}>
+              <label class="alert-toggle"><input type="checkbox" bind:this={alertToggle} bind:checked={alertEnabled} onchange={() => alertEditing = true} disabled={busy} />이 열람실 좌석 알림</label>
+              <label for="studium-alert-kind">알림 조건</label>
+              <select id="studium-alert-kind" bind:value={alertKind} onchange={() => alertEditing = true} disabled={busy}><option value="remaining">빈 좌석 수</option><option value="preferred">선호 좌석 중 빈자리</option></select>
+              {#if alertKind === 'remaining'}<label for="studium-alert-minimum">알림을 보낼 최소 빈 좌석 수</label><input id="studium-alert-minimum" type="number" min="1" max={room?.capacity} step="1" bind:value={alertMinimum} oninput={() => alertEditing = true} disabled={busy} aria-invalid={alertInvalid ? 'true' : undefined} aria-describedby="studium-alert-help" />{/if}
+              <div class="editor-actions"><button class="button secondary small" type="submit" disabled={busy || !alertDirty || alertInvalid}>알림 조건 저장</button><button class="button secondary small" type="button" disabled={busy || !alertEditing} onclick={cancelAlertEdit}>알림 조건 변경 취소</button></div>
+            </form>
+            {#if alertKind === 'preferred' && !savedFavorites.length}<p class="validation editor-help" role="status">선호 좌석 알림을 켜려면 이 방의 선호 번호를 먼저 저장해 주세요.</p>
+            {:else if alertInvalid}<p class="validation editor-help" role="status">1부터 {room?.capacity} 사이의 정수를 입력해 주세요.</p>{/if}
+            <p class="saved-alert">저장한 조건: {savedAlert.enabled ? savedAlert.kind === 'remaining' ? `켜짐 · 빈 좌석 ${savedAlert.minimum}석 이상` : '켜짐 · 선호 좌석 중 빈자리' : '꺼짐'}</p>
+            <p class="editor-help" id="studium-alert-help">최신 조회가 조건을 처음 만족하면 한 번 알립니다. 이후 확인에 성공한 결과가 조건을 벗어났다가 다시 만족할 때 다시 알립니다. 조회 실패로 반복 알리지 않습니다. 조건 저장만으로 조회하거나 알리지 않습니다.</p>
+            <p class="notification-policy" role="status">{notificationLoading ? '전체 알림 설정과 권한을 확인하고 있습니다.' : notificationPolicyStatus()}</p>
+            {#if notificationSettings?.quiet_hours.enabled}<p class="editor-help">조용한 시간 {wallTime(notificationSettings.quiet_hours.start, clockSetting.format)}–{wallTime(notificationSettings.quiet_hours.end, clockSetting.format)}(PC 현지 시각)에는 알리지 않습니다.</p>{/if}
+            <p class="editor-help">전체 알림의 10분당 최대 3회 제한을 함께 적용합니다. 조용한 시간이나 빈도 제한으로 보내지 못하면 다음 최신 조회에서 다시 판단합니다. 알림을 눌러도 빈자리가 유지된다고 보장하지 않습니다.</p>
+            <div class="editor-actions"><button class="button secondary small" onclick={onsettings}>{proactiveEnabled ? '알림 설정 열기' : '확장 기능 설정 열기'}</button><button class="button secondary small" disabled={notificationLoading} onclick={() => void loadNotificationContext()}>알림 상태 새로 확인</button></div>
+            {#if notificationError}<p class="archive-error" role="alert">{notificationError}</p>{/if}
+            {#if snapshot.alert_error}<p class="archive-error" role="alert">좌석 알림 전달 상태: {snapshot.alert_error}</p>{/if}
+          </section>
           <div class="seat-search"><label for="studium-seat-search">빈 좌석 번호 검색</label><input id="studium-seat-search" type="search" inputmode="numeric" bind:this={searchInput} bind:value={searchDraft} disabled={busy} aria-invalid={searchInvalid ? 'true' : undefined} aria-describedby={searchInvalid ? 'studium-search-error' : undefined} /><button class="button secondary small" disabled={busy || !searchActive} onclick={() => { searchDraft = ''; searchInput?.focus(); }}>검색 해제</button></div>
           {#if searchInvalid}<p class="validation editor-help" id="studium-search-error" role="status">1부터 {room?.capacity} 사이의 번호 하나를 입력해 주세요.</p>{/if}
           {#if result?.result}
@@ -358,15 +455,17 @@
   .view-picker { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; font-size: 13px; }
   select { max-width: 100%; min-width: 0; padding: 5px 8px; color: var(--text); background: var(--field); border: 1px solid var(--line-strong); border-radius: 6px; }
   .room-detail { padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--pane); }
-  .favorites-editor { margin: 0 0 16px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
-  .favorites-editor form { display: grid; gap: 8px; font-size: 13px; }
-  .favorites-editor input, .seat-search input { width: 100%; min-width: 0; padding: 6px 8px; color: var(--text); background: var(--field); border: 1px solid var(--line-strong); border-radius: 6px; }
+  .favorites-editor, .alert-editor { margin: 0 0 16px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+  .favorites-editor form, .alert-editor form { display: grid; gap: 8px; font-size: 13px; }
+  .favorites-editor input, .seat-search input, .alert-editor input[type=number] { width: 100%; min-width: 0; padding: 6px 8px; color: var(--text); background: var(--field); border: 1px solid var(--line-strong); border-radius: 6px; }
+  .alert-editor input[type=number] { max-width: 120px; }
+  .alert-toggle { display: flex; align-items: center; gap: 8px; }
   .editor-actions, .seat-search { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .seat-search { margin-bottom: 14px; font-size: 13px; }
   .seat-search input { width: 110px; }
   .editor-help { margin: 8px 0; color: var(--secondary); font-size: 12px; line-height: 1.6; }
   .editor-help.validation { color: var(--danger); }
-  .saved-favorites, .favorite-availability, .search-count { margin: 10px 0; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+  .saved-favorites, .favorite-availability, .search-count, .saved-alert, .notification-policy { margin: 10px 0; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
   .preferred { padding: 1px 3px; color: var(--text); background: var(--field); border: 1px solid var(--line-strong); border-radius: 4px; white-space: nowrap; }
   .seat-count { margin: 0 0 14px; font-size: 14px; font-variant-numeric: tabular-nums; }
   .seat-count strong { font-size: 20px; }
