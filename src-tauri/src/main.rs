@@ -495,6 +495,7 @@ fn main() {
             studium::commands::studium_start,
             studium::commands::studium_cancel,
             studium::commands::studium_save_interval,
+            studium::commands::studium_save_favorites,
             studium::commands::studium_automatic_start,
             studium::commands::studium_automatic_pause,
             backup::backup_create,
