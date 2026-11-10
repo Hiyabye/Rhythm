@@ -186,6 +186,174 @@ test('server refusal stops automatic polling and stays stopped after navigation 
   expect(await callCount(page, 'studium_start')).toBe(0);
 });
 
+test('favorite numbers validate, save independently and exact search keeps the total count', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true }, studium: { preferences, favorites: { '5': [84], '6': [1] }, results: [row('5', 2, [1, 84]), row('6', 0, [])] } });
+  await openStudium(page);
+  const input = page.getByRole('textbox', { name: '선호 좌석 번호', exact: true });
+  const save = page.getByRole('button', { name: '선호 좌석 저장', exact: true });
+  await expect(page.locator('.preferred')).toContainText('84');
+  await input.fill('1, 1');
+  await expect(page.getByText('같은 좌석 번호를 중복해서 입력할 수 없습니다.')).toBeVisible();
+  await expect(save).toBeDisabled();
+  await input.fill('103');
+  await expect(input).toHaveAttribute('aria-invalid', 'true');
+  await expect(save).toBeDisabled();
+  await input.fill('2.5');
+  await expect(save).toBeDisabled();
+  await input.fill('102, 84 1');
+  await save.click();
+  await expect(input).toHaveValue('1, 84, 102');
+  await expect(input).toBeFocused();
+  await expect(page.locator('.preferred')).toHaveCount(2);
+  await expect(page.locator('.favorite-availability')).toHaveText('이번 조회에서 빈 선호 좌석: 1, 84번');
+  const search = page.getByRole('searchbox', { name: '빈 좌석 번호 검색', exact: true });
+  await search.fill('84');
+  await expect(page.locator('.search-count')).toHaveText('전체 빈 좌석 2석 · 검색 결과 1개');
+  await expect(page.locator('.seat-count')).toContainText('2석');
+  await expect(page.locator('.preferred')).toHaveCount(1);
+  await expect(page.locator('.preferred')).toContainText('84');
+  await search.fill('4');
+  await expect(page.locator('.search-count')).toHaveText('전체 빈 좌석 2석 · 검색 결과 0개');
+  await expect(page.locator('.seat-numbers')).toContainText('검색한 번호가 빈 좌석 목록에 없습니다.');
+  await search.fill('0');
+  await expect(search).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.locator('.search-count')).toHaveCount(0);
+  await page.getByRole('button', { name: '검색 해제', exact: true }).click();
+  await expect(search).toHaveValue('');
+  await expect(search).toBeFocused();
+  await expect(page.locator('.preferred')).toHaveCount(2);
+  await input.fill('');
+  await save.click();
+  await expect(page.locator('.saved-favorites')).toHaveText('저장한 선호 좌석: 없음');
+  await expect(page.locator('.preferred')).toHaveCount(0);
+  expect(await callCount(page, 'studium_save_favorites')).toBe(2);
+  expect(await callCount(page, 'studium_start')).toBe(0);
+  expect(await callCount(page, 'studium_automatic_start')).toBe(0);
+  expect(await callCount(page, 'studium_status')).toBe(0);
+});
+
+test('favorite drafts survive polling and remain separate across viewed and deselected rooms', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true }, studium: {
+    preferences, favorites: { '5': [84], '6': [1] }, results: [row('5', 1, [84]), row('6', 1, [1])],
+    automatic: { active: true, interval_minutes: 5, next_check_at: '2026-11-10T10:00:00Z', error: null },
+  } });
+  await openStudium(page);
+  const input = page.getByRole('textbox', { name: '선호 좌석 번호', exact: true });
+  const search = page.getByRole('searchbox', { name: '빈 좌석 번호 검색', exact: true });
+  await input.fill('1 42');
+  await search.fill('84');
+  const polls = await callCount(page, 'studium_status');
+  await expect.poll(() => callCount(page, 'studium_status')).toBeGreaterThan(polls);
+  await expect(input).toHaveValue('1 42');
+  await page.getByRole('combobox', { name: '표시할 열람실' }).selectOption('6');
+  await expect(input).toHaveValue('1');
+  await expect(search).toHaveValue('');
+  await expect(page.locator('.favorite-availability')).toHaveText('이번 조회에서 빈 선호 좌석: 1번');
+  await page.getByRole('combobox', { name: '표시할 열람실' }).selectOption('5');
+  await expect(input).toHaveValue('84');
+  await input.fill('1');
+  await page.getByRole('button', { name: '선호 좌석 변경 취소', exact: true }).click();
+  await expect(input).toHaveValue('84');
+  await expect(input).toBeFocused();
+  await page.getByRole('checkbox', { name: /K관 열람실/ }).uncheck();
+  await page.getByRole('button', { name: '선택 저장', exact: true }).click();
+  await page.getByRole('checkbox', { name: /K관 열람실/ }).check();
+  await page.getByRole('button', { name: '선택 저장', exact: true }).click();
+  await page.getByRole('combobox', { name: '표시할 열람실' }).selectOption('6');
+  await expect(input).toHaveValue('1');
+  expect(await callCount(page, 'studium_save_favorites')).toBe(0);
+  expect(await callCount(page, 'studium_start')).toBe(0);
+  expect(await callCount(page, 'studium_automatic_start')).toBe(0);
+});
+
+test('favorite save failure keeps the draft and allows saving during a running check', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true }, studiumSaveError: true, studium: {
+    running: true, job_id: 7, results: [{ room_id: '5', status: 'loading', result: null, error: null, checked_at: null }],
+  } });
+  await openStudium(page);
+  const input = page.getByRole('textbox', { name: '선호 좌석 번호', exact: true });
+  await input.fill('84');
+  await page.getByRole('button', { name: '선호 좌석 저장', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('선호 좌석을 저장하지 못했습니다.');
+  await expect(input).toHaveValue('84');
+  await expect(page.locator('.saved-favorites')).toHaveText('저장한 선호 좌석: 없음');
+  await page.evaluate(() => { (window as any).__fixture.studiumSaveError = false; });
+  await page.getByRole('button', { name: '선호 좌석 저장', exact: true }).click();
+  await expect(page.locator('.saved-favorites')).toHaveText('저장한 선호 좌석: 84번');
+  await expect(page.locator('.favorite-availability')).toHaveText('현재 조회로 선호 좌석의 빈자리 여부를 확인하지 못했습니다.');
+  await page.getByRole('searchbox', { name: '빈 좌석 번호 검색', exact: true }).fill('84');
+  await expect(page.getByText('좌석 번호를 확인한 뒤 검색할 수 있습니다.')).toBeVisible();
+  await expect(page.locator('.search-count')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '지금 확인', exact: true })).toBeDisabled();
+  expect(await callCount(page, 'studium_start')).toBe(0);
+});
+
+test('favorite availability and search distinguish unverified counts, failure, unchecked and verified zero', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true }, studium: {
+    preferences: { room_ids: ['5', '6', '11', '15'], view_room: '5' }, favorites: { '5': [84], '6': [84], '11': [84], '15': [84] },
+    results: [row('5', 3, null, 'count_only'), { room_id: '6', status: 'failed', result: null, error: '학교 응답 오류', checked_at: now() }, { room_id: '11', status: 'not_checked', result: null, error: null, checked_at: null }, row('15', 0, [])],
+  } });
+  await openStudium(page);
+  const search = page.getByRole('searchbox', { name: '빈 좌석 번호 검색', exact: true });
+  await search.fill('84');
+  await expect(page.locator('.favorite-availability')).toHaveText('번호를 확인하지 못해 선호 좌석의 빈자리 여부를 알 수 없습니다.');
+  await expect(page.getByText('좌석 번호를 검증하지 못해 검색할 수 없습니다.')).toBeVisible();
+  await expect(page.locator('.seat-count')).toContainText('3석');
+  await expect(page.locator('.search-count')).toHaveCount(0);
+  for (const id of ['6', '11']) {
+    await page.getByRole('combobox', { name: '표시할 열람실' }).selectOption(id);
+    await search.fill('84');
+    await expect(page.locator('.favorite-availability')).toHaveText('현재 조회로 선호 좌석의 빈자리 여부를 확인하지 못했습니다.');
+    await expect(page.locator('.seat-count')).toHaveCount(0);
+    await expect(page.locator('.search-count')).toHaveCount(0);
+    await expect(page.locator('.preferred')).toHaveCount(0);
+  }
+  await page.getByRole('combobox', { name: '표시할 열람실' }).selectOption('15');
+  await search.fill('84');
+  await expect(page.locator('.favorite-availability')).toHaveText('이번 조회에서 빈 선호 좌석이 없습니다.');
+  await expect(page.locator('.search-count')).toHaveText('전체 빈 좌석 0석 · 검색 결과 0개');
+  await expect(page.locator('.seat-numbers')).toContainText('빈 좌석 없음');
+  expect(await callCount(page, 'studium_start')).toBe(0);
+});
+
+test('stale favorite highlights and search explicitly describe the earlier observation', async ({ page }) => {
+  const old = row('5', 1, [84]);
+  old.result!.source_time = '2026-01-01T00:00:00Z';
+  await mockDesktop(page, { extensions: { studium: true }, studium: { favorites: { '5': [84] }, results: [old] } });
+  await openStudium(page);
+  await expect(page.locator('.preferred')).toContainText('84');
+  await expect(page.locator('.favorite-availability')).toHaveText('이전 조회 기준 빈 선호 좌석: 84번. 현재 빈자리 여부는 확인되지 않았습니다.');
+  await page.getByRole('searchbox', { name: '빈 좌석 번호 검색', exact: true }).fill('84');
+  await expect(page.locator('.search-count')).toHaveText('전체 빈 좌석 1석 · 검색 결과 1개 · 이전 조회 기준');
+  expect(await callCount(page, 'studium_start')).toBe(0);
+});
+
+test('favorite editing and search support keyboard use in dark theme at 200% content zoom', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true }, studium: { results: [row('5', 2, [1, 84])] } });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openStudium(page);
+  await openSettings(page, '일반');
+  await page.getByRole('button', { name: '다크', exact: true }).click();
+  await nav(page).getByRole('button', { name: '열람실', exact: true }).click();
+  await page.evaluate(() => { document.documentElement.style.zoom = '2'; });
+  const input = page.getByRole('textbox', { name: '선호 좌석 번호', exact: true });
+  await input.fill('84, 1');
+  await input.press('Enter');
+  await expect(input).toHaveValue('1, 84');
+  await expect(input).toBeFocused();
+  await expect(page.locator('.preferred')).toHaveCount(2);
+  const search = page.getByRole('searchbox', { name: '빈 좌석 번호 검색', exact: true });
+  await search.fill('84');
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: '검색 해제', exact: true })).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(search).toHaveValue('');
+  await expect(search).toBeFocused();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  expect(await callCount(page, 'studium_start')).toBe(0);
+});
+
 test('manual lookup clears old values and cancellation keeps only completed rooms', async ({ page }) => {
   await mockDesktop(page, { extensions: { studium: true }, studium: { preferences, results: [row('5', 1, [84]), row('6', 2, [1, 2])] } });
   await openStudium(page);

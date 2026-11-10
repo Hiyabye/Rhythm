@@ -186,6 +186,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       ],
       preferences: { room_ids: ['5'], view_room: '5' }, job_id: null, running: false, results: [],
       automatic: { active: false, interval_minutes: 5, next_check_at: null, error: null },
+      favorites: Object.fromEntries(['19', '5', '6', '11', '15', '16', '18'].map((id) => [id, []])),
       ...copy(options.studium ?? {}),
     };
     const studiumStates = (status: 'not_checked' | 'loading' | 'cancelled') => studium.preferences.room_ids.map((room_id) => ({ room_id, status, result: null, error: null, checked_at: null }));
@@ -437,6 +438,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (!studium.preferences.room_ids.includes(args.roomId)) throw '선택한 열람실을 확인해 주세요.';
             studium.preferences.view_room = args.roomId;
             return copy(studium);
+          case 'studium_save_favorites': {
+            if (fixture.studiumSaveError) throw '선호 좌석을 저장하지 못했습니다.';
+            const room = studium.rooms.find((value) => value.id === args.roomId);
+            const numbers = args.seatNumbers as number[];
+            if (!room || !Array.isArray(numbers) || numbers.some((number) => !Number.isSafeInteger(number) || number < 1 || number > room.capacity) || new Set(numbers).size !== numbers.length) throw '선호 좌석 번호를 확인해 주세요.';
+            studium.favorites[args.roomId] = [...numbers].sort((a, b) => a - b);
+            return copy(studium);
+          }
           case 'studium_save_interval':
             if (fixture.studiumSaveError) throw '자동 확인 간격을 저장하지 못했습니다.';
             if (!Number.isInteger(args.intervalMinutes) || args.intervalMinutes < 2 || args.intervalMinutes > 60) throw '2부터 60 사이의 정수를 입력해 주세요.';
