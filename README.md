@@ -13,7 +13,7 @@ Rhythm은 학교 공지를 내 컴퓨터에 모아 보관하고, AI로 핵심을
 
 화면 이미지는 합성 데이터로 만든 예시입니다.
 
-현재 버전: **1.9.0**
+현재 버전: **1.9.1**
 
 ## 기능
 
@@ -39,13 +39,13 @@ Rhythm은 학교 공지를 내 컴퓨터에 모아 보관하고, AI로 핵심을
 
 ### macOS
 
-1. 공식 저장소 [github.com/Hiyabye/Rhythm](https://github.com/Hiyabye/Rhythm)의 **Releases**에서 `Rhythm_1.9.0_aarch64.dmg`와 `Rhythm_1.9.0_aarch64.dmg.sha256`을 내려받습니다. 다른 곳에서 받은 파일은 사용하지 마세요.
+1. 공식 저장소 [github.com/Hiyabye/Rhythm](https://github.com/Hiyabye/Rhythm)의 **Releases**에서 `Rhythm_1.9.1_aarch64.dmg`와 `Rhythm_1.9.1_aarch64.dmg.sha256`을 내려받습니다. 다른 곳에서 받은 파일은 사용하지 마세요.
 2. 터미널에서 체크섬을 확인합니다. 두 값이 정확히 같아야 하며, 다르면 파일을 열지 말고 삭제하세요.
 
    ```sh
    cd ~/Downloads
-   shasum -a 256 Rhythm_1.9.0_aarch64.dmg
-   cat Rhythm_1.9.0_aarch64.dmg.sha256
+   shasum -a 256 Rhythm_1.9.1_aarch64.dmg
+   cat Rhythm_1.9.1_aarch64.dmg.sha256
    ```
 
 3. DMG를 열고 **Rhythm**을 **응용 프로그램** 폴더로 끌어 놓습니다.
