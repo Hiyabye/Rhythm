@@ -26,6 +26,8 @@ test('each area selects only its own jobs', () => {
   assert.deepEqual(classify(['src/App.svelte', 'tests/ui/archive.spec.ts']), { ...none, frontend: true });
   assert.deepEqual(classify(['playwright.screenshots.config.ts']), { ...none, frontend: true });
   assert.deepEqual(classify(['src-tauri/src/main.rs']), { ...none, rust: true });
+  assert.deepEqual(classify(['src-tauri/vendor/mac-usernotifications/src/lib.rs']), { ...none, rust: true });
+  assert.deepEqual(classify(['src-tauri/vendor/mac-usernotifications/Cargo.toml']), { ...none, rust: true });
   assert.deepEqual(classify(['Cargo.lock']), { ...none, rust: true, packaging: true });
   assert.deepEqual(classify(['scripts/desktop.mjs']), { ...none, frontend: true, packaging: true });
   assert.deepEqual(classify(['src-tauri/tauri.windows.conf.json']), { ...none, rust: true, packaging: true });
