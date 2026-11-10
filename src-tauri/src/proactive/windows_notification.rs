@@ -416,7 +416,7 @@ fn escape_xml(text: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-pub(super) struct PreparedToast {
+pub(crate) struct PreparedToast {
     notifier: ToastNotifier,
     toast: ToastNotification,
     // Declared last so the COM objects are released before uninitialization.
@@ -424,6 +424,22 @@ pub(super) struct PreparedToast {
 }
 
 pub(super) fn prepare(title: &str, body: &str, token: &str) -> Result<PreparedToast, String> {
+    prepare_for_uri(title, body, &format!("{PREFIX}{token}"))
+}
+
+pub(crate) fn prepare_studium(
+    title: &str,
+    body: &str,
+    token: &str,
+) -> Result<PreparedToast, String> {
+    prepare_for_uri(
+        title,
+        body,
+        &format!("{}{token}", crate::studium::notification::TOKEN_PREFIX),
+    )
+}
+
+fn prepare_for_uri(title: &str, body: &str, uri: &str) -> Result<PreparedToast, String> {
     if !protocol_registered_to_current_exe() {
         return Err(
             "Windows 알림 연결이 등록되지 않았습니다. 설치 프로그램으로 다시 설치해 주세요.".into(),
@@ -436,7 +452,8 @@ pub(super) fn prepare(title: &str, body: &str, token: &str) -> Result<PreparedTo
                 .into(),
         );
     }
-    if token_from_uri(&format!("{PREFIX}{token}")).is_none() {
+    if token_from_uri(uri).is_none() && crate::studium::notification::token_from_uri(uri).is_none()
+    {
         return Err("알림 활성화 정보가 올바르지 않습니다.".into());
     }
     let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))
@@ -444,7 +461,7 @@ pub(super) fn prepare(title: &str, body: &str, token: &str) -> Result<PreparedTo
     if notifier.Setting().map_err(|e| e.to_string())? != NotificationSetting::Enabled {
         return Err("Windows 알림이 꺼져 있습니다.".into());
     }
-    let xml = format!("<toast activationType=\"protocol\" launch=\"{PREFIX}{token}\"><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>", escape_xml(title), escape_xml(body));
+    let xml = format!("<toast activationType=\"protocol\" launch=\"{}\"><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>", escape_xml(uri), escape_xml(title), escape_xml(body));
     let document = XmlDocument::new().map_err(|e| e.to_string())?;
     document
         .LoadXml(&HSTRING::from(xml))
@@ -457,7 +474,7 @@ pub(super) fn prepare(title: &str, body: &str, token: &str) -> Result<PreparedTo
     })
 }
 
-pub(super) fn show(prepared: PreparedToast) -> Result<(), String> {
+pub(crate) fn show(prepared: PreparedToast) -> Result<(), String> {
     // After this call starts, an error is an attempted handoff; do not retract
     // the durable attempt because the OS result can be ambiguous.
     prepared
