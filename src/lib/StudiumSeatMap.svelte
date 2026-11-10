@@ -71,9 +71,14 @@
     return validLayout(value.layout, value.total) ? '' : '좌석 위치를 확인하지 못했습니다. 번호 목록을 이용해 주세요.';
   }
 
-  function resetView() {
+  async function resetView() {
+    const currentViewport = viewport;
     zoom = 100;
-    viewport?.scrollTo({ left: 0, top: 0, behavior: 'instant' });
+    // Reset the scroll origin against the updated SVG size.
+    await tick();
+    if (currentViewport?.isConnected && currentViewport === viewport) {
+      currentViewport.scrollTo({ left: 0, top: 0, behavior: 'instant' });
+    }
   }
 
   function sourceClock() {
