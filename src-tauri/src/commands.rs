@@ -242,9 +242,17 @@ pub async fn set_extension(
     if !enabled && id == extensions::PROACTIVE {
         set_launch_at_login(&app, state.inner(), false)?;
     }
-    let studium_completion =
-        change_extension(&state.registry, &state.store, &state.studium, &id, enabled)?;
+    let (studium_completion, notification_completion) = change_extension_with_notifications(
+        &state.registry,
+        &state.store,
+        &state.studium,
+        &id,
+        enabled,
+    )?;
     if !enabled {
+        if let Some(completion) = notification_completion {
+            completion.wait().await;
+        }
         match id.as_str() {
             extensions::NOTICES | extensions::CYBERCAMPUS => state.archive.wait().await,
             extensions::STUDIUM => {
@@ -255,10 +263,13 @@ pub async fn set_extension(
             }
             _ => {}
         }
+    } else if matches!(id.as_str(), extensions::STUDIUM | extensions::PROACTIVE) {
+        state.studium_notifications.resume_after_quiesce().await;
     }
     snapshot(&state).await
 }
 
+#[cfg(test)]
 pub(crate) fn change_extension(
     registry: &extensions::Registry,
     shared_store: &crate::archive::sync::SharedStore,
@@ -266,15 +277,40 @@ pub(crate) fn change_extension(
     id: &str,
     enabled: bool,
 ) -> Result<Option<crate::studium::controller::CompletionHandle>, String> {
+    change_extension_with_notifications(registry, shared_store, studium, id, enabled)
+        .map(|(completion, _)| completion)
+}
+
+fn change_extension_with_notifications(
+    registry: &extensions::Registry,
+    shared_store: &crate::archive::sync::SharedStore,
+    studium: &crate::studium::controller::Controller,
+    id: &str,
+    enabled: bool,
+) -> Result<
+    (
+        Option<crate::studium::controller::CompletionHandle>,
+        Option<crate::studium::notification::Completion>,
+    ),
+    String,
+> {
     let store = shared_store
         .lock()
         .map_err(|_| "저장소에 접근할 수 없습니다.")?;
     registry.set(&store, id, enabled)?;
-    Ok(if !enabled && id == extensions::STUDIUM {
-        studium.completion()
+    let notifications = if !enabled && matches!(id, extensions::STUDIUM | extensions::PROACTIVE) {
+        studium.cancel_notifications()
     } else {
         None
-    })
+    };
+    Ok((
+        if !enabled && id == extensions::STUDIUM {
+            studium.completion()
+        } else {
+            None
+        },
+        notifications,
+    ))
 }
 
 pub(crate) async fn finish_studium_disable(

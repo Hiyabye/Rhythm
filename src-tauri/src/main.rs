@@ -33,6 +33,7 @@ pub(crate) struct AppState {
     pub(crate) proactive: Arc<proactive::Scheduler>,
     pub(crate) archive: Arc<archive::sync::Controller>,
     pub(crate) studium: Arc<studium::controller::Controller>,
+    pub(crate) studium_notifications: Arc<studium::notification::Notifications>,
     network: archive::Client,
     registry: Registry,
     pub(crate) worker: Arc<tokio::sync::Mutex<Worker>>,
@@ -51,6 +52,7 @@ pub(crate) struct AppState {
 pub(crate) struct AppMaintenanceGuard {
     _gate: operation_gate::MaintenanceGuard,
     proactive: Arc<proactive::Scheduler>,
+    studium_notifications: Arc<studium::notification::Notifications>,
     analysis: Arc<intelligence::analysis::Controller>,
     classifier_guard: Option<intelligence::classification::PauseGuard>,
 }
@@ -75,12 +77,16 @@ impl Drop for AppMaintenanceGuard {
         if let Err(error) = self.proactive.start() {
             eprintln!("Proactive: 유지보수 후 스케줄러를 다시 시작하지 못했습니다: {error}");
         }
+        if let Err(error) = self.studium_notifications.start() {
+            eprintln!("Studium: 유지보수 후 알림 수신을 다시 시작하지 못했습니다: {error}");
+        }
     }
 }
 
 struct MaintenancePreparation {
     reservation: Option<operation_gate::MaintenanceReservation>,
     proactive: Arc<proactive::Scheduler>,
+    studium_notifications: Arc<studium::notification::Notifications>,
     analysis: Arc<intelligence::analysis::Controller>,
     armed: bool,
 }
@@ -92,8 +98,10 @@ impl Drop for MaintenancePreparation {
         }
         self.analysis.resume();
         let proactive = self.proactive.clone();
+        let studium_notifications = self.studium_notifications.clone();
         tauri::async_runtime::spawn(async move {
             proactive.resume_after_quiesce().await;
+            studium_notifications.resume_after_quiesce().await;
         });
     }
 }
@@ -108,6 +116,7 @@ impl AppState {
         let mut preparation = MaintenancePreparation {
             reservation: Some(reservation),
             proactive: self.proactive.clone(),
+            studium_notifications: self.studium_notifications.clone(),
             analysis: self.analysis.clone(),
             armed: true,
         };
@@ -121,6 +130,7 @@ impl AppState {
         self.ai_operation.cancel();
         drop(ai_gate);
         self.proactive.quiesce().await;
+        self.studium_notifications.quiesce().await;
         self.archive.wait().await;
         if let Some(completion) = studium_completion {
             completion.wait().await;
@@ -140,6 +150,7 @@ impl AppState {
         Ok(AppMaintenanceGuard {
             _gate: gate,
             proactive: self.proactive.clone(),
+            studium_notifications: self.studium_notifications.clone(),
             analysis: self.analysis.clone(),
             classifier_guard: Some(classifier_guard),
         })
@@ -220,7 +231,15 @@ fn spawn_notification_activation(app: &tauri::AppHandle, uri: String) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Some(state) = app.try_state::<AppState>() {
-            if let Err(error) = state.proactive.handle_windows_activation(&uri).await {
+            let result = if studium::notification::token_from_uri(&uri).is_some() {
+                state
+                    .studium_notifications
+                    .handle_windows_activation(&uri)
+                    .await
+            } else {
+                state.proactive.handle_windows_activation(&uri).await
+            };
+            if let Err(error) = result {
                 eprintln!("알림을 열지 못했습니다: {error}");
             }
         } else {
@@ -231,11 +250,13 @@ fn spawn_notification_activation(app: &tauri::AppHandle, uri: String) {
 
 fn dispatch_notification_arguments(app: &tauri::AppHandle, arguments: &[String]) -> bool {
     #[cfg(windows)]
-    if let Some(uri) = arguments
-        .iter()
-        .find(|value| value.starts_with("rhythm-win://notification/"))
-    {
-        if proactive::windows_notification::token_from_uri(uri).is_none() {
+    if let Some(uri) = arguments.iter().find(|value| {
+        value.starts_with("rhythm-win://notification/")
+            || value.starts_with(studium::notification::TOKEN_PREFIX)
+    }) {
+        if proactive::windows_notification::token_from_uri(uri).is_none()
+            && studium::notification::token_from_uri(uri).is_none()
+        {
             eprintln!("올바르지 않은 알림 연결을 거부했습니다.");
             return true;
         }
@@ -407,6 +428,10 @@ fn main() {
             let operation_gate = Arc::new(operation_gate::AdmissionGate::default());
             let archive = archive::sync::Controller::new();
             let studium = studium::controller::Controller::new();
+            let studium_notifications = studium::notification::Notifications::new(
+                store.clone(), Arc::downgrade(&studium), operation_gate.clone(), app.handle().clone(),
+            );
+            studium.attach_notifications(&studium_notifications);
             let network = archive::client().map_err(std::io::Error::other)?;
             let proactive = proactive::Scheduler::new(
                 store.clone(),
@@ -447,6 +472,7 @@ fn main() {
                 proactive: Arc::new(proactive),
                 registry: Registry::new(archive.clone(), studium.clone()),
                 studium,
+                studium_notifications: studium_notifications.clone(),
                 archive,
                 network,
                 worker: Arc::new(tokio::sync::Mutex::new(worker)),
@@ -461,6 +487,9 @@ fn main() {
                 operation_gate,
                 restore_outcome,
             });
+            if let Err(error) = studium_notifications.start() {
+                eprintln!("Studium: 알림 수신을 시작하지 못했습니다: {error}");
+            }
             dispatch_notification_arguments(app.handle(), &std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>());
             #[cfg(windows)]
             notification_launches_ready(app.handle());
@@ -496,6 +525,8 @@ fn main() {
             studium::commands::studium_cancel,
             studium::commands::studium_save_interval,
             studium::commands::studium_save_favorites,
+            studium::commands::studium_save_alert,
+            studium::commands::studium_notification_activation,
             studium::commands::studium_automatic_start,
             studium::commands::studium_automatic_pause,
             backup::backup_create,
@@ -631,6 +662,7 @@ fn main() {
             state.analysis.stop();
             state.models.cancel();
             tauri::async_runtime::block_on(async {
+                state.studium_notifications.shutdown().await;
                 state.proactive.shutdown().await;
                 state.archive.wait().await;
                 if let Some(completion) = studium_completion {
