@@ -32,21 +32,67 @@ struct Job {
     cancel: AtomicBool,
     finished: AtomicBool,
     done: Notify,
+    automatic_id: Option<u64>,
+    stop_reason: Mutex<Option<StopReason>>,
+}
+
+enum StopReason {
+    AccessDenied(String),
+    RateLimited,
+}
+
+impl Job {
+    fn new(id: u64, automatic_id: Option<u64>) -> Arc<Self> {
+        Arc::new(Self {
+            id,
+            cancel: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
+            done: Notify::new(),
+            automatic_id,
+            stop_reason: Mutex::new(None),
+        })
+    }
+    fn note_access_error(&self, error: &str) {
+        let reason = if error == crate::archive::network::RATE_LIMITED || error == RATE_LIMITED {
+            Some(StopReason::RateLimited)
+        } else if matches!(
+            error,
+            "공개 자료에 접근할 수 없습니다. (HTTP 401)"
+                | "공개 자료에 접근할 수 없습니다. (HTTP 403)"
+        ) {
+            Some(StopReason::AccessDenied(error.into()))
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            if let Ok(mut saved) = self.stop_reason.lock() {
+                *saved = Some(reason);
+            }
+        }
+    }
+    fn automatic_stop_error(&self) -> Option<String> {
+        self.stop_reason.lock().ok().and_then(|reason| match reason.as_ref()? {
+            StopReason::AccessDenied(error) => Some(format!("{error} 자동 확인을 정지했습니다. 연결을 확인한 뒤 다시 시작해 주세요.")),
+            StopReason::RateLimited => Some("학교 서버가 요청을 제한하여 자동 확인을 정지했습니다. 잠시 기다린 후 다시 시작해 주세요.".into()),
+        })
+    }
 }
 
 /// Captured under the registration boundary so a delayed disable joins only
 /// the generation it cancelled, even after a later enable/start.
-pub(crate) struct CompletionHandle(Arc<Job>);
+pub(crate) struct CompletionHandle(Vec<Arc<Job>>);
 impl CompletionHandle {
     pub(crate) async fn wait(self) {
-        loop {
-            let notified = self.0.done.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if self.0.finished.load(Ordering::Acquire) {
-                break;
+        for job in self.0 {
+            loop {
+                let notified = job.done.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if job.finished.load(Ordering::Acquire) {
+                    break;
+                }
+                notified.await;
             }
-            notified.await;
         }
     }
 }
@@ -56,11 +102,15 @@ struct State {
     next: u64,
     job: Option<Arc<Job>>,
     results: Vec<RoomState>,
+    next_automatic: u64,
+    automatic: Option<automatic::Run>,
+    last_completed: Option<tokio::time::Instant>,
 }
 
 #[derive(Default)]
 pub(crate) struct Controller {
     state: Mutex<State>,
+    changed: Notify,
 }
 
 impl Controller {
@@ -102,6 +152,7 @@ impl Controller {
                 .job
                 .as_ref()
                 .is_some_and(|j| !j.finished.load(Ordering::Acquire)),
+            automatic: automatic::snapshot(&state),
         })
     }
     /// Caller holds Store's mutex, the same boundary as extension disable and
@@ -113,7 +164,22 @@ impl Controller {
         store: Arc<Mutex<Store>>,
         lease: AdmissionLease,
     ) -> Result<(), String> {
+        self.start_for(preferences, transport, store, lease, None)
+    }
+    fn start_for<T: Transport + 'static>(
+        self: &Arc<Self>,
+        preferences: Preferences,
+        transport: T,
+        store: Arc<Mutex<Store>>,
+        lease: AdmissionLease,
+        automatic_id: Option<u64>,
+    ) -> Result<(), String> {
         let mut state = self.state.lock().map_err(|_| "좌석 작업 잠금 오류")?;
+        if let Some(id) = automatic_id {
+            if !automatic::active(&state, id) {
+                return Err("자동 확인이 정지되었습니다.".into());
+            }
+        }
         if state
             .job
             .as_ref()
@@ -122,18 +188,14 @@ impl Controller {
             return Err("이미 좌석을 확인하고 있습니다.".into());
         }
         state.next = state.next.checked_add(1).ok_or("좌석 작업 번호 오류")?;
-        let job = Arc::new(Job {
-            id: state.next,
-            cancel: AtomicBool::new(false),
-            finished: AtomicBool::new(false),
-            done: Notify::new(),
-        });
+        let job = Job::new(state.next, automatic_id);
         state.results = preferences
             .room_ids
             .iter()
             .map(|id| empty(id, "loading"))
             .collect();
         state.job = Some(job.clone());
+        self.changed.notify_waiters();
         let owner = self.clone();
         // The completion guard releases the task-owned admission lease and
         // signals waiters even if the task unwinds or is dropped.
@@ -150,6 +212,7 @@ impl Controller {
                 _ = cancelled(&job.cancel) => Err("좌석 확인을 취소했습니다.".into()),
             };
             if let Err(error) = outcome {
+                job.note_access_error(&error);
                 owner.fail_pending(&job, seat_error(&error));
             }
         });
@@ -157,10 +220,14 @@ impl Controller {
     }
     pub(crate) fn cancel(&self) {
         if let Ok(state) = self.state.lock() {
+            if let Some(run) = &state.automatic {
+                run.job.cancel.store(true, Ordering::Release);
+            }
             if let Some(job) = &state.job {
                 job.cancel.store(true, Ordering::Release);
             }
         }
+        self.changed.notify_waiters();
     }
     pub(crate) fn cancel_job(&self, id: u64) -> Result<(), String> {
         let state = self.state.lock().map_err(|_| "좌석 작업 잠금 오류")?;
@@ -172,11 +239,15 @@ impl Controller {
         Ok(())
     }
     pub(crate) fn completion(&self) -> Option<CompletionHandle> {
-        self.state
-            .lock()
-            .ok()
-            .and_then(|s| s.job.clone())
-            .map(CompletionHandle)
+        let state = self.state.lock().ok()?;
+        let mut jobs = Vec::new();
+        if let Some(run) = &state.automatic {
+            jobs.push(run.job.clone());
+        }
+        if let Some(job) = &state.job {
+            jobs.push(job.clone());
+        }
+        (!jobs.is_empty()).then_some(CompletionHandle(jobs))
     }
     pub(crate) async fn wait(&self) {
         if let Some(completion) = self.completion() {
@@ -186,6 +257,7 @@ impl Controller {
     pub(crate) fn clear(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.results.clear();
+            automatic::clear(&mut state);
         }
     }
     fn fail_pending(&self, job: &Job, error: &str) {
@@ -257,6 +329,12 @@ impl Controller {
                         .and_then(|html| {
                             parser::parse_seats(&html, id, chrono::Utc::now().timestamp())
                         });
+                    if let Err(error) = &detail {
+                        job.note_access_error(error);
+                        if job.automatic_id.is_some() && job.automatic_stop_error().is_some() {
+                            return Err(error.clone());
+                        }
+                    }
                     match detail {
                         Ok(detail)
                             if parser::timestamp_seconds(&detail.source_time)?
@@ -333,10 +411,20 @@ impl Drop for Completion {
         // A joined job has released its admission lease as well as published
         // terminal state, so maintenance can immediately drain the gate.
         drop(self.lease.take());
+        if let Ok(mut state) = self.owner.state.lock() {
+            if state.job.as_ref().map(|job| job.id) == Some(self.job.id) {
+                state.last_completed = Some(tokio::time::Instant::now());
+            }
+        }
         self.job.finished.store(true, Ordering::Release);
         self.job.done.notify_waiters();
+        self.owner.changed.notify_waiters();
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+mod automatic;
+#[cfg(test)]
+mod automatic_tests;
