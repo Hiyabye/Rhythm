@@ -185,6 +185,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         { id: '18', name: 'MA관 열람실', label: 'MA관 열람실', capacity: 174 },
       ],
       preferences: { room_ids: ['5'], view_room: '5' }, job_id: null, running: false, results: [],
+      automatic: { active: false, interval_minutes: 5, next_check_at: null, error: null },
       ...copy(options.studium ?? {}),
     };
     const studiumStates = (status: 'not_checked' | 'loading' | 'cancelled') => studium.preferences.room_ids.map((room_id) => ({ room_id, status, result: null, error: null, checked_at: null }));
@@ -248,12 +249,20 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     let availableHandler: number | null = null;
     let autoUpdateCheck = options.autoUpdateCheck ?? true;
     let notificationHandler: number | null = null;
-    const fixture = { ai, analyses, options, entries, studium, studiumStatusDelay: 0, studiumSaveError: options.studiumSaveError ?? false, studiumCancelRequested: null as number | null, calls: [] as { command: string; args: any }[], sourceDelay: options.sourceDelay ?? 0,
+    const fixture = { ai, analyses, options, entries, studium, studiumStatusDelay: 0, studiumSaveError: options.studiumSaveError ?? false, studiumCancelRequested: null as number | null, studiumJobAutomatic: studium.automatic.active && studium.running, calls: [] as { command: string; args: any }[], sourceDelay: options.sourceDelay ?? 0,
       finishStudiumCancel() {
         if (this.studiumCancelRequested !== studium.job_id || !studium.running) return;
         studium.running = false;
         studium.results = studium.results.map((value) => value.status === 'loading' ? { ...value, status: 'cancelled', result: null } : value);
         this.studiumCancelRequested = null;
+        this.studiumJobAutomatic = false;
+        if (studium.automatic.active) studium.automatic.next_check_at = new Date(Date.now() + studium.automatic.interval_minutes * 60_000).toISOString();
+      },
+      finishStudiumCycle(results: StudiumSnapshot['results']) {
+        studium.results = copy(results);
+        studium.running = false;
+        this.studiumJobAutomatic = false;
+        if (studium.automatic.active) studium.automatic.next_check_at = new Date(Date.now() + studium.automatic.interval_minutes * 60_000).toISOString();
       },
       setNotificationAuthorization: (status: string) => { notificationAuthorization = status; },
       modelDirectoryResolvers: [] as Array<() => void>,
@@ -402,7 +411,11 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             snapshot.settings = copy(args.settings); return copy(snapshot);
           case 'set_extension':
             snapshot.extensions.find((extension) => extension.id === args.id)!.enabled = args.enabled;
-            if (args.id === 'studium' && !args.enabled) { studium.running = false; studium.job_id = null; studium.results = studiumStates('not_checked'); fixture.studiumCancelRequested = null; }
+            if (args.id === 'studium' && !args.enabled) {
+              studium.running = false; studium.job_id = null; studium.results = studiumStates('not_checked');
+              studium.automatic = { ...studium.automatic, active: false, next_check_at: null, error: null };
+              fixture.studiumCancelRequested = null; fixture.studiumJobAutomatic = false;
+            }
             return copy(snapshot);
           case 'studium_snapshot': return copy(studium);
           case 'studium_status': {
@@ -424,12 +437,39 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (!studium.preferences.room_ids.includes(args.roomId)) throw '선택한 열람실을 확인해 주세요.';
             studium.preferences.view_room = args.roomId;
             return copy(studium);
+          case 'studium_save_interval':
+            if (fixture.studiumSaveError) throw '자동 확인 간격을 저장하지 못했습니다.';
+            if (!Number.isInteger(args.intervalMinutes) || args.intervalMinutes < 2 || args.intervalMinutes > 60) throw '2부터 60 사이의 정수를 입력해 주세요.';
+            studium.automatic.interval_minutes = args.intervalMinutes;
+            return copy(studium);
+          case 'studium_automatic_start':
+            if (options.studiumStartError) throw '좌석 확인을 시작하지 못했습니다.';
+            if (!studium.automatic.active) {
+              studium.automatic = { ...studium.automatic, active: true, next_check_at: null, error: null };
+              if (!studium.running) {
+                studium.job_id = (studium.job_id ?? 0) + 1;
+                studium.running = true;
+                studium.results = studiumStates('loading');
+                fixture.studiumJobAutomatic = true;
+              }
+            }
+            return copy(studium);
+          case 'studium_automatic_pause':
+            studium.automatic.active = false;
+            studium.automatic.next_check_at = null;
+            if (studium.running && fixture.studiumJobAutomatic) {
+              fixture.studiumCancelRequested = studium.job_id;
+              fixture.finishStudiumCancel();
+            }
+            return copy(studium);
           case 'studium_start':
             if (options.studiumStartError) throw '좌석 확인을 시작하지 못했습니다.';
             if (studium.running) throw '이미 좌석을 확인하고 있습니다.';
             studium.job_id = (studium.job_id ?? 0) + 1;
             studium.running = true;
             fixture.studiumCancelRequested = null;
+            fixture.studiumJobAutomatic = false;
+            studium.automatic.next_check_at = null;
             studium.results = studiumStates('loading');
             return copy(studium);
           case 'studium_cancel':
