@@ -108,6 +108,10 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Test storage and worker lifecycle (no model weights)
         run: cargo test --locked --workspace
+      # This macOS-only dependency is excluded from workspace membership.
+      # These tests exercise Rust oneshots/registry cleanup, not OS alerts.
+      - name: Test notification response cancellation (no OS alerts)
+        run: cargo test --locked -p mac-usernotifications --lib send::tests
       # Release builds take most of the job; they run on main when packaging
       # inputs changed and on manual runs, never on pull requests.
       - name: Build native desktop executable
