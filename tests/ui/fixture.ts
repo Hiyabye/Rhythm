@@ -1,6 +1,13 @@
 import type { Page } from '@playwright/test';
 import analysisContract from '../../src/lib/analysis-contract.json' with { type: 'json' };
-import type { AiOperation, CalendarTodo, ClockFormat, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation, StudiumMiniStatus, StudiumSnapshot, Theme } from '../../src/lib/types';
+import type { AiOperation, CalendarTodo, ClockFormat, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation, StudiumMiniStatus, StudiumSeatLayout, StudiumSnapshot, Theme } from '../../src/lib/types';
+
+// Invented regular marker origins, unrelated to the school's real floor plans.
+export function syntheticStudiumLayout(total: number): StudiumSeatLayout {
+  const columns = Math.min(16, Math.ceil(Math.sqrt(total * 1.3)));
+  const points = Array.from({ length: total }, (_, index) => ({ number: index + 1, x: (index % columns) * 36_000, y: Math.floor(index / columns) * 36_000 }));
+  return { width: Math.max(...points.map((point) => point.x)), height: Math.max(...points.map((point) => point.y)), points };
+}
 
 export interface FixtureOptions {
   clockFormat?: ClockFormat;
