@@ -32,6 +32,10 @@ type Gates = std::sync::Mutex<HashMap<String, Arc<Mutex<Instant>>>>;
 pub struct Client {
     gates: Arc<Gates>,
     inflight: Arc<Semaphore>,
+    // Tests replace only DNS and the wire response. URL validation, TLS client
+    // construction, pacing, deadlines and response handling stay on this path.
+    #[cfg(test)]
+    test_io: Option<Arc<client_tests::Script>>,
 }
 #[derive(Debug)]
 pub enum Fetch {
@@ -50,6 +54,8 @@ impl Client {
         Ok(Self {
             gates: Arc::default(),
             inflight: Arc::new(Semaphore::new(MAX_HOSTS)),
+            #[cfg(test)]
+            test_io: None,
         })
     }
     pub async fn get(
@@ -100,6 +106,33 @@ impl Client {
         *last = Instant::now();
         Ok(())
     }
+    async fn resolve(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, Failure> {
+        #[cfg(test)]
+        if let Some(script) = &self.test_io {
+            return script.resolve(host, port);
+        }
+        tokio::net::lookup_host((host, port))
+            .await
+            .map(|addresses| addresses.collect())
+            .map_err(|_| {
+                Failure::Retry(
+                    "학교 서버 주소를 찾을 수 없습니다. 인터넷 연결을 확인해 주세요.".into(),
+                )
+            })
+    }
+    async fn send(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response, Failure> {
+        #[cfg(test)]
+        if let Some(script) = &self.test_io {
+            return script.send(request).await;
+        }
+        request.send().await.map_err(|error| {
+            if error.is_builder() {
+                Failure::Fatal("학교 응답 검증 값이 올바르지 않습니다.".into())
+            } else {
+                Failure::Retry(CONNECTION_FAILED.into())
+            }
+        })
+    }
     async fn attempt(
         &self,
         original: &Url,
@@ -116,14 +149,7 @@ impl Client {
         let port = url
             .port_or_known_default()
             .ok_or_else(|| Failure::Fatal(BLOCKED.into()))?;
-        let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
-            .await
-            .map_err(|_| {
-                Failure::Retry(
-                    "학교 서버 주소를 찾을 수 없습니다. 인터넷 연결을 확인해 주세요.".into(),
-                )
-            })?
-            .collect();
+        let addresses = self.resolve(host, port).await?;
         if addresses.is_empty() || addresses.iter().any(|address| !public_ip(address.ip())) {
             return Err(Failure::Fatal(
                 "공개 인터넷 주소가 아닌 다운로드 요청을 차단했습니다.".into(),
@@ -186,10 +212,7 @@ impl Client {
                 }
             }
         }
-        let mut response=request.send().await.map_err(|error|{
-                if error.is_builder(){Failure::Fatal("학교 응답 검증 값이 올바르지 않습니다.".into())}
-                else{Failure::Retry("학교 서버에 안전하게 연결하지 못했습니다. 연결 상태나 인증서 구성을 확인해 주세요.".into())}
-            })?;
+        let mut response = self.send(request).await?;
         let status = response.status();
         if [301, 302, 307, 308].contains(&status.as_u16()) || status.as_u16() == 303 {
             if access == Access::Studium {
@@ -330,6 +353,8 @@ fn studium_root() -> Result<reqwest::Certificate, String> {
 /// rest of the page from a server that asked it to slow down.
 pub const RATE_LIMITED: &str =
     "학교 서버가 요청을 제한했습니다. 잠시 기다린 후 다시 동기화해 주세요.";
+const CONNECTION_FAILED: &str =
+    "학교 서버에 안전하게 연결하지 못했습니다. 연결 상태나 인증서 구성을 확인해 주세요.";
 const BLOCKED: &str = "검증된 학교 공개 자료 주소가 아니어서 자동 다운로드하지 않았습니다.";
 pub fn validate(url: &Url, access: Access) -> Result<(), String> {
     if access == Access::Studium {
@@ -665,6 +690,10 @@ pub(super) fn public_ip(address: IpAddr) -> bool {
         }
     }
 }
+#[cfg(test)]
+#[path = "network_client_tests.rs"]
+mod client_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

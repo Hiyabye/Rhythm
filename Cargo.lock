@@ -3924,6 +3924,7 @@ dependencies = [
  "chrono",
  "encoding_rs",
  "getrandom 0.3.4",
+ "http",
  "keyring",
  "mac-usernotifications",
  "minisign-verify",

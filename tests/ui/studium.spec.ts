@@ -60,6 +60,13 @@ test('manual lookup clears old values and cancellation keeps only completed room
   await expect(page.locator('.seat-numbers')).toContainText('빈 좌석 없음');
   await page.getByRole('combobox', { name: '표시할 열람실' }).selectOption('6');
   await page.getByRole('button', { name: '확인 취소', exact: true }).click();
+  await expect(page.getByRole('button', { name: '지금 확인', exact: true })).toBeDisabled();
+  await expect(page.getByRole('checkbox', { name: /K관 열람실/ })).toBeDisabled();
+  await expect(page.getByRole('region', { name: 'K관 열람실 좌석 정보' })).toContainText('확인 중');
+  await expect.poll(() => page.evaluate(() => (window as any).__fixture.studiumCancelRequested)).toBe(1);
+  const pendingPolls = await callCount(page, 'studium_status');
+  await expect.poll(() => callCount(page, 'studium_status')).toBeGreaterThan(pendingPolls);
+  await page.evaluate(() => (window as any).__fixture.finishStudiumCancel());
   await expect(page.getByRole('region', { name: 'K관 열람실 좌석 정보' })).toContainText('확인 취소됨');
   await page.getByRole('combobox', { name: '표시할 열람실' }).selectOption('5');
   await expect(page.locator('.seat-numbers')).toContainText('빈 좌석 없음');
@@ -126,6 +133,9 @@ test('keyboard focus follows the lookup actions and polling stops once the cycle
   await page.keyboard.press('Enter');
   await expect(page.getByRole('button', { name: '확인 취소', exact: true })).toBeFocused();
   await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: '지금 확인', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '확인 취소', exact: true })).toBeFocused();
+  await page.evaluate(() => (window as any).__fixture.finishStudiumCancel());
   await expect(page.getByRole('button', { name: '지금 확인', exact: true })).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(page.getByRole('button', { name: '확인 취소', exact: true })).toBeFocused();
@@ -168,6 +178,75 @@ test('old source time stays visibly stale without a background lookup at narrow 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   expect(await callCount(page, 'studium_start')).toBe(0);
 });
+
+test('dark Studium remains readable and keyboard usable at 200% content zoom', async ({ page }) => {
+  const old = row('5', 3, [1, 42, 102]);
+  old.result!.source_time = '2026-01-01T00:00:00Z';
+  await mockDesktop(page, { extensions: { studium: true }, studium: { preferences, results: [old, row('6', 0, [])] } });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openStudium(page);
+  await openSettings(page, '일반');
+  await page.getByRole('button', { name: '다크', exact: true }).click();
+  await nav(page).getByRole('button', { name: '열람실', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.evaluate(() => { document.documentElement.style.zoom = '2'; });
+  const detail = page.getByRole('region', { name: '로욜라 인벤툼 II 좌석 정보' });
+  await expect(detail.locator('.seat-count')).toContainText('3석');
+  await expect(detail.locator('.seat-numbers')).toContainText('1, 42, 102번');
+  await expect(detail.locator('.stale')).toBeVisible();
+  await expect(detail.locator('time')).toHaveCount(2);
+  const contrast = await detail.evaluate((node) => {
+    const luminance = (color: string) => {
+      const [r, g, b] = color.match(/[\d.]+/g)!.slice(0, 3).map(Number).map((value) => {
+        const channel = value / 255;
+        return channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4;
+      });
+      return r * .2126 + g * .7152 + b * .0722;
+    };
+    const background = luminance(getComputedStyle(node).backgroundColor);
+    return ['.seat-count', '.times', '.stale'].map((selector) => {
+      const text = luminance(getComputedStyle(node.querySelector(selector)!).color);
+      return (Math.max(text, background) + .05) / (Math.min(text, background) + .05);
+    });
+  });
+  for (const ratio of contrast) expect(ratio).toBeGreaterThanOrEqual(4.5);
+  const target = page.getByRole('checkbox', { name: /K관 열람실/ });
+  await target.focus();
+  await page.keyboard.press('Space');
+  await expect(target).not.toBeChecked();
+  await expect(target).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(target).toBeChecked();
+  const view = page.getByRole('combobox', { name: '표시할 열람실' });
+  await view.selectOption('6');
+  await view.focus();
+  await expect(view).toBeFocused();
+  await expect(page.getByRole('region', { name: 'K관 열람실 좌석 정보' })).toContainText('빈 좌석 없음');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  expect(await callCount(page, 'studium_start')).toBe(0);
+  expect(await callCount(page, 'studium_status')).toBe(0);
+});
+
+for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+  test(`Studium entry ${reducedMotion === 'reduce' ? 'skips' : 'uses'} motion while results stay available`, async ({ page }) => {
+    await page.addInitScript(() => {
+      const animate = Element.prototype.animate;
+      (window as any).__studiumAnimations = 0;
+      Element.prototype.animate = function (...args) {
+        if (this.matches('.studium, .studium *')) (window as any).__studiumAnimations++;
+        return animate.apply(this, args);
+      };
+    });
+    await page.emulateMedia({ reducedMotion });
+    await mockDesktop(page, { extensions: { studium: true }, studium: { results: [row('5', 1, [84])] } });
+    await openStudium(page);
+    await expect(page.locator('.seat-numbers')).toContainText('84번');
+    const animations = await page.evaluate(() => (window as any).__studiumAnimations);
+    if (reducedMotion === 'reduce') expect(animations).toBe(0);
+    else expect(animations).toBeGreaterThan(0);
+    expect(await callCount(page, 'studium_start')).toBe(0);
+  });
+}
 
 test('source freshness expires with the local clock without starting or polling a lookup', async ({ page }) => {
   const clock = new Date('2026-11-09T10:00:00Z');

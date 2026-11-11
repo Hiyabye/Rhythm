@@ -248,7 +248,13 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     let availableHandler: number | null = null;
     let autoUpdateCheck = options.autoUpdateCheck ?? true;
     let notificationHandler: number | null = null;
-    const fixture = { ai, analyses, options, entries, studium, studiumStatusDelay: 0, studiumSaveError: options.studiumSaveError ?? false, calls: [] as { command: string; args: any }[], sourceDelay: options.sourceDelay ?? 0,
+    const fixture = { ai, analyses, options, entries, studium, studiumStatusDelay: 0, studiumSaveError: options.studiumSaveError ?? false, studiumCancelRequested: null as number | null, calls: [] as { command: string; args: any }[], sourceDelay: options.sourceDelay ?? 0,
+      finishStudiumCancel() {
+        if (this.studiumCancelRequested !== studium.job_id || !studium.running) return;
+        studium.running = false;
+        studium.results = studium.results.map((value) => value.status === 'loading' ? { ...value, status: 'cancelled', result: null } : value);
+        this.studiumCancelRequested = null;
+      },
       setNotificationAuthorization: (status: string) => { notificationAuthorization = status; },
       modelDirectoryResolvers: [] as Array<() => void>,
       releaseModelDirectory() { this.modelDirectoryResolvers.splice(0).forEach((release) => release()); },
@@ -396,7 +402,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             snapshot.settings = copy(args.settings); return copy(snapshot);
           case 'set_extension':
             snapshot.extensions.find((extension) => extension.id === args.id)!.enabled = args.enabled;
-            if (args.id === 'studium' && !args.enabled) { studium.running = false; studium.job_id = null; studium.results = studiumStates('not_checked'); }
+            if (args.id === 'studium' && !args.enabled) { studium.running = false; studium.job_id = null; studium.results = studiumStates('not_checked'); fixture.studiumCancelRequested = null; }
             return copy(snapshot);
           case 'studium_snapshot': return copy(studium);
           case 'studium_status': {
@@ -423,12 +429,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (studium.running) throw '이미 좌석을 확인하고 있습니다.';
             studium.job_id = (studium.job_id ?? 0) + 1;
             studium.running = true;
+            fixture.studiumCancelRequested = null;
             studium.results = studiumStates('loading');
             return copy(studium);
           case 'studium_cancel':
             if (args.jobId === studium.job_id) {
-              studium.running = false;
-              studium.results = studium.results.map((value) => value.status === 'loading' ? { ...value, status: 'cancelled', result: null } : value);
+              // A cancellation request does not complete the owning task. Tests
+              // explicitly release it after checking the still-running state.
+              fixture.studiumCancelRequested = args.jobId;
             }
             return copy(studium);
           case 'complete_onboarding': snapshot.onboarding_completed = true; return copy(snapshot);

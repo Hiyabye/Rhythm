@@ -172,6 +172,16 @@ pub fn parse_status(
             .iter()
             .filter(|(row, _)| {
                 row.select(&LINK).any(|link| {
+                    // Layout rows may contain the whole data table. Only the
+                    // link's own row identifies a room, never its ancestors.
+                    if link
+                        .ancestors()
+                        .filter_map(ElementRef::wrap)
+                        .find(|ancestor| ancestor.value().name() == "tr")
+                        != Some(*row)
+                    {
+                        return false;
+                    }
                     base.join(link.value().attr("href").unwrap_or_default())
                         .ok()
                         .is_some_and(|url| {

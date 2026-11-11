@@ -100,17 +100,18 @@ impl Drop for MaintenancePreparation {
 
 impl AppState {
     pub(crate) async fn exclusive_maintenance(&self) -> Result<AppMaintenanceGuard, String> {
+        let (reservation, studium_completion) = studium::commands::reserve_maintenance(
+            &self.operation_gate,
+            &self.store,
+            &self.studium,
+        )?;
         let mut preparation = MaintenancePreparation {
-            reservation: Some(self.operation_gate.close()?),
+            reservation: Some(reservation),
             proactive: self.proactive.clone(),
             analysis: self.analysis.clone(),
             armed: true,
         };
         self.archive.cancel();
-        {
-            let _store = self.store.lock().map_err(|_| "설정 잠금 오류")?;
-            self.studium.cancel();
-        }
         self.analysis.stop();
         self.models.cancel();
         self.ai_operation.cancel();
@@ -121,7 +122,9 @@ impl AppState {
         drop(ai_gate);
         self.proactive.quiesce().await;
         self.archive.wait().await;
-        self.studium.wait().await;
+        if let Some(completion) = studium_completion {
+            completion.wait().await;
+        }
         self.analysis.wait().await;
         self.models.wait().await;
         let gate = preparation
@@ -615,9 +618,10 @@ fn main() {
                 .store(true, std::sync::atomic::Ordering::Release);
             // Serialize cancellation against a start already admitted by the
             // gate but not yet registered. Starts recheck shutdown under Store.
-            if let Ok(_store) = state.store.lock() {
-                state.studium.cancel();
-            }
+            let studium_completion =
+                studium::commands::cancel_at_boundary(&state.store, &state.studium)
+                    .ok()
+                    .flatten();
             state.registry.stop_all();
             state.ai_operation.cancel();
             state.analysis.stop();
@@ -625,7 +629,13 @@ fn main() {
             tauri::async_runtime::block_on(async {
                 state.proactive.shutdown().await;
                 state.archive.wait().await;
-                state.studium.wait().await;
+                if let Some(completion) = studium_completion {
+                    completion.wait().await;
+                } else {
+                    // A poisoned Store prevented capture, but Registry still
+                    // signalled cancellation; exit must join that job as well.
+                    state.studium.wait().await;
+                }
                 state.analysis.wait().await;
                 state.models.wait().await;
                 state.classifier.shutdown().await;
