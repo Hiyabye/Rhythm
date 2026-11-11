@@ -12,6 +12,8 @@
       "../assets/licenses/native-tls-MIT.txt": "licenses/native-tls-MIT.txt",
       "../assets/licenses/hyper-tls-MIT.txt": "licenses/hyper-tls-MIT.txt",
       "../assets/licenses/tokio-native-tls-MIT.txt": "licenses/tokio-native-tls-MIT.txt",
+      "../assets/licenses/mac-usernotifications-MIT.txt": "licenses/mac-usernotifications-MIT.txt",
+      "../assets/licenses/mac-usernotifications-Apache-2.0.txt": "licenses/mac-usernotifications-Apache-2.0.txt",
       "../assets/licenses/Tauri-template-MIT.txt": "licenses/Tauri-template-MIT.txt",
       "../assets/licenses/llama.cpp-MIT.txt": "licenses/llama.cpp-MIT.txt",
       "../assets/licenses/Microsoft-VC-Runtime-NOTICE.txt": "licenses/Microsoft-VC-Runtime-NOTICE.txt",

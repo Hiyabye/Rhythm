@@ -1,6 +1,10 @@
 [workspace]
 members = ["src-tauri"]
+exclude = ["src-tauri/vendor/mac-usernotifications"]
 resolver = "2"
+
+[patch.crates-io]
+mac-usernotifications = { path = "src-tauri/vendor/mac-usernotifications" }
 
 [profile.release]
 strip = true

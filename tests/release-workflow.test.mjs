@@ -44,6 +44,16 @@ test('CI and the release share the Windows build tools, which install no GPU too
   assert.doesNotMatch(read('.github/actions/windows-build-tools/action.yml'), /vulkan|llvm|libclang|ninja/i);
 });
 
+test('vendored notification cancellation tests run only in macOS CI', () => {
+  const workflow = read('.github/workflows/ci.yml');
+  const desktop = workflow.split('\n  desktop:\n')[1].split('\n  windows:\n')[0];
+  const windows = workflow.split('\n  windows:\n')[1];
+  assert.match(desktop, /runs-on: macos-15/);
+  assert.match(desktop, /run: cargo test --locked -p mac-usernotifications --lib send::tests\n/);
+  assert.doesNotMatch(windows, /-p mac-usernotifications/);
+  assert.equal(workflow.match(/cargo test --locked -p mac-usernotifications --lib send::tests/g)?.length, 1);
+});
+
 test('release.yml is the only publishing workflow', () => {
   const workflows = readdirSync(new URL('../.github/workflows/', import.meta.url)).sort();
   assert.deepEqual(workflows, ['ci.yml', 'release.yml']);
