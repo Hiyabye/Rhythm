@@ -1,9 +1,48 @@
-//! Durable selection only; live seat information never enters SQLite or backup.
+//! Durable preferences only; live seat information and automatic running state
+//! never enter SQLite or backup.
 use super::Store;
 use crate::studium::{model::Preferences, rooms};
 use std::collections::HashSet;
 
 impl Store {
+    pub fn studium_auto_interval(&self) -> Result<u32, String> {
+        let interval: u32 = self
+            .connection
+            .query_row(
+                "SELECT interval_minutes FROM studium_preferences WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if !(2..=60).contains(&interval) {
+            return Err("저장된 자동 확인 간격을 확인해 주세요.".into());
+        }
+        Ok(interval)
+    }
+
+    /// Saves the interval without enabling automatic work or changing targets.
+    pub fn studium_save_auto_interval(&self, interval_minutes: u32) -> Result<u32, String> {
+        self.studium_writable()?;
+        if !(2..=60).contains(&interval_minutes) {
+            return Err("자동 확인 간격은 2분에서 60분 사이로 정해 주세요.".into());
+        }
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let changed = transaction
+            .execute(
+                "UPDATE studium_preferences SET interval_minutes=?1 WHERE id=1",
+                [interval_minutes],
+            )
+            .map_err(|e| e.to_string())?;
+        if changed != 1 {
+            return Err("저장된 열람실 설정을 확인해 주세요.".into());
+        }
+        transaction.commit().map_err(|e| e.to_string())?;
+        Ok(interval_minutes)
+    }
+
     pub fn studium_preferences(&self) -> Result<Preferences, String> {
         let mut statement = self
             .connection
@@ -149,6 +188,156 @@ mod tests {
     }
 
     #[test]
+    fn auto_interval_defaults_to_five_and_survives_reopen_without_changing_rooms() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("db");
+        let store = opened(&path);
+        assert_eq!(store.studium_auto_interval().unwrap(), 5);
+        let preferences = store
+            .studium_save_preferences(&ids(&["5", "6"]), "6")
+            .unwrap();
+        for interval in [2, 60, 5, 13] {
+            assert_eq!(
+                store.studium_save_auto_interval(interval).unwrap(),
+                interval
+            );
+            assert_eq!(store.studium_auto_interval().unwrap(), interval);
+            assert_eq!(store.studium_preferences().unwrap(), preferences);
+        }
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.studium_auto_interval().unwrap(), 13);
+        assert_eq!(reopened.studium_preferences().unwrap(), preferences);
+    }
+
+    #[test]
+    fn invalid_or_disabled_interval_writes_preserve_the_saved_value() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = opened(&directory.path().join("db"));
+        store.studium_save_auto_interval(11).unwrap();
+        for invalid in [0, 1, 61, u32::MAX] {
+            assert!(store.studium_save_auto_interval(invalid).is_err());
+            assert_eq!(store.studium_auto_interval().unwrap(), 11);
+        }
+        store
+            .set_enabled(crate::extensions::STUDIUM, false)
+            .unwrap();
+        assert!(store.studium_save_auto_interval(8).is_err());
+        assert_eq!(store.studium_auto_interval().unwrap(), 11);
+    }
+
+    #[test]
+    fn auto_interval_write_failure_keeps_the_previous_value_after_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("db");
+        let store = opened(&path);
+        store.studium_save_auto_interval(9).unwrap();
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER fail_interval_write BEFORE UPDATE OF interval_minutes ON studium_preferences
+                 BEGIN SELECT RAISE(ABORT,'synthetic interval failure'); END;",
+            )
+            .unwrap();
+        assert!(store.studium_save_auto_interval(12).is_err());
+        assert_eq!(store.studium_auto_interval().unwrap(), 9);
+        drop(store);
+        assert_eq!(
+            Store::open(&path).unwrap().studium_auto_interval().unwrap(),
+            9
+        );
+    }
+
+    #[test]
+    fn populated_schema_twenty_six_upgrade_adds_only_interval_default() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("db");
+        let store = opened(&path);
+        let preferences = store
+            .studium_save_preferences(&ids(&["5", "6"]), "6")
+            .unwrap();
+        store
+            .connection
+            .execute_batch(
+                "UPDATE settings SET theme='dark',clock_format='24h',auto_trash_months=3;
+                 ALTER TABLE studium_preferences DROP COLUMN interval_minutes;
+                 PRAGMA user_version=26;",
+            )
+            .unwrap();
+        drop(store);
+        let upgraded = Store::open(&path).unwrap();
+        assert_eq!(
+            upgraded.info().unwrap().schema_version,
+            super::super::SCHEMA_VERSION
+        );
+        assert_eq!(upgraded.studium_auto_interval().unwrap(), 5);
+        assert_eq!(upgraded.studium_preferences().unwrap(), preferences);
+        assert!(upgraded.enabled(crate::extensions::STUDIUM).unwrap());
+        assert_eq!(upgraded.settings().unwrap().theme, "dark");
+        assert_eq!(upgraded.settings().unwrap().clock_format, "24h");
+        assert_eq!(upgraded.settings().unwrap().auto_trash_months, 3);
+    }
+
+    #[test]
+    fn interval_migration_failure_keeps_schema_twenty_six_and_existing_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("db");
+        let store = opened(&path);
+        store.studium_save_auto_interval(17).unwrap();
+        store
+            .connection
+            .execute_batch("PRAGMA user_version=26;")
+            .unwrap();
+        drop(store);
+        // An unexpected pre-existing column makes 027 fail instead of silently
+        // treating a partially changed profile as a completed migration.
+        assert!(Store::open(&path).is_err());
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            26
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT interval_minutes FROM studium_preferences WHERE id=1",
+                    [],
+                    |row| row.get::<_, u32>(0),
+                )
+                .unwrap(),
+            17
+        );
+    }
+
+    #[test]
+    fn newer_schema_is_rejected_without_changing_journal_or_database_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("newer.db");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(&format!(
+                "PRAGMA journal_mode=DELETE;
+                 CREATE TABLE sentinel(value TEXT); INSERT INTO sentinel VALUES('keep');
+                 PRAGMA user_version={};",
+                super::super::SCHEMA_VERSION + 1,
+            ))
+            .unwrap();
+        drop(connection);
+        let before = std::fs::read(&path).unwrap();
+        assert!(Store::open(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(
+            connection
+                .query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "delete"
+        );
+    }
+
+    #[test]
     fn selection_and_view_survive_reopen_in_catalog_order() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("db");
@@ -290,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_backup_contains_selection_only() {
+    fn sqlite_backup_contains_selection_and_interval_only() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("db");
         let backup = directory.path().join("backup");
@@ -298,13 +487,25 @@ mod tests {
         store
             .studium_save_preferences(&ids(&["5", "11"]), "11")
             .unwrap();
+        store.studium_save_auto_interval(14).unwrap();
         store.backup_to(&backup).unwrap();
         let restored = Store::open(&backup).unwrap();
         let preferences = restored.studium_preferences().unwrap();
         assert_eq!(preferences.room_ids, ids(&["5", "11"]));
         assert_eq!(preferences.view_room, "11");
+        assert_eq!(restored.studium_auto_interval().unwrap(), 14);
         assert_eq!(restored.connection.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'studium_%'", [], |row| row.get::<_, i64>(0),
         ).unwrap(), 2);
+        let columns = restored
+            .connection
+            .prepare("SELECT name FROM pragma_table_info('studium_preferences') ORDER BY cid")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        // No durable automatic-enabled/job/result state is introduced.
+        assert_eq!(columns, ["id", "view_room", "interval_minutes"]);
     }
 }

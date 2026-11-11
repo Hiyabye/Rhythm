@@ -53,10 +53,19 @@ pub struct RoomState {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct AutomaticStatus {
+    pub active: bool,
+    pub interval_minutes: u32,
+    pub next_check_at: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct Snapshot {
     pub rooms: Vec<Room>,
     pub preferences: Preferences,
     pub job_id: Option<u64>,
     pub running: bool,
     pub results: Vec<RoomState>,
+    pub automatic: AutomaticStatus,
 }

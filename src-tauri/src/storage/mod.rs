@@ -21,7 +21,7 @@ pub mod proactive;
 mod proactive_tests;
 pub mod studium;
 pub(crate) mod trash;
-pub(crate) const SCHEMA_VERSION: i64 = 26;
+pub(crate) const SCHEMA_VERSION: i64 = 27;
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
     let migrations = [
@@ -51,6 +51,7 @@ fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
         include_str!("../../migrations/024_clock_format.sql"),
         include_str!("../../migrations/025_trash.sql"),
         include_str!("../../migrations/026_auto_trash.sql"),
+        include_str!("../../migrations/027_studium_interval.sql"),
     ];
     for (index, migration) in migrations.iter().enumerate().skip(version as usize) {
         let transaction = connection.transaction().map_err(|e| e.to_string())?;
@@ -380,7 +381,8 @@ mod tests {
             .unwrap()
             .connection
             .execute_batch(
-                "ALTER TABLE settings DROP COLUMN auto_trash_months;
+                "ALTER TABLE studium_preferences DROP COLUMN interval_minutes;
+                 ALTER TABLE settings DROP COLUMN auto_trash_months;
                  UPDATE settings SET theme='dark',clock_format='24h';
                  PRAGMA user_version=25;",
             )
@@ -555,7 +557,8 @@ mod tests {
             .unwrap()
             .connection
             .execute_batch(
-                "ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                "ALTER TABLE studium_preferences DROP COLUMN interval_minutes;
+                 ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                  UPDATE settings SET theme='dark',energy_profile='eco',interests='장학금';
                  PRAGMA user_version=23;",
             )

@@ -48,6 +48,144 @@ test('saved targets and viewed room are separate from unsaved target edits', asy
   await expect(page.getByText('열람실을 하나 이상 선택해 주세요.')).toBeVisible();
 });
 
+test('automatic checks stay off while interval edits validate, save and cancel without a lookup', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true } });
+  await openStudium(page);
+  const automatic = page.getByRole('region', { name: '자동 확인', exact: true });
+  const interval = automatic.getByRole('spinbutton', { name: '자동 확인 간격 (분)', exact: true });
+  const save = automatic.getByRole('button', { name: '간격 저장', exact: true });
+  await expect(interval).toHaveValue('5');
+  await expect(automatic.getByRole('status')).toHaveText('자동 확인이 꺼져 있습니다.');
+  await interval.fill('1');
+  await expect(interval).toHaveAttribute('aria-invalid', 'true');
+  await expect(save).toBeDisabled();
+  await interval.fill('2.5');
+  await expect(save).toBeDisabled();
+  await interval.fill('60');
+  await save.click();
+  await expect(automatic).toContainText('저장한 간격 60분');
+  await expect(save).toBeDisabled();
+  await interval.fill('2');
+  await automatic.getByRole('button', { name: '간격 변경 취소', exact: true }).click();
+  await expect(interval).toHaveValue('60');
+  expect(await callCount(page, 'studium_save_interval')).toBe(1);
+  expect(await callCount(page, 'studium_start')).toBe(0);
+  expect(await callCount(page, 'studium_automatic_start')).toBe(0);
+  expect(await callCount(page, 'studium_status')).toBe(0);
+});
+
+test('waiting automatic status preserves interval and room drafts through polling and save failure', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true }, studiumSaveError: true, studium: {
+    preferences, results: [row('5', 1, [84]), row('6', 0, [])],
+    automatic: { active: true, interval_minutes: 5, next_check_at: '2026-11-10T10:00:00Z', error: null },
+  } });
+  await openStudium(page);
+  const automatic = page.getByRole('region', { name: '자동 확인', exact: true });
+  const interval = automatic.getByRole('spinbutton', { name: '자동 확인 간격 (분)', exact: true });
+  await interval.fill('7');
+  await page.getByRole('checkbox', { name: /PA관 열람실/ }).check();
+  const polls = await callCount(page, 'studium_status');
+  await expect.poll(() => callCount(page, 'studium_status')).toBeGreaterThan(polls);
+  await expect(interval).toHaveValue('7');
+  await expect(page.getByRole('checkbox', { name: /PA관 열람실/ })).toBeChecked();
+  await automatic.getByRole('button', { name: '간격 저장', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('자동 확인 간격을 저장하지 못했습니다.');
+  await expect(interval).toHaveValue('7');
+  await expect(automatic).toContainText('저장한 간격 5분');
+  await page.evaluate(() => { (window as any).__fixture.studiumSaveError = false; });
+  await automatic.getByRole('button', { name: '간격 저장', exact: true }).click();
+  await expect(automatic).toContainText('저장한 간격 7분');
+  expect(await page.evaluate(() => (window as any).__fixture.studium.automatic.next_check_at)).toBe('2026-11-10T10:00:00Z');
+  await expect(page.getByRole('checkbox', { name: /PA관 열람실/ })).toBeChecked();
+  await expect(automatic.getByRole('status')).toContainText('다음 자동 확인:');
+  expect(await callCount(page, 'studium_start')).toBe(0);
+  expect(await callCount(page, 'studium_automatic_start')).toBe(0);
+});
+
+test('automatic start immediately checks once, keeps waiting status on reopen, and pause preserves a manual cycle', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true }, studium: { preferences, results: [row('5', 1, [84]), row('6', 0, [])] } });
+  await openStudium(page);
+  const automatic = page.getByRole('region', { name: '자동 확인', exact: true });
+  await automatic.getByRole('button', { name: '자동 확인 시작', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(automatic.getByRole('button', { name: '자동 확인 일시정지', exact: true })).toBeFocused();
+  await expect(page.getByRole('button', { name: '지금 확인', exact: true })).toBeDisabled();
+  await expect(page.locator('.seat-numbers')).toHaveCount(0);
+  await page.evaluate((results) => (window as any).__fixture.finishStudiumCycle(results), [row('5', 2, [1, 84]), row('6', 0, [])]);
+  await expect(automatic.getByRole('status')).toContainText('다음 자동 확인:');
+  await expect(page.getByRole('button', { name: '지금 확인', exact: true })).toBeEnabled();
+  const polls = await callCount(page, 'studium_status');
+  await expect.poll(() => callCount(page, 'studium_status')).toBeGreaterThan(polls);
+  await nav(page).getByRole('button', { name: '오늘', exact: true }).click();
+  await nav(page).getByRole('button', { name: '열람실', exact: true }).click();
+  await expect(automatic.getByRole('status')).toContainText('다음 자동 확인:');
+  await page.getByRole('button', { name: '지금 확인', exact: true }).click();
+  await expect(automatic.getByRole('status')).toContainText('진행 중인 확인을 마친 뒤 5분 후');
+  await automatic.getByRole('button', { name: '자동 확인 일시정지', exact: true }).click();
+  await expect(automatic.getByRole('button', { name: '자동 확인 시작', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '지금 확인', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '확인 취소', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__fixture.studiumCancelRequested)).toBeNull();
+  await page.evaluate((results) => (window as any).__fixture.finishStudiumCycle(results), [row('5', 0, []), row('6', 0, [])]);
+  await expect(page.getByRole('button', { name: '지금 확인', exact: true })).toBeEnabled();
+  const stoppedPolls = await callCount(page, 'studium_status');
+  await page.waitForTimeout(1_200);
+  expect(await callCount(page, 'studium_status')).toBe(stoppedPolls);
+  expect(await callCount(page, 'studium_automatic_start')).toBe(1);
+  expect(await callCount(page, 'studium_automatic_pause')).toBe(1);
+  expect(await callCount(page, 'studium_start')).toBe(1);
+});
+
+test('automatic start adopts an existing manual cycle and pausing an automatic cycle cancels only that cycle', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true } });
+  await openStudium(page);
+  const automatic = page.getByRole('region', { name: '자동 확인', exact: true });
+  await page.getByRole('button', { name: '지금 확인', exact: true }).click();
+  const manualId = await page.evaluate(() => (window as any).__fixture.studium.job_id);
+  await automatic.getByRole('button', { name: '자동 확인 시작', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).__fixture.studium.job_id)).toBe(manualId);
+  await automatic.getByRole('button', { name: '자동 확인 일시정지', exact: true }).click();
+  await expect(page.getByRole('button', { name: '지금 확인', exact: true })).toBeDisabled();
+  await page.evaluate((results) => (window as any).__fixture.finishStudiumCycle(results), [row('5', 0, [])]);
+  await expect(page.getByRole('button', { name: '지금 확인', exact: true })).toBeEnabled();
+  await automatic.getByRole('button', { name: '자동 확인 시작', exact: true }).click();
+  await automatic.getByRole('button', { name: '자동 확인 일시정지', exact: true }).click();
+  await expect(page.getByRole('button', { name: '지금 확인', exact: true })).toBeEnabled();
+  await expect(page.getByRole('region', { name: '로욜라 인벤툼 II 좌석 정보' })).toContainText('확인 취소됨');
+  expect(await callCount(page, 'studium_start')).toBe(1);
+});
+
+test('server refusal stops automatic polling and stays stopped after navigation or extension off and on', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true }, studium: {
+    automatic: { active: true, interval_minutes: 7, next_check_at: null, error: null }, running: true, job_id: 1,
+    results: [{ room_id: '5', status: 'loading', result: null, error: null, checked_at: null }],
+  } });
+  await openStudium(page);
+  const automatic = page.getByRole('region', { name: '자동 확인', exact: true });
+  await page.evaluate(() => {
+    const state = (window as any).__fixture.studium;
+    state.running = false;
+    state.results = [{ room_id: '5', status: 'failed', result: null, error: '학교 서버가 요청을 제한했습니다.', checked_at: new Date().toISOString() }];
+    state.automatic = { ...state.automatic, active: false, next_check_at: null, error: '학교 서버가 요청을 제한하여 자동 확인을 중단했습니다.' };
+  });
+  await expect(automatic.getByRole('alert')).toContainText('자동 확인을 중단했습니다.');
+  await expect(automatic.getByRole('status')).toHaveText('자동 확인이 중단되었습니다.');
+  const polls = await callCount(page, 'studium_status');
+  await page.waitForTimeout(1_200);
+  expect(await callCount(page, 'studium_status')).toBe(polls);
+  await nav(page).getByRole('button', { name: '오늘', exact: true }).click();
+  await nav(page).getByRole('button', { name: '열람실', exact: true }).click();
+  await expect(automatic.getByRole('button', { name: '자동 확인 시작', exact: true })).toBeVisible();
+  await openSettings(page, '확장 기능');
+  await page.getByRole('switch', { name: '열람실 사용 설정', exact: true }).click();
+  await page.getByRole('switch', { name: '열람실 사용 설정', exact: true }).click();
+  await nav(page).getByRole('button', { name: '열람실', exact: true }).click();
+  await expect(automatic.getByRole('status')).toHaveText('자동 확인이 꺼져 있습니다.');
+  await expect(automatic.getByRole('spinbutton', { name: '자동 확인 간격 (분)', exact: true })).toHaveValue('7');
+  expect(await callCount(page, 'studium_automatic_start')).toBe(0);
+  expect(await callCount(page, 'studium_start')).toBe(0);
+});
+
 test('manual lookup clears old values and cancellation keeps only completed rooms', async ({ page }) => {
   await mockDesktop(page, { extensions: { studium: true }, studium: { preferences, results: [row('5', 1, [84]), row('6', 2, [1, 2])] } });
   await openStudium(page);

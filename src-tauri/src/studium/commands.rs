@@ -8,7 +8,84 @@ use crate::{
 use std::sync::{atomic::AtomicBool, Arc};
 
 fn snapshot(state: &AppState, store: &Store) -> Result<Snapshot, String> {
-    state.studium.snapshot(store.studium_preferences()?)
+    snapshot_with_store(&state.studium, store)
+}
+
+fn snapshot_with_store(
+    controller: &super::controller::Controller,
+    store: &Store,
+) -> Result<Snapshot, String> {
+    let mut value = controller.snapshot(store.studium_preferences()?)?;
+    value.automatic.interval_minutes = store.studium_auto_interval()?;
+    Ok(value)
+}
+
+#[tauri::command]
+pub(crate) async fn studium_save_interval(
+    state: tauri::State<'_, AppState>,
+    interval_minutes: u32,
+) -> Result<Snapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
+    let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
+    store.studium_save_auto_interval(interval_minutes)?;
+    // Saving changes the next cycle's interval, never wakes the current timer.
+    snapshot(&state, &store)
+}
+
+#[tauri::command]
+pub(crate) async fn studium_automatic_start(
+    state: tauri::State<'_, AppState>,
+) -> Result<Snapshot, String> {
+    automatic_start_with_transport(
+        &state.studium,
+        &state.operation_gate,
+        &state.maintenance_shutdown,
+        &state.store,
+        state.network.clone(),
+    )
+    .await
+}
+
+pub(crate) async fn automatic_start_with_transport<T: Transport + Clone + 'static>(
+    controller: &Arc<super::controller::Controller>,
+    gate: &Arc<AdmissionGate>,
+    shutdown: &Arc<AtomicBool>,
+    shared_store: &SharedStore,
+    transport: T,
+) -> Result<Snapshot, String> {
+    let _lease = gate.shared().await?;
+    let store = shared_store.lock().map_err(|_| "설정 잠금 오류")?;
+    gate.ensure_open()?;
+    if shutdown.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("Rhythm을 종료하고 있습니다.".into());
+    }
+    if !store.enabled(crate::extensions::STUDIUM)? {
+        return Err("Studium 확장 기능이 꺼져 있습니다.".into());
+    }
+    store.studium_auto_interval()?;
+    controller.start_automatic(
+        shared_store.clone(),
+        gate.clone(),
+        shutdown.clone(),
+        transport,
+    )?;
+    snapshot_with_store(controller, &store)
+}
+
+#[tauri::command]
+pub(crate) async fn studium_automatic_pause(
+    state: tauri::State<'_, AppState>,
+) -> Result<Snapshot, String> {
+    let _lease = state.operation_gate.shared().await?;
+    let completion = {
+        let _store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
+        state.studium.pause_automatic()
+    };
+    if let Some(completion) = completion {
+        completion.wait().await;
+    }
+    let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
+    snapshot(&state, &store)
 }
 
 #[tauri::command]
@@ -98,7 +175,7 @@ fn register<T: Transport + 'static>(
         shared_store.clone(),
         lease,
     )?;
-    controller.snapshot(store.studium_preferences()?)
+    snapshot_with_store(controller, &store)
 }
 
 /// Cancellation and admission serialize on Store. The returned handle belongs

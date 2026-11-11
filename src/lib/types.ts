@@ -26,6 +26,7 @@ export interface StudiumSnapshot {
   job_id: number | null;
   running: boolean;
   results: StudiumRoomState[];
+  automatic: { active: boolean; interval_minutes: number; next_check_at: string | null; error: string | null };
 }
 export interface PersonalizationProfile {
   university: string;
