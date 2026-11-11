@@ -74,7 +74,7 @@ test('automatic checks stay off while interval edits validate, save and cancel w
   expect(await callCount(page, 'studium_status')).toBe(0);
 });
 
-test('waiting automatic status preserves interval and room drafts through polling and save failure', async ({ page }) => {
+test('waiting automatic status preserves interval and room drafts through state refresh and save failure', async ({ page }) => {
   await mockDesktop(page, { extensions: { studium: true }, studiumSaveError: true, studium: {
     preferences, results: [row('5', 1, [84]), row('6', 0, [])],
     automatic: { active: true, interval_minutes: 5, next_check_at: '2026-11-10T10:00:00Z', error: null },
@@ -84,8 +84,13 @@ test('waiting automatic status preserves interval and room drafts through pollin
   const interval = automatic.getByRole('spinbutton', { name: '자동 확인 간격 (분)', exact: true });
   await interval.fill('7');
   await page.getByRole('checkbox', { name: /PA관 열람실/ }).check();
+  // A waiting session does not poll; it refreshes on the shared state event.
   const polls = await callCount(page, 'studium_status');
-  await expect.poll(() => callCount(page, 'studium_status')).toBeGreaterThan(polls);
+  await page.waitForTimeout(1_200);
+  expect(await callCount(page, 'studium_status')).toBe(polls);
+  const refreshes = await callCount(page, 'studium_snapshot');
+  await page.evaluate(() => (window as any).__fixture.emitStudiumState());
+  await expect.poll(() => callCount(page, 'studium_snapshot')).toBeGreaterThan(refreshes);
   await expect(interval).toHaveValue('7');
   await expect(page.getByRole('checkbox', { name: /PA관 열람실/ })).toBeChecked();
   await automatic.getByRole('button', { name: '간격 저장', exact: true }).click();
@@ -115,7 +120,8 @@ test('automatic start immediately checks once, keeps waiting status on reopen, a
   await expect(automatic.getByRole('status')).toContainText('다음 자동 확인:');
   await expect(page.getByRole('button', { name: '지금 확인', exact: true })).toBeEnabled();
   const polls = await callCount(page, 'studium_status');
-  await expect.poll(() => callCount(page, 'studium_status')).toBeGreaterThan(polls);
+  await page.waitForTimeout(1_200);
+  expect(await callCount(page, 'studium_status')).toBe(polls);
   await nav(page).getByRole('button', { name: '오늘', exact: true }).click();
   await nav(page).getByRole('button', { name: '열람실', exact: true }).click();
   await expect(automatic.getByRole('status')).toContainText('다음 자동 확인:');
@@ -232,7 +238,7 @@ test('favorite numbers validate, save independently and exact search keeps the t
   expect(await callCount(page, 'studium_status')).toBe(0);
 });
 
-test('favorite drafts survive polling and remain separate across viewed and deselected rooms', async ({ page }) => {
+test('favorite drafts survive state refresh and remain separate across viewed and deselected rooms', async ({ page }) => {
   await mockDesktop(page, { extensions: { studium: true }, studium: {
     preferences, favorites: { '5': [84], '6': [1] }, results: [row('5', 1, [84]), row('6', 1, [1])],
     automatic: { active: true, interval_minutes: 5, next_check_at: '2026-11-10T10:00:00Z', error: null },
@@ -242,8 +248,9 @@ test('favorite drafts survive polling and remain separate across viewed and dese
   const search = page.getByRole('searchbox', { name: '빈 좌석 번호 검색', exact: true });
   await input.fill('1 42');
   await search.fill('84');
-  const polls = await callCount(page, 'studium_status');
-  await expect.poll(() => callCount(page, 'studium_status')).toBeGreaterThan(polls);
+  const refreshes = await callCount(page, 'studium_snapshot');
+  await page.evaluate(() => (window as any).__fixture.emitStudiumState());
+  await expect.poll(() => callCount(page, 'studium_snapshot')).toBeGreaterThan(refreshes);
   await expect(input).toHaveValue('1 42');
   await page.getByRole('combobox', { name: '표시할 열람실' }).selectOption('6');
   await expect(input).toHaveValue('1');

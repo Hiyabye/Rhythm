@@ -574,3 +574,44 @@ fn reopening_invalidates_tokens_left_by_a_process_that_skipped_shutdown() {
     assert_eq!(count(&store, "studium_alert_tokens"), 0);
     assert_eq!(store.studium_alert_consume(&token(1)).unwrap(), None);
 }
+
+#[test]
+fn a_minimum_beyond_a_reduced_capacity_reads_as_off_without_breaking_rules() {
+    let (_directory, store) = fixture();
+    let capacity = rooms::get("5").unwrap().capacity;
+    // Models a rule saved under a larger capacity than the current catalog.
+    store
+        .connection
+        .execute_batch(&format!(
+            "PRAGMA ignore_check_constraints=ON;
+             UPDATE studium_alert_rules SET enabled=1,minimum={} WHERE room_id='5';
+             PRAGMA ignore_check_constraints=OFF;",
+            capacity + 1
+        ))
+        .unwrap();
+    let rules = store.studium_alert_rules().unwrap();
+    assert!(!rules["5"].enabled);
+    assert_eq!(rules["5"].minimum, capacity);
+    assert!(rules["6"].kind == "remaining" && !rules["6"].enabled);
+    let stored: u32 = store
+        .connection
+        .query_row(
+            "SELECT minimum FROM studium_alert_rules WHERE room_id='5'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, capacity + 1);
+    // The stale rule yields no alert candidate, even at full availability.
+    assert!(store
+        .studium_alert_observe(1, &observation("5", capacity, true))
+        .unwrap()
+        .is_none());
+    // A changed save replaces the row.
+    assert!(
+        store
+            .studium_save_alert_rule("5", &rule("remaining", 2))
+            .unwrap()["5"]
+            .enabled
+    );
+}

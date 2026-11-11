@@ -112,7 +112,7 @@
   }
 
   async function poll() {
-    if (!mounted || !snapshot || (!snapshot.running && !snapshot.automatic.active) || busy || polling) return;
+    if (!mounted || !snapshot?.running || busy || polling) return;
     polling = true;
     const token = generation;
     try {

@@ -90,13 +90,14 @@ impl Store {
             let seats = favorites
                 .get_mut(&room_id)
                 .expect("fixed catalog room initialized above");
-            if number == 0
-                || number > room.capacity
-                || seats.last().is_some_and(|previous| *previous >= number)
-            {
+            if number == 0 || seats.last().is_some_and(|previous| *previous >= number) {
                 return Err("저장된 선호 좌석 설정을 확인해 주세요.".into());
             }
-            seats.push(number);
+            // A seat beyond a reduced catalog capacity cannot exist. Skip it
+            // instead of failing the whole page; a changed save replaces the row.
+            if number <= room.capacity {
+                seats.push(number);
+            }
         }
         Ok(favorites)
     }
@@ -544,6 +545,38 @@ mod tests {
                 .unwrap(),
             "keep"
         );
+    }
+
+    #[test]
+    fn favorites_beyond_a_reduced_capacity_are_skipped_without_failing_the_page() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = opened(&directory.path().join("db"));
+        store.studium_save_favorites("5", &[7]).unwrap();
+        let capacity = rooms::get("5").unwrap().capacity;
+        // Models a row saved under a larger capacity than the current catalog.
+        store
+            .connection
+            .execute_batch(&format!(
+                "PRAGMA ignore_check_constraints=ON;
+                 INSERT INTO studium_favorite_seats(room_id,seat_number) VALUES('5',{});
+                 PRAGMA ignore_check_constraints=OFF;",
+                capacity + 1
+            ))
+            .unwrap();
+        assert_eq!(store.studium_favorites().unwrap()["5"], [7]);
+        assert_eq!(
+            store.studium_save_favorites("5", &[7, 8]).unwrap()["5"],
+            [7, 8]
+        );
+        let stored: i64 = store
+            .connection
+            .query_row(
+                "SELECT count(*) FROM studium_favorite_seats WHERE room_id='5'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, 2);
     }
 
     #[test]

@@ -304,15 +304,19 @@ impl Views {
             let tooltip = tray_tooltip(&rows);
             let applied = (rows, tooltip);
             let mut tray = owner.tray.lock().map_err(|_| "트레이 상태 잠금 오류")?;
-            if tray.as_ref() != Some(&applied) {
+            let updated = if tray.as_ref() == Some(&applied) {
+                Ok(())
+            } else {
                 crate::core::lifecycle::update_studium_tray(&owner.app, &applied.0, &applied.1)
-                    .map_err(|_| "트레이 현황을 갱신하지 못했습니다.")?;
-                *tray = Some(applied);
-            }
+                    .map(|()| *tray = Some(applied))
+                    .map_err(|_| "트레이 현황을 갱신하지 못했습니다.".to_string())
+            };
             drop(tray);
             drop(store);
+            // Windows refresh only on this event while no check is running, so
+            // a tray failure must not suppress it.
             let _ = owner.app.emit("studium://state-changed", ());
-            Ok(())
+            updated
         })
         .await
     }

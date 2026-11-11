@@ -133,6 +133,11 @@ async fn studium_client_only_missing_robots_policies_become_empty() {
         } else {
             assert!(error.contains(&format!("HTTP {status}")), "{error}");
         }
+        assert_eq!(
+            is_access_denied(&error),
+            matches!(status, 401 | 403),
+            "{error}"
+        );
         script.assert_one_request(&url);
     }
     // A 404 page is not a missing robots policy.

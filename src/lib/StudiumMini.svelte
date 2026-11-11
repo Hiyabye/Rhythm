@@ -208,7 +208,7 @@
       });
     } else loading = false;
     const pollTimer = window.setInterval(() => {
-      if (!document.hidden && enabled && (snapshot?.running || snapshot?.automatic.active)) void refresh(false, true);
+      if (!document.hidden && enabled && snapshot?.running) void refresh(false, true);
     }, 500);
     const clockTimer = window.setInterval(() => now = Date.now(), 1000);
     const focus = () => { now = Date.now(); if (!document.hidden) void refresh(true); };
