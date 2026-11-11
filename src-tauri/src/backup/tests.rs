@@ -651,6 +651,55 @@ fn restored_activation_tokens_are_cleared_in_staging_only() {
     assert_eq!(count, 0);
 }
 
+#[test]
+fn restored_seat_tokens_are_cleared_without_resetting_latches_or_rate_accounting() {
+    let root = tempfile::tempdir().unwrap();
+    let stage = root.path().join("stage");
+    fs::create_dir(&stage).unwrap();
+    let live = root.path().join("rhythm.sqlite3");
+    let store = crate::storage::Store::open(&live).unwrap();
+    let connection = rusqlite::Connection::open(&live).unwrap();
+    connection.execute_batch(
+        "UPDATE studium_alert_rules SET armed=0 WHERE room_id='5';
+         INSERT INTO studium_alert_attempts(attempted_at) VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+         INSERT INTO studium_alert_tokens(token_hash,room_id,rule_version,expires_at,created_at)
+         VALUES(printf('%064d',1),'5',1,strftime('%Y-%m-%dT%H:%M:%fZ','now','+30 minutes'),strftime('%Y-%m-%dT%H:%M:%fZ','now'));",
+    ).unwrap();
+    drop(connection);
+    store.backup_to(&stage.join("rhythm.sqlite3")).unwrap();
+    drop(store);
+    clear_restored_activation_tokens(&stage).unwrap();
+    for (path, expected_tokens) in [(live, 1), (stage.join("rhythm.sqlite3"), 0)] {
+        let connection = rusqlite::Connection::open(path).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM studium_alert_tokens", [], |row| row
+                    .get::<_, i64>(
+                    0
+                ))
+                .unwrap(),
+            expected_tokens
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT armed FROM studium_alert_rules WHERE room_id='5'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM studium_alert_attempts", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_restore_refuses_prepared_database_tampering() {

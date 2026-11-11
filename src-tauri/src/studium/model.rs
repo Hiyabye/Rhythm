@@ -60,6 +60,30 @@ pub struct AutomaticStatus {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlertRule {
+    pub enabled: bool,
+    pub kind: String,
+    pub minimum: u32,
+    pub version: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlertRuleInput {
+    pub enabled: bool,
+    pub kind: String,
+    pub minimum: u32,
+}
+
+/// A transient, validated observation. None of its seat data is durable.
+#[derive(Clone, Debug)]
+pub(crate) struct AlertCandidate {
+    pub room_id: String,
+    pub version: i64,
+    pub job_id: u64,
+    pub data: SeatData,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Snapshot {
     pub rooms: Vec<Room>,
@@ -69,4 +93,6 @@ pub struct Snapshot {
     pub results: Vec<RoomState>,
     pub automatic: AutomaticStatus,
     pub favorites: std::collections::BTreeMap<String, Vec<u32>>,
+    pub alert_rules: std::collections::BTreeMap<String, AlertRule>,
+    pub alert_error: Option<String>,
 }

@@ -2,6 +2,7 @@ pub(crate) mod commands;
 pub(crate) mod controller;
 pub(crate) mod model;
 pub(crate) mod network;
+pub(crate) mod notification;
 pub(crate) mod parser;
 pub(crate) mod rooms;
 
