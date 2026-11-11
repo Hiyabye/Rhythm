@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { archiveError, timeOptions } from './archive-format';
   import { clock as clockSetting } from './clock.svelte';
@@ -12,6 +12,10 @@
   let draft = $state<string[]>([]);
   let intervalDraft = $state<number | undefined>(5);
   let intervalEditing = $state(false);
+  let favoritesRoom = $state('');
+  let favoritesDraft = $state('');
+  let favoritesEditing = $state(false);
+  let searchDraft = $state('');
   let viewRoom = $state('');
   let loading = $state(true);
   let busy = $state(false);
@@ -25,6 +29,8 @@
   let startButton = $state<HTMLButtonElement>();
   let cancelButton = $state<HTMLButtonElement>();
   let automaticButton = $state<HTMLButtonElement>();
+  let favoritesInput = $state<HTMLInputElement>();
+  let searchInput = $state<HTMLInputElement>();
   let keepAutomaticFocus = false;
   // Set when the user operates 지금 확인/확인 취소: disabling or removing the
   // pressed button would otherwise drop keyboard focus to the page body.
@@ -35,13 +41,26 @@
   let dirty = $derived(Boolean(snapshot && (draft.length !== snapshot.preferences.room_ids.length || draft.some((id) => !snapshot?.preferences.room_ids.includes(id)))));
   let intervalDirty = $derived(Boolean(snapshot && intervalDraft !== snapshot.automatic.interval_minutes));
   let intervalInvalid = $derived(intervalDraft === undefined || !Number.isInteger(intervalDraft) || intervalDraft < 2 || intervalDraft > 60);
+  let savedFavorites = $derived(snapshot?.favorites[viewRoom] ?? []);
+  let parsedFavorites = $derived(parseFavorites(favoritesDraft, room?.capacity ?? 0));
+  let favoritesDirty = $derived(Boolean(parsedFavorites.error || parsedFavorites.numbers.length !== savedFavorites.length || parsedFavorites.numbers.some((number, index) => savedFavorites[index] !== number)));
+  let searchActive = $derived(searchDraft.trim() !== '');
+  let searchInvalid = $derived(searchActive && (!/^\d+$/.test(searchDraft.trim()) || !Number.isSafeInteger(Number(searchDraft)) || Number(searchDraft) < 1 || Number(searchDraft) > (room?.capacity ?? 0)));
+  let filteredNumbers = $derived(result?.result?.seat_numbers?.filter((number) => !searchActive || (!searchInvalid && number === Number(searchDraft))) ?? []);
 
-  function apply(value: StudiumSnapshot, resetDraft = false, resetInterval = false) {
+  function apply(value: StudiumSnapshot, resetDraft = false, resetInterval = false, resetFavorites = false) {
+    if (favoritesRoom !== value.preferences.view_room) {
+      favoritesEditing = false;
+      searchDraft = '';
+    }
+    if (resetFavorites) favoritesEditing = false;
+    favoritesRoom = value.preferences.view_room;
     snapshot = value;
     viewRoom = value.preferences.view_room;
     if (resetDraft) draft = [...value.preferences.room_ids];
     if (resetInterval) intervalEditing = false;
     if (!intervalEditing) intervalDraft = value.automatic.interval_minutes;
+    if (!favoritesEditing) favoritesDraft = (value.favorites[viewRoom] ?? []).join(', ');
   }
 
   async function load() {
@@ -72,7 +91,7 @@
     } finally { polling = false; }
   }
 
-  async function act(command: string, args: Record<string, unknown> = {}, resetDraft = false, success = '', resetInterval = false) {
+  async function act(command: string, args: Record<string, unknown> = {}, resetDraft = false, success = '', resetInterval = false, resetFavorites = false) {
     if (!snapshot || busy) return;
     const token = ++generation;
     busy = true;
@@ -81,7 +100,7 @@
     notice = '';
     try {
       const value = await invoke<StudiumSnapshot>(command, args);
-      if (mounted && token === generation) { apply(value, resetDraft, resetInterval); notice = success; }
+      if (mounted && token === generation) { apply(value, resetDraft, resetInterval, resetFavorites); notice = success; }
     } catch (reason) {
       if (mounted && token === generation) {
         viewRoom = snapshot.preferences.view_room;
@@ -110,6 +129,42 @@
   function cancelIntervalEdit() {
     intervalEditing = false;
     intervalDraft = snapshot?.automatic.interval_minutes ?? 5;
+  }
+
+  function parseFavorites(value: string, capacity: number): { numbers: number[]; error: string } {
+    const parts = value.trim() ? value.trim().split(/[,\s]+/) : [];
+    const numbers = parts.map(Number);
+    if (parts.some((part) => !/^\d+$/.test(part)) || numbers.some((number) => !Number.isSafeInteger(number) || number < 1 || number > capacity)) {
+      return { numbers: [], error: `1부터 ${capacity} 사이의 좌석 번호를 쉼표나 공백으로 구분해 입력해 주세요.` };
+    }
+    if (new Set(numbers).size !== numbers.length) return { numbers: [], error: '같은 좌석 번호를 중복해서 입력할 수 없습니다.' };
+    return { numbers: numbers.sort((a, b) => a - b), error: '' };
+  }
+
+  async function saveFavorites() {
+    if (parsedFavorites.error || !favoritesDirty) return;
+    await act('studium_save_favorites', { roomId: viewRoom, seatNumbers: parsedFavorites.numbers }, false, '선호 좌석을 저장했습니다.', false, true);
+    await tick();
+    const active = document.activeElement;
+    // WebKit pointer activation can leave focus on the shell's main fallback;
+    // restore the editor unless the user has moved to another control.
+    if (mounted && (active === document.body || active?.id === 'main' || (active instanceof HTMLButtonElement && active.disabled && favoritesInput?.closest('form')?.contains(active)))) favoritesInput?.focus();
+  }
+
+  function cancelFavoritesEdit() {
+    favoritesEditing = false;
+    favoritesDraft = savedFavorites.join(', ');
+    favoritesInput?.focus();
+  }
+
+  function favoriteAvailability(): string {
+    if (!savedFavorites.length) return '선호 좌석을 저장하면 확인된 빈 번호를 ★로 강조합니다.';
+    if (!result?.result) return '현재 조회로 선호 좌석의 빈자리 여부를 확인하지 못했습니다.';
+    const data = result.result;
+    if (data.seat_numbers === null) return '번호를 확인하지 못해 선호 좌석의 빈자리 여부를 알 수 없습니다.';
+    const available = data.seat_numbers.filter((number) => savedFavorites.includes(number));
+    if (stale(data.source_time)) return `이전 조회 기준 빈 선호 좌석: ${available.length ? available.join(', ') + '번' : '없음'}. 현재 빈자리 여부는 확인되지 않았습니다.`;
+    return available.length ? `이번 조회에서 빈 선호 좌석: ${available.join(', ')}번` : '이번 조회에서 빈 선호 좌석이 없습니다.';
   }
 
   function toggleAutomatic() {
@@ -243,15 +298,32 @@
         <div class="view-picker"><label for="studium-view-room">표시할 열람실</label><select id="studium-view-room" value={viewRoom} disabled={busy} onchange={(event) => { viewRoom = event.currentTarget.value; void act('studium_set_view_room', { roomId: viewRoom }); }}>{#each selected as item (item.id)}<option value={item.id}>{item.label}</option>{/each}</select></div>
         <section class="room-detail" aria-label={`${room?.label ?? '열람실'} 좌석 정보`}>
           <h3>{room?.label ?? '열람실'}</h3>
+          <section class="favorites-editor" aria-labelledby="studium-favorites-title">
+            <h4 id="studium-favorites-title">선호 좌석</h4>
+            <form onsubmit={(event) => { event.preventDefault(); void saveFavorites(); }}>
+              <label for="studium-favorites">선호 좌석 번호</label>
+              <input id="studium-favorites" type="text" bind:this={favoritesInput} bind:value={favoritesDraft} oninput={() => favoritesEditing = true} disabled={busy} maxlength={(room?.capacity ?? 311) * 5} placeholder="예: 1, 42 84" aria-invalid={parsedFavorites.error ? 'true' : undefined} aria-describedby={parsedFavorites.error ? 'studium-favorites-help studium-favorites-error' : 'studium-favorites-help'} />
+              <div class="editor-actions"><button class="button secondary small" type="submit" disabled={busy || !favoritesDirty || Boolean(parsedFavorites.error)}>선호 좌석 저장</button><button class="button secondary small" type="button" disabled={busy || !favoritesEditing} onclick={cancelFavoritesEdit}>선호 좌석 변경 취소</button></div>
+            </form>
+            <p class="editor-help" id="studium-favorites-help">{room?.label}의 1–{room?.capacity}번을 쉼표나 공백으로 구분합니다. 빈칸으로 저장하면 선호 설정을 지웁니다.</p>
+            {#if parsedFavorites.error}<p class="validation editor-help" id="studium-favorites-error" role="status">{parsedFavorites.error}</p>{/if}
+            <p class="saved-favorites">저장한 선호 좌석: {savedFavorites.length ? savedFavorites.join(', ') + '번' : '없음'}</p>
+            <p class="favorite-availability" role="status">{favoriteAvailability()}</p>
+            <p class="editor-help">표시할 열람실을 바꾸면 저장하지 않은 선호 번호와 검색을 초기화합니다. 조회 대상에서 뺀 방의 선호 설정은 유지합니다.</p>
+          </section>
+          <div class="seat-search"><label for="studium-seat-search">빈 좌석 번호 검색</label><input id="studium-seat-search" type="search" inputmode="numeric" bind:this={searchInput} bind:value={searchDraft} disabled={busy} aria-invalid={searchInvalid ? 'true' : undefined} aria-describedby={searchInvalid ? 'studium-search-error' : undefined} /><button class="button secondary small" disabled={busy || !searchActive} onclick={() => { searchDraft = ''; searchInput?.focus(); }}>검색 해제</button></div>
+          {#if searchInvalid}<p class="validation editor-help" id="studium-search-error" role="status">1부터 {room?.capacity} 사이의 번호 하나를 입력해 주세요.</p>{/if}
           {#if result?.result}
             {@const data = result.result}
             <p class="seat-count">빈 좌석 <strong>{data.remaining.toLocaleString('ko-KR')}석</strong><span> / 전체 {data.total.toLocaleString('ko-KR')}석</span></p>
             {#if stale(data.source_time)}<p class="stale" role="status">오래되었거나 PC 시계와 맞지 않는 정보입니다. 지금 확인으로 다시 확인해 주세요.</p>{/if}
-            {#if data.seat_numbers !== null}<p class="seat-numbers"><span>빈 좌석 번호</span><strong>{data.seat_numbers.length ? data.seat_numbers.join(', ') + '번' : '빈 좌석 없음'}</strong></p>
-            {:else}<p class="seat-numbers"><span>빈 좌석 번호</span><strong>확인 불가 · 빈 좌석 수만 확인됨</strong></p>{/if}
+            {#if data.seat_numbers !== null}
+              {#if searchActive && !searchInvalid}<p class="search-count" role="status">전체 빈 좌석 {data.remaining}석 · 검색 결과 {filteredNumbers.length}개{stale(data.source_time) ? ' · 이전 조회 기준' : ''}</p>{/if}
+              <p class="seat-numbers"><span>빈 좌석 번호</span><strong>{#if searchInvalid}검색 번호를 확인해 주세요.{:else if filteredNumbers.length}{#each filteredNumbers as number, index}{#if savedFavorites.includes(number)}<mark class="preferred"><span aria-hidden="true">★ </span>{number}<span class="sr-only">번 선호 좌석</span></mark>{:else}{number}{/if}{index < filteredNumbers.length - 1 ? ', ' : '번'}{/each}{:else}{data.remaining === 0 ? '빈 좌석 없음' : '검색한 번호가 빈 좌석 목록에 없습니다.'}{/if}</strong></p>
+            {:else}<p class="seat-numbers"><span>빈 좌석 번호</span><strong>확인 불가 · 빈 좌석 수만 확인됨</strong></p>{#if searchActive}<p class="editor-help">좌석 번호를 검증하지 못해 검색할 수 없습니다.</p>{/if}{/if}
             {#if result.error}<p class="detail-error">{result.error}</p>{/if}
             <dl class="times"><div><dt>원본 기준 시각</dt><dd><time datetime={data.source_time}>{clock(data.source_time)}</time></dd></div><div><dt>조회 시각</dt><dd>{#if result.checked_at}<time datetime={result.checked_at}>{clock(result.checked_at)}</time>{:else}확인 불가{/if}</dd></div></dl>
-          {:else}<p class="empty-result">{stateLabel(result)}</p>{#if result?.error}<p class="detail-error">{result.error}</p>{/if}{/if}
+          {:else}<p class="empty-result">{stateLabel(result)}</p>{#if searchActive}<p class="editor-help">좌석 번호를 확인한 뒤 검색할 수 있습니다.</p>{/if}{#if result?.error}<p class="detail-error">{result.error}</p>{/if}{/if}
         </section>
       </section>
     {/if}
@@ -264,6 +336,7 @@
   .section-heading { display: flex; align-items: center; gap: 5px; margin-bottom: 10px; }
   h2 { margin: 0; font-size: 15px; font-weight: 650; }
   h3 { margin: 0 0 12px; font-size: 14px; font-weight: 650; }
+  h4 { margin: 0 0 10px; font-size: 13px; font-weight: 650; }
   .targets { border: 1px solid var(--line); border-radius: 10px; background: var(--pane); padding: 0; margin: 0; min-width: 0; }
   .target { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 8px 14px; font-size: 13px; }
   .target + .target { border-top: 1px solid var(--line); }
@@ -285,6 +358,16 @@
   .view-picker { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; font-size: 13px; }
   select { max-width: 100%; min-width: 0; padding: 5px 8px; color: var(--text); background: var(--field); border: 1px solid var(--line-strong); border-radius: 6px; }
   .room-detail { padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--pane); }
+  .favorites-editor { margin: 0 0 16px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+  .favorites-editor form { display: grid; gap: 8px; font-size: 13px; }
+  .favorites-editor input, .seat-search input { width: 100%; min-width: 0; padding: 6px 8px; color: var(--text); background: var(--field); border: 1px solid var(--line-strong); border-radius: 6px; }
+  .editor-actions, .seat-search { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .seat-search { margin-bottom: 14px; font-size: 13px; }
+  .seat-search input { width: 110px; }
+  .editor-help { margin: 8px 0; color: var(--secondary); font-size: 12px; line-height: 1.6; }
+  .editor-help.validation { color: var(--danger); }
+  .saved-favorites, .favorite-availability, .search-count { margin: 10px 0; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+  .preferred { padding: 1px 3px; color: var(--text); background: var(--field); border: 1px solid var(--line-strong); border-radius: 4px; white-space: nowrap; }
   .seat-count { margin: 0 0 14px; font-size: 14px; font-variant-numeric: tabular-nums; }
   .seat-count strong { font-size: 20px; }
   .seat-count > span { color: var(--secondary); font-size: 12px; }

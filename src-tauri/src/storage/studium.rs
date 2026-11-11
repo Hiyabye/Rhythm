@@ -2,9 +2,83 @@
 //! never enter SQLite or backup.
 use super::Store;
 use crate::studium::{model::Preferences, rooms};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 impl Store {
+    /// Includes every fixed room, including unselected rooms and empty lists.
+    pub fn studium_favorites(&self) -> Result<BTreeMap<String, Vec<u32>>, String> {
+        let mut favorites: BTreeMap<String, Vec<u32>> = rooms::all()
+            .into_iter()
+            .map(|room| (room.id.to_owned(), Vec::new()))
+            .collect();
+        let mut statement = self
+            .connection
+            .prepare("SELECT room_id,seat_number FROM studium_favorite_seats ORDER BY room_id,seat_number")
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let (room_id, number) = row.map_err(|e| e.to_string())?;
+            let room = rooms::get(&room_id)?;
+            let seats = favorites
+                .get_mut(&room_id)
+                .expect("fixed catalog room initialized above");
+            if number == 0
+                || number > room.capacity
+                || seats.last().is_some_and(|previous| *previous >= number)
+            {
+                return Err("저장된 선호 좌석 설정을 확인해 주세요.".into());
+            }
+            seats.push(number);
+        }
+        Ok(favorites)
+    }
+
+    /// Replaces one room's favorites atomically, retaining every other room.
+    pub fn studium_save_favorites(
+        &self,
+        room_id: &str,
+        seat_numbers: &[u32],
+    ) -> Result<BTreeMap<String, Vec<u32>>, String> {
+        self.studium_writable()?;
+        let room = rooms::get(room_id)?;
+        if seat_numbers.len() > room.capacity as usize
+            || seat_numbers.iter().copied().collect::<HashSet<_>>().len() != seat_numbers.len()
+            || seat_numbers
+                .iter()
+                .any(|number| *number == 0 || *number > room.capacity)
+        {
+            return Err(format!(
+                "선호 좌석은 1번부터 {}번까지 중복 없이 입력해 주세요.",
+                room.capacity
+            ));
+        }
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        transaction
+            .execute(
+                "DELETE FROM studium_favorite_seats WHERE room_id=?1",
+                [room_id],
+            )
+            .map_err(|e| e.to_string())?;
+        for number in seat_numbers {
+            transaction
+                .execute(
+                    "INSERT INTO studium_favorite_seats(room_id,seat_number) VALUES(?1,?2)",
+                    rusqlite::params![room_id, number],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        let favorites = self.studium_favorites()?;
+        transaction.commit().map_err(|e| e.to_string())?;
+        Ok(favorites)
+    }
+
     pub fn studium_auto_interval(&self) -> Result<u32, String> {
         let interval: u32 = self
             .connection
@@ -179,12 +253,194 @@ mod tests {
         store
             .connection
             .execute_batch(
-                "DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms;
-             ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                "DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
              DELETE FROM extension_preferences WHERE extension_id='studium';
              PRAGMA user_version=22;",
             )
             .unwrap();
+    }
+
+    #[test]
+    fn favorites_include_every_room_sort_numbers_and_allow_clearing_one_room() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = opened(&directory.path().join("db"));
+        let empty = store.studium_favorites().unwrap();
+        assert_eq!(empty.len(), rooms::all().len());
+        assert!(empty.values().all(Vec::is_empty));
+        for room in rooms::all() {
+            let saved = store
+                .studium_save_favorites(room.id, &[room.capacity, 1])
+                .unwrap();
+            assert_eq!(saved[room.id], [1, room.capacity]);
+            // The migration's per-room CHECK stays aligned with the catalog.
+            assert!(store
+                .connection
+                .execute(
+                    "INSERT INTO studium_favorite_seats(room_id,seat_number) VALUES(?1,?2)",
+                    rusqlite::params![room.id, room.capacity + 1],
+                )
+                .is_err());
+        }
+        let full_room: Vec<u32> = (1..=rooms::get("6").unwrap().capacity).collect();
+        assert_eq!(
+            store.studium_save_favorites("6", &full_room).unwrap()["6"],
+            full_room
+        );
+        let before = store.studium_favorites().unwrap();
+        let cleared = store.studium_save_favorites("5", &[]).unwrap();
+        assert!(cleared["5"].is_empty());
+        for (id, seats) in before.iter().filter(|(id, _)| id.as_str() != "5") {
+            assert_eq!(&cleared[id], seats);
+        }
+    }
+
+    #[test]
+    fn invalid_favorites_and_disabled_writes_preserve_all_rooms() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = opened(&directory.path().join("db"));
+        let before = store.studium_save_favorites("5", &[4, 7]).unwrap();
+        for numbers in [vec![0], vec![103], vec![7, 7], vec![1; 103], vec![u32::MAX]] {
+            assert!(store.studium_save_favorites("5", &numbers).is_err());
+            assert_eq!(store.studium_favorites().unwrap(), before);
+        }
+        assert!(store.studium_save_favorites("unknown", &[1]).is_err());
+        assert!(store.studium_save_favorites("unknown", &[]).is_err());
+        assert!(store
+            .connection
+            .execute(
+                "INSERT INTO studium_favorite_seats(room_id,seat_number) VALUES('5',4)",
+                [],
+            )
+            .is_err());
+        assert!(store
+            .connection
+            .execute(
+                "INSERT INTO studium_favorite_seats(room_id,seat_number) VALUES('unknown',1)",
+                [],
+            )
+            .is_err());
+        store
+            .set_enabled(crate::extensions::STUDIUM, false)
+            .unwrap();
+        assert!(store.studium_save_favorites("5", &[]).is_err());
+        assert_eq!(store.studium_favorites().unwrap(), before);
+    }
+
+    #[test]
+    fn favorites_survive_deselection_and_reopen_as_preferences_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("db");
+        let store = opened(&path);
+        store
+            .studium_save_preferences(&ids(&["5", "6"]), "6")
+            .unwrap();
+        let saved = store.studium_save_favorites("6", &[311, 20]).unwrap();
+        store.studium_save_preferences(&ids(&["5"]), "6").unwrap();
+        assert_eq!(store.studium_favorites().unwrap(), saved);
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(
+            reopened.studium_preferences().unwrap().room_ids,
+            ids(&["5"])
+        );
+        assert_eq!(reopened.studium_favorites().unwrap(), saved);
+    }
+
+    #[test]
+    fn favorite_insert_failure_rolls_back_delete_and_partial_inserts() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("db");
+        let store = opened(&path);
+        store.studium_save_favorites("6", &[1, 3]).unwrap();
+        let saved = store.studium_save_favorites("5", &[2, 8]).unwrap();
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER fail_favorite_insert BEFORE INSERT ON studium_favorite_seats
+             WHEN NEW.seat_number=9
+             BEGIN SELECT RAISE(ABORT,'synthetic favorite write failure'); END;",
+            )
+            .unwrap();
+        assert!(store.studium_save_favorites("5", &[3, 9]).is_err());
+        assert_eq!(store.studium_favorites().unwrap(), saved);
+        drop(store);
+        assert_eq!(
+            Store::open(&path).unwrap().studium_favorites().unwrap(),
+            saved
+        );
+    }
+
+    #[test]
+    fn populated_schema_twenty_seven_upgrade_keeps_interval_rooms_and_extension_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("db");
+        let store = opened(&path);
+        let preferences = store
+            .studium_save_preferences(&ids(&["5", "6"]), "6")
+            .unwrap();
+        store.studium_save_auto_interval(18).unwrap();
+        store
+            .connection
+            .execute_batch("DROP TABLE studium_favorite_seats; PRAGMA user_version=27;")
+            .unwrap();
+        drop(store);
+        let upgraded = Store::open(&path).unwrap();
+        assert_eq!(
+            upgraded.info().unwrap().schema_version,
+            super::super::SCHEMA_VERSION
+        );
+        assert_eq!(upgraded.studium_auto_interval().unwrap(), 18);
+        assert_eq!(upgraded.studium_preferences().unwrap(), preferences);
+        assert!(upgraded.enabled(crate::extensions::STUDIUM).unwrap());
+        assert_eq!(upgraded.studium_favorites().unwrap().len(), 7);
+        assert!(upgraded
+            .studium_favorites()
+            .unwrap()
+            .values()
+            .all(Vec::is_empty));
+    }
+
+    #[test]
+    fn favorite_migration_failure_keeps_schema_twenty_seven_and_existing_table() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("db");
+        let store = opened(&path);
+        store.studium_save_auto_interval(8).unwrap();
+        store
+            .connection
+            .execute_batch(
+                "DROP TABLE studium_favorite_seats;
+             CREATE TABLE studium_favorite_seats(sentinel TEXT);
+             INSERT INTO studium_favorite_seats VALUES('keep');
+             PRAGMA user_version=27;",
+            )
+            .unwrap();
+        drop(store);
+        assert!(Store::open(&path).is_err());
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            27
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT sentinel FROM studium_favorite_seats", [], |row| row
+                    .get::<_, String>(0))
+                .unwrap(),
+            "keep"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT interval_minutes FROM studium_preferences WHERE id=1",
+                    [],
+                    |row| row.get::<_, u32>(0)
+                )
+                .unwrap(),
+            8
+        );
     }
 
     #[test]
@@ -260,6 +516,7 @@ mod tests {
             .connection
             .execute_batch(
                 "UPDATE settings SET theme='dark',clock_format='24h',auto_trash_months=3;
+                 DROP TABLE studium_favorite_seats;
                  ALTER TABLE studium_preferences DROP COLUMN interval_minutes;
                  PRAGMA user_version=26;",
             )
@@ -286,7 +543,7 @@ mod tests {
         store.studium_save_auto_interval(17).unwrap();
         store
             .connection
-            .execute_batch("PRAGMA user_version=26;")
+            .execute_batch("DROP TABLE studium_favorite_seats; PRAGMA user_version=26;")
             .unwrap();
         drop(store);
         // An unexpected pre-existing column makes 027 fail instead of silently
@@ -479,7 +736,7 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_backup_contains_selection_and_interval_only() {
+    fn sqlite_backup_contains_selection_interval_and_favorites_without_results() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("db");
         let backup = directory.path().join("backup");
@@ -488,15 +745,17 @@ mod tests {
             .studium_save_preferences(&ids(&["5", "11"]), "11")
             .unwrap();
         store.studium_save_auto_interval(14).unwrap();
+        let favorites = store.studium_save_favorites("18", &[174, 2]).unwrap();
         store.backup_to(&backup).unwrap();
         let restored = Store::open(&backup).unwrap();
         let preferences = restored.studium_preferences().unwrap();
         assert_eq!(preferences.room_ids, ids(&["5", "11"]));
         assert_eq!(preferences.view_room, "11");
         assert_eq!(restored.studium_auto_interval().unwrap(), 14);
+        assert_eq!(restored.studium_favorites().unwrap(), favorites);
         assert_eq!(restored.connection.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'studium_%'", [], |row| row.get::<_, i64>(0),
-        ).unwrap(), 2);
+        ).unwrap(), 3);
         let columns = restored
             .connection
             .prepare("SELECT name FROM pragma_table_info('studium_preferences') ORDER BY cid")
@@ -507,5 +766,14 @@ mod tests {
             .unwrap();
         // No durable automatic-enabled/job/result state is introduced.
         assert_eq!(columns, ["id", "view_room", "interval_minutes"]);
+        let favorite_columns = restored
+            .connection
+            .prepare("SELECT name FROM pragma_table_info('studium_favorite_seats') ORDER BY cid")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(favorite_columns, ["room_id", "seat_number"]);
     }
 }

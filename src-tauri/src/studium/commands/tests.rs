@@ -90,6 +90,31 @@ struct Harness {
     _directory: tempfile::TempDir,
 }
 
+#[tokio::test]
+async fn saving_favorites_during_a_check_preserves_its_generation_without_another_request() {
+    let h = Harness::new();
+    let transport = BlockedTransport::new();
+    let started = h.start(transport.clone()).await.unwrap();
+    transport.entered().await;
+    {
+        let store = h.store.lock().unwrap();
+        let saved = save_favorites_with_store(&h.controller, &store, "5", &[102, 1]).unwrap();
+        assert_eq!(saved.favorites["5"], [1, 102]);
+        assert_eq!(saved.job_id, started.job_id);
+        assert!(saved.running);
+        assert!(saved.results.iter().all(|room| room.status == "loading"));
+        assert!(save_favorites_with_store(&h.controller, &store, "5", &[103]).is_err());
+        assert_eq!(
+            snapshot_with_store(&h.controller, &store)
+                .unwrap()
+                .favorites["5"],
+            [1, 102]
+        );
+    }
+    assert_eq!(transport.requests(), 1);
+    h.stop().await;
+}
+
 impl Harness {
     fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
