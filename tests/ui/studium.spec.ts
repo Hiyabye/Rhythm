@@ -354,6 +354,201 @@ test('favorite editing and search support keyboard use in dark theme at 200% con
   expect(await callCount(page, 'studium_start')).toBe(0);
 });
 
+test('seat alert rules start off and saving a valid condition never enables global notifications or checks', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true, proactive: false } });
+  await openStudium(page);
+  const alert = page.getByRole('region', { name: '좌석 알림 조건', exact: true });
+  const toggle = alert.getByRole('checkbox', { name: '이 열람실 좌석 알림', exact: true });
+  const minimum = alert.getByRole('spinbutton', { name: '알림을 보낼 최소 빈 좌석 수', exact: true });
+  const save = alert.getByRole('button', { name: '알림 조건 저장', exact: true });
+  await expect(toggle).not.toBeChecked();
+  await expect(alert.locator('.saved-alert')).toHaveText('저장한 조건: 꺼짐');
+  await expect(alert.locator('.notification-policy')).toContainText('확장 기능이 꺼져 있어');
+  await toggle.check();
+  await minimum.fill('103');
+  await expect(save).toBeDisabled();
+  await minimum.fill('2.5');
+  await expect(save).toBeDisabled();
+  await minimum.fill('3');
+  await save.click();
+  await expect(alert.locator('.saved-alert')).toHaveText('저장한 조건: 켜짐 · 빈 좌석 3석 이상');
+  await expect(toggle).toBeFocused();
+  await alert.getByRole('button', { name: '확장 기능 설정 열기', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '확장 기능', exact: true })).toBeVisible();
+  expect(await callCount(page, 'studium_start')).toBe(0);
+  expect(await callCount(page, 'studium_automatic_start')).toBe(0);
+  expect(await callCount(page, 'notification_request_permission')).toBe(0);
+  expect(await callCount(page, 'proactive_save')).toBe(0);
+});
+
+test('seat alerts report denied permission, quiet hours, global off and uncertain sends without prompting', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true }, initialNotificationsEnabled: true, notificationAuthorization: 'denied', studium: { alert_error: '전송 결과를 확인하지 못했습니다. 자동으로 다시 보내지 않습니다.' } });
+  await openStudium(page);
+  const alert = page.getByRole('region', { name: '좌석 알림 조건', exact: true });
+  await expect(alert.locator('.notification-policy')).toContainText('운영체제 알림 권한이 거부되어 있습니다.');
+  await expect(alert.getByRole('alert')).toContainText('좌석 알림 전달 상태: 전송 결과를 확인하지 못했습니다.');
+  await page.evaluate(() => {
+    const fixture = (window as any).__fixture;
+    fixture.setNotificationAuthorization('authorized');
+    fixture.setNotificationSettings({ quiet_hours: { enabled: true, start: '22:00', end: '07:00' } });
+  });
+  await alert.getByRole('button', { name: '알림 상태 새로 확인', exact: true }).click();
+  await expect(alert.locator('.notification-policy')).toHaveText('운영체제 알림 권한이 허용되어 있습니다.');
+  await expect(alert).toContainText('조용한 시간 오후 10:00–오전 7:00(PC 현지 시각)에는 알리지 않습니다.');
+  await expect(alert).toContainText('10분당 최대 3회');
+  await page.evaluate(() => (window as any).__fixture.setNotificationSettings({ notifications_enabled: false }));
+  await alert.getByRole('button', { name: '알림 상태 새로 확인', exact: true }).click();
+  await expect(alert.locator('.notification-policy')).toContainText('전체 운영체제 알림이 꺼져 있어');
+  expect(await callCount(page, 'notification_request_permission')).toBe(0);
+  expect(await callCount(page, 'studium_start')).toBe(0);
+  expect(await callCount(page, 'studium_save_alert')).toBe(0);
+});
+
+test.describe('clock preferences remain global with seat alerts', () => {
+  test.use({ timezoneId: 'Asia/Seoul' });
+
+  test('settings, quiet-hours text and notification navigation retain the selected clock without a lookup', async ({ page }) => {
+    const observed = row('5', 1, [84]);
+    observed.result!.source_time = '2026-11-09T12:34:56Z';
+    observed.checked_at = observed.result!.source_time;
+    await mockDesktop(page, { extensions: { studium: true }, studium: { preferences, results: [observed] } });
+    await openStudium(page);
+    await expect(page.locator('.times time').first()).toContainText('오후 9:34:56');
+    await page.evaluate(() => (window as any).__fixture.setNotificationSettings({ quiet_hours: { enabled: true, start: '22:00', end: '07:00' } }));
+    await page.getByRole('button', { name: '알림 상태 새로 확인', exact: true }).click();
+    await expect(page.getByRole('region', { name: '좌석 알림 조건', exact: true })).toContainText('오후 10:00–오전 7:00');
+    await expect(nav(page).getByRole('button', { name: '휴지통', exact: true })).toBeVisible();
+
+    await openSettings(page, '일반');
+    const formats = page.getByRole('group', { name: '시간 표시', exact: true });
+    await formats.getByRole('button', { name: '24시간', exact: true }).click();
+    await expect(formats.getByRole('button', { name: '24시간', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await nav(page).getByRole('button', { name: '열람실', exact: true }).click();
+    await expect(page.locator('.times time').first()).toContainText('21:34:56');
+    await expect(page.locator('.times time').first()).not.toContainText('오후');
+    await expect(page.getByRole('region', { name: '좌석 알림 조건', exact: true })).toContainText('22:00–07:00');
+    await page.evaluate(() => (window as any).__fixture.emitStudiumNotification('5'));
+    await expect(page.locator('.times time').first()).toContainText('21:34:56');
+    expect(await callCount(page, 'studium_start')).toBe(0);
+    expect(await callCount(page, 'studium_automatic_start')).toBe(0);
+  });
+});
+
+test('preferred-seat alerts require saved favorites and remain separate for each viewed room', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true }, studium: { preferences, results: [row('5', 3, null, 'count_only'), row('6', 0, [])] } });
+  await openStudium(page);
+  const alert = page.getByRole('region', { name: '좌석 알림 조건', exact: true });
+  const kind = alert.getByRole('combobox', { name: '알림 조건', exact: true });
+  const toggle = alert.getByRole('checkbox', { name: '이 열람실 좌석 알림', exact: true });
+  const save = alert.getByRole('button', { name: '알림 조건 저장', exact: true });
+  await kind.selectOption('preferred');
+  await toggle.check();
+  await expect(alert.getByText('선호 좌석 알림을 켜려면 이 방의 선호 번호를 먼저 저장해 주세요.')).toBeVisible();
+  await expect(save).toBeDisabled();
+  await page.getByRole('textbox', { name: '선호 좌석 번호', exact: true }).fill('84');
+  await expect(save).toBeDisabled();
+  await page.getByRole('button', { name: '선호 좌석 저장', exact: true }).click();
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect(alert.locator('.saved-alert')).toHaveText('저장한 조건: 켜짐 · 선호 좌석 중 빈자리');
+  await expect(page.locator('.favorite-availability')).toContainText('빈자리 여부를 알 수 없습니다.');
+  await page.getByRole('combobox', { name: '표시할 열람실' }).selectOption('6');
+  await expect(toggle).not.toBeChecked();
+  await expect(kind).toHaveValue('remaining');
+  await page.getByRole('combobox', { name: '표시할 열람실' }).selectOption('5');
+  await expect(toggle).toBeChecked();
+  await expect(kind).toHaveValue('preferred');
+  expect(await page.evaluate(() => (window as any).__fixture.studium.alert_rules['5'].minimum)).toBe(1);
+  expect(await callCount(page, 'studium_start')).toBe(0);
+  expect(await callCount(page, 'notification_request_permission')).toBe(0);
+});
+
+test('alert drafts survive polling and failed saves while another editor and a check are active', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true }, studiumAlertSaveError: true, studium: {
+    preferences, running: true, job_id: 7, results: [{ room_id: '5', status: 'loading', result: null, error: null, checked_at: null }],
+  } });
+  await openStudium(page);
+  const alert = page.getByRole('region', { name: '좌석 알림 조건', exact: true });
+  const toggle = alert.getByRole('checkbox', { name: '이 열람실 좌석 알림', exact: true });
+  const minimum = alert.getByRole('spinbutton', { name: '알림을 보낼 최소 빈 좌석 수', exact: true });
+  await toggle.check();
+  await minimum.fill('3');
+  await page.getByRole('textbox', { name: '선호 좌석 번호', exact: true }).fill('42');
+  const polls = await callCount(page, 'studium_status');
+  await expect.poll(() => callCount(page, 'studium_status')).toBeGreaterThan(polls);
+  await expect(toggle).toBeChecked();
+  await expect(minimum).toHaveValue('3');
+  await alert.getByRole('button', { name: '알림 조건 저장', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('좌석 알림 조건을 저장하지 못했습니다.');
+  await expect(alert.locator('.saved-alert')).toHaveText('저장한 조건: 꺼짐');
+  await expect(minimum).toHaveValue('3');
+  await page.evaluate(() => { (window as any).__fixture.studiumAlertSaveError = false; });
+  await alert.getByRole('button', { name: '알림 조건 저장', exact: true }).click();
+  await expect(alert.locator('.saved-alert')).toHaveText('저장한 조건: 켜짐 · 빈 좌석 3석 이상');
+  await expect(page.getByRole('textbox', { name: '선호 좌석 번호', exact: true })).toHaveValue('42');
+  await minimum.fill('4');
+  await alert.getByRole('button', { name: '알림 조건 변경 취소', exact: true }).click();
+  await expect(minimum).toHaveValue('3');
+  await expect(toggle).toBeFocused();
+  await page.getByRole('combobox', { name: '표시할 열람실' }).selectOption('6');
+  await expect(toggle).not.toBeChecked();
+  expect(await callCount(page, 'studium_start')).toBe(0);
+});
+
+test('seat notification clicks refresh the idle view, including repeated clicks for the same room', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true }, studium: { preferences, results: [row('5', 1, [84]), row('6', 0, [])] } });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '오늘', exact: true })).toBeVisible();
+  await page.evaluate(() => (window as any).__fixture.emitStudiumNotification('6'));
+  await expect(page.getByRole('region', { name: 'K관 열람실 좌석 정보', exact: true })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: '표시할 열람실' })).toHaveValue('6');
+  await page.evaluate(() => (window as any).__fixture.emitStudiumNotification('5'));
+  await expect(page.getByRole('combobox', { name: '표시할 열람실' })).toHaveValue('5');
+  await page.getByRole('searchbox', { name: '빈 좌석 번호 검색', exact: true }).fill('84');
+  await page.evaluate(() => (window as any).__fixture.emitStudiumNotification('5'));
+  await expect(page.getByRole('searchbox', { name: '빈 좌석 번호 검색', exact: true })).toHaveValue('');
+  const reads = await callCount(page, 'studium_snapshot');
+  await page.evaluate(() => (window as any).__fixture.emitStudiumNotification('999'));
+  expect(await callCount(page, 'studium_snapshot')).toBe(reads);
+  expect(await callCount(page, 'studium_set_view_room')).toBe(0);
+  expect(await callCount(page, 'studium_start')).toBe(0);
+  expect(await callCount(page, 'studium_automatic_start')).toBe(0);
+});
+
+test('seat notification activation before subscription is recovered after the core snapshot loads', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true }, pendingStudiumActivation: '6', studium: { preferences } });
+  await page.goto('/');
+  await expect(page.getByRole('region', { name: 'K관 열람실 좌석 정보', exact: true })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: '표시할 열람실' })).toHaveValue('6');
+  expect(await callCount(page, 'studium_notification_activation')).toBe(1);
+  expect(await callCount(page, 'studium_start')).toBe(0);
+  expect(await callCount(page, 'studium_automatic_start')).toBe(0);
+});
+
+test('a delayed seat activation fallback cannot replace a newer live notification click', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true }, pendingStudiumActivation: '5', studiumActivationGate: true, studium: { preferences } });
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => (window as any).__fixture.studiumActivationResolvers.length)).toBe(1);
+  await page.evaluate(() => (window as any).__fixture.emitStudiumNotification('6'));
+  await expect(page.getByRole('combobox', { name: '표시할 열람실' })).toHaveValue('6');
+  await page.evaluate(() => (window as any).__fixture.releaseStudiumActivation());
+  await expect.poll(() => page.evaluate(() => (window as any).__fixture.studiumActivationCompleted)).toBe(true);
+  await expect(page.getByRole('combobox', { name: '표시할 열람실' })).toHaveValue('6');
+  expect(await callCount(page, 'studium_snapshot')).toBe(1);
+  expect(await callCount(page, 'studium_start')).toBe(0);
+});
+
+test('seat notification events and pending activation cannot open a disabled extension', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: false }, pendingStudiumActivation: '6', studium: { preferences } });
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => (window as any).__fixture.studiumActivationCompleted)).toBe(true);
+  await page.evaluate(() => (window as any).__fixture.emitStudiumNotification('6'));
+  await expect(page.getByRole('heading', { name: '오늘', exact: true })).toBeVisible();
+  await expect(nav(page).getByRole('button', { name: '열람실', exact: true })).toHaveCount(0);
+  expect(await callCount(page, 'studium_snapshot')).toBe(0);
+  expect(await callCount(page, 'studium_start')).toBe(0);
+});
+
 test('manual lookup clears old values and cancellation keeps only completed rooms', async ({ page }) => {
   await mockDesktop(page, { extensions: { studium: true }, studium: { preferences, results: [row('5', 1, [84]), row('6', 2, [1, 2])] } });
   await openStudium(page);
@@ -547,9 +742,11 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     await mockDesktop(page, { extensions: { studium: true }, studium: { results: [row('5', 1, [84])] } });
     await openStudium(page);
     await expect(page.locator('.seat-numbers')).toContainText('84번');
-    const animations = await page.evaluate(() => (window as any).__studiumAnimations);
-    if (reducedMotion === 'reduce') expect(animations).toBe(0);
-    else expect(animations).toBeGreaterThan(0);
+    // The results can resolve before the browser starts a scheduled intro.
+    if (reducedMotion === 'reduce') {
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      expect(await page.evaluate(() => (window as any).__studiumAnimations)).toBe(0);
+    } else await expect.poll(() => page.evaluate(() => (window as any).__studiumAnimations)).toBeGreaterThan(0);
     expect(await callCount(page, 'studium_start')).toBe(0);
   });
 }
