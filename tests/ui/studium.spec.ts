@@ -1,11 +1,11 @@
 import { test, expect, type Page } from '@playwright/test';
-import { mockDesktop, callCount, openSettings } from './fixture';
+import { mockDesktop, callCount, openSettings, syntheticStudiumLayout } from './fixture';
 import type { StudiumRoomState } from '../../src/lib/types';
 
 const preferences = { room_ids: ['5', '6'], view_room: '5' };
 const now = () => new Date().toISOString();
 const row = (roomId: string, remaining: number, numbers: number[] | null, status: StudiumRoomState['status'] = 'ready'): StudiumRoomState => ({
-  room_id: roomId, status, result: { total: roomId === '6' ? 311 : 102, used: (roomId === '6' ? 311 : 102) - remaining, remaining, seat_numbers: numbers, source_time: now(), source_url: 'https://libseat.sogang.ac.kr:444/SEAT/roomview5.asp?room_no=' + roomId },
+  room_id: roomId, status, result: { total: roomId === '6' ? 311 : 102, used: (roomId === '6' ? 311 : 102) - remaining, remaining, seat_numbers: numbers, source_time: now(), source_url: 'https://libseat.sogang.ac.kr:444/SEAT/roomview5.asp?room_no=' + roomId, layout: numbers === null ? null : syntheticStudiumLayout(roomId === '6' ? 311 : 102), layout_error: null },
   error: status === 'count_only' ? '좌석 번호를 확인하지 못했습니다.' : null, checked_at: now(),
 });
 const nav = (page: Page) => page.getByRole('navigation', { name: '기본 탐색', exact: true });

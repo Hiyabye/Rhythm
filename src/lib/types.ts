@@ -7,6 +7,8 @@ export interface StudiumRoom { id: string; name: string; label: string; capacity
 export interface StudiumPreferences { room_ids: string[]; view_room: string }
 export interface StudiumAlertRule { enabled: boolean; kind: 'remaining' | 'preferred'; minimum: number; version: number }
 export interface StudiumMiniStatus { open: boolean; always_on_top: boolean }
+export interface StudiumSeatPoint { number: number; x: number; y: number }
+export interface StudiumSeatLayout { width: number; height: number; points: StudiumSeatPoint[] }
 export interface StudiumSeatData {
   total: number;
   used: number;
@@ -14,6 +16,8 @@ export interface StudiumSeatData {
   source_time: string;
   seat_numbers: number[] | null;
   source_url: string;
+  layout: StudiumSeatLayout | null;
+  layout_error: string | null;
 }
 export interface StudiumRoomState {
   room_id: string;

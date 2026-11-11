@@ -1,11 +1,11 @@
 import { test, expect, type Page } from '@playwright/test';
-import { mockDesktop, callCount } from './fixture';
+import { mockDesktop, callCount, syntheticStudiumLayout } from './fixture';
 import type { StudiumRoomState } from '../../src/lib/types';
 
 const preferences = { room_ids: ['5', '6'], view_room: '5' };
 const row = (id: string, remaining: number, status: 'ready' | 'count_only' = 'ready'): StudiumRoomState => ({
   room_id: id, status, error: status === 'count_only' ? '좌석 번호를 확인하지 못했습니다.' : null, checked_at: new Date().toISOString(),
-  result: { total: id === '6' ? 311 : 102, used: (id === '6' ? 311 : 102) - remaining, remaining, source_time: new Date().toISOString(), seat_numbers: status === 'count_only' ? null : Array.from({ length: remaining }, (_, index) => index + 1), source_url: status === 'count_only' ? 'https://libseat.sogang.ac.kr:444/SEAT/domian5.asp' : `https://libseat.sogang.ac.kr:444/SEAT/roomview5.asp?room_no=${id}` },
+  result: { total: id === '6' ? 311 : 102, used: (id === '6' ? 311 : 102) - remaining, remaining, source_time: new Date().toISOString(), seat_numbers: status === 'count_only' ? null : Array.from({ length: remaining }, (_, index) => index + 1), source_url: status === 'count_only' ? 'https://libseat.sogang.ac.kr:444/SEAT/domian5.asp' : `https://libseat.sogang.ac.kr:444/SEAT/roomview5.asp?room_no=${id}`, layout: status === 'count_only' ? null : syntheticStudiumLayout(id === '6' ? 311 : 102), layout_error: null },
 });
 const nav = (page: Page) => page.getByRole('navigation', { name: '기본 탐색', exact: true });
 async function openMini(page: Page) {

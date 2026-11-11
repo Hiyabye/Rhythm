@@ -5,6 +5,7 @@
   import { archiveError, timeOptions, wallTime } from './archive-format';
   import { clock as clockSetting } from './clock.svelte';
   import Hint from './Hint.svelte';
+  import StudiumSeatMap from './StudiumSeatMap.svelte';
   import { fade } from './motion';
   import type { NotificationAuthorization, ProactiveActivation, ProactiveSettings, ProactiveSnapshot, StudiumAlertRule, StudiumMiniStatus, StudiumRoomState, StudiumSnapshot } from './types';
 
@@ -47,6 +48,7 @@
   let favoritesInput = $state<HTMLInputElement>();
   let searchInput = $state<HTMLInputElement>();
   let alertToggle = $state<HTMLInputElement>();
+  let roomHeading = $state<HTMLHeadingElement>();
   let keepAutomaticFocus = false;
   // Set when the user operates 지금 확인/확인 취소: disabling or removing the
   // pressed button would otherwise drop keyboard focus to the page body.
@@ -69,6 +71,9 @@
   let alertDirty = $derived(alertEnabled !== savedAlert.enabled || alertKind !== savedAlert.kind || effectiveAlertMinimum !== savedAlert.minimum);
 
   function apply(value: StudiumSnapshot, resetDraft = false, resetInterval = false, resetFavorites = false, resetAlert = false) {
+    // Capture before Svelte removes a focused map for loading/failed results.
+    const losingMapFocus = document.hasFocus() && !value.results.find((room) => room.room_id === value.preferences.view_room)?.result
+      && roomHeading?.closest('.room-detail')?.querySelector('.seat-map')?.contains(document.activeElement);
     if (favoritesRoom !== value.preferences.view_room) {
       favoritesEditing = false;
       alertEditing = false;
@@ -84,6 +89,7 @@
     if (!favoritesEditing) favoritesDraft = (value.favorites[viewRoom] ?? []).join(', ');
     if (resetAlert) alertEditing = false;
     if (!alertEditing) applyAlertDraft(value.alert_rules[viewRoom]);
+    if (losingMapFocus) void restoreMapFocus();
   }
 
   async function load(resetEditors = false) {
@@ -343,6 +349,12 @@
     void act(command, args);
   }
 
+  async function restoreMapFocus() {
+    await tick();
+    const active = document.activeElement;
+    if (mounted && document.hasFocus() && roomHeading?.isConnected && (active === document.body || active?.id === 'main')) roomHeading.focus();
+  }
+
   onMount(() => {
     handledActivation = activation;
     mounted = true;
@@ -423,7 +435,7 @@
         </ul>
         <div class="view-picker"><label for="studium-view-room">표시할 열람실</label><select id="studium-view-room" value={viewRoom} disabled={busy} onchange={(event) => { viewRoom = event.currentTarget.value; void act('studium_set_view_room', { roomId: viewRoom }); }}>{#each selected as item (item.id)}<option value={item.id}>{item.label}</option>{/each}</select></div>
         <section class="room-detail" aria-label={`${room?.label ?? '열람실'} 좌석 정보`}>
-          <h3>{room?.label ?? '열람실'}</h3>
+          <h3 bind:this={roomHeading} tabindex="-1">{room?.label ?? '열람실'}</h3>
           <section class="favorites-editor" aria-labelledby="studium-favorites-title">
             <h4 id="studium-favorites-title">선호 좌석</h4>
             <form onsubmit={(event) => { event.preventDefault(); void saveFavorites(); }}>
@@ -467,6 +479,7 @@
               {#if searchActive && !searchInvalid}<p class="search-count" role="status">전체 빈 좌석 {data.remaining}석 · 검색 결과 {filteredNumbers.length}개{stale(data.source_time) ? ' · 이전 조회 기준' : ''}</p>{/if}
               <p class="seat-numbers"><span>빈 좌석 번호</span><strong>{#if searchInvalid}검색 번호를 확인해 주세요.{:else if filteredNumbers.length}{#each filteredNumbers as number, index}{#if savedFavorites.includes(number)}<mark class="preferred"><span aria-hidden="true">★ </span>{number}<span class="sr-only">번 선호 좌석</span></mark>{:else}{number}{/if}{index < filteredNumbers.length - 1 ? ', ' : '번'}{/each}{:else}{data.remaining === 0 ? '빈 좌석 없음' : '검색한 번호가 빈 좌석 목록에 없습니다.'}{/if}</strong></p>
             {:else}<p class="seat-numbers"><span>빈 좌석 번호</span><strong>확인 불가 · 빈 좌석 수만 확인됨</strong></p>{#if searchActive}<p class="editor-help">좌석 번호를 검증하지 못해 검색할 수 없습니다.</p>{/if}{/if}
+            <StudiumSeatMap {data} identity={`${viewRoom}:${snapshot.job_id ?? 0}:${data.source_time}:${result.checked_at ?? ''}`} roomLabel={room?.label ?? '열람실'} favorites={savedFavorites} searchNumber={searchActive && !searchInvalid ? Number(searchDraft) : null} stale={stale(data.source_time)} onfocuslost={() => void restoreMapFocus()} />
             {#if result.error}<p class="detail-error">{result.error}</p>{/if}
             <dl class="times"><div><dt>원본 기준 시각 · 한국시간</dt><dd><time datetime={data.source_time}>{clock(data.source_time)}</time></dd></div><div><dt>조회 시각 · 한국시간</dt><dd>{#if result.checked_at}<time datetime={result.checked_at}>{clock(result.checked_at)}</time>{:else}확인 불가{/if}</dd></div></dl>
           {:else}<p class="empty-result">{stateLabel(result)}</p>{#if searchActive}<p class="editor-help">좌석 번호를 확인한 뒤 검색할 수 있습니다.</p>{/if}{#if result?.error}<p class="detail-error">{result.error}</p>{/if}{/if}
@@ -483,6 +496,7 @@
   .section-heading { display: flex; align-items: center; gap: 5px; margin-bottom: 10px; }
   h2 { margin: 0; font-size: 15px; font-weight: 650; }
   h3 { margin: 0 0 12px; font-size: 14px; font-weight: 650; }
+  h3:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
   h4 { margin: 0 0 10px; font-size: 13px; font-weight: 650; }
   .targets { border: 1px solid var(--line); border-radius: 10px; background: var(--pane); padding: 0; margin: 0; min-width: 0; }
   .target { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 8px 14px; font-size: 13px; }
