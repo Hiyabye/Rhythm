@@ -446,12 +446,65 @@ async fn maintenance_joins_an_idle_automatic_owner_and_recovery_starts_no_reques
     let guard = reservation.acquire().await.unwrap();
     assert!(!h.snapshot().automatic.active);
     assert!(!h.snapshot().running);
+    assert_eq!(
+        h.snapshot().automatic.error.as_deref(),
+        Some(automatic::MAINTENANCE_STOPPED)
+    );
     assert!(h.start_auto(fake.clone()).await.is_err());
     drop(guard); // The same reopening path is used after preparation failure.
     tokio::time::advance(Duration::from_secs(3600)).await;
     tokio::task::yield_now().await;
     assert_eq!(fake.count(), count);
     assert!(!h.snapshot().automatic.active);
+}
+
+#[tokio::test(start_paused = true)]
+async fn maintenance_reports_the_same_stop_when_the_timer_wakes_into_the_closed_gate() {
+    let h = Harness::new();
+    let fake = Fake::default();
+    h.start_auto(fake.clone()).await.unwrap();
+    waiting(&h).await;
+    let count = fake.count();
+    // The timer fails on the closed gate before the reservation cancels it.
+    let reservation = h.gate.close().unwrap();
+    tokio::time::advance(Duration::from_secs(3600)).await;
+    until(|| !h.snapshot().automatic.active).await;
+    let completion = {
+        let _store = h.store.lock().unwrap();
+        h.controller.cancel_for_maintenance();
+        h.controller.completion()
+    };
+    if let Some(completion) = completion {
+        completion.wait().await;
+    }
+    assert_eq!(
+        h.snapshot().automatic.error.as_deref(),
+        Some(automatic::MAINTENANCE_STOPPED)
+    );
+    assert_eq!(fake.count(), count);
+    drop(reservation);
+}
+
+#[tokio::test(start_paused = true)]
+async fn paused_automatic_keeps_no_error_after_maintenance() {
+    let h = Harness::new();
+    let fake = Fake::default();
+    h.start_auto(fake.clone()).await.unwrap();
+    waiting(&h).await;
+    let completion = {
+        let _store = h.store.lock().unwrap();
+        h.controller.pause_automatic()
+    };
+    if let Some(completion) = completion {
+        completion.wait().await;
+    }
+    let (reservation, completion) =
+        crate::studium::commands::reserve_maintenance(&h.gate, &h.store, &h.controller).unwrap();
+    if let Some(completion) = completion {
+        completion.wait().await;
+    }
+    assert_eq!(h.snapshot().automatic.error, None);
+    drop(reservation);
 }
 
 #[tokio::test(start_paused = true)]
@@ -513,4 +566,26 @@ async fn exit_joins_automatic_owner_and_manual_work_without_allowing_late_admiss
     assert!(h.start_auto(fake.clone()).await.is_err());
     assert!(h.start_manual(fake).await.is_err());
     assert!(h.gate.close().unwrap().acquire().await.is_ok());
+}
+
+#[tokio::test(start_paused = true)]
+async fn timer_counts_wall_clock_time_that_the_monotonic_clock_missed_during_sleep() {
+    // After a system sleep the monotonic deadline is still far away while the
+    // shown wall-clock time has passed: the check is due at the next step.
+    let started = tokio::time::Instant::now();
+    automatic::due(
+        started + Duration::from_secs(3600),
+        chrono::Utc::now() - chrono::Duration::seconds(1),
+    )
+    .await;
+    assert!(started.elapsed() <= Duration::from_secs(30));
+
+    // A wall clock moved backward cannot postpone the monotonic deadline.
+    let started = tokio::time::Instant::now();
+    automatic::due(
+        started + Duration::from_secs(300),
+        chrono::Utc::now() + chrono::Duration::days(1),
+    )
+    .await;
+    assert_eq!(started.elapsed(), Duration::from_secs(300));
 }

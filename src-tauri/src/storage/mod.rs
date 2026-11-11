@@ -137,6 +137,9 @@ impl Store {
         };
         store.reset_interrupted()?;
         store.reset_ai_interrupted()?;
+        // A seat toast from an earlier process, including one that exited
+        // without its shutdown cleanup, must not navigate this session.
+        store.studium_alert_invalidate_tokens()?;
         Ok(store)
     }
     pub fn settings(&self) -> Result<Settings, String> {

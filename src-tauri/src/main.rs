@@ -660,10 +660,7 @@ fn main() {
             core::lifecycle::handle_main_close(handle, &label, &api, close_to_background);
         }
         #[cfg(target_os = "macos")]
-        tauri::RunEvent::Reopen {
-            has_visible_windows,
-            ..
-        } => core::lifecycle::handle_reopen(handle, has_visible_windows),
+        tauri::RunEvent::Reopen { .. } => core::lifecycle::handle_reopen(handle),
         tauri::RunEvent::Exit => {
             let Some(state) = handle.try_state::<AppState>() else {
                 return; // A rejected second launch never opened the store or worker.

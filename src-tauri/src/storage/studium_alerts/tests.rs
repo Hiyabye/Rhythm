@@ -557,3 +557,20 @@ fn alert_migration_failure_keeps_schema_twenty_eight_and_sentinel() {
         0
     );
 }
+
+#[test]
+fn reopening_invalidates_tokens_left_by_a_process_that_skipped_shutdown() {
+    let (directory, store) = fixture();
+    store
+        .studium_save_alert_rule("5", &rule("remaining", 2))
+        .unwrap();
+    assert!(store
+        .studium_alert_reserve(&candidate(&store, "5", 3), &token(1))
+        .unwrap());
+    assert_eq!(count(&store, "studium_alert_tokens"), 1);
+    // Dropping the store without quiesce models an updater exit or crash.
+    drop(store);
+    let store = Store::open(&directory.path().join("alerts.db")).unwrap();
+    assert_eq!(count(&store, "studium_alert_tokens"), 0);
+    assert_eq!(store.studium_alert_consume(&token(1)).unwrap(), None);
+}

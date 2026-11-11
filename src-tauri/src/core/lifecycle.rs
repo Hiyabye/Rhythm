@@ -279,11 +279,12 @@ pub fn handle_main_close(
     }
 }
 
-/// macOS dock-icon activation. `has_visible_windows` is false when the window
-/// was hidden or closed to the background.
+/// macOS dock-icon activation. The visible Studium mini window makes the OS
+/// report `has_visible_windows`, so the main window's own state decides.
 #[cfg(target_os = "macos")]
-pub fn handle_reopen(app: &AppHandle, has_visible_windows: bool) {
-    if !has_visible_windows {
+pub fn handle_reopen(app: &AppHandle) {
+    let visible = main_window(app).and_then(|window| window.is_visible());
+    if !visible.unwrap_or(false) {
         restore_main_window(app);
     }
 }

@@ -133,6 +133,9 @@ pub(crate) struct Views {
     worker: Mutex<Option<Arc<Worker>>>,
     wake: Notify,
     shutdown: AtomicBool,
+    // Last rows/tooltip applied to the tray. Replacing a native menu closes it
+    // if it is open, so unchanged cycles skip the update.
+    tray: Mutex<Option<(Vec<String>, String)>>,
 }
 
 impl Views {
@@ -151,6 +154,7 @@ impl Views {
             worker: Mutex::new(None),
             wake: Notify::new(),
             shutdown: AtomicBool::new(false),
+            tray: Mutex::new(None),
         })
     }
     pub(crate) fn refresh(&self) {
@@ -298,8 +302,14 @@ impl Views {
                 })
                 .unwrap_or_default();
             let tooltip = tray_tooltip(&rows);
-            crate::core::lifecycle::update_studium_tray(&owner.app, &rows, &tooltip)
-                .map_err(|_| "트레이 현황을 갱신하지 못했습니다.")?;
+            let applied = (rows, tooltip);
+            let mut tray = owner.tray.lock().map_err(|_| "트레이 상태 잠금 오류")?;
+            if tray.as_ref() != Some(&applied) {
+                crate::core::lifecycle::update_studium_tray(&owner.app, &applied.0, &applied.1)
+                    .map_err(|_| "트레이 현황을 갱신하지 못했습니다.")?;
+                *tray = Some(applied);
+            }
+            drop(tray);
             drop(store);
             let _ = owner.app.emit("studium://state-changed", ());
             Ok(())

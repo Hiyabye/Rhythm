@@ -259,8 +259,9 @@ pub(crate) fn reserve_maintenance(
     controller: &super::controller::Controller,
 ) -> Result<(MaintenanceReservation, Option<CompletionHandle>), String> {
     let reservation = gate.close()?;
-    let completion = cancel_at_boundary(store, controller)?;
-    Ok((reservation, completion))
+    let _store = store.lock().map_err(|_| "설정 잠금 오류")?;
+    controller.cancel_for_maintenance();
+    Ok((reservation, controller.completion()))
 }
 
 #[tauri::command]

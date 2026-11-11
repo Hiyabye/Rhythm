@@ -4,6 +4,9 @@ use super::*;
 use crate::studium::model::AutomaticStatus;
 use crate::{archive::sync::SharedStore, operation_gate::AdmissionGate};
 
+pub(crate) const MAINTENANCE_STOPPED: &str =
+    "백업, 복원 또는 업데이트를 시작해 자동 확인을 멈췄습니다. 끝난 뒤 다시 시작해 주세요.";
+
 pub(super) struct Run {
     pub(super) job: Arc<Job>,
     next_check_at: Option<String>,
@@ -82,7 +85,9 @@ impl Controller {
                 .automatic_loop(&job, initial, &store, &gate, &shutdown, transport)
                 .await
             {
-                if !job.cancel.load(Ordering::Acquire) {
+                // A closed gate means maintenance stopped the session; its
+                // reservation records one explicit outcome in either timing.
+                if !job.cancel.load(Ordering::Acquire) && gate.ensure_open().is_ok() {
                     if let Ok(mut state) = owner.state.lock() {
                         if let Some(run) =
                             state.automatic.as_mut().filter(|run| run.job.id == job.id)
@@ -95,6 +100,20 @@ impl Controller {
         });
         self.refresh_views();
         Ok(())
+    }
+
+    /// Caller holds Store after closing the gate. A session the user had not
+    /// paused and that had not already stopped with an error reports why it
+    /// ended; maintenance never resumes it.
+    pub(crate) fn cancel_for_maintenance(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            if let Some(run) = state.automatic.as_mut() {
+                if !run.job.cancel.load(Ordering::Acquire) && run.error.is_none() {
+                    run.error = Some(MAINTENANCE_STOPPED.into());
+                }
+            }
+        }
+        self.cancel();
     }
 
     /// Caller holds Store. A manual check continues when the timer is paused.
@@ -140,7 +159,7 @@ impl Controller {
             tokio::pin!(changed);
             changed.as_mut().enable();
             let lease = gate.shared().await?;
-            let (running, deadline, observed_completion) = {
+            let (running, deadline, wall_deadline, observed_completion) = {
                 let saved = store.lock().map_err(|_| "설정 잠금 오류")?;
                 gate.ensure_open()?;
                 if shutdown.load(Ordering::Acquire) || !saved.enabled(crate::extensions::STUDIUM)? {
@@ -174,21 +193,19 @@ impl Controller {
                         + interval
                 };
                 let delay = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let wall_deadline = chrono::Utc::now()
+                    + chrono::Duration::from_std(delay).map_err(|_| "자동 확인 간격 오류")?;
                 if let Some(current) = state.automatic.as_mut() {
                     current.next_check_at = if running.is_some() {
                         None
                     } else {
-                        Some(
-                            (chrono::Utc::now()
-                                + chrono::Duration::from_std(delay)
-                                    .map_err(|_| "자동 확인 간격 오류")?)
-                            .to_rfc3339(),
-                        )
+                        Some(wall_deadline.to_rfc3339())
                     };
                 }
                 (
                     running,
                     deadline,
+                    wall_deadline,
                     (state.last_completed, state.job.as_ref().map(|job| job.id)),
                 )
             };
@@ -206,7 +223,7 @@ impl Controller {
                 continue;
             }
             tokio::select! {
-                _ = tokio::time::sleep_until(deadline) => {},
+                _ = due(deadline, wall_deadline) => {},
                 _ = &mut changed => continue,
                 _ = cancelled(&run.cancel) => return Ok(()),
             }
@@ -272,6 +289,24 @@ impl Controller {
             if let Some(error) = cycle.automatic_stop_error() {
                 return Err(error);
             }
+        }
+    }
+}
+
+/// Waits for whichever deadline comes first. Tokio's monotonic clock stops
+/// while macOS sleeps, so after wake the shown wall-clock time also counts; a
+/// clock moved backward still ends at the monotonic deadline.
+pub(super) async fn due(deadline: tokio::time::Instant, wall: chrono::DateTime<chrono::Utc>) {
+    const STEP: Duration = Duration::from_secs(30);
+    loop {
+        let step = tokio::time::Instant::now() + STEP;
+        if deadline <= step {
+            tokio::time::sleep_until(deadline).await;
+            return;
+        }
+        tokio::time::sleep_until(step).await;
+        if chrono::Utc::now() >= wall {
+            return;
         }
     }
 }
