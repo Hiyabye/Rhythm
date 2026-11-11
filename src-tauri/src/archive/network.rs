@@ -279,10 +279,7 @@ impl Client {
             });
         }
         if !status.is_success() {
-            return Err(Failure::Fatal(format!(
-                "공개 자료에 접근할 수 없습니다. (HTTP {})",
-                status.as_u16()
-            )));
+            return Err(Failure::Fatal(http_refused(status.as_u16())));
         }
         if response
             .content_length()
@@ -353,6 +350,15 @@ fn studium_root() -> Result<reqwest::Certificate, String> {
 /// rest of the page from a server that asked it to slow down.
 pub const RATE_LIMITED: &str =
     "학교 서버가 요청을 제한했습니다. 잠시 기다린 후 다시 동기화해 주세요.";
+/// Message for an unsuccessful HTTP status. Callers recognize access denial
+/// through `is_access_denied`, so the wording and the check change together.
+pub fn http_refused(status: u16) -> String {
+    format!("공개 자료에 접근할 수 없습니다. (HTTP {status})")
+}
+/// Whether `error` is the message `http_refused` produces for HTTP 401 or 403.
+pub fn is_access_denied(error: &str) -> bool {
+    error == http_refused(401) || error == http_refused(403)
+}
 const CONNECTION_FAILED: &str =
     "학교 서버에 안전하게 연결하지 못했습니다. 연결 상태나 인증서 구성을 확인해 주세요.";
 const BLOCKED: &str = "검증된 학교 공개 자료 주소가 아니어서 자동 다운로드하지 않았습니다.";

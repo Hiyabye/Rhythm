@@ -387,13 +387,13 @@ async fn manual_work_during_automatic_wait_resets_the_interval_after_manual_comp
 async fn automatic_stops_for_401_403_and_429_from_every_request_stage() {
     for stage in ["/robots.txt", COMMON, DETAIL] {
         for error in [
-            "공개 자료에 접근할 수 없습니다. (HTTP 401)",
-            "공개 자료에 접근할 수 없습니다. (HTTP 403)",
-            crate::archive::network::RATE_LIMITED,
+            crate::archive::network::http_refused(401),
+            crate::archive::network::http_refused(403),
+            crate::archive::network::RATE_LIMITED.into(),
         ] {
             let h = Harness::new();
             let fake = Fake::default();
-            fake.fail_at(stage, error);
+            fake.fail_at(stage, &error);
             h.start_auto(fake.clone()).await.unwrap();
             until(|| !h.snapshot().automatic.active && !h.snapshot().running).await;
             assert!(h.snapshot().automatic.error.is_some(), "{stage}: {error}");

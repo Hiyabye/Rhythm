@@ -55,11 +55,7 @@ impl Job {
     fn note_access_error(&self, error: &str) {
         let reason = if error == crate::archive::network::RATE_LIMITED || error == RATE_LIMITED {
             Some(StopReason::RateLimited)
-        } else if matches!(
-            error,
-            "공개 자료에 접근할 수 없습니다. (HTTP 401)"
-                | "공개 자료에 접근할 수 없습니다. (HTTP 403)"
-        ) {
+        } else if crate::archive::network::is_access_denied(error) {
             Some(StopReason::AccessDenied(error.into()))
         } else {
             None

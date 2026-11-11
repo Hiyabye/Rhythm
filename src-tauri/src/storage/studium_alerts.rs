@@ -37,7 +37,7 @@ fn validate_input(room_id: &str, input: &AlertRuleInput) -> Result<(), String> {
 }
 
 fn read_rule(connection: &Connection, room_id: &str) -> Result<(AlertRule, bool), String> {
-    let (rule, armed) = connection
+    let (mut rule, armed) = connection
         .query_row(
             "SELECT enabled,kind,minimum,version,armed FROM studium_alert_rules WHERE room_id=?1",
             [room_id],
@@ -54,6 +54,14 @@ fn read_rule(connection: &Connection, room_id: &str) -> Result<(AlertRule, bool)
             },
         )
         .map_err(|e| e.to_string())?;
+    // A minimum saved before the catalog capacity shrank can never be met.
+    // Report the rule as off at the new capacity without rewriting the row,
+    // so one stale rule never breaks the page; a changed save replaces it.
+    let capacity = rooms::get(room_id)?.capacity;
+    if rule.minimum > capacity {
+        rule.enabled = false;
+        rule.minimum = capacity;
+    }
     validate_input(
         room_id,
         &AlertRuleInput {
