@@ -14,6 +14,9 @@ static LINK: LazyLock<Selector> = LazyLock::new(|| Selector::parse("a[href]").un
 static LAYERS: LazyLock<Selector> = LazyLock::new(|| Selector::parse("div[id]").unwrap());
 static CELLS: LazyLock<Selector> = LazyLock::new(|| Selector::parse("td").unwrap());
 
+#[path = "parser_layout.rs"]
+mod layout;
+
 pub fn decode_page(raw: &[u8]) -> Result<String, String> {
     if raw.len() > MAX_PAGE_BYTES {
         return Err("예상보다 큰 페이지입니다.".into());
@@ -219,6 +222,8 @@ pub fn parse_status(
                 source_time: source_time.clone(),
                 seat_numbers: None,
                 source_url: rooms::STATUS_URL.into(),
+                layout: None,
+                layout_error: None,
             })
         })();
         results.insert(room.id.into(), result);
@@ -338,6 +343,12 @@ pub fn parse_seats(html: &str, room_id: &str, now: i64) -> Result<SeatData, Stri
     if available.len() != remaining as usize {
         return Err("빈 좌석 번호와 빈 좌석 수가 일치하지 않습니다.".into());
     }
+    // Geometry is optional. It belongs to this same validated room/response,
+    // but a changed CSS layout cannot discard valid counts or seat numbers.
+    let (layout, layout_error) = match layout::parse(&page, total) {
+        Ok(layout) => (Some(layout), None),
+        Err(error) => (None, Some(error)),
+    };
     Ok(SeatData {
         total,
         used,
@@ -345,6 +356,8 @@ pub fn parse_seats(html: &str, room_id: &str, now: i64) -> Result<SeatData, Stri
         source_time,
         seat_numbers: Some(available),
         source_url: room.url(),
+        layout,
+        layout_error,
     })
 }
 

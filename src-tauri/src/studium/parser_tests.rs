@@ -244,3 +244,235 @@ fn unknown_rooms_and_non_html_error_responses_fail() {
         assert!(parse_seats(body, "5", now()).is_err());
     }
 }
+
+const FIRST_ORIGIN: &str = "position:absolute;left:100.125px;top:200.250px";
+
+/// Synthetic coordinates only; these positions do not reproduce a school map.
+fn positioned_map(room_id: &str, available: &[u32], clock: &str) -> String {
+    let mut html = map(room_id, available, clock);
+    for number in 1..=rooms::get(room_id).unwrap().capacity {
+        let left = 100 + ((number - 1) % 20) * 30;
+        let top = 200 + ((number - 1) / 20) * 40;
+        html = html.replace(
+            &format!("<div id=\"Layer{number}\">"),
+            &format!("<div id=\"Layer{number}\" style=\"position:absolute;left:{left}.125px;top:{top}.250px\">"),
+        );
+    }
+    html
+}
+
+fn assert_optional_layout_failure(html: &str) {
+    let data = parse_seats(html, "5", now()).expect("counts/numbers remain valid");
+    assert_eq!(data.remaining, 2);
+    assert_eq!(data.seat_numbers, Some(vec![1, 102]));
+    assert_eq!(data.source_time, "2026-10-16T15:26:13Z");
+    assert_eq!(data.source_url, rooms::get("5").unwrap().url());
+    assert!(data.layout.is_none());
+    assert!(data.layout_error.is_some());
+}
+
+#[test]
+fn normalized_layouts_cover_all_seven_rooms_and_keep_the_same_response_identity() {
+    for room in rooms::all() {
+        let data = parse_seats(
+            &positioned_map(room.id, &[1, room.capacity], CLOCK),
+            room.id,
+            now(),
+        )
+        .unwrap();
+        let layout = data.layout.as_ref().unwrap();
+        assert!(data.layout_error.is_none());
+        assert_eq!(layout.points.len(), room.capacity as usize);
+        assert_eq!(layout.width, 570_000);
+        assert_eq!(layout.height, ((room.capacity - 1) / 20) * 40_000);
+        for (index, point) in layout.points.iter().enumerate() {
+            assert_eq!(point.number, index as u32 + 1);
+            assert_eq!(point.x, (index as u32 % 20) * 30_000);
+            assert_eq!(point.y, (index as u32 / 20) * 40_000);
+        }
+        assert_eq!(data.seat_numbers, Some(vec![1, room.capacity]));
+        assert_eq!(data.total, room.capacity);
+        assert_eq!(data.source_time, "2026-10-16T15:26:13Z");
+        assert_eq!(data.source_url, room.url());
+    }
+    let common = parse_status(&status(CLOCK), now()).unwrap();
+    assert!(common.values().all(|result| result
+        .as_ref()
+        .is_ok_and(|data| data.layout.is_none() && data.layout_error.is_none())));
+}
+
+#[test]
+fn full_and_all_available_layouts_still_contain_every_numbered_marker() {
+    let room = rooms::get("5").unwrap();
+    for available in [vec![], (1..=room.capacity).collect::<Vec<_>>()] {
+        let data = parse_seats(&positioned_map("5", &available, CLOCK), "5", now()).unwrap();
+        assert_eq!(data.remaining, available.len() as u32);
+        assert_eq!(data.seat_numbers, Some(available));
+        assert_eq!(data.layout.unwrap().points.len(), room.capacity as usize);
+    }
+}
+
+#[test]
+fn exact_decimal_and_maximum_coordinates_do_not_round_or_overflow() {
+    let close_points = positioned_map("5", &[1, 102], CLOCK).replace(
+        "left:130.125px;top:200.250px",
+        "left:100.126px;top:200.250px",
+    );
+    let close_layout = parse_seats(&close_points, "5", now())
+        .unwrap()
+        .layout
+        .unwrap();
+    assert_eq!((close_layout.points[0].x, close_layout.points[1].x), (0, 1));
+    let html = positioned_map("5", &[1, 102], CLOCK)
+        .replace(FIRST_ORIGIN, "position:absolute;left:.001px;top:0.002px")
+        .replace("left:130.125px;top:400.250px", "left:8192px;top:8192.000px");
+    let data = parse_seats(&html, "5", now()).unwrap();
+    let layout = data.layout.unwrap();
+    assert_eq!((layout.width, layout.height), (8_191_999, 8_191_998));
+    assert_eq!((layout.points[0].x, layout.points[0].y), (0, 0));
+    assert_eq!((layout.points[1].x, layout.points[1].y), (130_124, 200_248));
+    assert_eq!(
+        (layout.points[101].x, layout.points[101].y),
+        (layout.width, layout.height)
+    );
+}
+
+#[test]
+fn geometry_units_expressions_precision_and_bounds_fail_only_the_layout() {
+    let page = positioned_map("5", &[1, 102], CLOCK);
+    for left in [
+        "broken",
+        "-1px",
+        "-0px",
+        "+1px",
+        "1e3px",
+        "1%",
+        "1em",
+        "0",
+        "1.0000px",
+        "8192.001px",
+        "NaNpx",
+        "infpx",
+        "calc(1px)",
+        "var(--x)",
+        "url(https://example.invalid/a)",
+        "1 px",
+        "1px !important",
+        "999999999999999999999px",
+        ".px",
+    ] {
+        let changed = page.replace(
+            FIRST_ORIGIN,
+            &format!("position:absolute;left:{left};top:200.250px"),
+        );
+        assert_optional_layout_failure(&changed);
+    }
+}
+
+#[test]
+fn missing_duplicate_and_geometry_shifting_styles_fail_only_the_layout() {
+    let page = positioned_map("5", &[1, 102], CLOCK);
+    for style in [
+        "left:100.125px;top:200.250px",
+        "position:relative;left:100.125px;top:200.250px",
+        "position:absolute;top:200.250px",
+        "position:absolute;left:100.125px",
+        "position:absolute;left:100.125px;LEFT:100.125px;top:200.250px",
+        "position:absolute;position:absolute;left:100.125px;top:200.250px",
+    ] {
+        assert_optional_layout_failure(&page.replace(FIRST_ORIGIN, style));
+    }
+    for property in [
+        "transform",
+        "translate",
+        "rotate",
+        "scale",
+        "zoom",
+        "inset",
+        "right",
+        "bottom",
+        "margin-left",
+    ] {
+        assert_optional_layout_failure(
+            &page.replace(FIRST_ORIGIN, &format!("{FIRST_ORIGIN};{property}:1px")),
+        );
+    }
+    for suffix in [";/*transform*/transform:scale(2)", ";trans\\form:scale(2)"] {
+        assert_optional_layout_failure(
+            &page.replace(FIRST_ORIGIN, &format!("{FIRST_ORIGIN}{suffix}")),
+        );
+    }
+}
+
+#[test]
+fn mixed_parent_duplicate_positions_and_noncanonical_ids_fail_only_the_layout() {
+    let page = positioned_map("5", &[1, 102], CLOCK);
+    let start = page.find("<div id=\"Layer1\"").unwrap();
+    let end = start + page[start..].find("</div>").unwrap() + "</div>".len();
+    let mixed_parent = format!(
+        "{}<section>{}</section>{}",
+        &page[..start],
+        &page[start..end],
+        &page[end..]
+    );
+    assert_optional_layout_failure(&mixed_parent);
+    assert_optional_layout_failure(&page.replace(
+        "left:130.125px;top:200.250px",
+        "left:100.125px;top:200.250px",
+    ));
+    assert_optional_layout_failure(&page.replace("id=\"Layer1\"", "id=\"Layer01\""));
+    assert_optional_layout_failure(&format!("{page}<span id=\"Layer1\">추가 요소</span>"));
+    let no_horizontal_extent = (1..=102).fold(page.clone(), |page, number| {
+        let x = 100 + ((number - 1) % 20) * 30;
+        let y = 200 + ((number - 1) / 20) * 40;
+        page.replace(
+            &format!("left:{x}.125px;top:{y}.250px"),
+            &format!("left:100px;top:{number}px"),
+        )
+    });
+    assert_optional_layout_failure(&no_horizontal_extent);
+    let no_vertical_extent = (1..=102).fold(page.clone(), |page, number| {
+        let x = 100 + ((number - 1) % 20) * 30;
+        let y = 200 + ((number - 1) / 20) * 40;
+        page.replace(
+            &format!("left:{x}.125px;top:{y}.250px"),
+            &format!("left:{number}px;top:100px"),
+        )
+    });
+    assert_optional_layout_failure(&no_vertical_extent);
+}
+
+#[test]
+fn wrapper_dimensions_are_not_exported_as_seat_sizes() {
+    let page = positioned_map("5", &[1, 102], CLOCK);
+    let reference = parse_seats(&page, "5", now()).unwrap();
+    let changed = page.replace(FIRST_ORIGIN, &format!("{FIRST_ORIGIN};width:1px;height:999999px;background:url(https://example.invalid/never-requested)"));
+    let parsed = parse_seats(&changed, "5", now()).unwrap();
+    assert_eq!(parsed.layout, reference.layout);
+    let serialized = serde_json::to_string(parsed.layout.as_ref().unwrap()).unwrap();
+    assert!(
+        !serialized.contains("background")
+            && !serialized.contains("https")
+            && !serialized.contains("style")
+    );
+}
+
+#[test]
+fn optional_layout_never_softens_room_time_counts_or_number_validation() {
+    let page = positioned_map("5", &[1, 102], CLOCK);
+    assert!(parse_seats(&page, "6", now()).is_err());
+    assert!(parse_seats(&page, "5", now() + 301).is_err());
+    assert!(parse_seats(
+        &page.replace("잔여 좌석수 : 2", "잔여 좌석수 : 3"),
+        "5",
+        now()
+    )
+    .is_err());
+    assert!(parse_seats(
+        &page.replace("id=\"Layer102\"", "id=\"Layer1\""),
+        "5",
+        now()
+    )
+    .is_err());
+    assert!(parse_seats(&page.replace(">102</td>", ">101</td>"), "5", now()).is_err());
+}

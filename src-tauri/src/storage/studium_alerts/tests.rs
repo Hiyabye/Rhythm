@@ -36,6 +36,8 @@ fn observation(room_id: &str, remaining: u32, detail: bool) -> RoomState {
             } else {
                 rooms::STATUS_URL.into()
             },
+            layout: None,
+            layout_error: None,
         }),
         error: None,
         checked_at: Some(parser::now_timestamp()),

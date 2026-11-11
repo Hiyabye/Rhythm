@@ -33,6 +33,22 @@ impl Default for Preferences {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SeatPoint {
+    pub number: u32,
+    pub x: u32,
+    pub y: u32,
+}
+
+/// Relative marker origins and positive extents share a fixed-point scale of
+/// 1000 units per source CSS pixel. They do not describe physical seat sizes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SeatLayout {
+    pub width: u32,
+    pub height: u32,
+    pub points: Vec<SeatPoint>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SeatData {
     pub total: u32,
     pub used: u32,
@@ -41,6 +57,8 @@ pub struct SeatData {
     /// None means numbers could not be validated; Some([]) is verified full.
     pub seat_numbers: Option<Vec<u32>>,
     pub source_url: String,
+    pub layout: Option<SeatLayout>,
+    pub layout_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
