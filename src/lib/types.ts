@@ -6,6 +6,7 @@ export type AutoTrashMonths = 0 | 1 | 3 | 6 | 12 | 24;
 export interface StudiumRoom { id: string; name: string; label: string; capacity: number }
 export interface StudiumPreferences { room_ids: string[]; view_room: string }
 export interface StudiumAlertRule { enabled: boolean; kind: 'remaining' | 'preferred'; minimum: number; version: number }
+export interface StudiumMiniStatus { open: boolean; always_on_top: boolean }
 export interface StudiumSeatData {
   total: number;
   used: number;

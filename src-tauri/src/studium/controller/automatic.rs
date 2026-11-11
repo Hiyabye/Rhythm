@@ -93,6 +93,7 @@ impl Controller {
                 }
             }
         });
+        self.refresh_views();
         Ok(())
     }
 
@@ -111,6 +112,7 @@ impl Controller {
             jobs.push(job.clone());
         }
         self.changed.notify_waiters();
+        self.refresh_views();
         Some(CompletionHandle(jobs))
     }
 
@@ -191,6 +193,7 @@ impl Controller {
                 )
             };
             drop(lease);
+            self.refresh_views();
             if let Some(job) = running {
                 tokio::select! {
                     _ = CompletionHandle(vec![job.clone()]).wait() => {},
@@ -296,5 +299,6 @@ impl Drop for Finish {
         self.job.finished.store(true, Ordering::Release);
         self.job.done.notify_waiters();
         self.owner.changed.notify_waiters();
+        self.owner.refresh_views();
     }
 }

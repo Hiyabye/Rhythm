@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { listen } from '@tauri-apps/api/event';
   import { archiveError, timeOptions, wallTime } from './archive-format';
   import { clock as clockSetting } from './clock.svelte';
   import Hint from './Hint.svelte';
   import { fade } from './motion';
-  import type { NotificationAuthorization, ProactiveActivation, ProactiveSettings, ProactiveSnapshot, StudiumAlertRule, StudiumRoomState, StudiumSnapshot } from './types';
+  import type { NotificationAuthorization, ProactiveActivation, ProactiveSettings, ProactiveSnapshot, StudiumAlertRule, StudiumMiniStatus, StudiumRoomState, StudiumSnapshot } from './types';
 
   let { desktop, activation, proactiveEnabled, onactivation, onsettings }: { desktop: boolean; activation: number; proactiveEnabled: boolean; onactivation: (activation: ProactiveActivation) => void; onsettings: () => void } = $props();
   let snapshot = $state<StudiumSnapshot | null>(null);
@@ -29,12 +30,17 @@
   let busy = $state(false);
   let error = $state('');
   let pollError = $state('');
+  let eventError = $state('');
+  let miniBusy = $state(false);
+  let miniError = $state('');
+  let miniNotice = $state('');
   let notice = $state('');
   let now = $state(Date.now());
   let mounted = $state(false);
   let handledActivation = 0;
   let generation = 0;
   let polling = false;
+  let stateRefreshPending = false;
   let startButton = $state<HTMLButtonElement>();
   let cancelButton = $state<HTMLButtonElement>();
   let automaticButton = $state<HTMLButtonElement>();
@@ -95,7 +101,7 @@
     } catch (reason) {
       if (mounted && token === generation) error = archiveError(reason);
     } finally {
-      if (mounted && token === generation) loading = false;
+      if (mounted && token === generation) { loading = false; void refreshChangedState(); }
     }
   }
 
@@ -108,7 +114,37 @@
       if (mounted && token === generation) { apply(value); pollError = ''; }
     } catch (reason) {
       if (mounted && token === generation) pollError = archiveError(reason);
-    } finally { polling = false; }
+    } finally { polling = false; void refreshChangedState(); }
+  }
+
+  function requestChangedState() {
+    stateRefreshPending = true;
+    void refreshChangedState();
+  }
+
+  async function refreshChangedState() {
+    if (!stateRefreshPending || !mounted || loading || busy || polling) return;
+    stateRefreshPending = false;
+    polling = true;
+    const token = generation;
+    try {
+      const value = await invoke<StudiumSnapshot>('studium_snapshot');
+      if (mounted && token === generation) { apply(value); pollError = ''; }
+    } catch (reason) {
+      if (mounted && token === generation) pollError = archiveError(reason);
+    } finally { polling = false; void refreshChangedState(); }
+  }
+
+  async function openMini() {
+    if (!desktop || miniBusy) return;
+    miniBusy = true;
+    miniError = '';
+    miniNotice = '';
+    try {
+      const status = await invoke<StudiumMiniStatus>('studium_open_mini');
+      if (mounted && status.open) miniNotice = '미니 창을 열었습니다.';
+    } catch (reason) { if (mounted) miniError = archiveError(reason); }
+    finally { if (mounted) miniBusy = false; }
   }
 
   async function act(command: string, args: Record<string, unknown> = {}, resetDraft = false, success = '', resetInterval = false, resetFavorites = false, resetAlert = false) {
@@ -127,7 +163,7 @@
         error = archiveError(reason);
       }
     } finally {
-      if (mounted && token === generation) busy = false;
+      if (mounted && token === generation) { busy = false; void refreshChangedState(); }
     }
   }
 
@@ -272,7 +308,7 @@
 
   function clock(value: string | null | undefined): string {
     if (!value || !Number.isFinite(Date.parse(value))) return '확인 불가';
-    return new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'numeric', day: 'numeric', ...timeOptions(clockSetting.format, true) }).format(new Date(value));
+    return new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: 'numeric', day: 'numeric', ...timeOptions(clockSetting.format, true) }).format(new Date(value));
   }
 
   function stale(value: string): boolean {
@@ -310,8 +346,18 @@
   onMount(() => {
     handledActivation = activation;
     mounted = true;
-    if (desktop) void load();
-    else loading = false;
+    let unlistenState: (() => void) | undefined;
+    if (desktop) {
+      void listen<null>('studium://state-changed', requestChangedState).then((unlisten) => {
+        if (!mounted) { unlisten(); return; }
+        unlistenState = unlisten;
+        void load();
+      }).catch((reason) => {
+        if (!mounted) return;
+        eventError = `다른 창의 좌석 상태를 구독하지 못했습니다: ${archiveError(reason)}`;
+        void load();
+      });
+    } else loading = false;
     if (desktop) void loadNotificationContext();
     const pollTimer = window.setInterval(() => void poll(), 500);
     const tick = () => now = Date.now();
@@ -325,6 +371,7 @@
       window.clearInterval(clockTimer);
       window.removeEventListener('focus', tick);
       document.removeEventListener('visibilitychange', tick);
+      unlistenState?.();
     };
   });
 </script>
@@ -333,7 +380,9 @@
   {#if !desktop}
     <p class="muted">데스크톱 앱에서 열람실 좌석을 확인할 수 있습니다.</p>
   {:else}
-    {#if error || pollError}<p class="archive-error" role="alert">{error || pollError}</p>{/if}
+    {#if error || pollError || eventError}<p class="archive-error" role="alert">{error || pollError || eventError}</p>{/if}
+    <div class="mini-launch"><button class="button secondary small" disabled={miniBusy} onclick={() => void openMini()}>미니 창 열기</button>{#if miniNotice}<span role="status">{miniNotice}</span>{/if}</div>
+    {#if miniError}<p class="archive-error" role="alert">{miniError}</p>{/if}
     {#if loading}<p class="loading" role="status">열람실 설정을 불러오는 중입니다…</p>
     {:else if !snapshot}<button class="button secondary" onclick={() => void load()}>다시 불러오기</button>
     {:else}
@@ -419,7 +468,7 @@
               <p class="seat-numbers"><span>빈 좌석 번호</span><strong>{#if searchInvalid}검색 번호를 확인해 주세요.{:else if filteredNumbers.length}{#each filteredNumbers as number, index}{#if savedFavorites.includes(number)}<mark class="preferred"><span aria-hidden="true">★ </span>{number}<span class="sr-only">번 선호 좌석</span></mark>{:else}{number}{/if}{index < filteredNumbers.length - 1 ? ', ' : '번'}{/each}{:else}{data.remaining === 0 ? '빈 좌석 없음' : '검색한 번호가 빈 좌석 목록에 없습니다.'}{/if}</strong></p>
             {:else}<p class="seat-numbers"><span>빈 좌석 번호</span><strong>확인 불가 · 빈 좌석 수만 확인됨</strong></p>{#if searchActive}<p class="editor-help">좌석 번호를 검증하지 못해 검색할 수 없습니다.</p>{/if}{/if}
             {#if result.error}<p class="detail-error">{result.error}</p>{/if}
-            <dl class="times"><div><dt>원본 기준 시각</dt><dd><time datetime={data.source_time}>{clock(data.source_time)}</time></dd></div><div><dt>조회 시각</dt><dd>{#if result.checked_at}<time datetime={result.checked_at}>{clock(result.checked_at)}</time>{:else}확인 불가{/if}</dd></div></dl>
+            <dl class="times"><div><dt>원본 기준 시각 · 한국시간</dt><dd><time datetime={data.source_time}>{clock(data.source_time)}</time></dd></div><div><dt>조회 시각 · 한국시간</dt><dd>{#if result.checked_at}<time datetime={result.checked_at}>{clock(result.checked_at)}</time>{:else}확인 불가{/if}</dd></div></dl>
           {:else}<p class="empty-result">{stateLabel(result)}</p>{#if searchActive}<p class="editor-help">좌석 번호를 확인한 뒤 검색할 수 있습니다.</p>{/if}{#if result?.error}<p class="detail-error">{result.error}</p>{/if}{/if}
         </section>
       </section>
@@ -429,6 +478,7 @@
 
 <style>
   .studium { max-width: 860px; display: grid; gap: 28px; }
+  .mini-launch { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; color: var(--secondary); font-size: 12px; }
   section { min-width: 0; }
   .section-heading { display: flex; align-items: center; gap: 5px; margin-bottom: 10px; }
   h2 { margin: 0; font-size: 15px; font-weight: 650; }

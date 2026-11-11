@@ -41,6 +41,7 @@ pub(crate) async fn studium_save_alert(
         },
     )?;
     // Rule editing invalidates old candidates but never observes old results.
+    state.studium_views.refresh();
     snapshot(&state, &store)
 }
 
@@ -60,7 +61,9 @@ pub(crate) async fn studium_save_favorites(
 ) -> Result<Snapshot, String> {
     let _lease = state.operation_gate.shared().await?;
     let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
-    save_favorites_with_store(&state.studium, &store, &room_id, &seat_numbers)
+    let value = save_favorites_with_store(&state.studium, &store, &room_id, &seat_numbers)?;
+    state.studium_views.refresh();
+    Ok(value)
 }
 
 fn save_favorites_with_store(
@@ -82,6 +85,7 @@ pub(crate) async fn studium_save_interval(
     let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
     store.studium_save_auto_interval(interval_minutes)?;
     // Saving changes the next cycle's interval, never wakes the current timer.
+    state.studium_views.refresh();
     snapshot(&state, &store)
 }
 
@@ -89,14 +93,16 @@ pub(crate) async fn studium_save_interval(
 pub(crate) async fn studium_automatic_start(
     state: tauri::State<'_, AppState>,
 ) -> Result<Snapshot, String> {
-    automatic_start_with_transport(
+    let value = automatic_start_with_transport(
         &state.studium,
         &state.operation_gate,
         &state.maintenance_shutdown,
         &state.store,
         state.network.clone(),
     )
-    .await
+    .await?;
+    state.studium_views.refresh();
+    Ok(value)
 }
 
 pub(crate) async fn automatic_start_with_transport<T: Transport + Clone + 'static>(
@@ -137,6 +143,7 @@ pub(crate) async fn studium_automatic_pause(
     if let Some(completion) = completion {
         completion.wait().await;
     }
+    state.studium_views.refresh();
     let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
     snapshot(&state, &store)
 }
@@ -165,6 +172,7 @@ pub(crate) async fn studium_save_preferences(
     let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
     state.studium.ensure_idle()?;
     store.studium_save_preferences(&room_ids, &view_room)?;
+    state.studium_views.refresh();
     snapshot(&state, &store)
 }
 
@@ -176,6 +184,7 @@ pub(crate) async fn studium_set_view_room(
     let _lease = state.operation_gate.shared().await?;
     let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
     store.studium_set_view_room(&room_id)?;
+    state.studium_views.refresh();
     snapshot(&state, &store)
 }
 
@@ -262,6 +271,7 @@ pub(crate) async fn studium_cancel(
     let _lease = state.operation_gate.shared().await?;
     let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
     state.studium.cancel_job(job_id)?;
+    state.studium_views.refresh();
     snapshot(&state, &store)
 }
 

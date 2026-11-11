@@ -2,9 +2,73 @@
 //! never enter SQLite or backup.
 use super::Store;
 use crate::studium::{model::Preferences, rooms};
+use rusqlite::OptionalExtension;
 use std::collections::{BTreeMap, HashSet};
 
+/// Position uses physical screen coordinates; window size uses logical pixels.
+/// Open/always-on-top state and seat data are deliberately absent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MiniGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl MiniGeometry {
+    fn validate(&self) -> Result<(), String> {
+        if !(-100_000..=100_000).contains(&self.x)
+            || !(-100_000..=100_000).contains(&self.y)
+            || !(300..=1200).contains(&self.width)
+            || !(260..=1400).contains(&self.height)
+        {
+            return Err("저장할 미니 창의 위치와 크기를 확인해 주세요.".into());
+        }
+        Ok(())
+    }
+}
+
 impl Store {
+    pub(crate) fn studium_mini_geometry(&self) -> Result<Option<MiniGeometry>, String> {
+        let geometry: Option<MiniGeometry> = self
+            .connection
+            .query_row(
+                "SELECT x,y,width,height FROM studium_mini_geometry WHERE id=1",
+                [],
+                |row| {
+                    Ok(MiniGeometry {
+                        x: row.get(0)?,
+                        y: row.get(1)?,
+                        width: row.get(2)?,
+                        height: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if let Some(geometry) = &geometry {
+            geometry.validate()?;
+        }
+        Ok(geometry)
+    }
+
+    /// Native close/cleanup captures geometry under admission before calling
+    /// this internal method. It must also work just after extension disable.
+    /// No raw geometry write command is exposed to a WebView.
+    pub(crate) fn studium_save_mini_geometry(&self, geometry: &MiniGeometry) -> Result<(), String> {
+        geometry.validate()?;
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        transaction.execute(
+            "INSERT INTO studium_mini_geometry(id,x,y,width,height) VALUES(1,?1,?2,?3,?4)
+             ON CONFLICT(id) DO UPDATE SET x=excluded.x,y=excluded.y,width=excluded.width,height=excluded.height",
+            rusqlite::params![geometry.x, geometry.y, geometry.width, geometry.height],
+        ).map_err(|e| e.to_string())?;
+        transaction.commit().map_err(|e| e.to_string())
+    }
+
     /// Includes every fixed room, including unselected rooms and empty lists.
     pub fn studium_favorites(&self) -> Result<BTreeMap<String, Vec<u32>>, String> {
         let mut favorites: BTreeMap<String, Vec<u32>> = rooms::all()
@@ -276,11 +340,210 @@ mod tests {
         store
             .connection
             .execute_batch(
-                "DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                "DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
              DELETE FROM extension_preferences WHERE extension_id='studium';
              PRAGMA user_version=22;",
             )
             .unwrap();
+    }
+
+    fn geometry() -> MiniGeometry {
+        MiniGeometry {
+            x: -500,
+            y: 200,
+            width: 380,
+            height: 480,
+        }
+    }
+
+    #[test]
+    fn mini_geometry_starts_absent_and_survives_disabled_cleanup_and_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("db");
+        let store = opened(&path);
+        assert_eq!(store.studium_mini_geometry().unwrap(), None);
+        store
+            .set_enabled(crate::extensions::STUDIUM, false)
+            .unwrap();
+        // Internal close cleanup follows extension disable and preserves the
+        // user's last window geometry without turning the extension back on.
+        store.studium_save_mini_geometry(&geometry()).unwrap();
+        assert_eq!(store.studium_mini_geometry().unwrap(), Some(geometry()));
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert!(!reopened.enabled(crate::extensions::STUDIUM).unwrap());
+        assert_eq!(reopened.studium_mini_geometry().unwrap(), Some(geometry()));
+    }
+
+    #[test]
+    fn mini_geometry_bounds_and_single_row_checks_preserve_previous_geometry() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = opened(&directory.path().join("db"));
+        for valid in [
+            MiniGeometry {
+                x: -100_000,
+                y: 100_000,
+                width: 300,
+                height: 260,
+            },
+            MiniGeometry {
+                x: 100_000,
+                y: -100_000,
+                width: 1200,
+                height: 1400,
+            },
+            geometry(),
+        ] {
+            store.studium_save_mini_geometry(&valid).unwrap();
+            assert_eq!(store.studium_mini_geometry().unwrap(), Some(valid));
+        }
+        for invalid in [
+            MiniGeometry {
+                x: -100_001,
+                ..geometry()
+            },
+            MiniGeometry {
+                x: 100_001,
+                ..geometry()
+            },
+            MiniGeometry {
+                y: i32::MIN,
+                ..geometry()
+            },
+            MiniGeometry {
+                y: i32::MAX,
+                ..geometry()
+            },
+            MiniGeometry {
+                width: 299,
+                ..geometry()
+            },
+            MiniGeometry {
+                width: 1201,
+                ..geometry()
+            },
+            MiniGeometry {
+                height: 259,
+                ..geometry()
+            },
+            MiniGeometry {
+                height: 1401,
+                ..geometry()
+            },
+        ] {
+            assert!(store.studium_save_mini_geometry(&invalid).is_err());
+            assert_eq!(store.studium_mini_geometry().unwrap(), Some(geometry()));
+        }
+        for sql in [
+            "INSERT INTO studium_mini_geometry VALUES(2,0,0,380,480)",
+            "UPDATE studium_mini_geometry SET x=100001",
+            "UPDATE studium_mini_geometry SET y=-100001",
+            "UPDATE studium_mini_geometry SET width=299",
+            "UPDATE studium_mini_geometry SET height=1401",
+            "UPDATE studium_mini_geometry SET x=0.5",
+        ] {
+            assert!(store.connection.execute(sql, []).is_err());
+            assert_eq!(store.studium_mini_geometry().unwrap(), Some(geometry()));
+        }
+    }
+
+    #[test]
+    fn failed_geometry_upsert_keeps_the_previous_row_after_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("db");
+        let store = opened(&path);
+        store.studium_save_mini_geometry(&geometry()).unwrap();
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER fail_mini_update BEFORE UPDATE ON studium_mini_geometry
+             BEGIN SELECT RAISE(ABORT,'synthetic geometry write failure'); END;",
+            )
+            .unwrap();
+        assert!(store
+            .studium_save_mini_geometry(&MiniGeometry {
+                x: 700,
+                ..geometry()
+            })
+            .is_err());
+        assert_eq!(store.studium_mini_geometry().unwrap(), Some(geometry()));
+        drop(store);
+        assert_eq!(
+            Store::open(&path).unwrap().studium_mini_geometry().unwrap(),
+            Some(geometry())
+        );
+    }
+
+    #[test]
+    fn schema_twenty_nine_upgrade_preserves_room_interval_favorite_and_alert_preferences() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("db");
+        let store = opened(&path);
+        let preferences = store
+            .studium_save_preferences(&ids(&["5", "6"]), "6")
+            .unwrap();
+        store.studium_save_auto_interval(14).unwrap();
+        let favorites = store.studium_save_favorites("6", &[1, 311]).unwrap();
+        let rules = store
+            .studium_save_alert_rule(
+                "6",
+                &crate::studium::model::AlertRuleInput {
+                    enabled: true,
+                    kind: "remaining".into(),
+                    minimum: 5,
+                },
+            )
+            .unwrap();
+        let mut settings = store.settings().unwrap();
+        settings.clock_format = "24h".into();
+        settings.auto_trash_months = 12;
+        store.save(&settings).unwrap();
+        store
+            .connection
+            .execute_batch("DROP TABLE studium_mini_geometry; PRAGMA user_version=29;")
+            .unwrap();
+        drop(store);
+        let upgraded = Store::open(&path).unwrap();
+        assert_eq!(
+            upgraded.info().unwrap().schema_version,
+            super::super::SCHEMA_VERSION
+        );
+        assert_eq!(upgraded.studium_mini_geometry().unwrap(), None);
+        assert_eq!(upgraded.studium_preferences().unwrap(), preferences);
+        assert_eq!(upgraded.studium_auto_interval().unwrap(), 14);
+        assert_eq!(upgraded.studium_favorites().unwrap(), favorites);
+        assert_eq!(upgraded.studium_alert_rules().unwrap(), rules);
+        assert!(upgraded.enabled(crate::extensions::STUDIUM).unwrap());
+        assert_eq!(upgraded.settings().unwrap().clock_format, "24h");
+        assert_eq!(upgraded.settings().unwrap().auto_trash_months, 12);
+    }
+
+    #[test]
+    fn geometry_migration_failure_preserves_schema_twenty_nine_and_existing_table() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("db");
+        let store = opened(&path);
+        store.connection.execute_batch(
+            "DROP TABLE studium_mini_geometry; CREATE TABLE studium_mini_geometry(sentinel TEXT);
+             INSERT INTO studium_mini_geometry VALUES('keep'); PRAGMA user_version=29;",
+        ).unwrap();
+        drop(store);
+        assert!(Store::open(&path).is_err());
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            29
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT sentinel FROM studium_mini_geometry", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .unwrap(),
+            "keep"
+        );
     }
 
     #[test]
@@ -404,7 +667,7 @@ mod tests {
         store.studium_save_auto_interval(18).unwrap();
         store
             .connection
-            .execute_batch("DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; PRAGMA user_version=27;")
+            .execute_batch("DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; PRAGMA user_version=27;")
             .unwrap();
         drop(store);
         let upgraded = Store::open(&path).unwrap();
@@ -432,7 +695,7 @@ mod tests {
         store
             .connection
             .execute_batch(
-                "DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats;
+                "DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats;
              CREATE TABLE studium_favorite_seats(sentinel TEXT);
              INSERT INTO studium_favorite_seats VALUES('keep');
              PRAGMA user_version=27;",
@@ -539,7 +802,7 @@ mod tests {
             .connection
             .execute_batch(
                 "UPDATE settings SET theme='dark',clock_format='24h',auto_trash_months=3;
-                 DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats;
+                 DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats;
                  ALTER TABLE studium_preferences DROP COLUMN interval_minutes;
                  PRAGMA user_version=26;",
             )
@@ -566,7 +829,7 @@ mod tests {
         store.studium_save_auto_interval(17).unwrap();
         store
             .connection
-            .execute_batch("DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; PRAGMA user_version=26;")
+            .execute_batch("DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; PRAGMA user_version=26;")
             .unwrap();
         drop(store);
         // An unexpected pre-existing column makes 027 fail instead of silently
@@ -769,6 +1032,7 @@ mod tests {
             .unwrap();
         store.studium_save_auto_interval(14).unwrap();
         let favorites = store.studium_save_favorites("18", &[174, 2]).unwrap();
+        store.studium_save_mini_geometry(&geometry()).unwrap();
         store.backup_to(&backup).unwrap();
         let restored = Store::open(&backup).unwrap();
         let preferences = restored.studium_preferences().unwrap();
@@ -776,9 +1040,10 @@ mod tests {
         assert_eq!(preferences.view_room, "11");
         assert_eq!(restored.studium_auto_interval().unwrap(), 14);
         assert_eq!(restored.studium_favorites().unwrap(), favorites);
+        assert_eq!(restored.studium_mini_geometry().unwrap(), Some(geometry()));
         assert_eq!(restored.connection.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'studium_%'", [], |row| row.get::<_, i64>(0),
-        ).unwrap(), 6);
+        ).unwrap(), 7);
         let columns = restored
             .connection
             .prepare("SELECT name FROM pragma_table_info('studium_preferences') ORDER BY cid")
@@ -798,5 +1063,14 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(favorite_columns, ["room_id", "seat_number"]);
+        let geometry_columns = restored
+            .connection
+            .prepare("SELECT name FROM pragma_table_info('studium_mini_geometry') ORDER BY cid")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(geometry_columns, ["id", "x", "y", "width", "height"]);
     }
 }

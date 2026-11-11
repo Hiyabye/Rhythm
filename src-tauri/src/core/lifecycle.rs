@@ -176,6 +176,45 @@ pub fn install_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Replaces only the already-installed tray's menu/tooltip. It never installs
+/// a tray or changes the existing restore, quit or background policies.
+pub(crate) fn update_studium_tray(
+    app: &AppHandle,
+    rows: &[String],
+    tooltip: &str,
+) -> tauri::Result<()> {
+    use tauri::menu::{MenuItem, Submenu};
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return Ok(());
+    };
+    let mut menu = MenuBuilder::new(app)
+        .text(TRAY_SHOW, "Rhythm 열기")
+        .separator();
+    if !rows.is_empty() {
+        let items = rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                MenuItem::with_id(
+                    app,
+                    format!("studium.summary.{index}"),
+                    row,
+                    false,
+                    None::<&str>,
+                )
+            })
+            .collect::<tauri::Result<Vec<_>>>()?;
+        let refs = items
+            .iter()
+            .map(|item| item as &dyn tauri::menu::IsMenuItem<_>)
+            .collect::<Vec<_>>();
+        let submenu = Submenu::with_items(app, "열람실 현황", true, &refs)?;
+        menu = menu.item(&submenu).separator();
+    }
+    tray.set_menu(Some(menu.text(TRAY_QUIT, "Rhythm 종료").build()?))?;
+    tray.set_tooltip(Some(tooltip))
+}
+
 fn main_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
     app.get_webview_window(MAIN_WINDOW)
         .ok_or(tauri::Error::WindowNotFound)
