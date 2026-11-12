@@ -1,10 +1,22 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "studium-mini",
-  "description": "Allow the local Studium mini window to subscribe to shared state changes.",
-  "windows": ["studium-mini"],
+  "description": "Allow the local Studium mini window to read and control seat checks and to manage its own window.",
+  "windows": [
+    "studium-mini"
+  ],
   "permissions": [
     "core:event:allow-listen",
-    "core:event:allow-unlisten"
+    "core:event:allow-unlisten",
+    "allow-get-snapshot",
+    "allow-studium-cancel",
+    "allow-studium-close-mini",
+    "allow-studium-mini-set-on-top",
+    "allow-studium-mini-show-main",
+    "allow-studium-mini-status",
+    "allow-studium-set-view-room",
+    "allow-studium-snapshot",
+    "allow-studium-start",
+    "allow-studium-status"
   ]
 }
