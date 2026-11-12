@@ -1,18 +1,22 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { CalendarTodo, CybercampusTask, ReferenceDate, TodoInput } from './types';
-  import { archiveError, localDayKey, wallTime } from './archive-format';
+  import type { CalendarTodo, CybercampusTask, ReferenceDate, TodoInput, TodoPrefill } from './types';
+  import { archiveError, localDayKey, noticeTodo, taskTodo, wallTime } from './archive-format';
   import { confirmAction } from './confirm';
   import { clock } from './clock.svelte';
   import Icon from './Icon.svelte';
   import TimeField from './TimeField.svelte';
   import { fade, slide } from './motion';
 
-  let { desktop, selected = $bindable(), tasks, dates, ontasks, onopen }: {
+  let { desktop, selected = $bindable(), prefill = $bindable(), focus = $bindable(), tasks, dates, ontasks, onopen }: {
     desktop: boolean;
     // Owned by the archive view, so returning from the reader keeps the day.
     selected: string;
+    // A form requested from another page; cleared once opened so returning from the reader does not reopen it.
+    prefill: TodoPrefill | null;
+    // Element ID to focus after the next load, when returning from a linked todo's notice.
+    focus: string;
     // Open eClass deadlines and current AI reference dates; the archive view owns both rules.
     tasks: CybercampusTask[];
     dates: ReferenceDate[];
@@ -31,6 +35,8 @@
   let busy = $state(false);
   let editing = $state<number | null>(null);
   let draft = $state<TodoInput>({ title: '', day: '', time: null, memo: '' });
+  // Set while the new-todo form came prefilled; such a form also shows its date.
+  let caution = $state<string | null>(null);
   let grid = $state<HTMLElement>();
   let loadRequest = 0;
   let active = true;
@@ -71,6 +77,12 @@
     const { from, to } = range;
     if (desktop) void load(from, to);
   });
+  $effect(() => {
+    const request = prefill;
+    if (!request || !desktop) return;
+    prefill = null;
+    void startPrefill(request);
+  });
   onMount(() => {
     const refresh = () => { today = localDayKey(new Date()); };
     const timer = window.setInterval(refresh, 60_000);
@@ -83,7 +95,16 @@
     loading = true;
     try {
       const rows = await invoke<CalendarTodo[]>('calendar_todos', { from, to });
-      if (active && current === loadRequest) { todos = rows; error = ''; }
+      if (active && current === loadRequest) {
+        todos = rows;
+        error = '';
+        if (focus) {
+          const target = focus;
+          focus = '';
+          await tick();
+          document.getElementById(target)?.focus({ preventScroll: true });
+        }
+      }
     } catch (reason) {
       if (active && current === loadRequest) error = archiveError(reason);
     } finally {
@@ -119,6 +140,7 @@
   async function select(day: string, focus = false) {
     selected = day;
     editing = null;
+    caution = null;
     if (!focus) return;
     await tick();
     grid?.querySelector<HTMLButtonElement>(`[data-day="${day}"]`)?.focus();
@@ -137,10 +159,25 @@
 
   function startAdd() {
     editing = 0;
+    caution = null;
     draft = { title: '', day: selected, time: null, memo: '' };
+  }
+  async function startPrefill(request: TodoPrefill) {
+    selected = request.todo.day;
+    editing = 0;
+    caution = request.caution;
+    draft = { ...request.todo };
+    feedback = '';
+    await tick();
+    document.getElementById('calendar-todo-title')?.focus();
+  }
+  function cancel() {
+    editing = null;
+    caution = null;
   }
   function startEdit(todo: CalendarTodo) {
     editing = todo.id;
+    caution = null;
     draft = { title: todo.title, day: todo.day, time: todo.time, memo: todo.memo };
   }
   async function submit(event: SubmitEvent) {
@@ -155,6 +192,7 @@
       else await invoke<CalendarTodo>('calendar_create_todo', { todo });
       feedback = editing ? '할 일을 고쳤습니다.' : '할 일을 추가했습니다.';
       editing = null;
+      caution = null;
       // A moved todo jumps with the selection, so it stays in view.
       selected = todo.day;
       await load();
@@ -200,14 +238,15 @@
 
 {#snippet form()}
   <form class="todo-form" onsubmit={submit} transition:slide>
-    <label class="todo-field todo-title-field"><span class="field-label">제목</span><input bind:value={draft.title} maxlength="200" required placeholder="예: 장학금 서류 내기" /></label>
+    {#if caution}<p class="ai-caution todo-caution" role="note">{caution}</p>{/if}
+    <label class="todo-field todo-title-field"><span class="field-label">제목</span><input id={editing === 0 ? 'calendar-todo-title' : undefined} bind:value={draft.title} maxlength="200" required placeholder="예: 장학금 서류 내기" /></label>
     <div class="todo-row">
-      {#if editing}<label class="todo-field"><span class="field-label">날짜</span><input type="date" bind:value={draft.day} required /></label>{/if}
+      {#if editing || caution}<label class="todo-field"><span class="field-label">날짜</span><input type="date" bind:value={draft.day} required /></label>{/if}
       <div class="todo-field"><span class="field-label" aria-hidden="true">시간 (선택)</span><TimeField value={draft.time} label="시간 (선택)" optional onchange={(time) => draft.time = time} /></div>
     </div>
     <label class="todo-field"><span class="field-label">메모 (선택)</span><textarea bind:value={draft.memo} maxlength="2000" rows="2"></textarea></label>
     <div class="todo-actions">
-      <button type="button" class="button secondary small" onclick={() => editing = null}>취소</button>
+      <button type="button" class="button secondary small" onclick={cancel}>취소</button>
       <button class="button small" disabled={busy || !draft.title.trim()}>{editing ? '저장' : '추가'}</button>
     </div>
   </form>
@@ -263,11 +302,11 @@
     {#if editing === 0}{@render form()}{/if}
     <ul class="day-events calendar-list" aria-label={`${label(selected, false)} 일정`}>
       {#each selectedItems.tasks as task (`${task.course_key}-${task.category}-${task.item_id}`)}
-        <li><button class="event event-task" onclick={ontasks}>
+        <li class="calendar-source"><button class="event event-task" onclick={ontasks}>
           <span class="event-bar" aria-hidden="true"></span>
           <span class="event-title"><span class="ai-mark task-mark">마감{task.due_at!.length > 10 ? ` ${wallTime(task.due_at!.slice(11, 16), clock.format)}` : ''}</span> {task.title}</span>
           <span class="event-meta">{task.course_name} · 과제·마감에서 보기</span>
-        </button></li>
+        </button>{#if desktop}<button class="text-button" disabled={busy || editing !== null} aria-label={`${task.title} 할 일로 추가`} onclick={() => void startPrefill(taskTodo({ ...task, due_at: task.due_at! }))}>할 일로 추가</button>{/if}</li>
       {/each}
       {#each selectedItems.todos as todo (todo.id)}
         <li class="todo" class:done={todo.done}>
@@ -279,6 +318,7 @@
               {#if todo.memo}<span class="todo-memo">{todo.memo}</span>{/if}
             </div>
             <div class="todo-buttons">
+              {#if todo.document_id !== null}<button class="text-button" id={`calendar-todo-${todo.id}`} disabled={editing !== null} onclick={() => onopen(todo.document_id!, `calendar-todo-${todo.id}`)} aria-label={`${todo.title} 원문 보기`}>원문</button>{/if}
               <button class="text-button" disabled={busy || editing !== null} onclick={() => startEdit(todo)} aria-label={`${todo.title} 수정`}>수정</button>
               <button class="text-button danger" disabled={busy || editing !== null} onclick={() => void remove(todo)} aria-label={`${todo.title} 삭제`}>삭제</button>
             </div>
@@ -286,11 +326,11 @@
         </li>
       {/each}
       {#each selectedItems.dates as entry (entry.key)}
-        <li><button class="event event-ai" id={`calendar-ai-${entry.key}`} onclick={() => onopen(entry.documentId, `calendar-ai-${entry.key}`)}>
+        <li class="calendar-source"><button class="event event-ai" id={`calendar-ai-${entry.key}`} onclick={() => onopen(entry.documentId, `calendar-ai-${entry.key}`)}>
           <span class="event-bar" aria-hidden="true"></span>
           <span class="event-title"><span class="ai-mark">AI 참고 일정</span> {entry.label}</span>
           <span class="event-meta">{entry.title} · 원문 확인</span>
-        </button></li>
+        </button>{#if desktop}<button class="text-button" disabled={busy || editing !== null} aria-label={`${entry.label} 할 일로 추가`} onclick={() => void startPrefill(noticeTodo(entry.label, entry.title, entry.day, entry.documentId, entry.image))}>할 일로 추가</button>{/if}</li>
       {/each}
       {#if selectedEmpty && editing !== 0}<li class="day-empty">일정 없음</li>{/if}
     </ul>
@@ -342,6 +382,9 @@
   .todo-field input { width: 100%; min-width: 0; font: inherit; font-size: 13px; color: var(--text); background: var(--field); border: 1px solid var(--line-strong); border-radius: 6px; padding: 4px 8px; }
   .todo-field textarea { min-height: 52px; padding: 6px 8px; }
   .todo-actions { display: flex; justify-content: flex-end; gap: 6px; }
+  .todo-caution { margin: 0; font-size: 11.5px; }
+  .calendar-source { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px; align-items: start; }
+  .calendar-source > .text-button { margin-top: 6px; white-space: nowrap; }
   @media (max-width: 1000px) {
     .calendar-view { grid-template-columns: minmax(0, 1fr); }
     .calendar-day-panel { position: static; }

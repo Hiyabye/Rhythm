@@ -869,7 +869,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             .sort((a, b) => a.day.localeCompare(b.day) || Number(a.time !== null) - Number(b.time !== null) || (a.time ?? '').localeCompare(b.time ?? '') || a.id - b.id));
           case 'calendar_create_todo': {
             if (!args.todo.title.trim()) throw '할 일 제목은 1자에서 200자 사이로 입력해 주세요.';
-            const todo = { id: ++calendarId, title: args.todo.title.trim(), day: args.todo.day, time: args.todo.time || null, memo: args.todo.memo.trim(), done: false };
+            const todo = { id: ++calendarId, title: args.todo.title.trim(), day: args.todo.day, time: args.todo.time || null, memo: args.todo.memo.trim(), done: false, document_id: args.todo.document_id ?? null };
             calendarTodos.push(todo);
             return copy(todo);
           }

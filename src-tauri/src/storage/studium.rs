@@ -341,7 +341,7 @@ mod tests {
         store
             .connection
             .execute_batch(
-                "DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                "DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
              DELETE FROM extension_preferences WHERE extension_id='studium';
              PRAGMA user_version=22;",
             )
@@ -501,7 +501,7 @@ mod tests {
         store.save(&settings).unwrap();
         store
             .connection
-            .execute_batch("DROP TABLE studium_mini_geometry; PRAGMA user_version=29;")
+            .execute_batch("DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; DROP TABLE studium_mini_geometry; PRAGMA user_version=29;")
             .unwrap();
         drop(store);
         let upgraded = Store::open(&path).unwrap();
@@ -525,7 +525,7 @@ mod tests {
         let path = directory.path().join("db");
         let store = opened(&path);
         store.connection.execute_batch(
-            "DROP TABLE studium_mini_geometry; CREATE TABLE studium_mini_geometry(sentinel TEXT);
+            "DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; DROP TABLE studium_mini_geometry; CREATE TABLE studium_mini_geometry(sentinel TEXT);
              INSERT INTO studium_mini_geometry VALUES('keep'); PRAGMA user_version=29;",
         ).unwrap();
         drop(store);
@@ -700,7 +700,7 @@ mod tests {
         store.studium_save_auto_interval(18).unwrap();
         store
             .connection
-            .execute_batch("DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; PRAGMA user_version=27;")
+            .execute_batch("DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; PRAGMA user_version=27;")
             .unwrap();
         drop(store);
         let upgraded = Store::open(&path).unwrap();
@@ -728,7 +728,7 @@ mod tests {
         store
             .connection
             .execute_batch(
-                "DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats;
+                "DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats;
              CREATE TABLE studium_favorite_seats(sentinel TEXT);
              INSERT INTO studium_favorite_seats VALUES('keep');
              PRAGMA user_version=27;",
@@ -835,7 +835,7 @@ mod tests {
             .connection
             .execute_batch(
                 "UPDATE settings SET theme='dark',clock_format='24h',auto_trash_months=3;
-                 DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats;
+                 DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats;
                  ALTER TABLE studium_preferences DROP COLUMN interval_minutes;
                  PRAGMA user_version=26;",
             )
@@ -862,7 +862,7 @@ mod tests {
         store.studium_save_auto_interval(17).unwrap();
         store
             .connection
-            .execute_batch("DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; PRAGMA user_version=26;")
+            .execute_batch("DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; PRAGMA user_version=26;")
             .unwrap();
         drop(store);
         // An unexpected pre-existing column makes 027 fail instead of silently

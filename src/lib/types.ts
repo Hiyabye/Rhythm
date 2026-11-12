@@ -464,7 +464,8 @@ export interface CybercampusTask {
 }
 
 // storage/calendar `CalendarTodo`. `day` (`YYYY-MM-DD`) and `time` (`HH:MM`)
-// are local wall-clock values.
+// are local wall-clock values. `document_id` links a todo made from a notice;
+// it is null while that notice is in 휴지통 or after it was deleted.
 export interface CalendarTodo {
   id: number;
   title: string;
@@ -472,12 +473,21 @@ export interface CalendarTodo {
   time: string | null;
   memo: string;
   done: boolean;
+  document_id: number | null;
 }
 export interface TodoInput {
   title: string;
   day: string;
   time: string | null;
   memo: string;
+  // Read only on create; editing keeps the link.
+  document_id?: number | null;
+}
+// A prefilled todo form opened from a notice, an AI date or an eClass deadline.
+// `caution` says what to check before saving, such as an AI-read date.
+export interface TodoPrefill {
+  todo: TodoInput;
+  caution: string;
 }
 // An AI-extracted date of a current analysis, as the week pane and calendar show it.
 export interface ReferenceDate {
@@ -486,4 +496,6 @@ export interface ReferenceDate {
   label: string;
   documentId: number;
   title: string;
+  // Read from an archived image rather than the text, so it is less certain.
+  image: boolean;
 }

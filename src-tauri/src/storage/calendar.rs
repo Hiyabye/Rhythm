@@ -1,5 +1,6 @@
 //! Todos the user makes on the calendar. `day` and `time` are local wall-clock
-//! values; they never leave this device.
+//! values; they never leave this device. A todo made from a notice keeps a
+//! link to it (`document_id`), shown only while the notice is outside 휴지통.
 use super::Store;
 use rusqlite::{params, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,7 @@ pub struct CalendarTodo {
     pub time: Option<String>,
     pub memo: String,
     pub done: bool,
+    pub document_id: Option<i64>,
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct TodoInput {
@@ -26,6 +28,9 @@ pub struct TodoInput {
     pub time: Option<String>,
     #[serde(default)]
     pub memo: String,
+    /// Read only when the todo is created; editing keeps the link it has.
+    #[serde(default)]
+    pub document_id: Option<i64>,
 }
 
 /// Days since 1970-01-01 of a valid `YYYY-MM-DD`, or `None`.
@@ -100,9 +105,13 @@ fn todo(row: &Row) -> rusqlite::Result<CalendarTodo> {
         time: row.get(3)?,
         memo: row.get(4)?,
         done: row.get(5)?,
+        document_id: row.get(6)?,
     })
 }
-const COLUMNS: &str = "id,title,day,time,memo,done";
+// A trashed notice hides its link; restoring the notice brings it back.
+const COLUMNS: &str = "id,title,day,time,memo,done,
+    CASE WHEN EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=calendar_todos.document_id)
+      THEN NULL ELSE document_id END";
 const NOT_FOUND: &str = "할 일을 찾을 수 없습니다. 이미 삭제되었을 수 있습니다.";
 
 impl Store {
@@ -160,10 +169,30 @@ impl Store {
                 "할 일은 {MAX_TODOS}개까지 저장할 수 있습니다. 지난 할 일을 지워 주세요."
             ));
         }
+        if let Some(document) = input.document_id {
+            let exists = self
+                .connection
+                .query_row(
+                    &format!(
+                        "SELECT 1 FROM documents d WHERE d.id=?1 AND {}",
+                        super::trash::NOT_TRASHED
+                    ),
+                    [document],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            if exists.is_none() {
+                return Err(
+                    "연결할 공지를 찾을 수 없습니다. 휴지통으로 옮겼거나 삭제했을 수 있습니다."
+                        .into(),
+                );
+            }
+        }
         self.connection
             .execute(
-                "INSERT INTO calendar_todos(title,day,time,memo) VALUES(?1,?2,?3,?4)",
-                params![title, input.day, time, memo],
+                "INSERT INTO calendar_todos(title,day,time,memo,document_id) VALUES(?1,?2,?3,?4,?5)",
+                params![title, input.day, time, memo, input.document_id],
             )
             .map_err(|e| e.to_string())?;
         self.calendar_todo(self.connection.last_insert_rowid())
@@ -226,6 +255,7 @@ mod tests {
             day: day.into(),
             time: time.map(Into::into),
             memo: String::new(),
+            document_id: None,
         }
     }
 

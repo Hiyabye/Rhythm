@@ -1,13 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { CybercampusTask } from './types';
-  import { archiveError, kstInstant as instant, openTask, wallTime } from './archive-format';
+  import type { CybercampusTask, TodoPrefill } from './types';
+  import { archiveError, kstInstant as instant, openTask, taskTodo, wallTime } from './archive-format';
   import { clock } from './clock.svelte';
   import Icon from './Icon.svelte';
   import { fade } from './motion';
 
-  let { desktop, onsettings }: { desktop: boolean; onsettings: () => void } = $props();
+  // `oncalendar` is set only while the calendar extension is on.
+  let { desktop, onsettings, oncalendar }: { desktop: boolean; onsettings: () => void; oncalendar?: (prefill: TodoPrefill) => void } = $props();
   let tasks = $state<CybercampusTask[]>([]);
   let loading = $state(true);
   let error = $state('');
@@ -81,6 +82,7 @@
       {#if task.late_due_at}<span>지각 제출 {when(task.late_due_at)}까지</span>{/if}
       <span>{progress(task)}</span>
     </span>
+    {#if open && task.due_at && oncalendar}<button class="text-button task-calendar" aria-label={`${task.title} 캘린더에 할 일로 추가`} onclick={() => oncalendar(taskTodo({ ...task, due_at: task.due_at! }))}>캘린더에 추가</button>{/if}
   </li>
 {/snippet}
 
@@ -110,5 +112,6 @@
   .task-label { margin-right: 8px; font-size: 11px; font-weight: 600; color: var(--secondary); }
   .task-left { font-weight: 650; color: var(--text); }
   .urgent .task-left { color: var(--danger); }
+  .task-calendar { justify-self: start; }
   .task-history summary { cursor: pointer; padding: 8px 0; font-size: 13px; color: var(--secondary); }
 </style>

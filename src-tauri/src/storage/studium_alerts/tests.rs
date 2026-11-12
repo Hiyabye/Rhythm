@@ -471,7 +471,7 @@ fn populated_schema_twenty_eight_upgrade_and_settings_backup_preserve_rules_with
     settings.clock_format = "24h".into();
     settings.auto_trash_months = 6;
     store.save(&settings).unwrap();
-    store.connection.execute_batch("DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; PRAGMA user_version=28;").unwrap();
+    store.connection.execute_batch("DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; PRAGMA user_version=28;").unwrap();
     drop(store);
     let store = Store::open(&directory.path().join("alerts.db")).unwrap();
     assert_eq!(store.studium_auto_interval().unwrap(), 17);
@@ -527,7 +527,7 @@ fn populated_schema_twenty_eight_upgrade_and_settings_backup_preserve_rules_with
 #[test]
 fn alert_migration_failure_keeps_schema_twenty_eight_and_sentinel() {
     let (directory, store) = fixture();
-    store.connection.execute_batch("DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; CREATE TABLE studium_alert_rules(sentinel TEXT); INSERT INTO studium_alert_rules VALUES('keep'); PRAGMA user_version=28;").unwrap();
+    store.connection.execute_batch("DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; CREATE TABLE studium_alert_rules(sentinel TEXT); INSERT INTO studium_alert_rules VALUES('keep'); PRAGMA user_version=28;").unwrap();
     drop(store);
     assert!(Store::open(&directory.path().join("alerts.db")).is_err());
     let connection = Connection::open(directory.path().join("alerts.db")).unwrap();
