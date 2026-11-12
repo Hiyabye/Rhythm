@@ -613,7 +613,7 @@ async fn access_denials_fail_the_room_without_fallback_or_retry() {
             (COMMON, Reply::Html(summary(&time))),
             (
                 "/SEAT/roomview5.asp?room_no=5",
-                Reply::Error(format!("HTTP {code}")),
+                Reply::Error(crate::archive::network::http_refused(code)),
             ),
             (
                 "/SEAT/roomview5.asp?room_no=6",
@@ -633,32 +633,32 @@ async fn access_denials_fail_the_room_without_fallback_or_retry() {
 
 #[tokio::test]
 async fn rate_limit_fails_pending_rooms_and_stops_without_retrying() {
-    for error in [crate::archive::network::RATE_LIMITED, "HTTP 429"] {
-        let h = Harness::new(&["5", "6"]);
-        let time = clock(0);
-        let fake = Fake::new(vec![
-            (COMMON, Reply::Html(summary(&time))),
-            ("/SEAT/roomview5.asp?room_no=5", Reply::Error(error.into())),
-        ]);
-        h.start(fake.clone()).await;
-        h.wait().await;
-        fake.exhausted();
-        assert!(h
-            .snapshot()
-            .results
-            .iter()
-            .all(|room| room.status == "failed" && room.result.is_none()));
-        if error == crate::archive::network::RATE_LIMITED {
-            assert!(h.snapshot().results.iter().all(|room| room.error.as_deref()
+    let h = Harness::new(&["5", "6"]);
+    let time = clock(0);
+    let fake = Fake::new(vec![
+        (COMMON, Reply::Html(summary(&time))),
+        (
+            "/SEAT/roomview5.asp?room_no=5",
+            Reply::Error(crate::archive::network::RATE_LIMITED.into()),
+        ),
+    ]);
+    h.start(fake.clone()).await;
+    h.wait().await;
+    fake.exhausted();
+    assert!(h
+        .snapshot()
+        .results
+        .iter()
+        .all(|room| room.status == "failed"
+            && room.result.is_none()
+            && room.error.as_deref()
                 == Some(
                     "학교 서버가 요청을 제한했습니다. 잠시 기다린 후 지금 확인을 다시 눌러 주세요."
                 )));
-        }
-        assert_eq!(
-            fake.requests(),
-            ["/robots.txt", COMMON, "/SEAT/roomview5.asp?room_no=5"]
-        );
-    }
+    assert_eq!(
+        fake.requests(),
+        ["/robots.txt", COMMON, "/SEAT/roomview5.asp?room_no=5"]
+    );
 }
 
 #[tokio::test]
@@ -712,7 +712,10 @@ async fn new_cycle_clears_old_numbers_and_global_failure_clears_all_targets() {
 #[tokio::test]
 async fn common_access_failure_has_no_detail_requests() {
     let h = Harness::new(&["5", "6"]);
-    let fake = Fake::new(vec![(COMMON, Reply::Error("HTTP 403".into()))]);
+    let fake = Fake::new(vec![(
+        COMMON,
+        Reply::Error(crate::archive::network::http_refused(403)),
+    )]);
     h.start(fake.clone()).await;
     h.wait().await;
     fake.exhausted();
