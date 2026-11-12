@@ -1,4 +1,4 @@
-import type { ClockFormat, CybercampusTask } from './types';
+import type { ClockFormat, CybercampusTask, TodoPrefill } from './types';
 
 export function archiveError(reason: unknown): string {
   if (typeof reason !== 'string') return '작업을 완료하지 못했습니다. 다시 시도해 주세요.';
@@ -57,6 +57,31 @@ export function kstInstant(value: string): number {
 /** Still to do: unsubmitted, and pending or not past its (late) deadline. The 과제·마감 page and its sidebar count share this. */
 export function openTask(task: CybercampusTask, now: number): boolean {
   return !task.submitted_at && (task.pending || (task.due_at !== null && kstInstant(task.late_due_at ?? task.due_at) >= now));
+}
+
+// storage/calendar `MAX_TITLE`, counted in characters as Rust counts them.
+const todoTitleLimit = 200;
+function todoTitle(text: string): string {
+  const characters = [...text.trim()];
+  return characters.length > todoTitleLimit ? `${characters.slice(0, todoTitleLimit - 1).join('')}…` : characters.join('');
+}
+
+/** A todo form for an AI-read date of a notice. The date is a guess until the user checks it. */
+export function noticeTodo(label: string, noticeTitle: string, day: string, documentId: number, image = false): TodoPrefill {
+  return {
+    todo: { title: todoTitle(`${label} · ${noticeTitle}`), day: day.slice(0, 10), time: null, memo: '', document_id: documentId },
+    caution: image
+      ? 'AI가 이미지에서 읽은 날짜라 확정되지 않았습니다. 원문에서 날짜와 시간을 확인한 뒤 저장하세요.'
+      : 'AI가 원문에서 읽은 날짜입니다. 틀릴 수 있으니 원문에서 날짜와 시간을 확인한 뒤 저장하세요.',
+  };
+}
+
+/** A todo form for an eClass deadline. Its due time is Korean local time, copied as the todo's wall-clock time. */
+export function taskTodo(task: CybercampusTask & { due_at: string }): TodoPrefill {
+  return {
+    todo: { title: todoTitle(task.title), day: task.due_at.slice(0, 10), time: task.due_at.length > 10 ? task.due_at.slice(11, 16) : null, memo: task.course_name, document_id: null },
+    caution: '사이버캠퍼스 마감을 옮겨 적은 할 일입니다. 마감이 바뀌어도 이 할 일은 그대로이니 과제·마감에서 확인하세요.',
+  };
 }
 
 export function localDayKey(date: Date): string {

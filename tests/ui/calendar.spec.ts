@@ -6,7 +6,7 @@ test.use({ timezoneId: 'Asia/Seoul' });
 const board = { id: 'cybercampus', name: '강의 공지', organization: '서강대학교 · 사이버캠퍼스', supported: true, family: 'cybercampus', subscribed: true };
 const deadline: CybercampusTask = { course_key: 'A1', course_name: '자료구조실습', category: 'report', item_id: '1', label: '과제', title: '실습 과제 2', week: 9,
   opens_at: null, due_at: '2026-10-26T23:59', late_due_at: null, status: null, submitted_at: null, pending: true, updated_at: '2026-10-20T00:00:00Z' };
-const todo = (overrides: Partial<CalendarTodo>): CalendarTodo => ({ id: 1, title: '장학금 서류', day: '2026-10-25', time: null, memo: '', done: false, ...overrides });
+const todo = (overrides: Partial<CalendarTodo>): CalendarTodo => ({ id: 1, title: '장학금 서류', day: '2026-10-25', time: null, memo: '', done: false, document_id: null, ...overrides });
 
 async function openCalendar(page: Page) {
   await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name: '캘린더' }).click();
@@ -157,4 +157,84 @@ test('turning the calendar off hides its page and the todos in the week', async 
   await expect(week.locator('.week-day')).toHaveCount(7);
   await expect(week.locator('.event-todo')).toHaveCount(0);
   await expect(week).not.toContainText('캘린더');
+});
+
+test('an AI reference date becomes a linked todo after the user checks the prefilled form', async ({ page }) => {
+  await mockDesktop(page, { aiResult: true, aiInstalled: true });
+  await page.goto('/');
+  await openCalendar(page);
+  await page.locator('[data-day="2026-10-30"]').click();
+  const panel = page.getByRole('region', { name: /10월 30일 금요일/ });
+  await panel.getByRole('button', { name: '신청 마감 할 일로 추가' }).click();
+  await expect(panel.getByRole('note')).toContainText('AI가 원문에서 읽은 날짜입니다');
+  const title = panel.getByRole('textbox', { name: '제목' });
+  await expect(title).toBeFocused();
+  await expect(title).toHaveValue(/^신청 마감 · /);
+  await expect(panel.getByLabel('날짜')).toHaveValue('2026-10-30');
+  // The AI date may be wrong, so the form lets the user move it before saving.
+  await title.fill('장학금 신청');
+  await panel.getByLabel('날짜').fill('2026-10-29');
+  await panel.getByRole('button', { name: '추가', exact: true }).click();
+  const moved = page.getByRole('region', { name: /10월 29일 목요일/ });
+  await expect(moved.getByRole('status')).toHaveText('할 일을 추가했습니다.');
+  const created = await page.evaluate(() => (window as any).__fixture.calls.find((call: any) => call.command === 'calendar_create_todo').args.todo);
+  expect(created).toMatchObject({ title: '장학금 신청', day: '2026-10-29', time: null, document_id: 1 });
+
+  await moved.getByRole('button', { name: '장학금 신청 원문 보기' }).click();
+  await expect(page.getByRole('region', { name: '공지 AI 분석' })).toBeVisible();
+  await page.getByRole('button', { name: /목록으로 돌아가기/ }).click();
+  await expect(page.getByRole('button', { name: '장학금 신청 원문 보기' })).toBeFocused();
+  await expect(page.getByRole('region', { name: /10월 29일 목요일/ }).getByRole('textbox', { name: '제목' })).toHaveCount(0);
+});
+
+test('a dated AI fact in the reader opens the calendar with a prefilled todo', async ({ page }) => {
+  await mockDesktop(page, { aiResult: true, aiInstalled: true });
+  await page.goto('/');
+  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
+  await page.locator('#notice-1').click();
+  await page.getByRole('region', { name: '공지 AI 분석' }).getByRole('button', { name: '신청 마감 캘린더에 할 일로 추가' }).click();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('캘린더');
+  const panel = page.getByRole('region', { name: /10월 30일 금요일/ });
+  await expect(panel.getByRole('textbox', { name: '제목' })).toHaveValue('신청 마감 · 한국어 공지 01');
+  await expect(panel.getByLabel('날짜')).toHaveValue('2026-10-30');
+  await expect(panel.getByRole('note')).toContainText('원문에서 날짜와 시간을 확인한 뒤 저장하세요');
+  await panel.getByRole('button', { name: '취소' }).click();
+  await expect(panel.getByRole('textbox', { name: '제목' })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'calendar_create_todo').length)).toBe(0);
+});
+
+test('an open eClass deadline is copied into a todo with its due time and course', async ({ page }) => {
+  await mockDesktop(page, { sourceList: [board], cybercampusId: '20990001', cybercampusTasks: [deadline] });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name: '과제·마감' }).click();
+  await page.getByRole('button', { name: '실습 과제 2 캘린더에 할 일로 추가' }).click();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('캘린더');
+  const panel = page.getByRole('region', { name: /10월 26일 월요일/ });
+  await expect(panel.getByRole('textbox', { name: '제목' })).toHaveValue('실습 과제 2');
+  await expect(panel.getByRole('textbox', { name: '메모 (선택)' })).toHaveValue('자료구조실습');
+  await expect(panel.getByRole('combobox', { name: '시' })).toHaveValue('11');
+  await expect(panel.getByRole('combobox', { name: '분' })).toHaveValue('59');
+  await expect(panel.getByRole('button', { name: '오후', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(panel.getByRole('note')).toContainText('마감이 바뀌어도 이 할 일은 그대로');
+  await panel.getByRole('button', { name: '추가', exact: true }).click();
+  await expect(panel.getByRole('list')).toContainText('오후 11:59 실습 과제 2');
+  // eClass deadlines are replaced on every sync, so the todo keeps no link.
+  await expect(panel.getByRole('button', { name: '실습 과제 2 원문 보기' })).toHaveCount(0);
+
+  // The calendar's own deadline row offers the same copy.
+  await panel.getByRole('button', { name: '실습 과제 2 할 일로 추가' }).click();
+  await expect(panel.getByRole('textbox', { name: '제목' })).toHaveValue('실습 과제 2');
+});
+
+test('without the calendar extension no page offers to add a todo', async ({ page }) => {
+  await mockDesktop(page, { sourceList: [board], cybercampusId: '20990001', cybercampusTasks: [deadline], aiResult: true, aiInstalled: true, extensions: { calendar: false } });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name: '과제·마감' }).click();
+  await expect(page.getByText('실습 과제 2')).toBeVisible();
+  await expect(page.getByRole('button', { name: /캘린더에 할 일로 추가/ })).toHaveCount(0);
+  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
+  await page.locator('#notice-1').click();
+  const analysis = page.getByRole('region', { name: '공지 AI 분석' });
+  await expect(analysis).toContainText('신청 마감');
+  await expect(analysis.getByRole('button', { name: /캘린더에/ })).toHaveCount(0);
 });

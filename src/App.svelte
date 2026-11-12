@@ -20,7 +20,7 @@
   import './lib/ai.css';
   import { archiveError as message, archiveDay, localDayKey, openTask, timeOptions } from './lib/archive-format';
   import { clock } from './lib/clock.svelte';
-  import type { ArchiveSummary, AutoTrashMonths, ClockFormat, EnergyProfile, Settings, Snapshot, SourceInfo, SyncStatus, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusTask } from './lib/types';
+  import type { ArchiveSummary, AutoTrashMonths, ClockFormat, EnergyProfile, Settings, Snapshot, SourceInfo, SyncStatus, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusTask, TodoPrefill } from './lib/types';
 
   const themes: { id: Theme; label: string; icon: string }[] = [
     { id: 'light', label: '라이트', icon: 'today' },
@@ -86,7 +86,7 @@
   let activeSource = $state('');
   let weekPane = $state(false);
   // A new token asks the calendar page to select `day`.
-  let calendarRequest = $state({ day: '', token: 0 });
+  let calendarRequest = $state<{ day: string; token: number; prefill: TodoPrefill | null }>({ day: '', token: 0, prefill: null });
   let boards = $derived(sources.filter((item) => item.supported && item.subscribed));
   // 휴지통 belongs to the notice sources, but stays reachable while it still holds notices.
   let primaryNavigation = $derived(contributed(navigation, enabled).filter((item) => item.id !== 'trash'
@@ -209,6 +209,12 @@
     activeSource = sourceId;
     notice = '';
     await showTop();
+  }
+
+  // Opens the calendar on one day, optionally with a prefilled new-todo form.
+  async function openCalendar(day: string, prefill: TodoPrefill | null = null) {
+    await navigate('calendar');
+    calendarRequest = { day, token: calendarRequest.token + 1, prefill };
   }
 
   async function showTop() {
@@ -477,7 +483,8 @@
         </section>
       </div>
     {:else if page === 'tasks'}
-      <CybercampusTasks {desktop} onsettings={() => openSettings('cybercampus')} />
+      <CybercampusTasks {desktop} onsettings={() => openSettings('cybercampus')}
+        oncalendar={enabled.has('calendar') ? (prefill) => void openCalendar(prefill.todo.day, prefill) : undefined} />
     {:else if page === 'studium'}
       <StudiumView {desktop} activation={studiumActivation} proactiveEnabled={enabled.has('proactive')} onactivation={handleProactiveActivation} onsettings={() => openSettings(enabled.has('proactive') ? 'notifications' : 'extensions')} />
     {:else}
@@ -486,7 +493,7 @@
         onweekpane={(visible) => weekPane = visible}
         ontasks={() => void navigate('tasks')}
         {calendarRequest}
-        oncalendar={(day) => void navigate('calendar').then(() => { calendarRequest = { day, token: calendarRequest.token + 1 }; })}
+        oncalendar={(day, prefill) => void openCalendar(day, prefill)}
         oncontext={(context) => { if (context.summary) summary = context.summary; if (context.sources) sources = context.sources; syncStatus = context.status; }} />
     {/if}
   </main>

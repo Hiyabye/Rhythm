@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { AiSnapshot, ArchivePage, ArchiveQuery, ArchiveSummary, AiResult, AiClassification, CalendarTodo, CybercampusTask, ReferenceDate, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
+  import type { AiSnapshot, ArchivePage, ArchiveQuery, ArchiveSummary, AiResult, AiClassification, CalendarTodo, CybercampusTask, ReferenceDate, TodoPrefill, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
   import analysisContract from './analysis-contract.json' with { type: 'json' };
   import { archiveDate, archiveDay, archiveError, kstInstant, localDayKey, wallTime } from './archive-format';
   import { clock } from './clock.svelte';
@@ -19,8 +19,8 @@
     oncontext: (context: { summary: ArchiveSummary | null; sources: SourceInfo[] | null; status: SyncStatus | null }) => void;
     onweekpane: (visible: boolean) => void;
     ontasks: () => void;
-    calendarRequest: { day: string; token: number };
-    oncalendar: (day: string) => void;
+    calendarRequest: { day: string; token: number; prefill: TodoPrefill | null };
+    oncalendar: (day: string, prefill?: TodoPrefill) => void;
   } = $props();
   // Today's widgets and the AI annotations follow their extensions.
   let showRecommendations = $derived(enabled.has('recommendations'));
@@ -41,6 +41,9 @@
   let tasks = $state<CybercampusTask[]>([]);
   let weekTodos = $state<CalendarTodo[]>([]);
   let calendarDay = $state(localDayKey(new Date()));
+  let calendarPrefill = $state<TodoPrefill | null>(null);
+  // The row the calendar focuses after returning from the reader.
+  let calendarFocus = $state('');
   let hasPreferences = $state(false);
   let recommendationError = $state('');
   let status = $state<SyncStatus | null>(null);
@@ -93,10 +96,14 @@
     sort = currentPage === 'search' ? 'relevance' : 'newest';
     offset = 0;
     calendarDay = localDayKey(new Date());
+    calendarFocus = '';
   });
   // The week pane opens the calendar on one day; this runs after the page change above.
   $effect(() => {
-    if (calendarRequest.token && calendarRequest.day) calendarDay = calendarRequest.day;
+    if (calendarRequest.token && calendarRequest.day) {
+      calendarDay = calendarRequest.day;
+      calendarPrefill = calendarRequest.prefill;
+    }
   });
 
   $effect(() => {
@@ -417,6 +424,8 @@
   function closeReader() {
     readerId = null;
     readerRevisionId = null;
+    // The calendar loads no notice list; it focuses the row once its todos have loaded again.
+    if (page === 'calendar') calendarFocus = lastOpenedTarget;
     changed();
   }
   async function focusList() {
@@ -454,7 +463,7 @@
   let referenceDates: ReferenceDate[] = $derived(analyses.flatMap((analysis) => currentSummary(analysis.document_id)?.id !== analysis.id ? [] :
     analysis.result.facts.filter((fact) => fact.date && /^\d{4}-\d{2}-\d{2}/.test(fact.date)).map((fact, index) => ({
       key: `${analysis.id}-${index}`, day: fact.date!.slice(0, 10), label: fact.label, documentId: analysis.document_id,
-      title: titleOf(analysis.document_id, analysis.result.short_summary),
+      title: titleOf(analysis.document_id, analysis.result.short_summary), image: fact.origin === 'image',
     }))));
   // Stored tasks outlive an unsubscribed board; the week follows the 과제·마감 navigation and shows them only while subscribed.
   let showTasks = $derived(enabled.has('cybercampus') && sources.some((item) => item.family === 'cybercampus' && item.subscribed));
@@ -501,7 +510,8 @@
 </script>
 
 {#if readerId !== null}
-  {#key `${readerId}:${readerRevisionId ?? ''}`}<DocumentReader id={readerId} initialRevisionId={readerRevisionId} enabledSources={sources.filter((item) => item.extension && enabled.has(item.extension)).map((item) => item.id)} {ai} onclose={closeReader} onchange={changed} {onaisettings} onopen={(id) => void openDocument(id, `notice-${id}`)} />{/key}
+  {#key `${readerId}:${readerRevisionId ?? ''}`}<DocumentReader id={readerId} initialRevisionId={readerRevisionId} enabledSources={sources.filter((item) => item.extension && enabled.has(item.extension)).map((item) => item.id)} {ai} onclose={closeReader} onchange={changed} {onaisettings} onopen={(id) => void openDocument(id, `notice-${id}`)}
+    oncalendar={calendarOn && desktop ? (prefill) => oncalendar(prefill.todo.day, prefill) : undefined} />{/key}
 {:else}
   <section class="archive-view" aria-busy={loading} in:fade>
     {#if page === 'today' && !showRecommendations && !showWeek}
@@ -625,7 +635,7 @@
         {/if}
       </div>
     {:else if page === 'calendar'}
-      <CalendarView {desktop} bind:selected={calendarDay} tasks={openTasks} dates={referenceDates} {ontasks} onopen={(id, target) => void openDocument(id, target)} />
+      <CalendarView {desktop} bind:selected={calendarDay} bind:prefill={calendarPrefill} bind:focus={calendarFocus} tasks={openTasks} dates={referenceDates} {ontasks} onopen={(id, target) => void openDocument(id, target)} />
     {:else}
     {#if page === 'search'}
       <form class="search-form archive-search" onsubmit={search} role="search"><Icon name="search" size={21} /><label class="sr-only" for="local-query">보관된 공지 검색</label><input id="local-query" type="search" bind:value={draft} maxlength="512" placeholder="제목과 본문에서 검색" autocomplete="off" disabled={!desktop} /><button class="text-button" type="submit" disabled={!desktop || loading}>검색</button></form>

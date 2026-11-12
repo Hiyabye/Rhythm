@@ -95,7 +95,7 @@ fn studium_interval_upgrade_preserves_released_trash_state_and_settings() {
         .connection
         .execute_batch(
             "INSERT INTO deleted_notices(source_id,external_id) VALUES('one','removed');
-             DROP TABLE studium_mini_geometry;
+             DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; DROP TABLE studium_mini_geometry;
              DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules;
              DROP TABLE studium_favorite_seats;
              ALTER TABLE studium_preferences DROP COLUMN interval_minutes;
@@ -1578,7 +1578,7 @@ fn schema_ten_upgrade_keeps_archive_and_adds_skipped_articles() {
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                  PRAGMA user_version=10;",
             )
             .unwrap();
@@ -1630,7 +1630,7 @@ fn schema_eleven_upgrade_retries_mislabeled_and_newly_allowed_resources() {
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                  PRAGMA user_version=11;"
             ))
             .unwrap();
@@ -1663,7 +1663,7 @@ fn retired_eng_newsletter_row_is_removed_but_archived_data_is_kept() {
             .execute_batch(
                 "DROP TABLE cybercampus_tasks; DROP TABLE cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                  PRAGMA user_version=16",
             )
             .unwrap();
@@ -1815,7 +1815,7 @@ fn schema_twenty_upgrade_keeps_every_subscription_with_groups_on() {
         store
             .connection
             .execute_batch(
-                "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                  PRAGMA user_version=20;",
             )
             .unwrap();
@@ -2079,4 +2079,122 @@ fn trashed_notices_leave_automatic_ai_work() {
         .map(|(id, _)| id)
         .collect::<Vec<_>>();
     assert_eq!(recent, [kept]);
+}
+
+fn linked_todo(document_id: Option<i64>) -> crate::storage::calendar::TodoInput {
+    crate::storage::calendar::TodoInput {
+        title: "신청 마감".into(),
+        day: "2026-11-20".into(),
+        time: Some("18:00".into()),
+        memo: String::new(),
+        document_id,
+    }
+}
+
+#[test]
+fn notice_todo_link_follows_trash_and_is_cleared_by_permanent_deletion() {
+    let (_directory, store) = database();
+    store
+        .set_enabled(crate::extensions::CALENDAR, true)
+        .unwrap();
+    let id = store
+        .upsert_article(
+            "one",
+            &article("a", "장학금 신청", "본문", "2026-11-01"),
+            true,
+        )
+        .unwrap()
+        .0;
+    let todo = store.calendar_create_todo(&linked_todo(Some(id))).unwrap();
+    assert_eq!(todo.document_id, Some(id));
+    let listed = || store.calendar_todos("2026-11-20", "2026-11-20").unwrap();
+
+    // A new revision of the notice leaves the user's todo as it was.
+    store
+        .upsert_article(
+            "one",
+            &article("a", "장학금 신청 (수정)", "새 본문", "2026-11-01"),
+            true,
+        )
+        .unwrap();
+    assert_eq!(listed(), std::slice::from_ref(&todo));
+    // Editing keeps the link even when the input names none.
+    let edited = store
+        .calendar_update_todo(
+            todo.id,
+            &crate::storage::calendar::TodoInput {
+                title: "서류 제출".into(),
+                ..linked_todo(None)
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        (edited.title.as_str(), edited.document_id),
+        ("서류 제출", Some(id))
+    );
+
+    store.trash_documents(&[id]).unwrap();
+    assert_eq!(
+        listed()[0].document_id,
+        None,
+        "a trashed notice hides the link"
+    );
+    assert!(
+        store.calendar_create_todo(&linked_todo(Some(id))).is_err(),
+        "a trashed notice cannot be linked"
+    );
+    store.restore_documents(&[id]).unwrap();
+    assert_eq!(listed()[0].document_id, Some(id));
+
+    store.trash_documents(&[id]).unwrap();
+    store.purge_trashed(Some(&[id])).unwrap();
+    let kept = listed();
+    assert_eq!(kept.len(), 1, "permanent deletion keeps the todo");
+    assert_eq!(
+        (kept[0].title.as_str(), kept[0].document_id),
+        ("서류 제출", None)
+    );
+    let stored: Option<i64> = store
+        .connection
+        .query_row(
+            "SELECT document_id FROM calendar_todos WHERE id=?1",
+            [todo.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, None, "the trigger clears the stored link");
+    assert!(store.calendar_create_todo(&linked_todo(Some(id))).is_err());
+    assert!(store
+        .calendar_create_todo(&linked_todo(Some(id + 1000)))
+        .is_err());
+}
+
+#[test]
+fn schema_thirty_upgrade_keeps_todos_without_links() {
+    let (directory, store) = database();
+    let path = directory.path().join("db");
+    store
+        .set_enabled(crate::extensions::CALENDAR, true)
+        .unwrap();
+    store.calendar_create_todo(&linked_todo(None)).unwrap();
+    store
+        .connection
+        .execute_batch(
+            "DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document;
+             ALTER TABLE calendar_todos DROP COLUMN document_id;
+             PRAGMA user_version=30;",
+        )
+        .unwrap();
+    drop(store);
+
+    let upgraded = Store::open(&path).unwrap();
+    assert_eq!(upgraded.info().unwrap().schema_version, SCHEMA_VERSION);
+    let todos = upgraded.calendar_todos("2026-11-20", "2026-11-20").unwrap();
+    assert_eq!(
+        todos
+            .iter()
+            .map(|t| (t.title.as_str(), t.document_id))
+            .collect::<Vec<_>>(),
+        [("신청 마감", None)]
+    );
 }
