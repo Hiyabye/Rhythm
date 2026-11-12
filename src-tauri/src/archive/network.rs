@@ -37,6 +37,51 @@ pub struct Client {
     #[cfg(test)]
     test_io: Option<Arc<client_tests::Script>>,
 }
+/// A failed request. `status` is the HTTP status when the server answered
+/// with one, so callers act on 429 or 401/403 without reading `message`, the
+/// Korean text shown to the user.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FetchError {
+    pub status: Option<u16>,
+    pub message: String,
+}
+impl FetchError {
+    pub fn http(status: u16, message: String) -> Self {
+        Self {
+            status: Some(status),
+            message,
+        }
+    }
+    pub fn rate_limited(&self) -> bool {
+        self.status == Some(429)
+    }
+    pub fn access_denied(&self) -> bool {
+        matches!(self.status, Some(401 | 403))
+    }
+}
+impl From<String> for FetchError {
+    fn from(message: String) -> Self {
+        Self {
+            status: None,
+            message,
+        }
+    }
+}
+impl From<&str> for FetchError {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+impl From<FetchError> for String {
+    fn from(error: FetchError) -> Self {
+        error.message
+    }
+}
+impl std::fmt::Display for FetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
 #[derive(Debug)]
 pub enum Fetch {
     /// Return redirects to the policy owner; transport never follows them implicitly.
@@ -65,7 +110,7 @@ impl Client {
         max_bytes: usize,
         cancel: &AtomicBool,
         access: Access,
-    ) -> Result<Fetch, String> {
+    ) -> Result<Fetch, FetchError> {
         validate(url, access)?;
         if max_bytes == 0 || max_bytes > 20 * 1024 * 1024 {
             return Err("허용된 다운로드 크기를 초과했습니다.".into());
@@ -142,7 +187,7 @@ impl Client {
         access: Access,
     ) -> Result<Fetch, Failure> {
         let url = original;
-        validate(url, access).map_err(Failure::Fatal)?;
+        validate(url, access).map_err(|error| Failure::Fatal(error.into()))?;
         let host = url
             .host_str()
             .ok_or_else(|| Failure::Fatal("학교 서버 주소가 올바르지 않습니다.".into()))?;
@@ -167,9 +212,11 @@ impl Client {
                 .use_native_tls()
                 .min_tls_version(reqwest::tls::Version::TLS_1_2)
                 .tls_built_in_root_certs(false)
-                .add_root_certificate(studium_root().map_err(Failure::Fatal)?)
+                .add_root_certificate(studium_root().map_err(|error| Failure::Fatal(error.into()))?)
         } else {
-            builder.use_preconfigured_tls(super::tls::config().map_err(Failure::Fatal)?)
+            builder.use_preconfigured_tls(
+                super::tls::config().map_err(|error| Failure::Fatal(error.into()))?,
+            )
         };
         let client = builder
             .https_only(true)
@@ -228,7 +275,7 @@ impl Client {
             let target = url
                 .join(location)
                 .map_err(|_| Failure::Fatal("학교 서버 이동 주소가 올바르지 않습니다.".into()))?;
-            validate(&target, access).map_err(Failure::Fatal)?;
+            validate(&target, access).map_err(|error| Failure::Fatal(error.into()))?;
             return Ok(Fetch::Redirect(target));
         }
         if status == StatusCode::NOT_MODIFIED {
@@ -243,12 +290,15 @@ impl Client {
             return Ok(Fetch::NotModified);
         }
         if status == StatusCode::TOO_MANY_REQUESTS {
-            return Err(Failure::Fatal(RATE_LIMITED.into()));
+            return Err(Failure::Fatal(FetchError::http(429, RATE_LIMITED.into())));
         }
         if status.is_server_error() || status == StatusCode::REQUEST_TIMEOUT {
-            return Err(Failure::Retry(format!(
-                "학교 서버에 일시적인 오류가 발생했습니다. (HTTP {})",
-                status.as_u16()
+            return Err(Failure::Retry(FetchError::http(
+                status.as_u16(),
+                format!(
+                    "학교 서버에 일시적인 오류가 발생했습니다. (HTTP {})",
+                    status.as_u16()
+                ),
             )));
         }
         // Only an absent policy means no restrictions for this exact origin.
@@ -279,7 +329,10 @@ impl Client {
             });
         }
         if !status.is_success() {
-            return Err(Failure::Fatal(http_refused(status.as_u16())));
+            return Err(Failure::Fatal(FetchError::http(
+                status.as_u16(),
+                http_refused(status.as_u16()),
+            )));
         }
         if response
             .content_length()
@@ -331,8 +384,8 @@ impl Client {
     }
 }
 enum Failure {
-    Fatal(String),
-    Retry(String),
+    Fatal(FetchError),
+    Retry(FetchError),
 }
 async fn cancelled(cancel: &AtomicBool) {
     while !cancel.load(Ordering::Acquire) {
@@ -350,14 +403,9 @@ fn studium_root() -> Result<reqwest::Certificate, String> {
 /// rest of the page from a server that asked it to slow down.
 pub const RATE_LIMITED: &str =
     "학교 서버가 요청을 제한했습니다. 잠시 기다린 후 다시 동기화해 주세요.";
-/// Message for an unsuccessful HTTP status. Callers recognize access denial
-/// through `is_access_denied`, so the wording and the check change together.
+/// Message for an unsuccessful HTTP status.
 pub fn http_refused(status: u16) -> String {
     format!("공개 자료에 접근할 수 없습니다. (HTTP {status})")
-}
-/// Whether `error` is the message `http_refused` produces for HTTP 401 or 403.
-pub fn is_access_denied(error: &str) -> bool {
-    error == http_refused(401) || error == http_refused(403)
 }
 const CONNECTION_FAILED: &str =
     "학교 서버에 안전하게 연결하지 못했습니다. 연결 상태나 인증서 구성을 확인해 주세요.";
@@ -1073,6 +1121,7 @@ mod tests {
             .get(&url, None, 1024, &cancel, Access::Source)
             .await
             .unwrap_err()
+            .message
             .contains("중단"));
     }
 }

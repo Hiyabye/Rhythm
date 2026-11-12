@@ -40,7 +40,7 @@ async fn live_default_room_uses_production_tls_transport_and_parser() {
 #[ignore = "explicit school-server layout validation: at most nine requests, no retries or source capture"]
 async fn live_all_room_layouts_use_the_same_validated_detail_response() {
     use crate::archive::{
-        network::{Access, Fetch},
+        network::{Access, Fetch, FetchError},
         sync::Transport,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -58,7 +58,7 @@ async fn live_all_room_layouts_use_the_same_validated_detail_response() {
             limit: usize,
             cancel: &AtomicBool,
             access: Access,
-        ) -> Result<Fetch, String> {
+        ) -> Result<Fetch, FetchError> {
             assert_eq!(access, Access::Studium);
             assert!(self.requests.fetch_add(1, Ordering::AcqRel) < 9);
             self.client

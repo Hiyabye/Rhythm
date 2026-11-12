@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     archive::{
-        network::{Access, Fetch},
+        network::{Access, Fetch, FetchError},
         sync::Transport,
     },
     extensions::{PROACTIVE, STUDIUM},
@@ -106,7 +106,7 @@ impl Transport for Fake {
         _limit: usize,
         _cancel: &AtomicBool,
         access: Access,
-    ) -> Result<Fetch, String> {
+    ) -> Result<Fetch, FetchError> {
         assert_eq!(access, Access::Studium);
         self.requests.fetch_add(1, Ordering::AcqRel);
         let (text, mime) = match url.path() {

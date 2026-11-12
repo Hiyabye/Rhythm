@@ -2,7 +2,7 @@
 //! tests exercise the automatic command/controller boundary without school I/O.
 use super::*;
 use crate::{
-    archive::network::{Access, Fetch},
+    archive::network::{Access, Fetch, FetchError},
     commands::{change_extension, finish_studium_disable},
     extensions::{Registry, STUDIUM},
     operation_gate::AdmissionGate,
@@ -23,7 +23,7 @@ struct Probe {
     maximum: AtomicUsize,
     block_next_common: AtomicBool,
     block: Mutex<Option<Arc<Blocked>>>,
-    failure: Mutex<Option<(String, String)>>,
+    failure: Mutex<Option<(String, FetchError)>>,
 }
 
 struct Blocked {
@@ -71,8 +71,8 @@ impl Fake {
         block
     }
 
-    fn fail_at(&self, route: &str, error: &str) {
-        *self.0.failure.lock().unwrap() = Some((route.into(), error.into()));
+    fn fail_at(&self, route: &str, error: &FetchError) {
+        *self.0.failure.lock().unwrap() = Some((route.into(), error.clone()));
     }
 }
 
@@ -84,7 +84,7 @@ impl Transport for Fake {
         limit: usize,
         _cancel: &AtomicBool,
         access: Access,
-    ) -> Result<Fetch, String> {
+    ) -> Result<Fetch, FetchError> {
         assert_eq!(access, Access::Studium);
         assert!(validators.is_none());
         let route = url[url::Position::BeforePath..url::Position::AfterQuery].to_string();
@@ -386,11 +386,14 @@ async fn manual_work_during_automatic_wait_resets_the_interval_after_manual_comp
 #[tokio::test(start_paused = true)]
 async fn automatic_stops_for_401_403_and_429_from_every_request_stage() {
     for stage in ["/robots.txt", COMMON, DETAIL] {
-        for error in [
-            crate::archive::network::http_refused(401),
-            crate::archive::network::http_refused(403),
-            crate::archive::network::RATE_LIMITED.into(),
-        ] {
+        for error in [401, 403, 429].map(|status| {
+            let message = if status == 429 {
+                crate::archive::network::RATE_LIMITED.into()
+            } else {
+                crate::archive::network::http_refused(status)
+            };
+            FetchError::http(status, message)
+        }) {
             let h = Harness::new();
             let fake = Fake::default();
             fake.fail_at(stage, &error);

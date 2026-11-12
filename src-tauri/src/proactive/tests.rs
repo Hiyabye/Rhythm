@@ -749,7 +749,7 @@ impl crate::archive::sync::Transport for SchedulerTransport {
         _limit: usize,
         _cancel: &std::sync::atomic::AtomicBool,
         _access: crate::archive::sync::Access,
-    ) -> Result<crate::archive::sync::Fetch, String> {
+    ) -> Result<crate::archive::sync::Fetch, crate::archive::sync::FetchError> {
         use crate::archive::sync::Fetch;
         let body = |bytes: Vec<u8>, mime: &str| {
             Ok(Fetch::Body {
@@ -801,7 +801,7 @@ impl crate::archive::sync::Transport for SchedulerTransport {
             detail["data"]["content"] = serde_json::json!(format!("<p>장학금 연구 안내 {id}</p>"));
             return body(detail.to_string().into_bytes(), "application/json");
         }
-        Err(format!("unexpected fixture request: {url}"))
+        Err(format!("unexpected fixture request: {url}").into())
     }
 }
 
