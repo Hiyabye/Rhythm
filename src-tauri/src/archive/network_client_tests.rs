@@ -79,7 +79,7 @@ fn status_url() -> Url {
     Url::parse(crate::studium::rooms::STATUS_URL).unwrap()
 }
 
-async fn get(client: &Client, url: &Url) -> Result<Fetch, String> {
+async fn get(client: &Client, url: &Url) -> Result<Fetch, FetchError> {
     client
         .get(url, None, 1024, &AtomicBool::new(false), Access::Studium)
         .await
@@ -106,6 +106,7 @@ async fn studium_client_refuses_each_redirect_without_a_second_request() {
         assert!(get(&client, &status_url())
             .await
             .unwrap_err()
+            .message
             .contains("이동 응답을 거부"));
         script.assert_one_request(&status_url());
     }
@@ -128,16 +129,14 @@ async fn studium_client_only_missing_robots_policies_become_empty() {
     for status in [400, 401, 403, 429, 500] {
         let (client, script) = Script::client(public_addresses(), vec![Reply::Http(status)]);
         let error = get(&client, &url).await.unwrap_err();
+        assert_eq!(error.status, Some(status));
         if status == 429 {
-            assert_eq!(error, RATE_LIMITED);
+            assert_eq!(error.message, RATE_LIMITED);
         } else {
-            assert!(error.contains(&format!("HTTP {status}")), "{error}");
+            assert!(error.message.contains(&format!("HTTP {status}")), "{error}");
         }
-        assert_eq!(
-            is_access_denied(&error),
-            matches!(status, 401 | 403),
-            "{error}"
-        );
+        assert_eq!(error.rate_limited(), status == 429);
+        assert_eq!(error.access_denied(), matches!(status, 401 | 403));
         script.assert_one_request(&url);
     }
     // A 404 page is not a missing robots policy.
@@ -160,6 +159,7 @@ async fn studium_client_resolves_port_444_and_checks_every_dns_answer_before_sen
         assert!(get(&client, &status_url())
             .await
             .unwrap_err()
+            .message
             .contains("공개 인터넷 주소"));
         assert_eq!(
             script.lookups.lock().unwrap().as_slice(),
@@ -197,6 +197,7 @@ async fn studium_client_deadline_ends_a_hung_attempt_without_retry() {
     assert!(get(&client, &status_url())
         .await
         .unwrap_err()
+        .message
         .contains("응답 시간이 초과"));
     assert_eq!(started.elapsed(), Duration::from_secs(25));
     script.assert_one_request(&status_url());
@@ -223,6 +224,6 @@ async fn studium_client_cancellation_stops_a_hung_attempt_without_retry() {
     assert_eq!(script.requests.lock().unwrap().len(), 1);
     cancel.store(true, Ordering::Release);
     tokio::time::advance(Duration::from_millis(100)).await;
-    assert!(task.await.unwrap().unwrap_err().contains("중단"));
+    assert!(task.await.unwrap().unwrap_err().message.contains("중단"));
     script.assert_one_request(&status_url());
 }

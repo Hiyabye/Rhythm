@@ -1,17 +1,18 @@
 //! In-memory transport responses only; never contacts the seat server.
 use super::*;
+use crate::archive::network::FetchError;
 use std::{
     collections::VecDeque,
     sync::{atomic::Ordering, Mutex},
 };
 
 struct Stub {
-    replies: Mutex<VecDeque<Result<Fetch, String>>>,
+    replies: Mutex<VecDeque<Result<Fetch, FetchError>>>,
     requests: Mutex<Vec<String>>,
 }
 
 impl Stub {
-    fn new(replies: Vec<Result<Fetch, String>>) -> Self {
+    fn new(replies: Vec<Result<Fetch, FetchError>>) -> Self {
         Self {
             replies: Mutex::new(replies.into()),
             requests: Mutex::new(Vec::new()),
@@ -31,7 +32,7 @@ impl Transport for Stub {
         limit: usize,
         _cancel: &AtomicBool,
         access: Access,
-    ) -> Result<Fetch, String> {
+    ) -> Result<Fetch, FetchError> {
         assert_eq!(access, Access::Studium);
         assert!(validators.is_none());
         let route = url[url::Position::BeforePath..url::Position::AfterQuery].to_string();
@@ -52,7 +53,7 @@ impl Transport for Stub {
     }
 }
 
-fn response(bytes: &[u8], mime: Option<&str>) -> Result<Fetch, String> {
+fn response(bytes: &[u8], mime: Option<&str>) -> Result<Fetch, FetchError> {
     Ok(Fetch::Body {
         bytes: bytes.to_vec(),
         mime: mime.map(str::to_string),
@@ -61,7 +62,7 @@ fn response(bytes: &[u8], mime: Option<&str>) -> Result<Fetch, String> {
     })
 }
 
-fn allow() -> Result<Fetch, String> {
+fn allow() -> Result<Fetch, FetchError> {
     response(b"User-agent: *\nAllow: /\n", Some("text/plain"))
 }
 

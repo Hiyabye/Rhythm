@@ -111,7 +111,7 @@ impl Transport for Fake {
         limit: usize,
         _cancel: &AtomicBool,
         access: network::Access,
-    ) -> Result<network::Fetch, String> {
+    ) -> Result<network::Fetch, network::FetchError> {
         self.calls
             .lock()
             .unwrap()
@@ -257,7 +257,7 @@ impl Transport for Fake {
         if url.as_str() == PDF_URL || url.path().ends_with(".pdf") {
             return body(PDF.to_vec(), "application/pdf", None);
         }
-        Err(format!("예상하지 않은 모의 요청: {}", url.path()))
+        Err(format!("예상하지 않은 모의 요청: {}", url.path()).into())
     }
 }
 fn setup(ids: &[&str]) -> (TempDir, SharedStore) {
@@ -505,7 +505,7 @@ impl Transport for SemiconductorFake {
         _limit: usize,
         _cancel: &AtomicBool,
         _access: network::Access,
-    ) -> Result<network::Fetch, String> {
+    ) -> Result<network::Fetch, network::FetchError> {
         let body = |bytes: Vec<u8>, mime: &str| {
             Ok(network::Fetch::Body {
                 bytes,
@@ -527,13 +527,13 @@ impl Transport for SemiconductorFake {
                 (Some("notice"), Some("1")) => SE_NOTICE_LIST_1,
                 (Some("notice"), Some("2")) => SE_NOTICE_LIST_2,
                 (Some("notice"), Some("3")) => SE_NOTICE_LIST_3,
-                _ => return Err(format!("예상하지 않은 모의 목록: {url}")),
+                _ => return Err(format!("예상하지 않은 모의 목록: {url}").into()),
             };
             return body(fixture.as_bytes().to_vec(), "text/html");
         }
         if url.path() == "/board/board_view.php" {
             if query("board_id").as_deref() != Some("notice") {
-                return Err(format!("예상하지 않은 모의 원문: {url}"));
+                return Err(format!("예상하지 않은 모의 원문: {url}").into());
             }
             let no = query("no").ok_or("모의 원문 번호 없음")?;
             return body(
@@ -547,7 +547,7 @@ impl Transport for SemiconductorFake {
         if url.as_str() == SE_ATTACHMENT {
             return body(PDF.to_vec(), "application/pdf");
         }
-        Err(format!("예상하지 않은 모의 요청: {url}"))
+        Err(format!("예상하지 않은 모의 요청: {url}").into())
     }
 }
 
@@ -727,7 +727,7 @@ impl Transport for CancelAfter<'_> {
         limit: usize,
         cancel: &AtomicBool,
         access: network::Access,
-    ) -> Result<network::Fetch, String> {
+    ) -> Result<network::Fetch, network::FetchError> {
         if self.calls.fetch_add(1, Ordering::AcqRel) + 1 == self.cancel_on {
             self.controller.cancel();
         }
@@ -2361,7 +2361,7 @@ async fn robots_html_mime_and_redirect_are_not_an_allow_all_policy() {
             _: usize,
             _: &AtomicBool,
             _: network::Access,
-        ) -> Result<network::Fetch, String> {
+        ) -> Result<network::Fetch, network::FetchError> {
             if self.0 {
                 Ok(network::Fetch::Body {
                     bytes: b"User-agent: *\nAllow: /\n".to_vec(),
@@ -2974,7 +2974,7 @@ impl Transport for Offline {
         _limit: usize,
         _cancel: &AtomicBool,
         _access: network::Access,
-    ) -> Result<network::Fetch, String> {
+    ) -> Result<network::Fetch, network::FetchError> {
         Err("모의 연결 실패".into())
     }
 }
@@ -3390,7 +3390,7 @@ impl Transport for Overlap<'_> {
         limit: usize,
         cancel: &AtomicBool,
         access: network::Access,
-    ) -> Result<network::Fetch, String> {
+    ) -> Result<network::Fetch, network::FetchError> {
         (self.hook)(self.calls.fetch_add(1, Ordering::AcqRel) + 1, url);
         let host = url.host_str().unwrap().to_owned();
         {
@@ -3575,7 +3575,7 @@ impl<T: Transport + Sync> Transport for Recording<'_, T> {
         limit: usize,
         cancel: &AtomicBool,
         access: network::Access,
-    ) -> Result<network::Fetch, String> {
+    ) -> Result<network::Fetch, network::FetchError> {
         self.urls.lock().unwrap().push(url.to_string());
         self.inner
             .fetch(url, validators, limit, cancel, access)

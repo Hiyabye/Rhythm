@@ -1,6 +1,6 @@
 use super::{cancelled, parser, rooms};
 use crate::archive::{
-    network::{Access, Fetch},
+    network::{Access, Fetch, FetchError},
     sync::{robots::Robots, Transport},
 };
 use std::{
@@ -41,7 +41,7 @@ pub(crate) struct Session<'a, T> {
 }
 
 impl<'a, T: Transport> Session<'a, T> {
-    pub(crate) async fn new(transport: &'a T, cancel: &AtomicBool) -> Result<Self, String> {
+    pub(crate) async fn new(transport: &'a T, cancel: &AtomicBool) -> Result<Self, FetchError> {
         let url = Url::parse(rooms::STATUS_URL).map_err(|_| "열람실 주소 오류")?;
         let policy = Robots::load(transport, &url, cancel, Access::Studium).await?;
         Ok(Self {
@@ -55,7 +55,7 @@ impl<'a, T: Transport> Session<'a, T> {
         &mut self,
         value: &str,
         cancel: &AtomicBool,
-    ) -> Result<String, String> {
+    ) -> Result<String, FetchError> {
         let url = Url::parse(value).map_err(|_| "열람실 주소 오류")?;
         validate_url(&url)?;
         if !self.policy.permits(&url) {
@@ -82,7 +82,7 @@ impl<'a, T: Transport> Session<'a, T> {
                 ) {
                     return Err("좌석 서버가 HTML이 아닌 응답을 보냈습니다.".into());
                 }
-                parser::decode_page(&bytes)
+                Ok(parser::decode_page(&bytes)?)
             }
             _ => Err("좌석 서버의 응답을 확인하지 못했습니다.".into()),
         }

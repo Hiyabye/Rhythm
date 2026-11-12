@@ -48,8 +48,8 @@ pub(super) async fn image_policy<T: Transport>(
     let loaded = match Robots::load(transport, url, cancel, network::Access::EmbeddedImage).await {
         Ok(policy) => Ok(Arc::new(policy)),
         // Cancellation must not be remembered as the host's policy.
-        Err(error) if cancel.load(Ordering::Acquire) => return Err(error),
-        Err(error) => Err(error),
+        Err(error) if cancel.load(Ordering::Acquire) => return Err(error.into()),
+        Err(error) => Err(error.into()),
     };
     if let Ok(mut cache) = cache.lock() {
         cache.insert(origin, loaded.clone());

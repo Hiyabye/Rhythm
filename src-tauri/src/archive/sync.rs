@@ -14,7 +14,7 @@ use tokio::sync::Notify;
 use url::Url;
 
 #[cfg(test)]
-pub use super::network::{Access, Fetch};
+pub use super::network::{Access, Fetch, FetchError};
 pub type SharedStore = Arc<Mutex<Store>>;
 const ARTICLE_LIMIT: usize = 4 * 1024 * 1024;
 const FILE_LIMIT: usize = 20 * 1024 * 1024;
@@ -28,7 +28,7 @@ pub trait Transport: Send + Sync {
         limit: usize,
         cancel: &'a AtomicBool,
         access: network::Access,
-    ) -> impl Future<Output = Result<network::Fetch, String>> + Send + 'a;
+    ) -> impl Future<Output = Result<network::Fetch, network::FetchError>> + Send + 'a;
 }
 impl Transport for network::Client {
     async fn fetch(
@@ -38,7 +38,7 @@ impl Transport for network::Client {
         limit: usize,
         cancel: &AtomicBool,
         access: network::Access,
-    ) -> Result<network::Fetch, String> {
+    ) -> Result<network::Fetch, network::FetchError> {
         self.get(url, validators, limit, cancel, access).await
     }
 }

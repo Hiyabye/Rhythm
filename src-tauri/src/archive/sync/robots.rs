@@ -18,7 +18,7 @@ impl Robots {
         url: &Url,
         cancel: &AtomicBool,
         access: network::Access,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, network::FetchError> {
         let robots = url
             .join("/robots.txt")
             .map_err(|_| "정보원 주소를 확인해 주세요.")?;
@@ -32,11 +32,11 @@ impl Robots {
                 }
                 let body = std::str::from_utf8(&bytes)
                     .map_err(|_| "학교의 수집 정책을 해석하지 못했습니다.")?;
-                if robots.host_str() == Some(ASP_SOURCE_HOST) {
-                    Self::parse(url, &without_asp(body)?)
+                Ok(if robots.host_str() == Some(ASP_SOURCE_HOST) {
+                    Self::parse(url, &without_asp(body)?)?
                 } else {
-                    Self::parse(url, body)
-                }
+                    Self::parse(url, body)?
+                })
             }
             _ => Err("학교의 수집 정책을 확인하지 못했습니다.".into()),
         }

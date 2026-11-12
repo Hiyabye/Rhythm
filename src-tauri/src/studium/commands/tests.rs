@@ -2,7 +2,7 @@
 //! transport blocked inside fetch. No Tauri window, OS sender or school request.
 use super::*;
 use crate::{
-    archive::network::{Access, Fetch},
+    archive::network::{Access, Fetch, FetchError},
     commands::{change_extension, finish_studium_disable},
     extensions::{Registry, STUDIUM},
     studium::controller::Controller,
@@ -66,7 +66,7 @@ impl Transport for BlockedTransport {
         limit: usize,
         _cancel: &AtomicBool,
         access: Access,
-    ) -> Result<Fetch, String> {
+    ) -> Result<Fetch, FetchError> {
         assert_eq!(access, Access::Studium);
         assert_eq!(url.as_str(), "https://libseat.sogang.ac.kr:444/robots.txt");
         assert!(validators.is_none());

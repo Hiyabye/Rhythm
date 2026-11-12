@@ -1,7 +1,7 @@
 //! Synthetic transport and temporary-profile checks; no school requests occur.
 use super::*;
 use crate::{
-    archive::network::{Access, Fetch},
+    archive::network::{Access, Fetch, FetchError},
     operation_gate::AdmissionGate,
 };
 use chrono::{Datelike, Timelike};
@@ -13,7 +13,7 @@ const COMMON: &str = "/SEAT/domian5.asp";
 
 enum Reply {
     Html(String),
-    Error(String),
+    Error(FetchError),
     Blocked(String, Arc<Block>),
 }
 
@@ -84,7 +84,7 @@ impl Transport for Fake {
         limit: usize,
         _cancel: &AtomicBool,
         access: Access,
-    ) -> Result<Fetch, String> {
+    ) -> Result<Fetch, FetchError> {
         assert_eq!(access, Access::Studium);
         assert!(validators.is_none());
         assert_eq!(
@@ -579,29 +579,34 @@ async fn malformed_detail_and_older_detail_keep_only_verified_common_counts() {
 
 #[tokio::test]
 async fn detail_network_failure_is_count_only_and_next_room_still_completes() {
-    let h = Harness::new(&["5", "6"]);
-    let time = clock(0);
-    let fake = Fake::new(vec![
-        (COMMON, Reply::Html(summary(&time))),
-        (
-            "/SEAT/roomview5.asp?room_no=5",
-            Reply::Error("synthetic timeout".into()),
-        ),
-        (
-            "/SEAT/roomview5.asp?room_no=6",
-            Reply::Html(map("6", &[1], &time)),
-        ),
-    ]);
-    h.start(fake.clone()).await;
-    h.wait().await;
-    fake.exhausted();
-    let snapshot = h.snapshot();
-    assert_eq!(snapshot.results[0].status, "count_only");
-    assert_eq!(
-        snapshot.results[0].error.as_deref(),
-        Some("synthetic timeout")
-    );
-    assert_eq!(snapshot.results[1].status, "ready");
+    // Only the HTTP status marks an access denial or rate limit; the same
+    // wording without one is an ordinary failure.
+    for error in [
+        "synthetic timeout".to_owned(),
+        crate::archive::network::http_refused(403),
+        crate::archive::network::RATE_LIMITED.into(),
+    ] {
+        let h = Harness::new(&["5", "6"]);
+        let time = clock(0);
+        let fake = Fake::new(vec![
+            (COMMON, Reply::Html(summary(&time))),
+            (
+                "/SEAT/roomview5.asp?room_no=5",
+                Reply::Error(error.clone().into()),
+            ),
+            (
+                "/SEAT/roomview5.asp?room_no=6",
+                Reply::Html(map("6", &[1], &time)),
+            ),
+        ]);
+        h.start(fake.clone()).await;
+        h.wait().await;
+        fake.exhausted();
+        let snapshot = h.snapshot();
+        assert_eq!(snapshot.results[0].status, "count_only", "{error}");
+        assert_eq!(snapshot.results[0].error.as_deref(), Some(error.as_str()));
+        assert_eq!(snapshot.results[1].status, "ready");
+    }
 }
 
 #[tokio::test]
@@ -613,7 +618,10 @@ async fn access_denials_fail_the_room_without_fallback_or_retry() {
             (COMMON, Reply::Html(summary(&time))),
             (
                 "/SEAT/roomview5.asp?room_no=5",
-                Reply::Error(crate::archive::network::http_refused(code)),
+                Reply::Error(FetchError::http(
+                    code,
+                    crate::archive::network::http_refused(code),
+                )),
             ),
             (
                 "/SEAT/roomview5.asp?room_no=6",
@@ -639,7 +647,10 @@ async fn rate_limit_fails_pending_rooms_and_stops_without_retrying() {
         (COMMON, Reply::Html(summary(&time))),
         (
             "/SEAT/roomview5.asp?room_no=5",
-            Reply::Error(crate::archive::network::RATE_LIMITED.into()),
+            Reply::Error(FetchError::http(
+                429,
+                crate::archive::network::RATE_LIMITED.into(),
+            )),
         ),
     ]);
     h.start(fake.clone()).await;
@@ -714,7 +725,10 @@ async fn common_access_failure_has_no_detail_requests() {
     let h = Harness::new(&["5", "6"]);
     let fake = Fake::new(vec![(
         COMMON,
-        Reply::Error(crate::archive::network::http_refused(403)),
+        Reply::Error(FetchError::http(
+            403,
+            crate::archive::network::http_refused(403),
+        )),
     )]);
     h.start(fake.clone()).await;
     h.wait().await;

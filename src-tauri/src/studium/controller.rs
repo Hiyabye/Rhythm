@@ -4,7 +4,11 @@ use super::{
     network::Session,
     parser, rooms,
 };
-use crate::{archive::sync::Transport, operation_gate::AdmissionLease, storage::Store};
+use crate::{
+    archive::{network::FetchError, sync::Transport},
+    operation_gate::AdmissionLease,
+    storage::Store,
+};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -19,11 +23,11 @@ const RATE_LIMITED: &str =
 
 /// The shared transport's 429 text asks notice users to sync again; a seat
 /// check is repeated only with the 지금 확인 button.
-fn seat_error(error: &str) -> &str {
-    if error == crate::archive::network::RATE_LIMITED {
+fn seat_error(error: &FetchError) -> &str {
+    if error.rate_limited() {
         RATE_LIMITED
     } else {
-        error
+        &error.message
     }
 }
 
@@ -52,11 +56,11 @@ impl Job {
             stop_reason: Mutex::new(None),
         })
     }
-    fn note_access_error(&self, error: &str) {
-        let reason = if error == crate::archive::network::RATE_LIMITED || error == RATE_LIMITED {
+    fn note_access_error(&self, error: &FetchError) {
+        let reason = if error.rate_limited() {
             Some(StopReason::RateLimited)
-        } else if crate::archive::network::is_access_denied(error) {
-            Some(StopReason::AccessDenied(error.into()))
+        } else if error.access_denied() {
+            Some(StopReason::AccessDenied(error.message.clone()))
         } else {
             None
         };
@@ -374,7 +378,7 @@ impl Controller {
         transport: &T,
         store: &Arc<Mutex<Store>>,
         job: &Job,
-    ) -> Result<(), String> {
+    ) -> Result<(), FetchError> {
         let mut session = Session::new(transport, &job.cancel).await?;
         let html = session.html(rooms::STATUS_URL, &job.cancel).await?;
         let mut summaries = parser::parse_status(&html, chrono::Utc::now().timestamp())?;
@@ -393,6 +397,7 @@ impl Controller {
                         .await
                         .and_then(|html| {
                             parser::parse_seats(&html, id, chrono::Utc::now().timestamp())
+                                .map_err(FetchError::from)
                         });
                     if let Err(error) = &detail {
                         job.note_access_error(error);
@@ -416,17 +421,14 @@ impl Controller {
                                 Some("좌석 배치가 공통 현황보다 오래되었습니다.".into()),
                             )
                         }
-                        Err(error) if error == crate::archive::network::RATE_LIMITED => {
-                            let error = seat_error(&error).to_owned();
-                            self.publish(job, store, failed(id, error.clone()))?;
+                        Err(error) if error.rate_limited() => {
+                            self.publish(job, store, failed(id, seat_error(&error).into()))?;
                             return Err(error);
                         }
-                        Err(error) if crate::archive::network::is_access_denied(&error) => {
-                            failed(id, error)
-                        }
+                        Err(error) if error.access_denied() => failed(id, error.into()),
                         Err(error) => {
                             summary.seat_numbers = None;
-                            result(id, "count_only", summary, Some(error))
+                            result(id, "count_only", summary, Some(error.into()))
                         }
                     }
                 }
