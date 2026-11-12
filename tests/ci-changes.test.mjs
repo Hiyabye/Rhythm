@@ -19,13 +19,13 @@ test('markdown never runs the Rust or packaging jobs', () => {
   // Still a frontend change: tests/ and scripts/ hold Node test inputs.
   assert.deepEqual(classify(['scripts/NOTES.md']), { ...none, frontend: true });
   // A real Rust change in the same diff still runs Rust.
-  assert.deepEqual(classify(['src-tauri/src/archive/fixtures/README.md', 'src-tauri/src/main.rs']), { ...none, rust: true });
+  assert.deepEqual(classify(['src-tauri/src/archive/fixtures/README.md', 'src-tauri/src/main.rs']), { ...none, frontend: true, rust: true });
 });
 
 test('each area selects only its own jobs', () => {
   assert.deepEqual(classify(['src/App.svelte', 'tests/ui/archive.spec.ts']), { ...none, frontend: true });
   assert.deepEqual(classify(['playwright.screenshots.config.ts']), { ...none, frontend: true });
-  assert.deepEqual(classify(['src-tauri/src/main.rs']), { ...none, rust: true });
+  assert.deepEqual(classify(['src-tauri/src/main.rs']), { ...none, frontend: true, rust: true });
   assert.deepEqual(classify(['src-tauri/vendor/mac-usernotifications/src/lib.rs']), { ...none, rust: true });
   assert.deepEqual(classify(['src-tauri/vendor/mac-usernotifications/Cargo.toml']), { ...none, rust: true });
   assert.deepEqual(classify(['Cargo.lock']), { ...none, rust: true, packaging: true });
@@ -43,6 +43,18 @@ test('frontend files read by Rust tests also run the Rust jobs', () => {
   for (const file of ['scripts/stage-llama.mjs', 'scripts/llama-cpp.json']) {
     assert.deepEqual(classify([file]), { ...none, frontend: true, rust: true, packaging: true }, file);
   }
+});
+
+test('the command permission check runs for every file it reads', () => {
+  // tests/capabilities.test.mjs compares the registered commands, the app
+  // manifest and the capability files, so a change to any of them must run the
+  // frontend job that holds the check.
+  for (const file of ['src-tauri/build.rs', 'src-tauri/src/main.rs', 'src-tauri/capabilities/default.json',
+    'src-tauri/capabilities/studium-mini.json']) {
+    assert.equal(classify([file]).frontend, true, file);
+  }
+  // Other Rust paths keep the Rust-only behavior.
+  assert.equal(classify(['src-tauri/src/commands.rs']).frontend, false);
 });
 
 test('workflow changes and unknown change sets run everything', () => {

@@ -8,7 +8,9 @@ import { fileURLToPath } from 'node:url';
 const workflow = /^\.github\//;
 const rules = {
   frontend: [/^src\//, /^tests\//, /^scripts\//, /^package(-lock)?\.json$/, /^index\.html$/,
-    /^vite\.config\.ts$/, /^tsconfig\.json$/, /^playwright(\.screenshots)?\.config\.ts$/],
+    /^vite\.config\.ts$/, /^tsconfig\.json$/, /^playwright(\.screenshots)?\.config\.ts$/,
+    // tests/capabilities.test.mjs compares these Rust-side files with src/.
+    /^src-tauri\/(build\.rs|src\/main\.rs|capabilities\/)/],
   rust: [/^src-tauri\//, /^Cargo\.(toml|lock)$/, /^\.cargo\//, /^rust-toolchain/,
     /^(rustfmt|clippy)\.toml$/,
     // Windows CI runs these PowerShell scripts before its Rust tests.
