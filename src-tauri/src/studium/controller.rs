@@ -416,15 +416,12 @@ impl Controller {
                                 Some("좌석 배치가 공통 현황보다 오래되었습니다.".into()),
                             )
                         }
-                        Err(error)
-                            if error == crate::archive::network::RATE_LIMITED
-                                || error.contains("HTTP 429") =>
-                        {
+                        Err(error) if error == crate::archive::network::RATE_LIMITED => {
                             let error = seat_error(&error).to_owned();
                             self.publish(job, store, failed(id, error.clone()))?;
                             return Err(error);
                         }
-                        Err(error) if error.contains("HTTP 401") || error.contains("HTTP 403") => {
+                        Err(error) if crate::archive::network::is_access_denied(&error) => {
                             failed(id, error)
                         }
                         Err(error) => {
