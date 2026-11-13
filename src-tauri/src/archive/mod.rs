@@ -1,5 +1,8 @@
 mod catalog;
 pub mod cybercampus;
+// #226 prototype: measured by its tests, not wired into the app yet.
+#[cfg(test)]
+mod dates;
 pub mod model;
 pub(crate) mod network;
 mod parser;
