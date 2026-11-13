@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { AiSnapshot, ArchivePage, ArchiveQuery, ArchiveSummary, AiResult, AiClassification, CalendarTodo, CybercampusTask, ReferenceDate, TodoPrefill, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
+  import type { AiSnapshot, ArchivePage, ArchiveQuery, ArchiveSummary, AiResult, AiClassification, CalendarNoticeDates, CalendarTodo, CybercampusTask, NoticeDate, TodoPrefill, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
   import analysisContract from './analysis-contract.json' with { type: 'json' };
-  import { archiveDate, archiveDay, archiveError, kstInstant, localDayKey, wallTime } from './archive-format';
+  import { archiveDate, archiveDay, archiveError, kstInstant, localDayKey, noticeDateMark, wallTime } from './archive-format';
   import { clock } from './clock.svelte';
   import { confirmAction } from './confirm';
   import CalendarView from './CalendarView.svelte';
@@ -40,6 +40,9 @@
   let recommendations = $state<PersonalizedRecommendation[]>([]);
   let tasks = $state<CybercampusTask[]>([]);
   let weekTodos = $state<CalendarTodo[]>([]);
+  // Dates found in notice text from today through two months ahead, for the week and what follows it.
+  let weekDates = $state<NoticeDate[]>([]);
+  let weekAllDeadlines = $state(false);
   let calendarDay = $state(localDayKey(new Date()));
   let calendarPrefill = $state<TodoPrefill | null>(null);
   // The row the calendar focuses after returning from the reader.
@@ -154,6 +157,7 @@
       void archiveRevision;
       if (currentPage === 'today' && showRecommendations) void loadRecommendations();
       if (currentPage === 'today' && showWeek && calendarOn) void loadWeekTodos();
+      if (currentPage === 'today' && showWeek) void loadWeekDates();
       if (enabled.has('cybercampus')) void loadTasks();
     }
   });
@@ -246,6 +250,19 @@
     } catch {
       // Todos are a supplement to the week; the calendar page reports load failures.
       if (active) weekTodos = [];
+    }
+  }
+
+  async function loadWeekDates() {
+    const now = new Date();
+    const from = localDayKey(now);
+    const to = localDayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 62));
+    try {
+      const value = await invoke<CalendarNoticeDates>('calendar_notice_dates', { from, to });
+      if (active) { weekDates = value.dates; weekAllDeadlines = value.all_deadlines; }
+    } catch {
+      // Notice dates are a supplement to the week; the calendar page reports load failures.
+      if (active) weekDates = [];
     }
   }
 
@@ -455,16 +472,6 @@
   function familyOf(sourceId: string): string {
     return sources.find((item) => item.id === sourceId)?.family ?? 'other';
   }
-  function titleOf(documentId: number, fallback: string): string {
-    return result.items.find((item) => item.id === documentId)?.title
-      ?? recommendations.find((item) => item.item.id === documentId)?.item.title ?? fallback;
-  }
-  // Only dates from analyses that match the current contract appear.
-  let referenceDates: ReferenceDate[] = $derived(analyses.flatMap((analysis) => currentSummary(analysis.document_id)?.id !== analysis.id ? [] :
-    analysis.result.facts.filter((fact) => fact.date && /^\d{4}-\d{2}-\d{2}/.test(fact.date)).map((fact, index) => ({
-      key: `${analysis.id}-${index}`, day: fact.date!.slice(0, 10), label: fact.label, documentId: analysis.document_id,
-      title: titleOf(analysis.document_id, analysis.result.short_summary), image: fact.origin === 'image',
-    }))));
   // Stored tasks outlive an unsubscribed board; the week follows the 과제·마감 navigation and shows them only while subscribed.
   let showTasks = $derived(enabled.has('cybercampus') && sources.some((item) => item.family === 'cybercampus' && item.subscribed));
   // Open deadlines only: a submitted task or one whose deadline (and late window) has passed is no longer something to plan for.
@@ -485,12 +492,12 @@
         tasks: openTasks.filter((task) => task.due_at!.slice(0, 10) === key),
         // Done todos need no planning, like submitted deadlines.
         todos: calendarOn ? weekTodos.filter((todo) => todo.day === key && !todo.done) : [],
-        dates: referenceDates.filter((entry) => entry.day === key) };
+        dates: weekDates.filter((entry) => entry.day === key) };
     });
   });
   // The window's first day is today, so the highlight and the range cannot disagree after midnight.
   let todayKey = $derived(week[0].key);
-  let laterDates = $derived(referenceDates.filter((entry) => entry.day > week[6].key).sort((a, b) => a.day.localeCompare(b.day)).slice(0, 5));
+  let laterDates = $derived(weekDates.filter((entry) => entry.day > week[6].key).slice(0, 5));
   // The Today query holds the newest page only; say so when today's notices may extend past it.
   let weekTruncated = $derived(result.items.length === pageSize && (archiveDay(result.items[pageSize - 1].published_at) ?? '') >= week[0].key);
   function shortDay(day: string): string {
@@ -605,10 +612,11 @@
                     </button></li>
                   {/each}
                   {#if day.notices.length > weekDayLimit}<li class="day-more">외 {day.notices.length - weekDayLimit}건 · 받은 소식에서 모두 보기</li>{/if}
-                  {#each day.dates as entry (entry.key)}
-                    <li><button class="event event-ai" id={`week-ai-${entry.key}`} onclick={() => void openDocument(entry.documentId, `week-ai-${entry.key}`)}>
+                  {#each day.dates as entry (`${entry.document_id}-${entry.ordinal}`)}
+                    {@const target = `week-notice-${entry.document_id}-${entry.ordinal}`}
+                    <li><button class="event event-notice" id={target} onclick={() => void openDocument(entry.document_id, target)}>
                       <span class="event-bar" aria-hidden="true"></span>
-                      <span class="event-title"><span class="ai-mark">AI 참고 일정</span> {entry.label}</span>
+                      <span class="event-title"><span class="ai-mark notice-mark">{noticeDateMark(entry, clock.format)}</span> {entry.label || entry.title}</span>
                       <span class="event-meta">{entry.title} · 원문 확인</span>
                     </button></li>
                   {/each}
@@ -619,23 +627,24 @@
           </ol>
           {#if weekTruncated}<p class="pane-footnote">오늘 공지가 많아 최근 {pageSize}건 중에서만 표시합니다. 전체 목록은 받은 소식에서 볼 수 있습니다.</p>{/if}
           {#if laterDates.length}
-            <h3 class="later-heading">이후 AI 참고 일정</h3>
+            <h3 class="later-heading">이후 공지 날짜</h3>
             <ul class="day-events">
-              {#each laterDates as entry (entry.key)}
-                <li><button class="event event-ai" id={`later-ai-${entry.key}`} onclick={() => void openDocument(entry.documentId, `later-ai-${entry.key}`)}>
+              {#each laterDates as entry (`${entry.document_id}-${entry.ordinal}`)}
+                {@const target = `later-notice-${entry.document_id}-${entry.ordinal}`}
+                <li><button class="event event-notice" id={target} onclick={() => void openDocument(entry.document_id, target)}>
                   <span class="event-bar" aria-hidden="true"></span>
-                  <span class="event-title"><span class="ai-mark">AI · {shortDay(entry.day)}</span> {entry.label}</span>
+                  <span class="event-title"><span class="ai-mark notice-mark">{shortDay(entry.day)} · {noticeDateMark(entry, clock.format)}</span> {entry.label || entry.title}</span>
                   <span class="event-meta">{entry.title} · 원문 확인</span>
                 </button></li>
               {/each}
             </ul>
           {/if}
-          <p class="pane-footnote">오늘 게시된 공지{#if showTasks}, 사이버캠퍼스에서 마지막으로 가져온 과제 마감{/if}{#if calendarOn}, 캘린더에 직접 만든 할 일{/if}{#if ai}과 AI가 원문에서 추출한 참고 일정입니다. 참고 일정은 추천 순위와 알림에 쓰지 않으니 원문에서 확인하세요.{:else}입니다.{/if}</p>
+          <p class="pane-footnote">오늘 게시된 공지{#if showTasks}, 사이버캠퍼스에서 마지막으로 가져온 과제 마감{/if}{#if calendarOn}, 캘린더에 직접 만든 할 일{/if}{showTasks || calendarOn ? '과' : '와'} {weekAllDeadlines ? '저장한 공지의 날짜, 모든 공지의 마감' : '저장한 공지의 본문에서 찾은 날짜'}입니다. 찾은 날짜는 틀릴 수 있으니 원문에서 확인하세요.</p>
         </aside>
         {/if}
       </div>
     {:else if page === 'calendar'}
-      <CalendarView {desktop} bind:selected={calendarDay} bind:prefill={calendarPrefill} bind:focus={calendarFocus} tasks={openTasks} dates={referenceDates} {ontasks} onopen={(id, target) => void openDocument(id, target)} />
+      <CalendarView {desktop} bind:selected={calendarDay} bind:prefill={calendarPrefill} bind:focus={calendarFocus} tasks={openTasks} {ontasks} onopen={(id, target) => void openDocument(id, target)} />
     {:else}
     {#if page === 'search'}
       <form class="search-form archive-search" onsubmit={search} role="search"><Icon name="search" size={21} /><label class="sr-only" for="local-query">보관된 공지 검색</label><input id="local-query" type="search" bind:value={draft} maxlength="512" placeholder="제목과 본문에서 검색" autocomplete="off" disabled={!desktop} /><button class="text-button" type="submit" disabled={!desktop || loading}>검색</button></form>

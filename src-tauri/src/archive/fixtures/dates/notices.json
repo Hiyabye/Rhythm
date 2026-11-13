@@ -1,0 +1,139 @@
+[
+  {
+    "id": "spaced_yearless_range",
+    "published_at": "2026-10-28",
+    "text": "2026학년도 2학기 학점교류 신청을 아래와 같이 안내합니다.\n신청기간: 2026. 11. 3.(화) ~ 11. 14.(토) 17:00\n신청방법: 학사정보시스템",
+    "deadlines": ["2026-11-14"],
+    "others": ["2026-11-03"],
+    "labels": {"2026-11-14": "신청기간"}
+  },
+  {
+    "id": "yearless_until",
+    "published_at": "2026-11-20",
+    "text": "졸업논문 심사 신청서 접수 마감: 12. 5.(토)까지\n제출처: 학과 사무실",
+    "deadlines": ["2026-12-05"],
+    "others": [],
+    "labels": {"2026-12-05": "접수 마감"}
+  },
+  {
+    "id": "year_rollover",
+    "published_at": "2026-12-15",
+    "text": "동계 현장실습 참여 확인서를 1월 8일(금)까지 학생지원팀에 제출해 주세요.",
+    "deadlines": ["2027-01-08"],
+    "others": [],
+    "labels": {}
+  },
+  {
+    "id": "previous_year_reference",
+    "published_at": "2027-01-04",
+    "text": "지난 12월 30일(수) 발표된 결과에 이의가 있는 학생은 이의신청서를 제출하세요. 이의신청 마감은 1월 15일입니다.",
+    "deadlines": ["2027-01-15"],
+    "others": ["2026-12-30"],
+    "labels": {"2027-01-15": "이의신청 마감"}
+  },
+  {
+    "id": "weekday_mismatch",
+    "published_at": "2026-11-01",
+    "text": "신청 마감은 11월 20일(수)입니다.",
+    "deadlines": ["2026-11-20"],
+    "others": [],
+    "labels": {},
+    "note": "2026-11-20 is a Friday; a mistyped weekday keeps the written date."
+  },
+  {
+    "id": "header_dates",
+    "published_at": "2026-11-01",
+    "text": "작성일 2026.11.01\n게시일 2026-11-01 09:30\n수정일 2026.11.02\n도서관 이용 시간이 변경됩니다. 자세한 사항은 홈페이지를 확인하세요.",
+    "deadlines": [],
+    "others": [],
+    "labels": {}
+  },
+  {
+    "id": "event_schedule",
+    "published_at": "2026-11-10",
+    "text": "대학원 입학 설명회를 개최합니다.\n일시: 2026년 11월 25일(수) 14:00~16:00\n장소: 본관 강당",
+    "deadlines": [],
+    "others": ["2026-11-25"],
+    "labels": {"2026-11-25": "일시"}
+  },
+  {
+    "id": "compact_dots",
+    "published_at": "2026-11-15",
+    "text": "모집 인원: 10명\n2026.11.30.(월) 23:59까지 온라인으로 접수합니다.",
+    "deadlines": ["2026-11-30"],
+    "others": [],
+    "labels": {}
+  },
+  {
+    "id": "slash_range",
+    "published_at": "2026-11-05",
+    "text": "튜터 모집 기간 11/10(화)~11/21(토)\n활동 기간은 별도 안내합니다.",
+    "deadlines": ["2026-11-21"],
+    "others": ["2026-11-10"],
+    "labels": {"2026-11-21": "튜터 모집 기간"}
+  },
+  {
+    "id": "two_rounds",
+    "published_at": "2027-02-20",
+    "text": "1차 접수 마감 3월 6일, 2차 접수 마감 3월 20일입니다.",
+    "deadlines": ["2027-03-06", "2027-03-20"],
+    "others": [],
+    "labels": {"2027-03-06": "1차 접수 마감", "2027-03-20": "2차 접수 마감"}
+  },
+  {
+    "id": "numeric_noise",
+    "published_at": "2026-11-01",
+    "text": "평점평균 3.5 이상, 12학점 이상 이수한 2026-1학기 재학생이 대상입니다. 만점은 4.5.\n1. 신청 대상\n2. 제출 서류",
+    "deadlines": [],
+    "others": [],
+    "labels": {}
+  },
+  {
+    "id": "korean_range_day_only_end",
+    "published_at": "2026-10-30",
+    "text": "수강 취소 기간은 11월 3일(화)부터 7일(토)까지입니다.",
+    "deadlines": ["2026-11-07"],
+    "others": ["2026-11-03"],
+    "labels": {"2026-11-07": "수강 취소 기간"}
+  },
+  {
+    "id": "result_announcement",
+    "published_at": "2026-11-10",
+    "text": "서류 제출은 11월 20일(금)까지입니다. 합격자 발표는 12월 1일(화)에 개별 안내합니다.",
+    "deadlines": ["2026-11-20"],
+    "others": ["2026-12-01"],
+    "labels": {}
+  },
+  {
+    "id": "event_time_until",
+    "published_at": "2026-11-10",
+    "text": "체육대회는 11월 28일(토) 10시부터 12시까지 대운동장에서 열립니다.",
+    "deadlines": [],
+    "others": ["2026-11-28"],
+    "labels": {}
+  },
+  {
+    "id": "payment_due",
+    "published_at": "2026-02-10",
+    "text": "등록금 납부 기한 2026. 2. 27.(금) 16:00",
+    "deadlines": ["2026-02-27"],
+    "others": [],
+    "labels": {"2026-02-27": "등록금 납부 기한"}
+  },
+  {
+    "id": "correction_notice",
+    "published_at": "2026-09-01",
+    "text": "[정정] 장학금 신청 마감일이 변경되었습니다.\n변경 전: 9월 2일(수)\n변경 후: 9월 4일(금)까지",
+    "deadlines": ["2026-09-04"],
+    "others": [],
+    "labels": {}
+  },
+  {
+    "id": "course_cancellation",
+    "published_at": "2026-09-01",
+    "text": "수강신청 취소는 9월 4일(금)까지 가능합니다.",
+    "deadlines": ["2026-09-04"],
+    "others": [],
+    "labels": {}
+  }
+]

@@ -56,8 +56,7 @@ test('without the AI extension the reader hides analysis and Today hides AI date
   await page.goto('/');
   const week = page.getByRole('complementary', { name: '앞으로 7일', exact: true });
   await expect(week).toBeVisible();
-  await expect(week.locator('.event-ai')).toHaveCount(0);
-  await expect(week).not.toContainText('추천 순위와 알림에 쓰지 않으니');
+  await expect(week.locator('.event-notice')).toHaveCount(0);
   await page.getByRole('button', { name: '받은 소식', exact: true }).click();
   await page.locator('#notice-1').click();
   await expect(page.locator('.reader-body')).toBeVisible();

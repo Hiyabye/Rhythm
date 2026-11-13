@@ -734,6 +734,7 @@ impl Store {
                 )
                 .map_err(|e| e.to_string())?;
         }
+        super::notice_dates::extract(&transaction, document_id)?;
         transaction.commit().map_err(|e| e.to_string())?;
         Ok(true)
     }
@@ -924,6 +925,7 @@ impl Store {
             // not a remote-byte recheck; local access still verifies integrity.
             transaction.execute("UPDATE resources SET (status,mime,bytes,local_path,sha256,error)=(SELECT status,mime,bytes,local_path,sha256,NULL FROM resources prior WHERE prior.document_id=?1 AND prior.url=?3 AND prior.kind=?4 AND prior.status='downloaded' AND prior.revision_id<>?2 ORDER BY prior.id DESC LIMIT 1) WHERE document_id=?1 AND revision_id=?2 AND url=?3 AND EXISTS(SELECT 1 FROM resources prior WHERE prior.document_id=?1 AND prior.url=?3 AND prior.kind=?4 AND prior.status='downloaded' AND prior.revision_id<>?2)",params![id,revision_id,resource.url,resource.kind]).map_err(|e|e.to_string())?;
         }
+        super::notice_dates::extract(&transaction, id)?;
         transaction.commit().map_err(|e| e.to_string())?;
         Ok((id, true))
     }

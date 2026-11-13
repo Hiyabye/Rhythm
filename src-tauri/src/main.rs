@@ -520,6 +520,10 @@ fn main() {
                 app.handle().clone(),
                 maintenance_shutdown.clone(),
             ));
+            tauri::async_runtime::spawn(archive::run_notice_dates(
+                app.handle().clone(),
+                maintenance_shutdown.clone(),
+            ));
             tauri::async_runtime::spawn(intelligence::maintenance::run(
                 app.handle().clone(),
                 maintenance_shutdown,
@@ -587,6 +591,9 @@ fn main() {
             commands::set_extension,
             commands::worker_status,
             commands::calendar_todos,
+            commands::calendar_notice_dates,
+            commands::calendar_set_all_deadlines,
+            commands::notice_dates,
             commands::calendar_create_todo,
             commands::calendar_update_todo,
             commands::calendar_set_todo_done,

@@ -1,4 +1,4 @@
-import type { ClockFormat, CybercampusTask, TodoPrefill } from './types';
+import type { ClockFormat, CybercampusTask, NoticeDate, TodoPrefill } from './types';
 
 export function archiveError(reason: unknown): string {
   if (typeof reason !== 'string') return '작업을 완료하지 못했습니다. 다시 시도해 주세요.';
@@ -73,6 +73,25 @@ export function noticeTodo(label: string, noticeTitle: string, day: string, docu
     caution: image
       ? 'AI가 이미지에서 읽은 날짜라 확정되지 않았습니다. 원문에서 날짜와 시간을 확인한 뒤 저장하세요.'
       : 'AI가 원문에서 읽은 날짜입니다. 틀릴 수 있으니 원문에서 날짜와 시간을 확인한 뒤 저장하세요.',
+  };
+}
+
+const noticeDateKinds: Record<NoticeDate['kind'], string> = { deadline: '마감', start: '시작', date: '일정' };
+/** The mark shown before a notice date, such as "마감 오후 6:00". */
+export function noticeDateMark(date: NoticeDate, format: ClockFormat): string {
+  const kind = noticeDateKinds[date.kind];
+  if (!date.time) return kind;
+  // The end of the day ("밤 12시"); wallTime would read 24:00 as noon.
+  return `${kind} ${date.time === '24:00' && format === '12h' ? '밤 12:00' : wallTime(date.time, format)}`;
+}
+
+/** A todo form for a date found in a notice's text. Matching is lexical, so the user checks it first. */
+export function noticeDateTodo(date: NoticeDate): TodoPrefill {
+  // A todo time is below 24:00; "밤 12시" stays a date without a time.
+  const time = date.time && date.time < '24:00' ? date.time : null;
+  return {
+    todo: { title: todoTitle(`${date.label || noticeDateKinds[date.kind]} · ${date.title}`), day: date.day, time, memo: '', document_id: date.document_id },
+    caution: '공지 본문에서 찾은 날짜입니다. 연도나 의미가 틀릴 수 있으니 원문에서 날짜와 시간을 확인한 뒤 저장하세요.',
   };
 }
 

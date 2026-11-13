@@ -361,10 +361,13 @@ test('resource guidance is honest at narrow widths and operation cancellation is
   await expect(page.getByRole('button', { name: '선택한 모델 불러오기', exact: true })).toBeEnabled();
 });
 
-test('today shows stored AI dates without scheduling inference', async ({ page }) => {
+test('today does not turn stored AI dates into week entries or schedule inference', async ({ page }) => {
   await page.clock.setFixedTime(new Date('2026-10-28T10:00:00'));
   await mockDesktop(page, { aiResult: true }); await page.goto('/');
-  await expect(page.getByRole('complementary', { name: '앞으로 7일', exact: true }).locator('.event-ai')).toContainText('AI 참고 일정 신청 마감');
+  const week = page.getByRole('complementary', { name: '앞으로 7일', exact: true });
+  await expect(week.locator('.week-day')).toHaveCount(7);
+  await expect(week.locator('.event-notice')).toHaveCount(0);
+  await expect(week).not.toContainText('신청 마감');
   expect(await callCount(page, 'ai_analyze')).toBe(0);
 });
 

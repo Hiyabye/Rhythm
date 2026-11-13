@@ -1,15 +1,15 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { CalendarTodo, CybercampusTask, ReferenceDate, TodoInput, TodoPrefill } from './types';
-  import { archiveError, localDayKey, noticeTodo, taskTodo, wallTime } from './archive-format';
+  import type { CalendarNoticeDates, CalendarTodo, CybercampusTask, NoticeDate, TodoInput, TodoPrefill } from './types';
+  import { archiveError, localDayKey, noticeDateMark, noticeDateTodo, taskTodo, wallTime } from './archive-format';
   import { confirmAction } from './confirm';
   import { clock } from './clock.svelte';
   import Icon from './Icon.svelte';
   import TimeField from './TimeField.svelte';
   import { fade, slide } from './motion';
 
-  let { desktop, selected = $bindable(), prefill = $bindable(), focus = $bindable(), tasks, dates, ontasks, onopen }: {
+  let { desktop, selected = $bindable(), prefill = $bindable(), focus = $bindable(), tasks, ontasks, onopen }: {
     desktop: boolean;
     // Owned by the archive view, so returning from the reader keeps the day.
     selected: string;
@@ -17,9 +17,8 @@
     prefill: TodoPrefill | null;
     // Element ID to focus after the next load, when returning from a linked todo's notice.
     focus: string;
-    // Open eClass deadlines and current AI reference dates; the archive view owns both rules.
+    // Open eClass deadlines; the archive view owns their rule.
     tasks: CybercampusTask[];
-    dates: ReferenceDate[];
     ontasks: () => void;
     onopen: (documentId: number, target: string) => void;
   } = $props();
@@ -29,6 +28,9 @@
   let today = $state(localDayKey(new Date()));
   let month = $derived(selected.slice(0, 7));
   let todos = $state<CalendarTodo[]>([]);
+  // Dates found in notice text: saved notices', plus every notice's deadlines when chosen.
+  let dates = $state<NoticeDate[]>([]);
+  let allDeadlines = $state(false);
   let loading = $state(false);
   let error = $state('');
   let feedback = $state('');
@@ -94,9 +96,14 @@
     const current = ++loadRequest;
     loading = true;
     try {
-      const rows = await invoke<CalendarTodo[]>('calendar_todos', { from, to });
+      const [rows, notices] = await Promise.all([
+        invoke<CalendarTodo[]>('calendar_todos', { from, to }),
+        invoke<CalendarNoticeDates>('calendar_notice_dates', { from, to }),
+      ]);
       if (active && current === loadRequest) {
         todos = rows;
+        dates = notices.dates;
+        allDeadlines = notices.all_deadlines;
         error = '';
         if (focus) {
           const target = focus;
@@ -109,6 +116,19 @@
       if (active && current === loadRequest) error = archiveError(reason);
     } finally {
       if (active && current === loadRequest) loading = false;
+    }
+  }
+
+  async function setAllDeadlines(enabled: boolean) {
+    busy = true;
+    try {
+      await invoke('calendar_set_all_deadlines', { enabled });
+      feedback = enabled ? '모든 공지의 마감을 표시합니다.' : '저장한 공지의 날짜만 표시합니다.';
+      await load();
+    } catch (reason) {
+      error = archiveError(reason);
+    } finally {
+      busy = false;
     }
   }
 
@@ -133,7 +153,7 @@
     if (day === today) parts.push('오늘');
     if (open) parts.push(`할 일 ${open}개`);
     if (items.tasks.length) parts.push(`마감 ${items.tasks.length}개`);
-    if (items.dates.length) parts.push(`AI 참고 일정 ${items.dates.length}개`);
+    if (items.dates.length) parts.push(`공지 날짜 ${items.dates.length}개`);
     return parts.join(', ');
   }
 
@@ -263,6 +283,10 @@
         <button class="icon-button" aria-label="다음 달" onclick={() => shiftMonth(1)}><Icon name="arrow" size={15} /></button>
       </div>
     </div>
+    <div class="calendar-options">
+      <label class="calendar-toggle"><input type="checkbox" checked={allDeadlines} disabled={busy || !desktop} onchange={(event) => void setAllDeadlines(event.currentTarget.checked)} />모든 공지의 마감 표시</label>
+      <span class="footnote">{allDeadlines ? '저장한 공지의 날짜와 모든 공지의 마감을 표시합니다.' : '저장한 공지의 본문에서 찾은 날짜를 표시합니다.'} 찾은 날짜는 틀릴 수 있으니 원문에서 확인하세요.</span>
+    </div>
     <div class="calendar-grid" role="grid" aria-labelledby="calendar-month-heading" bind:this={grid} tabindex="-1">
       <div class="calendar-row calendar-head" role="row">
         {#each weekdays as weekday}<span role="columnheader" class="calendar-weekday">{weekday}</span>{/each}
@@ -274,7 +298,7 @@
             {@const entries = [
               ...items.tasks.map((task) => ({ kind: 'task', text: task.title, done: false })),
               ...items.todos.map((todo) => ({ kind: 'todo', text: todo.title, done: todo.done })),
-              ...items.dates.map((entry) => ({ kind: 'ai', text: entry.label, done: false })),
+              ...items.dates.map((entry) => ({ kind: 'notice', text: entry.label || entry.title, done: false })),
             ]}
             <div role="gridcell" aria-selected={day === selected}>
               <button class="calendar-day" class:outside={day.slice(0, 7) !== month} class:is-today={day === today} class:selected={day === selected}
@@ -325,12 +349,13 @@
           {/if}
         </li>
       {/each}
-      {#each selectedItems.dates as entry (entry.key)}
-        <li class="calendar-source"><button class="event event-ai" id={`calendar-ai-${entry.key}`} onclick={() => onopen(entry.documentId, `calendar-ai-${entry.key}`)}>
+      {#each selectedItems.dates as entry (`${entry.document_id}-${entry.ordinal}`)}
+        {@const target = `calendar-notice-${entry.document_id}-${entry.ordinal}`}
+        <li class="calendar-source"><button class="event event-notice" id={target} onclick={() => onopen(entry.document_id, target)}>
           <span class="event-bar" aria-hidden="true"></span>
-          <span class="event-title"><span class="ai-mark">AI 참고 일정</span> {entry.label}</span>
+          <span class="event-title"><span class="ai-mark notice-mark">{noticeDateMark(entry, clock.format)}</span> {entry.label || entry.title}</span>
           <span class="event-meta">{entry.title} · 원문 확인</span>
-        </button>{#if desktop}<button class="text-button" disabled={busy || editing !== null} aria-label={`${entry.label} 할 일로 추가`} onclick={() => void startPrefill(noticeTodo(entry.label, entry.title, entry.day, entry.documentId, entry.image))}>할 일로 추가</button>{/if}</li>
+        </button>{#if desktop}<button class="text-button" disabled={busy || editing !== null} aria-label={`${entry.label || entry.title} 할 일로 추가`} onclick={() => void startPrefill(noticeDateTodo(entry))}>할 일로 추가</button>{/if}</li>
       {/each}
       {#if selectedEmpty && editing !== 0}<li class="day-empty">일정 없음</li>{/if}
     </ul>
@@ -342,6 +367,8 @@
   .calendar-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
   .calendar-toolbar h2 { font-size: 17px; font-weight: 650; }
   .calendar-nav { display: flex; align-items: center; gap: 6px; }
+  .calendar-options { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-bottom: 10px; }
+  .calendar-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
   .flip { display: grid; transform: scaleX(-1); }
   .calendar-grid { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
   .calendar-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
@@ -358,7 +385,7 @@
   .calendar-entry { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 4px; border-left: 2px solid var(--family-other); font-size: 11px; line-height: 16px; }
   .entry-task { border-left-color: var(--accent); }
   .entry-todo { border-left-color: var(--text-2); }
-  .entry-ai { border-left-style: dashed; border-left-color: var(--muted); color: var(--secondary); }
+  .entry-notice { border-left-style: dashed; border-left-color: var(--muted); color: var(--secondary); }
   .calendar-entry.done { text-decoration: line-through; color: var(--muted); }
   .calendar-more { padding: 0 4px; font-size: 11px; color: var(--secondary); }
   .calendar-day-panel { position: sticky; top: 16px; display: grid; gap: 8px; }

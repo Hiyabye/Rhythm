@@ -1,5 +1,6 @@
 mod catalog;
 pub mod cybercampus;
+pub(crate) mod dates;
 pub mod model;
 pub(crate) mod network;
 mod parser;
@@ -220,6 +221,32 @@ pub async fn run_auto_trash(app: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
     }
 }
 const AUTO_TRASH_WAKE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Extracts dates for notices archived before the dates table existed or by an
+/// older extractor, once per launch. New and changed notices are extracted when
+/// they are written. Batches release the store between them so commands and
+/// sync are not held up.
+pub async fn run_notice_dates(app: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
+    while !shutdown.load(Ordering::Acquire) {
+        let Some(state) = app.try_state::<AppState>() else {
+            return;
+        };
+        let Ok(lease) = state.operation_gate.shared().await else {
+            return;
+        };
+        match with_store(&state.store, |s| s.refresh_notice_dates(NOTICE_DATES_BATCH)) {
+            Ok(0) => return,
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("Archive: 공지 날짜를 정리하지 못했습니다: {error}");
+                return;
+            }
+        }
+        drop(lease);
+        tokio::task::yield_now().await;
+    }
+}
+const NOTICE_DATES_BATCH: i64 = 200;
 #[tauri::command]
 pub async fn archive_start(
     state: State<'_, AppState>,

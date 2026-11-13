@@ -34,7 +34,7 @@ pub struct TodoInput {
 }
 
 /// Days since 1970-01-01 of a valid `YYYY-MM-DD`, or `None`.
-fn day_number(value: &str) -> Option<i64> {
+pub(super) fn day_number(value: &str) -> Option<i64> {
     let bytes = value.as_bytes();
     if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
         return None;

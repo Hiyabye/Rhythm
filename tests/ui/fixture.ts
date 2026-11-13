@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import analysisContract from '../../src/lib/analysis-contract.json' with { type: 'json' };
-import type { AiOperation, CalendarTodo, ClockFormat, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation, StudiumMiniStatus, StudiumSeatLayout, StudiumSnapshot, Theme } from '../../src/lib/types';
+import type { AiOperation, CalendarTodo, ClockFormat, NoticeDate, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation, StudiumMiniStatus, StudiumSeatLayout, StudiumSnapshot, Theme } from '../../src/lib/types';
 
 // Invented regular marker origins, unrelated to the school's real floor plans.
 export function syntheticStudiumLayout(total: number): StudiumSeatLayout {
@@ -124,6 +124,9 @@ export interface FixtureOptions {
   cybercampusId?: string | null;
   cybercampusTasks?: CybercampusTask[];
   calendarTodos?: CalendarTodo[];
+  // Dates found in notice text; `saved: false` ones appear on the calendar only as deadlines with every notice's deadlines on.
+  noticeDates?: (NoticeDate & { saved?: boolean })[];
+  calendarAllDeadlines?: boolean;
   // Nested board groups; sources name theirs through `group`.
   sourceGroups?: { id: string; name: string; parent: string | null; enabled?: boolean }[];
 }
@@ -345,6 +348,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       } finally { if (ai.operation === current) ai.operation = null; }
     }
     let calendarTodos = copy(options.calendarTodos ?? []);
+    const noticeDates = copy(options.noticeDates ?? []);
+    let calendarAllDeadlines = options.calendarAllDeadlines ?? false;
+    const noticeDate = ({ saved: _, ...date }: NoticeDate & { saved?: boolean }): NoticeDate => date;
     let calendarId = Math.max(0, ...calendarTodos.map((todo) => todo.id));
     const cybercampus = { id: options.cybercampusId ?? null, rejected: false, courses: options.cybercampusId ? [{ course_key: 'A1', name: '자료구조실습', year: 2026, term: '3' }] : [] };
     Object.assign(window, { isTauri: true, __fixture: fixture, __TAURI_EVENT_PLUGIN_INTERNALS__: {
@@ -867,6 +873,12 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           // Mirrors storage/calendar: inclusive range, untimed first, then time and id.
           case 'calendar_todos': return copy(calendarTodos.filter((todo) => todo.day >= args.from && todo.day <= args.to)
             .sort((a, b) => a.day.localeCompare(b.day) || Number(a.time !== null) - Number(b.time !== null) || (a.time ?? '').localeCompare(b.time ?? '') || a.id - b.id));
+          // Mirrors storage/notice_dates: saved notices' dates, plus every deadline when chosen.
+          case 'calendar_notice_dates': return { all_deadlines: calendarAllDeadlines, dates: noticeDates
+            .filter((date) => date.day >= args.from && date.day <= args.to && (date.saved !== false || (calendarAllDeadlines && date.kind === 'deadline')))
+            .sort((a, b) => a.day.localeCompare(b.day) || a.document_id - b.document_id || a.ordinal - b.ordinal).map(noticeDate) };
+          case 'calendar_set_all_deadlines': calendarAllDeadlines = args.enabled; return null;
+          case 'notice_dates': return noticeDates.filter((date) => date.document_id === args.documentId).map(noticeDate);
           case 'calendar_create_todo': {
             if (!args.todo.title.trim()) throw '할 일 제목은 1자에서 200자 사이로 입력해 주세요.';
             const todo = { id: ++calendarId, title: args.todo.title.trim(), day: args.todo.day, time: args.todo.time || null, memo: args.todo.memo.trim(), done: false, document_id: args.todo.document_id ?? null };

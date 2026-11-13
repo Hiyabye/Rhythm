@@ -95,7 +95,7 @@ fn studium_interval_upgrade_preserves_released_trash_state_and_settings() {
         .connection
         .execute_batch(
             "INSERT INTO deleted_notices(source_id,external_id) VALUES('one','removed');
-             DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; DROP TABLE studium_mini_geometry;
+             DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; DROP TABLE studium_mini_geometry;
              DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules;
              DROP TABLE studium_favorite_seats;
              ALTER TABLE studium_preferences DROP COLUMN interval_minutes;
@@ -1578,7 +1578,7 @@ fn schema_ten_upgrade_keeps_archive_and_adds_skipped_articles() {
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                  PRAGMA user_version=10;",
             )
             .unwrap();
@@ -1630,7 +1630,7 @@ fn schema_eleven_upgrade_retries_mislabeled_and_newly_allowed_resources() {
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                  PRAGMA user_version=11;"
             ))
             .unwrap();
@@ -1663,7 +1663,7 @@ fn retired_eng_newsletter_row_is_removed_but_archived_data_is_kept() {
             .execute_batch(
                 "DROP TABLE cybercampus_tasks; DROP TABLE cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                  PRAGMA user_version=16",
             )
             .unwrap();
@@ -1815,7 +1815,7 @@ fn schema_twenty_upgrade_keeps_every_subscription_with_groups_on() {
         store
             .connection
             .execute_batch(
-                "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
                  PRAGMA user_version=20;",
             )
             .unwrap();
@@ -2180,7 +2180,7 @@ fn schema_thirty_upgrade_keeps_todos_without_links() {
     store
         .connection
         .execute_batch(
-            "DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document;
+            "DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document;
              ALTER TABLE calendar_todos DROP COLUMN document_id;
              PRAGMA user_version=30;",
         )
@@ -2197,4 +2197,237 @@ fn schema_thirty_upgrade_keeps_todos_without_links() {
             .collect::<Vec<_>>(),
         [("신청 마감", None)]
     );
+}
+
+fn dated(store: &Store, from: &str, to: &str) -> Vec<(String, String, String)> {
+    store
+        .calendar_notice_dates(from, to)
+        .unwrap()
+        .dates
+        .into_iter()
+        .map(|d| (d.title, d.day, d.kind))
+        .collect()
+}
+
+#[test]
+fn notice_dates_follow_content_saved_state_toggle_and_trash() {
+    let (_directory, store) = database();
+    let (id, _) = store
+        .upsert_article(
+            "one",
+            &article(
+                "1",
+                "장학금 안내 (~11/20(금)까지)",
+                "선발 결과는 12월 1일 발표합니다.",
+                "2026-11-02",
+            ),
+            false,
+        )
+        .unwrap();
+    store
+        .upsert_article(
+            "one",
+            &article(
+                "2",
+                "특강",
+                "특강은 11월 25일(수)에 열립니다.",
+                "2026-11-02",
+            ),
+            false,
+        )
+        .unwrap();
+    // Nothing is saved and every-notice deadlines are off: the calendar is empty.
+    assert!(dated(&store, "2026-11-01", "2026-12-31").is_empty());
+    assert_eq!(store.notice_dates(id).unwrap().len(), 2);
+
+    store.set_document_state(id, None, Some(true)).unwrap();
+    assert_eq!(
+        dated(&store, "2026-11-01", "2026-12-31"),
+        [
+            (
+                "장학금 안내 (~11/20(금)까지)".into(),
+                "2026-11-20".into(),
+                "deadline".into()
+            ),
+            (
+                "장학금 안내 (~11/20(금)까지)".into(),
+                "2026-12-01".into(),
+                "date".into()
+            ),
+        ]
+    );
+    // All deadlines adds deadlines only, so the unsaved event stays off.
+    store.set_document_state(id, None, Some(false)).unwrap();
+    store.set_calendar_all_deadlines(true).unwrap();
+    let all = store
+        .calendar_notice_dates("2026-11-01", "2026-12-31")
+        .unwrap();
+    assert!(all.all_deadlines);
+    assert_eq!(
+        all.dates
+            .iter()
+            .map(|d| (d.day.as_str(), d.kind.as_str()))
+            .collect::<Vec<_>>(),
+        [("2026-11-20", "deadline")]
+    );
+
+    // A new revision replaces the dates instead of adding to them.
+    store
+        .upsert_article(
+            "one",
+            &article(
+                "1",
+                "장학금 안내",
+                "신청 마감은 11월 27일입니다.",
+                "2026-11-02",
+            ),
+            false,
+        )
+        .unwrap();
+    assert_eq!(
+        store
+            .notice_dates(id)
+            .unwrap()
+            .iter()
+            .map(|d| d.day.as_str())
+            .collect::<Vec<_>>(),
+        ["2026-11-27"]
+    );
+
+    store.trash_documents(&[id]).unwrap();
+    assert!(dated(&store, "2026-11-01", "2026-12-31").is_empty());
+    assert!(store.notice_dates(id).unwrap().is_empty());
+    assert!(store
+        .calendar_notice_dates("2026-11-01", "2027-02-01")
+        .is_err());
+    assert!(store
+        .calendar_notice_dates("2026-11-02", "2026-11-01")
+        .is_err());
+}
+
+#[test]
+fn filled_pdf_body_gets_its_dates() {
+    let (_directory, store) = database();
+    store
+        .catalog(&[definition("sogang-academic", true)])
+        .unwrap();
+    let mut empty = article("1", "PDF 공지", "", "2026-11-02");
+    empty.body_html.clear();
+    empty.unsupported_body = true;
+    let (id, _) = store
+        .upsert_article("sogang-academic", &empty, false)
+        .unwrap();
+    assert!(store.notice_dates(id).unwrap().is_empty());
+    let filled = article(
+        "1",
+        "PDF 공지",
+        "제출 마감: 2026. 11. 20.(금)",
+        "2026-11-02",
+    );
+    assert!(store.fill_body(id, &filled).unwrap());
+    assert_eq!(
+        store
+            .notice_dates(id)
+            .unwrap()
+            .iter()
+            .map(|d| (d.day.as_str(), d.kind.as_str()))
+            .collect::<Vec<_>>(),
+        [("2026-11-20", "deadline")]
+    );
+}
+
+#[test]
+fn notice_dates_backfill_stale_rows_and_the_toggle_survive_reopen() {
+    let (directory, store) = database();
+    for index in 0..3 {
+        store
+            .upsert_article(
+                "one",
+                &article(
+                    &index.to_string(),
+                    "모집",
+                    "접수 마감 11월 20일",
+                    "2026-11-02",
+                ),
+                false,
+            )
+            .unwrap();
+    }
+    // Rows from an older extractor version, and one notice without any row.
+    store
+        .connection
+        .execute_batch(
+            "UPDATE notice_date_extractions SET version=0;
+             DELETE FROM notice_date_extractions WHERE document_id=(SELECT MIN(id) FROM documents);",
+        )
+        .unwrap();
+    assert_eq!(row_count(&store, "notice_dates"), 2);
+    assert_eq!(store.refresh_notice_dates(2).unwrap(), 2);
+    assert_eq!(store.refresh_notice_dates(2).unwrap(), 1);
+    assert_eq!(store.refresh_notice_dates(2).unwrap(), 0);
+    assert_eq!(row_count(&store, "notice_dates"), 3);
+    store.set_calendar_all_deadlines(true).unwrap();
+    drop(store);
+
+    let reopened = Store::open(&directory.path().join("db")).unwrap();
+    assert!(reopened.calendar_all_deadlines().unwrap());
+    assert_eq!(reopened.refresh_notice_dates(200).unwrap(), 0);
+    assert_eq!(dated(&reopened, "2026-11-20", "2026-11-20").len(), 3);
+}
+
+#[test]
+fn schema_thirty_one_upgrade_backfills_dates_and_rolls_back_on_failure() {
+    let (directory, store) = database();
+    let path = directory.path().join("db");
+    let (id, _) = store
+        .upsert_article(
+            "one",
+            &article("1", "모집", "접수 마감 11월 20일", "2026-11-02"),
+            false,
+        )
+        .unwrap();
+    store.set_document_state(id, None, Some(true)).unwrap();
+    let rollback = "DROP TABLE notice_dates; DROP TABLE notice_date_extractions;
+                    ALTER TABLE settings DROP COLUMN calendar_all_deadlines;
+                    PRAGMA user_version=31;";
+    store.connection.execute_batch(rollback).unwrap();
+    drop(store);
+
+    let upgraded = Store::open(&path).unwrap();
+    assert_eq!(upgraded.info().unwrap().schema_version, SCHEMA_VERSION);
+    assert!(!upgraded.calendar_all_deadlines().unwrap());
+    // Released notices get their dates from the launch backfill, not the migration.
+    assert!(dated(&upgraded, "2026-11-20", "2026-11-20").is_empty());
+    assert_eq!(upgraded.refresh_notice_dates(200).unwrap(), 1);
+    assert_eq!(dated(&upgraded, "2026-11-20", "2026-11-20").len(), 1);
+
+    // A collision late in migration 32 leaves schema 31 untouched.
+    upgraded.connection.execute_batch(rollback).unwrap();
+    upgraded
+        .connection
+        .execute_batch("CREATE TABLE notice_dates(sentinel TEXT);")
+        .unwrap();
+    drop(upgraded);
+    assert!(Store::open(&path).is_err());
+    let connection = Connection::open(&path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        31
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='notice_date_extractions'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert!(connection
+        .query_row("SELECT calendar_all_deadlines FROM settings", [], |r| r
+            .get::<_, i64>(0))
+        .is_err());
 }

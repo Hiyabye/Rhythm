@@ -197,3 +197,6 @@ chrome outside `#inner_wrap` was removed, and line endings are LF.
   deadline, eligibility, documents, method and the `02-705-0000` phone number are
   invented. It exists to check that an archived image reaches the model and that
   image-derived dates are labelled unverified, not to measure general quality.
+
+`dates/notices.json` is synthetic: short Korean notice texts written for the #226
+date-extractor prototype (`archive/dates.rs`), not captured from any site.
