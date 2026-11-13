@@ -35,10 +35,10 @@
     "id": "weekday_mismatch",
     "published_at": "2026-11-01",
     "text": "신청 마감은 11월 20일(수)입니다.",
-    "deadlines": [],
+    "deadlines": ["2026-11-20"],
     "others": [],
     "labels": {},
-    "note": "2026-11-20 is a Friday; a mismatched weekday drops the candidate."
+    "note": "2026-11-20 is a Friday; a mistyped weekday keeps the written date."
   },
   {
     "id": "header_dates",

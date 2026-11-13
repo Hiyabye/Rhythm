@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { AiClassification, DocumentDetail, SimilarNotice, SyncStatus, TodoPrefill } from './types';
-  import { archiveDate, archiveError, archiveSize, noticeTodo, resourceStatus } from './archive-format';
+  import type { AiClassification, DocumentDetail, NoticeDate, SimilarNotice, SyncStatus, TodoPrefill } from './types';
+  import { archiveDate, archiveError, archiveSize, noticeDateMark, noticeDateTodo, noticeTodo, resourceStatus } from './archive-format';
   import { clock } from './clock.svelte';
   import { confirmAction } from './confirm';
   import Icon from './Icon.svelte';
@@ -19,6 +19,9 @@
   let enabled = $derived(detail !== null && enabledSources.includes(detail.item.source_id));
   let classification = $state<AiClassification | null>(null);
   let similar = $state<SimilarNotice[]>([]);
+  // Found in the latest text, so they are shown only while that version is open.
+  let dates = $state<NoticeDate[]>([]);
+  let latest = $derived(detail !== null && detail.revision_id === detail.revisions[0]?.id);
   let loading = $state(true);
   let busy = $state(false);
   let resourceBusy = $state(false);
@@ -43,6 +46,7 @@
     void invoke<SimilarNotice[]>('ai_similar_notices', { documentId: id })
       .then((value) => { if (!disposed) similar = value; })
       .catch(() => {});
+    void loadDates();
     const key = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !(event.target instanceof HTMLSelectElement)) onclose();
     };
@@ -57,6 +61,8 @@
           resourceBusy = false;
           feedback = archiveError(status.message);
           await load(detail?.revision_id ?? null);
+          // A downloaded PDF can become the body and bring dates with it.
+          void loadDates();
           onchange();
         }
       }).catch((reason) => { if (!disposed) { error = archiveError(reason); resourceBusy = false; } }).finally(() => { polling = false; });
@@ -72,6 +78,16 @@
       window.clearInterval(timer);
     };
   });
+
+  async function loadDates() {
+    try {
+      const value = await invoke<NoticeDate[]>('notice_dates', { documentId: id });
+      if (!disposed) dates = value;
+    } catch {
+      // Dates are a supplement; the body stays readable without them.
+      if (!disposed) dates = [];
+    }
+  }
 
   async function load(revisionId: number | null, markRead = false) {
     const request = ++generation;
@@ -397,6 +413,18 @@
           </div>
         {/each}
         {#if !enabled}<p class="footnote">자료를 추가로 받으려면 설정 → 확장 기능에서 이 공지의 정보원을 켜 주세요.</p>{/if}
+      </section>
+    {/if}
+    {#if latest && dates.length}
+      <section class="reader-resources" aria-labelledby="dates-heading">
+        <h3 id="dates-heading">공지 속 날짜 <span class="muted">{dates.length}</span></h3>
+        <p class="footnote">본문에서 날짜 표기를 그대로 찾았습니다. 연도가 없으면 게시일로 정하므로, 원문에서 날짜와 의미를 확인하세요.</p>
+        {#each dates as date (date.ordinal)}
+          <div class="resource-row">
+            <div><strong><span class="ai-mark notice-mark">{noticeDateMark(date, clock.format)}</span> {date.label || date.title}</strong><p>{archiveDate(date.day)}</p></div>
+            {#if oncalendar}<button class="text-button" aria-label={`${date.label || date.title} 할 일로 추가`} onclick={() => oncalendar(noticeDateTodo(date))}>할 일로 추가</button>{/if}
+          </div>
+        {/each}
       </section>
     {/if}
     {#if ai && similar.length}

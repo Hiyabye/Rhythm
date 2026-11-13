@@ -489,13 +489,20 @@ export interface TodoPrefill {
   todo: TodoInput;
   caution: string;
 }
-// An AI-extracted date of a current analysis, as the week pane and calendar show it.
-export interface ReferenceDate {
-  key: string;
-  day: string;
-  label: string;
-  documentId: number;
+// A date found in a notice's current text (storage::notice_dates::NoticeDate).
+export interface NoticeDate {
+  document_id: number;
+  ordinal: number;
   title: string;
-  // Read from an archived image rather than the text, so it is less certain.
-  image: boolean;
+  day: string;
+  // HH:MM, up to 24:00 for "밤 12시".
+  time: string | null;
+  // Text just before the date in the notice, such as "신청 마감"; may be empty.
+  label: string;
+  kind: 'deadline' | 'start' | 'date';
+}
+// Saved notices' dates, plus every notice's deadlines when `all_deadlines` is on.
+export interface CalendarNoticeDates {
+  all_deadlines: boolean;
+  dates: NoticeDate[];
 }

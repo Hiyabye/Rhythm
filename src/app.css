@@ -2508,7 +2508,7 @@ mark {
   color: var(--text-2);
 }
 
-.event-ai .event-bar {
+.event-notice .event-bar {
   background: repeating-linear-gradient(var(--muted) 0 3px, transparent 3px 6px);
 }
 

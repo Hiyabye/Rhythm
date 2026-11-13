@@ -1,7 +1,7 @@
-//! Deterministic notice date extraction (#226 prototype; not wired into the app).
+//! Deterministic notice date extraction for the calendar (#226).
 //!
 //! Every date is a literal match in the notice text. A missing year comes from the
-//! publication date, and a written weekday must agree with the resolved date.
+//! publication date; a written weekday only marks a bare `9.15`/`9/15` as a date.
 //! Classification is lexical: it decides deadline vs. other date from nearby
 //! Korean keywords, not from meaning.
 
@@ -25,7 +25,7 @@ pub struct Found {
 
 /// A date with nothing before it except one of these is page metadata.
 const HEADER: [&str; 4] = ["작성일", "게시일", "등록일", "수정일"];
-/// A sentence with one of these reports a replaced or cancelled date.
+/// A clause with one of these reports a replaced or cancelled date.
 const SUPERSEDED: [&str; 6] = [
     "취소합니다",
     "취소되었",
@@ -38,38 +38,90 @@ const DUE: [&str; 2] = ["마감", "기한"];
 const ACTION: [&str; 9] = [
     "신청", "접수", "모집", "제출", "지원", "등록", "납부", "응시", "취소",
 ];
-const PERIOD: [&str; 3] = ["기간", "일시", "시간"];
+/// Periods and events: their `까지` ends an activity, not a submission.
+const PERIOD: [&str; 15] = [
+    "기간",
+    "일시",
+    "시간",
+    "개최",
+    "열리",
+    "열립",
+    "진행",
+    "행사",
+    "학회",
+    "축제",
+    "설명회",
+    "면접",
+    "발표",
+    "교육",
+    "운영",
+];
+/// Clause starts inside one-line bodies: bullets and markers notices use.
+const BULLETS: [char; 15] = [
+    '■', '□', '▶', '▷', '►', '○', '●', '◼', '◆', '◇', '※', '•', '📍', '🗓', '✅',
+];
 const RANGE: [&str; 6] = ["부터", "~", "∼", "〜", "–", "-"];
 const WEEKDAYS: [char; 7] = ['일', '월', '화', '수', '목', '금', '토'];
 
 pub fn extract(text: &str, published: &str) -> Vec<Found> {
     let published = published.get(..10).and_then(parse_iso);
     let mut found: Vec<Found> = Vec::new();
-    for sentence in sentences(text) {
-        if SUPERSEDED.iter().any(|word| sentence.contains(word)) {
+    for clause in clauses(text) {
+        if SUPERSEDED.iter().any(|word| clause.contains(word)) {
             continue;
         }
-        let action = ACTION.iter().any(|word| sentence.contains(word));
-        let period = PERIOD.iter().any(|word| sentence.contains(word));
+        let first = found.len();
         let mut segment_start = 0;
         let mut index = 0;
-        while index < sentence.len() {
-            let Some(expression) = expression_at(sentence, index) else {
-                index += sentence[index..].chars().next().map_or(1, char::len_utf8);
+        while index < clause.len() {
+            let Some(expression) = expression_at(clause, index) else {
+                index += clause[index..].chars().next().map_or(1, char::len_utf8);
                 continue;
             };
-            let before = &sentence[segment_start..index];
+            let before = &clause[segment_start..index];
             segment_start = expression.end;
             index = expression.end;
             if HEADER.iter().any(|word| before.contains(word)) {
                 continue;
             }
-            let due = DUE.iter().any(|word| before.contains(word));
+            // Keywords count only between the previous date and a short window
+            // after this one, so one item's 신청 does not reach the next item.
+            let after: String = clause[expression.end..]
+                .chars()
+                .take(12)
+                .take_while(|c| !matches!(c, '→' | '(' | ')' | ',' | '|') && !BULLETS.contains(c))
+                .collect();
+            let context = format!("{before}{after}");
+            let action = ACTION.iter().any(|word| context.contains(word));
+            let period = PERIOD.iter().any(|word| context.contains(word));
+            let due_after = after.trim_start().starts_with("마감")
+                || ACTION
+                    .iter()
+                    .any(|word| after.trim_start().starts_with(&format!("{word} 마감")));
+            let due = due_after || DUE.iter().any(|word| before.contains(word));
+            // `~9/29` is an open range ending on the date; a `~` right after a
+            // number (`8.18~8.19` with an unrecognized start) continues a range.
+            let open_end = before
+                .trim_end()
+                .strip_suffix(['~', '∼', '〜'])
+                .is_some_and(|rest| {
+                    !rest
+                        .trim_end()
+                        .ends_with(|c: char| c.is_ascii_digit() || c == ')')
+                });
             let label = label(before);
             let Some(start) = resolve(&expression.start, None, published) else {
                 continue;
             };
-            let mut push = |date: (u32, u32, u32), time: &Option<String>, kind| {
+            // Nothing published after a date can still be due on it.
+            let due_on = |date: (u32, u32, u32), deadline: bool| {
+                if deadline && published.is_none_or(|p| date >= p) {
+                    Kind::Deadline
+                } else {
+                    Kind::Date
+                }
+            };
+            let mut push = |date: (u32, u32, u32), time: &Option<String>, kind: Kind| {
                 found.push(Found {
                     day: format!("{:04}-{:02}-{:02}", date.0, date.1, date.2),
                     time: time.clone(),
@@ -84,24 +136,29 @@ pub fn extract(text: &str, published: &str) -> Vec<Found> {
                         continue;
                     };
                     let deadline = due || action || expression.until && !period;
-                    push(end_date, &end.time, kind(deadline));
+                    push(end_date, &end.time, due_on(end_date, deadline));
                 }
                 None => {
-                    let deadline = due || expression.until && (action || !period);
-                    push(start, &expression.start.time, kind(deadline));
+                    let until = expression.until || open_end;
+                    let deadline = due || until && (action || !period);
+                    push(start, &expression.start.time, due_on(start, deadline));
                 }
+            }
+        }
+        // `마감 11. 20. → 연장 11. 27.`: only the last date of an extension is due.
+        if clause.contains("연장") && found.len() > first + 1 {
+            let last = found.len() - 1;
+            if found[last].kind == Kind::Deadline
+                || found[first..last].iter().any(|f| f.kind == Kind::Deadline)
+            {
+                for item in &mut found[first..last] {
+                    item.kind = Kind::Date;
+                }
+                found[last].kind = Kind::Deadline;
             }
         }
     }
     deduplicate(found)
-}
-
-fn kind(deadline: bool) -> Kind {
-    if deadline {
-        Kind::Deadline
-    } else {
-        Kind::Date
-    }
 }
 
 /// One entry per (day, kind); a day that is a deadline anywhere is only a deadline.
@@ -126,34 +183,77 @@ fn deduplicate(found: Vec<Found>) -> Vec<Found> {
     unique
 }
 
-/// Lines, further split after a sentence-final `다.`/`요.`. Dates such as
-/// `11. 14.` never end in those syllables, so they are not split.
-fn sentences(text: &str) -> Vec<&str> {
+/// Keyword scopes. Archived bodies are often one long line, so besides lines and
+/// a sentence-final `다.`/`요.` a clause also ends before a bullet, a ` - ` item or
+/// a numbered item (`2. 공모분야`, `3) 일정`). A date such as `11. 14.` never
+/// ends in `다`/`요`, and its `11. ` is followed by a digit, so dates stay whole.
+fn clauses(text: &str) -> Vec<&str> {
     let mut result = Vec::new();
     for line in text.lines() {
-        let mut start = 0;
         let chars: Vec<(usize, char)> = line.char_indices().collect();
-        for window in chars.windows(3) {
-            let [(_, syllable), (dot, '.'), (_, space)] = window else {
-                continue;
+        let next = |position: usize| chars.get(position).map(|&(_, c)| c);
+        let mut cuts = vec![0];
+        for (position, &(at, c)) in chars.iter().enumerate() {
+            let after_space = position > 0 && chars[position - 1].1.is_whitespace();
+            let cut = if BULLETS.contains(&c) {
+                Some(at)
+            } else if matches!(c, '다' | '요')
+                && next(position + 1) == Some('.')
+                && next(position + 2).is_some_and(char::is_whitespace)
+            {
+                Some(chars[position + 2].0)
+            } else if c == '-'
+                && after_space
+                && next(position + 1).is_some_and(char::is_whitespace)
+                && next(position + 2).is_some_and(|c| !c.is_ascii_digit())
+            {
+                Some(at)
+            } else if c.is_ascii_digit() && after_space && !after_date_part(&chars, position) {
+                let digits = chars[position..]
+                    .iter()
+                    .take_while(|(_, c)| c.is_ascii_digit())
+                    .count();
+                let end = position + digits;
+                (digits <= 2
+                    && matches!(next(end), Some('.' | ')'))
+                    && next(end + 1).is_some_and(char::is_whitespace)
+                    && next(end + 2).is_some_and(|c| !c.is_ascii_digit()))
+                .then_some(at)
+            } else {
+                None
             };
-            if matches!(syllable, '다' | '요') && space.is_whitespace() {
-                result.push(&line[start..dot + 1]);
-                start = dot + 1;
+            if let Some(cut) = cut.filter(|cut| cut > cuts.last().unwrap()) {
+                cuts.push(cut);
             }
         }
-        result.push(&line[start..]);
+        cuts.push(line.len());
+        result.extend(cuts.windows(2).map(|pair| &line[pair[0]..pair[1]]));
     }
     result
+}
+
+/// `2026. 6. 16.`: a number right after `<digit>.` continues a date rather
+/// than starting a numbered item.
+fn after_date_part(chars: &[(usize, char)], position: usize) -> bool {
+    let mut previous = chars[..position]
+        .iter()
+        .rev()
+        .map(|&(_, c)| c)
+        .skip_while(|c| c.is_whitespace());
+    previous.next() == Some('.') && previous.next().is_some_and(|c| c.is_ascii_digit())
 }
 
 /// Text just before a date, trimmed to its nearest clause, without a trailing particle.
 fn label(before: &str) -> String {
     let clause = before
-        .rsplit(['|', ',', '，'])
+        .rsplit(['|', ',', '，', '('])
         .next()
         .unwrap_or(before)
-        .trim_matches(|c: char| c.is_whitespace() || matches!(c, ':' | '：' | '-' | '·'));
+        .trim_matches(|c: char| {
+            c.is_whitespace()
+                || matches!(c, ':' | '：' | '-' | '·' | '~' | '∼' | '〜')
+                || BULLETS.contains(&c)
+        });
     let clause = ["에는", "은", "는", "이", "가", "을", "를", "에"]
         .iter()
         .find_map(|particle| clause.strip_suffix(particle))
@@ -170,7 +270,6 @@ struct Written {
     year: Option<u32>,
     month: Option<u32>,
     day: u32,
-    weekday: Option<u32>,
     time: Option<String>,
 }
 
@@ -227,12 +326,11 @@ fn date_at(text: &str, index: usize, range_end: bool) -> Option<(Written, usize)
     let (mut written, mut cursor) = if digits == 4 {
         full_date(text, first, after_first)?
     } else if digits <= 2 {
-        short_date(text, first, after_first, range_end)?
+        short_date(text, index, first, after_first, range_end)?
     } else {
         return None;
     };
-    if let Some((weekday, after)) = weekday_at(text, cursor) {
-        written.weekday = Some(weekday);
+    if let Some(after) = weekday_at(text, cursor) {
         cursor = after;
     }
     if let Some((time, after)) = time_at(text, skip_space(text, cursor)) {
@@ -268,7 +366,6 @@ fn full_date(text: &str, year: u32, after_year: usize) -> Option<(Written, usize
             year: Some(year),
             month: Some(month),
             day,
-            weekday: None,
             time: None,
         },
         end,
@@ -277,6 +374,7 @@ fn full_date(text: &str, year: u32, after_year: usize) -> Option<(Written, usize
 
 fn short_date(
     text: &str,
+    index: usize,
     first: u32,
     after_first: usize,
     range_end: bool,
@@ -287,7 +385,6 @@ fn short_date(
                 year: None,
                 month: Some(month),
                 day,
-                weekday: None,
                 time: None,
             },
             end,
@@ -297,30 +394,39 @@ fn short_date(
         let (day, after_day) = number_at(text, skip_space(text, after_month))?;
         return month_day(first, day, expect(text, after_day, "일")?);
     }
+    // `9.15`/`9/15` alone may be a number (`4.5`, `1/2`); a weekday, `~` before
+    // or `까지`/`마감` after marks it as a date.
+    let marked = |end: usize| {
+        let rest = &text[skip_space(text, end)..];
+        weekday_at(text, end).is_some()
+            || text[..index].trim_end().ends_with(['~', '∼', '〜'])
+            || rest.starts_with("까지")
+            || rest.starts_with("마감")
+    };
     if let Some(after_dot) = expect(text, after_first, ".") {
-        let spaced = text[after_dot..].starts_with(' ');
+        let spaced = text[after_dot..].starts_with(char::is_whitespace);
         let (day, after_day) = number_at(text, skip_space(text, after_dot))?;
         let end = expect(text, after_day, ".").unwrap_or(after_day);
-        // `11. 14.` needs the space and closing dot, `11.14.(금)` a weekday;
-        // `4.5.` is more likely a number than a date.
-        if !(spaced && end > after_day) && weekday_at(text, end).is_none() {
+        // `11. 14.` with its space and closing dot is a date by itself.
+        if !(spaced && end > after_day) && !marked(end) {
             return None;
         }
         return month_day(first, day, end);
     }
     if let Some(after_slash) = expect(text, after_first, "/") {
         let (day, after_day) = number_at(text, after_slash)?;
-        weekday_at(text, after_day)?;
+        marked(after_day).then_some(())?;
         return month_day(first, day, after_day);
     }
     if range_end {
-        let end = expect(text, after_first, "일")?;
+        // `~ 7일` or `~ 19(금)`; date_at reads the weekday itself.
+        let end = expect(text, after_first, "일")
+            .or_else(|| weekday_at(text, after_first).map(|_| after_first))?;
         return Some((
             Written {
                 year: None,
                 month: None,
                 day: first,
-                weekday: None,
                 time: None,
             },
             end,
@@ -329,24 +435,26 @@ fn short_date(
     None
 }
 
-/// `(목)` or `(목요일)`, returned as 0 = Sunday.
-fn weekday_at(text: &str, index: usize) -> Option<(u32, usize)> {
+/// `(목)` or `(목요일)`, optionally after one space; returns the end.
+fn weekday_at(text: &str, index: usize) -> Option<usize> {
+    let index = expect(text, index, " ").unwrap_or(index);
     let rest = text[index..].strip_prefix('(')?;
     let name = rest.chars().next()?;
-    let weekday = WEEKDAYS.iter().position(|day| *day == name)? as u32;
+    WEEKDAYS.contains(&name).then_some(())?;
     let mut cursor = index + 1 + name.len_utf8();
     cursor = expect(text, cursor, "요일").unwrap_or(cursor);
-    Some((weekday, expect(text, cursor, ")")?))
+    expect(text, cursor, ")")
 }
 
-/// `17:00`, `18시`, `오후 5시 30분`, normalized to 24-hour `HH:MM`.
+/// `17:00`, `18시`, `오후 5시 30분`, `밤 12시`, normalized to 24-hour `HH:MM`.
 fn time_at(text: &str, index: usize) -> Option<(String, usize)> {
-    let (afternoon, cursor) = if let Some(after) = expect(text, index, "오후") {
-        (Some(true), skip_space(text, after))
+    let night = expect(text, index, "밤");
+    let (afternoon, cursor) = if let Some(after) = expect(text, index, "오후").or(night) {
+        (true, skip_space(text, after))
     } else if let Some(after) = expect(text, index, "오전") {
-        (Some(false), skip_space(text, after))
+        (false, skip_space(text, after))
     } else {
-        (None, index)
+        (false, index)
     };
     let (hour, after_hour) = number_at(text, cursor)?;
     let (mut hour, minute, end) = if let Some(after_colon) = expect(text, after_hour, ":") {
@@ -362,7 +470,8 @@ fn time_at(text: &str, index: usize) -> Option<(String, usize)> {
             None => (hour, 0, after_hour),
         }
     };
-    if afternoon == Some(true) && hour < 12 {
+    // `밤 12시` is midnight at the end of that day, written 24:00.
+    if afternoon && hour < 12 || night.is_some() && hour == 12 {
         hour += 12;
     }
     (hour <= 24 && minute < 60).then(|| (format!("{hour:02}:{minute:02}"), end))
@@ -401,12 +510,8 @@ fn resolve(
     if !valid(date) {
         return None;
     }
-    if written
-        .weekday
-        .is_some_and(|weekday| weekday != weekday_of(date))
-    {
-        return None;
-    }
+    // A written weekday that disagrees is a typo in the notice; the date number
+    // is what readers act on, so it is kept.
     Some(date)
 }
 
@@ -433,12 +538,6 @@ fn day_number((year, month, day): (u32, u32, u32)) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
-/// 0 = Sunday.
-fn weekday_of(date: (u32, u32, u32)) -> u32 {
-    // 1970-01-01 was a Thursday.
-    (day_number(date) + 4).rem_euclid(7) as u32
-}
-
 fn parse_iso(value: &str) -> Option<(u32, u32, u32)> {
     let date = (
         value.get(0..4)?.parse().ok()?,
@@ -455,11 +554,7 @@ fn expect(text: &str, index: usize, literal: &str) -> Option<usize> {
 }
 
 fn skip_space(text: &str, mut index: usize) -> usize {
-    while let Some(c) = text[index..]
-        .chars()
-        .next()
-        .filter(|c| *c == ' ' || *c == '\t')
-    {
+    while let Some(c) = text[index..].chars().next().filter(|c| c.is_whitespace()) {
         index += c.len_utf8();
     }
     index

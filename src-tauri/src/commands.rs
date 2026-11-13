@@ -7,6 +7,7 @@ use crate::{
     intelligence::WorkerStatus,
     storage::{
         calendar::{CalendarTodo, TodoInput},
+        notice_dates::{CalendarNoticeDates, NoticeDate},
         proactive::ProactiveSettings,
         Settings, StorageInfo,
     },
@@ -377,6 +378,33 @@ pub async fn calendar_todos(
 ) -> Result<Vec<CalendarTodo>, String> {
     let _lease = state.operation_gate.shared().await?;
     locked(&state.store, |s| s.calendar_todos(&from, &to))
+}
+/// Dates found in notice text for the calendar range: saved notices' dates, plus
+/// every notice's deadlines when the user turned that on.
+#[tauri::command]
+pub async fn calendar_notice_dates(
+    state: tauri::State<'_, AppState>,
+    from: String,
+    to: String,
+) -> Result<CalendarNoticeDates, String> {
+    let _lease = state.operation_gate.shared().await?;
+    locked(&state.store, |s| s.calendar_notice_dates(&from, &to))
+}
+#[tauri::command]
+pub async fn calendar_set_all_deadlines(
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
+    locked(&state.store, |s| s.set_calendar_all_deadlines(enabled))
+}
+#[tauri::command]
+pub async fn notice_dates(
+    state: tauri::State<'_, AppState>,
+    document_id: i64,
+) -> Result<Vec<NoticeDate>, String> {
+    let _lease = state.operation_gate.shared().await?;
+    locked(&state.store, |s| s.notice_dates(document_id))
 }
 #[tauri::command]
 pub async fn calendar_create_todo(
