@@ -9,7 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 /// Bump when extraction rules change so stored dates are recomputed.
-pub(crate) const EXTRACTOR_VERSION: i64 = 1;
+pub(crate) const EXTRACTOR_VERSION: i64 = 2;
 /// The calendar's month grid and the week pane's two months ahead.
 const MAX_RANGE_DAYS: i64 = 62;
 /// Bounds one calendar request even with every notice's deadlines shown.
