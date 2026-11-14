@@ -47,7 +47,7 @@
 
 <div class="settings-group" role="group" aria-label="사이버캠퍼스 로그인">
   <div class="settings-row stacked">
-    <span class="row-label">사이버캠퍼스 로그인<Hint label="사이버캠퍼스 로그인">학번과 SAINT 비밀번호로 eClass에 로그인해 이번 학기 수강 강좌의 공지, 첨부 파일, 과제와 마감을 이 기기에 가져옵니다. 비밀번호는 운영체제 보안 저장소(Keychain 또는 Credential Manager)에만 저장하며 Rhythm 데이터베이스, 백업, 진단에 포함되지 않습니다. 읽기만 하며 제출, 게시, 확인 표시는 하지 않습니다. 다만 공지 본문을 가져오면 eClass에는 그 공지를 연 것으로 기록됩니다. 사이버캠퍼스 자료는 원격 AI로 보내지 않습니다.</Hint>
+    <span class="row-label">사이버캠퍼스 로그인<Hint label="사이버캠퍼스 로그인">학번과 SAINT 비밀번호로 eClass에 로그인해 이번 학기 수강 강좌의 공지, 첨부 파일, 과제와 마감을 이 기기에 가져옵니다. 비밀번호는 운영체제 보안 저장소(Keychain 또는 Credential Manager)에만 저장하며 Rhythm 데이터베이스, 백업, 진단에 포함되지 않습니다. 읽기만 하며 제출, 게시, 확인 표시는 하지 않습니다. 다만 공지 본문을 가져오면 eClass에는 그 공지를 연 것으로 기록됩니다.</Hint>
       <span class="row-detail" class:error-text={status?.rejected}>{#if status?.rejected}eClass가 저장된 로그인을 거부했습니다. 다시 저장하기 전까지 자동으로 시도하지 않습니다.{:else if status?.id}{status.id} 계정으로 로그인 정보 저장됨{#if status.courses.length}{' · '}강좌 {status.courses.length}개{/if}{:else if status}저장된 로그인 정보 없음{/if}</span>
     </span>
     <form class="field-with-button" onsubmit={save}>

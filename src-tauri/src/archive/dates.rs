@@ -251,7 +251,7 @@ fn label(before: &str) -> String {
         .unwrap_or(before)
         .trim_matches(|c: char| {
             c.is_whitespace()
-                || matches!(c, ':' | '：' | '-' | '·' | '~' | '∼' | '〜')
+                || matches!(c, ':' | '：' | '-' | '·' | '~' | '∼' | '〜' | '→')
                 || BULLETS.contains(&c)
         });
     let clause = ["에는", "은", "는", "이", "가", "을", "를", "에"]
@@ -319,7 +319,8 @@ fn range_marker(text: &str, cursor: usize) -> Option<usize> {
 }
 
 /// `YYYY년 M월 D일`, `YYYY. M. D.`, `YYYY-MM-DD`, `YYYY/MM/DD`, `M월 D일`,
-/// `M. D.` (spaced or with a weekday), `M/D(요일)` and, as a range end, `D일`.
+/// `M. D.` (spaced or with a weekday), `M/D(요일)` and, as a range end, `D일`
+/// or `D.(요일)`.
 fn date_at(text: &str, index: usize, range_end: bool) -> Option<(Written, usize)> {
     let (first, after_first) = number_at(text, index)?;
     let digits = after_first - index;
@@ -394,16 +395,35 @@ fn short_date(
         let (day, after_day) = number_at(text, skip_space(text, after_month))?;
         return month_day(first, day, expect(text, after_day, "일")?);
     }
-    // `9.15`/`9/15` alone may be a number (`4.5`, `1/2`); a weekday, `~` before
-    // or `까지`/`마감` after marks it as a date.
+    // `9.15`/`9/15` alone may be a number (`4.5`, `1/2`); a weekday, `~` or
+    // `마감`/`기한` before, or `까지`/`마감` after marks it as a date.
     let marked = |end: usize| {
         let rest = &text[skip_space(text, end)..];
+        let before = text[..index].trim_end();
         weekday_at(text, end).is_some()
-            || text[..index].trim_end().ends_with(['~', '∼', '〜'])
+            || before.ends_with(['~', '∼', '〜'])
+            || DUE.iter().any(|word| {
+                before
+                    .trim_end_matches([':', '：'])
+                    .trim_end()
+                    .ends_with(word)
+            })
             || rest.starts_with("까지")
             || rest.starts_with("마감")
     };
     if let Some(after_dot) = expect(text, after_first, ".") {
+        // A range end `~22.(일)` is a day of the start's month.
+        if range_end && weekday_at(text, after_dot).is_some() {
+            return Some((
+                Written {
+                    year: None,
+                    month: None,
+                    day: first,
+                    time: None,
+                },
+                after_dot,
+            ));
+        }
         let spaced = text[after_dot..].starts_with(char::is_whitespace);
         let (day, after_day) = number_at(text, skip_space(text, after_dot))?;
         let end = expect(text, after_day, ".").unwrap_or(after_day);

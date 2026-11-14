@@ -410,12 +410,41 @@ fn delete_remote_key(origin: &str) -> Result<(), String> {
 
 #[cfg(all(not(test), any(target_os = "macos", windows)))]
 fn delete_remote_key(origin: &str) -> Result<(), String> {
-    match keyring::Entry::new(RETIRED_REMOTE_KEY_SERVICE, origin)
+    let error = match keyring::Entry::new(RETIRED_REMOTE_KEY_SERVICE, origin)
         .map_err(|error| error.to_string())?
         .delete_credential()
     {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(error.to_string()),
+        Ok(()) | Err(keyring::Error::NoEntry) => return Ok(()),
+        Err(error) => error.to_string(),
+    };
+    #[cfg(target_os = "macos")]
+    return delete_with_security_tool(origin).map_err(|tool| format!("{error}; {tool}"));
+    #[cfg(windows)]
+    Err(error)
+}
+
+/// Every release is ad-hoc signed with a new code hash, and the keychain
+/// refuses to let one binary delete an item another binary saved (-25244), so
+/// the key an earlier Rhythm saved can't be deleted through `keyring`. Apple's
+/// `security` tool can delete it without a prompt. Fixed arguments, no shell.
+#[cfg(all(not(test), target_os = "macos"))]
+fn delete_with_security_tool(origin: &str) -> Result<(), String> {
+    let output = std::process::Command::new("/usr/bin/security")
+        .args([
+            "delete-generic-password",
+            "-s",
+            RETIRED_REMOTE_KEY_SERVICE,
+            "-a",
+            origin,
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .output()
+        .map_err(|error| error.to_string())?;
+    // 44: no such item, so nothing is left to delete.
+    match output.status.code() {
+        Some(0 | 44) => Ok(()),
+        _ => Err(String::from_utf8_lossy(&output.stderr).trim().to_owned()),
     }
 }
 

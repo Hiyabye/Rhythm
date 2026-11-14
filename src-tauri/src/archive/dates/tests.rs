@@ -201,6 +201,27 @@ fn times_and_weekdays() {
     assert!(extract("신청 마감은 4월 30일입니다.", "").is_empty());
 }
 
+#[test]
+fn bare_slash_dates_dotted_range_ends_and_extension_labels() {
+    // `마감`/`기한` before a bare `M/D` marks it as a date; a bare fraction is not one.
+    assert_eq!(
+        days(&extract("신청 마감 11/20", "2026-11-01"), Kind::Deadline),
+        ["2026-11-20"]
+    );
+    assert_eq!(
+        days(&extract("제출 기한: 11/20", "2026-11-01"), Kind::Deadline),
+        ["2026-11-20"]
+    );
+    assert!(extract("배점 1/2 반영", "2026-11-01").is_empty());
+    // A dotted day-only end with a weekday keeps the start's month.
+    let found = extract("행사 일정: 11. 20.(금)~22.(일)", "2026-11-01");
+    assert_eq!(days(&found, Kind::Start), ["2026-11-20"]);
+    assert_eq!(days(&found, Kind::Date), ["2026-11-22"]);
+    let found = extract("접수 마감 11. 20. → 연장 11. 27.", "2026-11-01");
+    assert_eq!(days(&found, Kind::Deadline), ["2026-11-27"]);
+    assert_eq!(found.last().unwrap().label, "연장");
+}
+
 /// Opt-in, read-only run over a copied archive. Point `RHYTHM_DATES_EVAL_DB` at
 /// a copy (never the live profile) and `RHYTHM_DATES_EVAL_REPORT` at the JSON
 /// output. Nothing here is ground truth; judge the report by reading notices.
