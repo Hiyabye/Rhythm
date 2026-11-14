@@ -545,6 +545,8 @@ mod tests {
         }
         let directory = tempfile::tempdir().unwrap();
         test_worker::fake_engine(directory.path(), "ok");
+        // The fixture embeds a single input.
+        std::fs::write(directory.path().join("embed-one"), b"").unwrap();
         let marker = directory.path().join("server-pid");
         let parent = StdCommand::new(std::env::current_exe().unwrap())
             .args([
