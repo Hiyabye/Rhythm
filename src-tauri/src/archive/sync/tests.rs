@@ -3181,25 +3181,6 @@ async fn older_viewer_notices_are_backfilled_from_their_stored_response() {
         article.resources.clear();
         with_store(&store, |s| s.upsert_article(MAIN, &article, true)).unwrap();
     }
-    // An analysis already used 551681's empty revision.
-    let analysed = document_by_external(&store, "551681");
-    with_store(&store, |s| {
-        s.ai_enqueue(
-            &crate::storage::intelligence::AnalysisKey {
-                document_id: analysed.item.id,
-                revision_id: analysed.revision_id,
-                task: "notice_analysis".into(),
-                model_sha256: "a".repeat(64),
-                prompt_version: 5,
-                schema_version: 3,
-                configuration_hash: "b".repeat(64),
-            },
-            &json!({"id": "test"}),
-            1,
-        )
-        .map(|_| ())
-    })
-    .unwrap();
     let unfilled = document_by_external(&store, "551680").item.id;
     let before = with_store(&store, |s| s.latest_original(unfilled)).unwrap();
 
@@ -3229,13 +3210,9 @@ async fn older_viewer_notices_are_backfilled_from_their_stored_response() {
         with_store(&store, |s| s.latest_original(filled.item.id)).unwrap(),
         before
     );
-    let revised = document_by_external(&store, "551681");
-    assert!(revised.body_text.contains("동계계절수업"));
-    assert_eq!(
-        revised.revisions.len(),
-        2,
-        "the analysed empty revision stays intact"
-    );
+    let second = document_by_external(&store, "551681");
+    assert!(second.body_text.contains("동계계절수업"));
+    assert_eq!(second.revisions.len(), 1);
     // A PDF without a text layer leaves the notice metadata-only, but stays
     // downloaded so later runs neither refetch nor fail on it.
     let scan = document_by_external(&store, "551682");

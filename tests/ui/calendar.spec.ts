@@ -131,14 +131,12 @@ test('the calendar shows open eClass deadlines and saved notices\' dates', async
   await expect(page.locator('[data-day="2026-10-30"]')).toHaveAccessibleName('10월 30일 금요일, 공지 날짜 1개');
 });
 
-test('the calendar leaves out deadlines whose extension is off and never shows AI dates', async ({ page }) => {
-  await mockDesktop(page, { sourceList: [board], cybercampusId: '20990001', cybercampusTasks: [deadline], aiResult: true, aiInstalled: true,
+test('the calendar leaves out deadlines whose extension is off', async ({ page }) => {
+  await mockDesktop(page, { sourceList: [board], cybercampusId: '20990001', cybercampusTasks: [deadline],
     extensions: { cybercampus: false } });
   await page.goto('/');
   await openCalendar(page);
   await expect(page.locator('[data-day="2026-10-26"]')).toHaveAccessibleName('10월 26일 월요일');
-  // The stored AI result dates 10월 30일; only dates found in notice text reach the calendar.
-  await expect(page.locator('[data-day="2026-10-30"]')).toHaveAccessibleName('10월 30일 금요일');
 });
 
 test('every notice\'s deadlines are added only after the user turns them on', async ({ page }) => {
@@ -217,22 +215,6 @@ test('a notice date becomes a linked todo after the user checks the prefilled fo
   await expect(page.getByRole('region', { name: /10월 29일 목요일/ }).getByRole('textbox', { name: '제목' })).toHaveCount(0);
 });
 
-test('a dated AI fact in the reader opens the calendar with a prefilled todo', async ({ page }) => {
-  await mockDesktop(page, { aiResult: true, aiInstalled: true });
-  await page.goto('/');
-  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
-  await page.locator('#notice-1').click();
-  await page.getByRole('region', { name: '공지 AI 분석' }).getByRole('button', { name: '신청 마감 캘린더에 할 일로 추가' }).click();
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('캘린더');
-  const panel = page.getByRole('region', { name: /10월 30일 금요일/ });
-  await expect(panel.getByRole('textbox', { name: '제목' })).toHaveValue('신청 마감 · 한국어 공지 01');
-  await expect(panel.getByLabel('날짜')).toHaveValue('2026-10-30');
-  await expect(panel.getByRole('note')).toContainText('원문에서 날짜와 시간을 확인한 뒤 저장하세요');
-  await panel.getByRole('button', { name: '취소' }).click();
-  await expect(panel.getByRole('textbox', { name: '제목' })).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'calendar_create_todo').length)).toBe(0);
-});
-
 test('a notice date in the reader opens the calendar with a prefilled todo', async ({ page }) => {
   await mockDesktop(page, { noticeDates: [noticeDate({ time: '24:00' })] });
   await page.goto('/');
@@ -273,7 +255,7 @@ test('an open eClass deadline is copied into a todo with its due time and course
 });
 
 test('without the calendar extension no page offers to add a todo', async ({ page }) => {
-  await mockDesktop(page, { sourceList: [board], cybercampusId: '20990001', cybercampusTasks: [deadline], aiResult: true, aiInstalled: true, extensions: { calendar: false },
+  await mockDesktop(page, { sourceList: [board], cybercampusId: '20990001', cybercampusTasks: [deadline], extensions: { calendar: false },
     noticeDates: [noticeDate({})] });
   await page.goto('/');
   await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name: '과제·마감' }).click();
@@ -281,9 +263,6 @@ test('without the calendar extension no page offers to add a todo', async ({ pag
   await expect(page.getByRole('button', { name: /캘린더에 할 일로 추가/ })).toHaveCount(0);
   await page.getByRole('button', { name: '받은 소식', exact: true }).click();
   await page.locator('#notice-1').click();
-  const analysis = page.getByRole('region', { name: '공지 AI 분석' });
-  await expect(analysis).toContainText('신청 마감');
-  await expect(analysis.getByRole('button', { name: /캘린더에/ })).toHaveCount(0);
   // The reader still lists the notice's dates, without a todo button.
   const dates = page.getByRole('region', { name: /공지 속 날짜/ });
   await expect(dates).toContainText('신청 마감');

@@ -679,8 +679,8 @@ impl Store {
     /// revision: freshness and change notices stay as they were, and the hash
     /// matches a later fetch of the same response. Title-only embeddings of that
     /// revision are dropped so classification recomputes them. Returns false,
-    /// changing nothing, when an analysis job already used the empty revision;
-    /// the caller then archives the text as a new revision instead.
+    /// changing nothing, when the latest revision already has a body; the
+    /// caller then archives the text as a new revision instead.
     pub(crate) fn fill_body(
         &self,
         document_id: i64,
@@ -701,9 +701,7 @@ impl Store {
             .query_row(
                 "SELECT r.id FROM document_revisions r
                  WHERE r.id=(SELECT MAX(id) FROM document_revisions WHERE document_id=?1)
-                   AND r.body_html='' AND r.body_text=''
-                   AND NOT EXISTS(SELECT 1 FROM ai_jobs j WHERE j.document_id=?1 AND j.revision_id=r.id)
-                   AND NOT EXISTS(SELECT 1 FROM ai_results a WHERE a.document_id=?1 AND a.revision_id=r.id)",
+                   AND r.body_html='' AND r.body_text=''",
                 [document_id],
                 |row| row.get(0),
             )
@@ -1399,18 +1397,6 @@ impl Store {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string());
         result
-    }
-    /// Moves a document to another source for deterministic tests.
-    #[cfg(test)]
-    pub(crate) fn move_document_for_test(&self, id: i64, source: &str) -> Result<(), String> {
-        require_changed(
-            self.connection
-                .execute(
-                    "UPDATE documents SET source_id=?2 WHERE id=?1",
-                    params![id, source],
-                )
-                .map_err(|e| e.to_string())?,
-        )
     }
     /// Inserts one resource row for deterministic tests, outside the sync path.
     #[cfg(test)]

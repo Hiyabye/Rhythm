@@ -295,16 +295,15 @@ pub async fn updater_restart(
     ensure_signing_key()?;
     let operation = state.exclusive_maintenance().await?;
     let active = acquire(&updater)?;
-    // Maintenance stops jobs but not a loaded model's server, which runs from
-    // the install folder. The Windows installer would find its executable
-    // locked (the plugin exits the app with `process::exit`, skipping the
-    // normal shutdown), and on macOS it would keep running from the replaced
-    // bundle. Admission stays closed, so nothing restarts it before install.
+    // Maintenance pauses classification but leaves a loaded embedding server
+    // running from the install folder. The Windows installer would find its
+    // executable locked (the plugin exits the app with `process::exit`,
+    // skipping the normal shutdown), and on macOS it would keep running from
+    // the replaced bundle. The maintenance guard keeps classification paused,
+    // so nothing restarts it before install.
     state
-        .worker
-        .lock()
-        .await
-        .stop_for_inventory()
+        .classifier
+        .stop_worker()
         .await
         .map_err(|e| format!("AI 엔진을 멈추지 못해 업데이트를 설치하지 않았습니다. {e}"))?;
     let mut staged = updater

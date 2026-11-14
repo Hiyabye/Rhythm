@@ -181,7 +181,7 @@ test('an empty archive explains first steps, local storage and optional AI on To
   const start = page.getByRole('region', { name: 'Rhythm 시작하기' });
   await expect(start).toContainText('이 기기에만 저장됩니다');
   await expect(start).toContainText('설정 → 확장 기능에서 서강대학교 공지나 사이버캠퍼스를 켭니다');
-  await expect(start).toContainText('AI 분석, 알림·백그라운드 같은 기능도 확장 기능에서 필요할 때 켭니다');
+  await expect(start).toContainText('AI 분류, 알림·백그라운드 같은 기능도 확장 기능에서 필요할 때 켭니다');
   await expect(start).toContainText('설정 → 데이터 및 정보에서 확인할 수 있습니다');
   await start.getByRole('button', { name: '초기 설정 열기', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Rhythm에 오신 것을 환영합니다', exact: true })).toBeFocused();
@@ -223,7 +223,7 @@ test('row explanations open from the keyboard and Escape returns focus to their 
   await hint.focus();
   await page.keyboard.press('Enter');
   await expect(panel).toBeVisible();
-  await expect(panel).toContainText('절전은 자동 분석을 하지 않고');
+  await expect(panel).toContainText('절전은 60분마다');
   await page.keyboard.press('Escape');
   await expect(panel).toBeHidden();
   await expect(hint).toBeFocused();

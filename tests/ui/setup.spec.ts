@@ -7,7 +7,7 @@ function title(page: Page, name: string) {
 }
 const none = { sogang_notices: false, cybercampus: false, search: false, saved: false, recommendations: false, week: false, calendar: false, ai: false, proactive: false };
 // With every extension on (the fixture default), each contributed step appears.
-const allSteps = ['사용할 기능 고르기', '받아 볼 게시판', '사이버캠퍼스 연결', '관심사', 'AI 요약', '백그라운드 실행', '알림', '준비가 끝났습니다'];
+const allSteps = ['사용할 기능 고르기', '받아 볼 게시판', '사이버캠퍼스 연결', '관심사', '공지 분류', '백그라운드 실행', '알림', '준비가 끝났습니다'];
 async function next(page: Page, name: string) {
   await page.getByRole('button', { name: '다음', exact: true }).click();
   await expect(title(page, name)).toBeFocused();
@@ -33,7 +33,7 @@ test('a fresh profile walks through setup, saving each choice without starting n
   const progress = page.getByRole('list', { name: '초기 설정 단계' }).getByRole('listitem');
   await expect(progress).toHaveText(['시작', '2기능', '3완료']);
   await expect(page.getByRole('switch', { checked: true })).toHaveCount(0);
-  for (const name of ['서강대학교 공지', '나를 위한 소식', 'AI 분석', '알림·백그라운드']) await page.getByRole('switch', { name: `${name} 사용 설정` }).click();
+  for (const name of ['서강대학교 공지', '나를 위한 소식', 'AI 분류', '알림·백그라운드']) await page.getByRole('switch', { name: `${name} 사용 설정` }).click();
   await expect(progress).toHaveText(['시작', '2기능', '3게시판', '4관심사', '5AI', '6백그라운드', '7알림', '8완료']);
 
   await next(page, '받아 볼 게시판');
@@ -44,12 +44,11 @@ test('a fresh profile walks through setup, saving each choice without starting n
   await expect(page.getByRole('textbox', { name: '관심 주제 추가' })).toBeVisible();
   await expect(page.getByRole('switch', { name: '관심사 학습' })).toHaveCount(0);
 
-  await next(page, 'AI 요약');
-  await page.getByRole('button', { name: 'AI 이 기기에서', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Qwen3.5 4B 다운로드 및 설치', exact: true })).toBeVisible();
+  await next(page, '공지 분류');
+  await expect(page.getByRole('button', { name: 'Qwen3-Embedding 0.6B 다운로드 및 설치', exact: true })).toBeVisible();
   expect(await callCount(page, 'ai_install')).toBe(0);
-  await page.getByRole('button', { name: 'Qwen3.5 4B 다운로드 및 설치', exact: true }).click();
-  await expect(page.getByRole('progressbar', { name: 'Qwen3.5 4B 다운로드' })).toBeVisible();
+  await page.getByRole('button', { name: 'Qwen3-Embedding 0.6B 다운로드 및 설치', exact: true }).click();
+  await expect(page.getByRole('progressbar', { name: 'Qwen3-Embedding 0.6B 다운로드' })).toBeVisible();
   expect(await callCount(page, 'ai_install')).toBe(1);
 
   await next(page, '백그라운드 실행');
@@ -64,7 +63,7 @@ test('a fresh profile walks through setup, saving each choice without starting n
   await next(page, '준비가 끝났습니다');
   const summary = page.getByRole('group', { name: '선택한 설정' });
   await expect(summary.locator('.settings-row').filter({ hasText: '구독한 게시판' }).first()).toContainText('1개');
-  await expect(summary.locator('.settings-row').filter({ hasText: /^AI/ })).toContainText('이 기기에서 실행');
+  await expect(summary.locator('.settings-row').filter({ hasText: '공지 분류' })).toContainText('내려받는 중');
   await expect(summary.locator('.settings-row').filter({ hasText: '켠 기능' })).toContainText('4개');
   expect(await callCount(page, 'archive_start')).toBe(0);
   expect(await callCount(page, 'complete_onboarding')).toBe(0);
@@ -113,34 +112,17 @@ test('skipping ends setup without changing settings', async ({ page }) => {
   expect(await callCount(page, 'set_extension')).toBe(0);
 });
 
-test('choosing the remote engine saves it and leaves the details to the AI pane', async ({ page }) => {
-  await mockDesktop(page, { onboardingNeeded: true });
+test('an installed classification model needs no action in setup and shows in the summary', async ({ page }) => {
+  await mockDesktop(page, { onboardingNeeded: true, aiEmbeddingInstalled: true });
   await page.goto('/');
   for (const name of allSteps.slice(0, 5)) await next(page, name);
-  await page.getByRole('button', { name: 'AI OpenAI 호환 API', exact: true }).click();
-  await expect(page.getByText('API 주소, 키, 전송 동의는 설정 → AI에서 입력합니다.', { exact: false })).toBeVisible();
-  expect(await page.evaluate(() => (window as any).__fixture.ai.preferences.engine)).toBe('openai-compatible');
-  await page.getByRole('button', { name: 'AI 나중에', exact: true }).click();
-  expect(await page.evaluate(() => (window as any).__fixture.ai.preferences.engine)).toBe('openai-compatible');
+  const models = page.getByRole('list', { name: '분류 모델' });
+  await expect(models).toContainText('설치됨');
+  await expect(models.getByRole('button')).toHaveCount(0);
+  for (const name of allSteps.slice(5)) await next(page, name);
+  await expect(page.getByRole('group', { name: '선택한 설정' }).locator('.settings-row').filter({ hasText: '공지 분류' })).toContainText('설치함');
+  expect(await callCount(page, 'ai_install')).toBe(0);
 });
-
-test('an installed model can be removed from the AI step after confirming', async ({ page }) => {
-  await mockDesktop(page, { onboardingNeeded: true, aiInstalled: true });
-  await page.goto('/');
-  for (const name of allSteps.slice(0, 5)) await next(page, name);
-  const models = page.getByRole('list', { name: '설치할 수 있는 모델' });
-  await models.getByRole('button', { name: 'Qwen3.5 4B 삭제', exact: true }).click();
-  const confirm = models.getByRole('group', { name: 'Qwen3.5 4B 삭제 확인' });
-  await confirm.getByRole('button', { name: '취소', exact: true }).click();
-  expect(await callCount(page, 'ai_remove')).toBe(0);
-
-  await models.getByRole('button', { name: 'Qwen3.5 4B 삭제', exact: true }).click();
-  await confirm.getByRole('button', { name: '확인하고 삭제', exact: true }).click();
-  await expect(models.getByRole('button', { name: 'Qwen3.5 4B 다운로드 및 설치', exact: true })).toBeVisible();
-  const calls = await page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'ai_remove').map((call: any) => call.args));
-  expect(calls).toEqual([{ id: 'qwen35-4b', confirmed: true }]);
-});
-
 test('setup can be reopened from Settings and from the empty Today guide', async ({ page }) => {
   await mockDesktop(page, { count: 0 });
   await page.goto('/');

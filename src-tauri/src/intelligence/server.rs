@@ -1,4 +1,4 @@
-//! Supervises one upstream `llama-server` child process for the loaded model.
+//! Supervises one upstream `llama-server` embedding process for the loaded model.
 //!
 //! The server listens only on a Unix socket inside a private `0700` directory.
 //! Where that is unavailable (Windows, or a socket path beyond the OS limit),
@@ -18,9 +18,6 @@ use tokio::{
     time::{sleep, timeout, Duration, Instant},
 };
 
-/// Stable part of the context-overflow error. It rejects the input, not the
-/// device, so auto mode retries only that request on CPU.
-pub(super) const INPUT_LIMIT: &str = "토큰 한도를 넘습니다";
 const MAX_RESPONSE: usize = 4 * 1024 * 1024;
 const MAX_LOG_LINE: u64 = 4096;
 // sockaddr_un.sun_path is 104 bytes on macOS (108 on Linux), including the NUL.
@@ -34,21 +31,14 @@ pub(super) struct Launch {
     /// Backend this launch targets: `metal`, `vulkan` or `cpu`.
     pub backend: &'static str,
     pub context: u32,
-    /// Some only for the dedicated embedding process. Generation launches keep
-    /// the chat flags and never receive `--embedding`.
-    pub embedding: Option<EmbeddingLaunch>,
+    /// Model-declared pooling mode. The vector is normalized by the server, so
+    /// callers only need cosine similarity.
+    pub pooling: String,
 }
 impl Launch {
     fn gpu(&self) -> bool {
         self.backend != "cpu"
     }
-}
-
-/// Model-declared pooling mode. The vector is normalized by the server, so
-/// callers only need cosine similarity.
-#[derive(Clone, Debug)]
-pub(super) struct EmbeddingLaunch {
-    pub pooling: String,
 }
 
 enum Endpoint {
@@ -65,8 +55,6 @@ struct Observed {
     port: Option<u16>,
     offloaded: Option<(u32, u32)>,
     device: Option<String>,
-    /// Upstream confirms the multimodal encoder actually loaded.
-    multimodal: bool,
 }
 
 pub(super) struct Server {
@@ -74,29 +62,20 @@ pub(super) struct Server {
     endpoint: Endpoint,
     runtime: PathBuf,
     pub model: PathBuf,
-    /// Projector this process was started with; None means text-only.
-    pub projector: Option<PathBuf>,
-    /// True only when upstream logged the multimodal encoder as loaded.
-    pub vision: bool,
-    /// True only for a dedicated embedding process.
-    pub embedding: bool,
     pub loaded_backend: &'static str,
-    pub load_ms: u64,
     #[cfg(windows)]
     _job: super::WorkerJob,
 }
 
 impl Server {
-    /// Starts `launch` with `model` and an optional vision projector, then waits
-    /// until it serves requests. Every failure path kills and reaps the child.
+    /// Starts `launch` with `model`, then waits until it serves requests.
+    /// Every failure path kills and reaps the child.
     pub async fn start(
         launch: &Launch,
         model: &Path,
-        projector: Option<&Path>,
         runtime: &Path,
         deadline: Duration,
     ) -> Result<Self, String> {
-        let started = Instant::now();
         prepare_runtime(runtime)?;
         let socket = runtime.join("llama.sock");
         let key_file = runtime.join("llama.key");
@@ -104,12 +83,6 @@ impl Server {
         let _ = std::fs::remove_file(&key_file);
         let mut command = Command::new(&launch.executable);
         command.arg("-m").arg(model);
-        if let Some(projector) = projector {
-            command.arg("--mmproj").arg(projector);
-            // Bound per-image cost; the encoder still receives enough tokens to
-            // read Korean poster text instead of guessing from layout alone.
-            command.args(["--image-min-tokens", "1024", "--image-max-tokens", "2048"]);
-        }
         // Resolved first so a missing GPU fails before a key file exists.
         let device = if launch.backend == "vulkan" {
             Some(nvidia_device(&launch.executable).await?)
@@ -140,36 +113,20 @@ impl Server {
             // Level 4 logs the selected device and offloaded layer count.
             "-lv",
             "4",
+            // Embedding models have no chat template. Request a unit-length
+            // vector from upstream. Without a large physical batch one long
+            // notice exceeds the default 512-token ubatch and the server
+            // returns HTTP 500.
+            "--embedding",
+            "--pooling",
+            &launch.pooling,
+            "--embd-normalize",
+            "2",
+            "--batch-size",
+            "2048",
+            "--ubatch-size",
+            "2048",
         ]);
-        match &launch.embedding {
-            Some(embedding) => {
-                // Dedicated embedding models have no chat template and reject
-                // chat-only flags. Request a unit-length vector from upstream.
-                // Without a large physical batch one long notice exceeds the
-                // default 512-token ubatch and the server returns HTTP 500.
-                command.args([
-                    "--embedding",
-                    "--pooling",
-                    &embedding.pooling,
-                    "--embd-normalize",
-                    "2",
-                    "--batch-size",
-                    "2048",
-                    "--ubatch-size",
-                    "2048",
-                ]);
-            }
-            None => {
-                command.args([
-                    "--jinja",
-                    // Analysis is deterministic JSON, never a reasoning task. This also
-                    // stops Gemma 4's optional thought channel from consuming the whole
-                    // output budget before the JSON begins.
-                    "--reasoning-budget",
-                    "0",
-                ]);
-            }
-        }
         if let Some(device) = &device {
             command.args(["-ngl", "99", "--device", device]);
         } else if launch.gpu() {
@@ -190,7 +147,7 @@ impl Server {
                 return Err(error);
             }
         };
-        let (loaded_backend, complete, multimodal) = {
+        let (loaded_backend, complete) = {
             // The observer only records log facts, so a poisoned lock still
             // holds usable data and must not leave the child unreaped.
             let facts = observed.lock().unwrap_or_else(|e| e.into_inner());
@@ -208,7 +165,6 @@ impl Server {
                 facts
                     .offloaded
                     .is_some_and(|(done, total)| done > 0 && done == total),
-                facts.multimodal,
             )
         };
         if launch.backend == "vulkan" && !complete {
@@ -223,37 +179,10 @@ impl Server {
             endpoint,
             runtime: runtime.to_owned(),
             model: model.to_owned(),
-            projector: projector.map(Path::to_owned),
-            vision: multimodal && projector.is_some(),
-            embedding: launch.embedding.is_some(),
             loaded_backend,
-            load_ms: started.elapsed().as_millis() as u64,
             #[cfg(windows)]
             _job: job,
         })
-    }
-
-    /// Sends one chat completion (a JSON request body) and returns the parsed response.
-    pub async fn chat(&mut self, body: &str, deadline: Duration) -> Result<Value, String> {
-        let (status, value, response) = self
-            .post_json("/v1/chat/completions", body, deadline)
-            .await?;
-        if status == 200 {
-            return value
-                .is_object()
-                .then_some(value)
-                .ok_or("AI 엔진 응답 내용이 올바르지 않습니다.".into());
-        }
-        if value["error"]["type"] == "exceed_context_size_error" {
-            return Err(format!(
-                "분석 입력과 출력이 모델의 {INPUT_LIMIT}. 본문 길이를 줄여 주세요."
-            ));
-        }
-        eprintln!(
-            "AI engine request failed with HTTP {status}: {}",
-            String::from_utf8_lossy(&response)
-        );
-        Err("로컬 추론에 실패했습니다. AI 엔진 로그를 확인해 주세요.".into())
     }
 
     /// Sends one OpenAI-style embeddings request. The server returns one vector
@@ -477,9 +406,6 @@ pub(super) async fn drain_log(reader: impl AsyncRead + Unpin, mut handle: impl F
 }
 
 fn observe(facts: &mut Observed, line: &str) {
-    if line.contains("loaded multimodal model") {
-        facts.multimodal = true;
-    }
     if let Some(rest) = line.split("listening on http://127.0.0.1:").nth(1) {
         facts.port = rest.trim().parse().ok();
     }
@@ -742,12 +668,11 @@ mod tests {
             executable: stub(directory.path(), "exit 0"),
             backend: "vulkan",
             context: 1024,
-            embedding: None,
+            pooling: "last".into(),
         };
         let error = Server::start(
             &launch,
             Path::new("model.gguf"),
-            None,
             &runtime,
             Duration::from_secs(5),
         )
@@ -767,12 +692,11 @@ mod tests {
             executable: stub(directory.path(), "exit 1"),
             backend: "cpu",
             context: 1024,
-            embedding: None,
+            pooling: "last".into(),
         };
         let error = Server::start(
             &launch,
             Path::new("model.gguf"),
-            None,
             &runtime,
             Duration::from_secs(20),
         )

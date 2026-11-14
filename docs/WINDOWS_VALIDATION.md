@@ -35,7 +35,7 @@ No second PC or VM has been tested. The only installed runs of the current codeb
 
 ## AI on Windows
 
-Observed with the bundled `llama-server` b12068 (PR #63). Model runs used the pinned 2B/4B Q4_K_M files copied from existing local copies (size and SHA-256 matched); no weights were downloaded.
+Observed with the bundled `llama-server` b12068 (PR #63). Model runs used the pinned 2B/4B Q4_K_M files copied from existing local copies (size and SHA-256 matched); no weights were downloaded. Those were the generation models, retired with AI summaries (#226): the rows below show that the bundled Vulkan and CPU builds run on this PC, but the embedding classifier, the only model Rhythm runs now, has not been run on Windows.
 
 | Check | Observed |
 | --- | --- |
@@ -45,17 +45,6 @@ Observed with the bundled `llama-server` b12068 (PR #63). Model runs used the pi
 | Unix socket | `llama-server --host <path>.sock` served `GET /health` over a Unix domain socket, with and without a loaded 2B model. The app still uses loopback on Windows |
 | Default `npm run desktop:build` | Succeeded and produced `Rhythm_1.1.0_x64-setup.exe` |
 | Installed app (validation identifier) | A rebuild with identifier `io.github.hiyabye.rhythm.pr63.validation` and an isolated `RHYTHM_VALIDATION_DATA_DIR` installed; all 55 files under `llama/cpu` and `llama/vulkan` matched the staged hashes. In the real window: registered the 2B file, completed setup in `gpu` mode, analyzed one synthetic scholarship notice on GPU (`loaded_backend` vulkan, 12.6 s), switched to `cpu` and analyzed it again (cpu, 61.0 s). Both results had the right category and deadline; the GPU result was marked as differing from the current setting. The app used loopback, and no app or `llama-server` process remained after closing the window |
-
-Synthetic evaluation (`actual_qwen35_analysis_evaluation`, release build, production controller → validation → Store path). The harness always uses `auto`, so the CPU runs used a resource folder without the Vulkan build; the backend column is the reported `loaded_backend`. Durations are the sum of job wall times, and the first 2B GPU run overlapped a release build.
-
-| Model / backend | Completed | Passed every screening check | Total |
-| --- | ---: | ---: | ---: |
-| 2B / Vulkan | 18/18 | 8/18 | 262 s |
-| 4B / Vulkan | 18/18 | 14/18 | 441 s |
-| 2B / CPU | 18/18 | 7/18 | 941 s |
-| 4B / CPU (first 4 fixtures only) | 4/4 | 4/4 | 537 s |
-
-Screening failures were wrong categories (mostly `학사`), missing or extra deadlines and missing summary terms, as on macOS.
 
 Not verified: other NVIDIA GPUs or drivers, the production-identifier install with protocol/notification registration, uninstall and upgrade, 4B in the installed app, model cancellation or crash recovery in the installed app, VRAM exhaustion, memory limits, peak RAM/VRAM, OS-enforced offline operation.
 

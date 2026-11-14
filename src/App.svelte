@@ -20,7 +20,7 @@
   import './lib/ai.css';
   import { archiveError as message, archiveDay, localDayKey, openTask, timeOptions } from './lib/archive-format';
   import { clock } from './lib/clock.svelte';
-  import type { ArchiveSummary, AutoTrashMonths, ClockFormat, EnergyProfile, Settings, Snapshot, SourceInfo, SyncStatus, Theme, WorkerStatus, AiSnapshot, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusTask, TodoPrefill } from './lib/types';
+  import type { ArchiveSummary, AutoTrashMonths, ClockFormat, EnergyProfile, Settings, Snapshot, SourceInfo, SyncStatus, Theme, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusTask, TodoPrefill } from './lib/types';
 
   const themes: { id: Theme; label: string; icon: string }[] = [
     { id: 'light', label: '라이트', icon: 'today' },
@@ -56,7 +56,6 @@
   let pendingStudiumRoom: string | null = null;
   let studiumEventGeneration = 0;
   const handledActivations = new Set<string>();
-  let setupNeeded = $state(false);
   // The first-run setup flow replaces the shell until it is finished or skipped.
   let showSetup = $state(false);
   // Kept while the app is open, so returning to Settings shows the last pane.
@@ -187,11 +186,6 @@
     const healthTimer = window.setInterval(() => {
       dayKey = localDayKey(new Date());
       now = Date.now();
-      if (desktop && snapshot && page === 'settings' && !busy) {
-        void invoke<WorkerStatus>('worker_status').then((status) => {
-          if (snapshot) snapshot.worker = status;
-        }).catch(() => { /* Explicit refresh also exposes transport errors. */ });
-      }
     }, 5000);
     return () => {
       mounted = false;
@@ -269,12 +263,6 @@
       } catch { /* The archive remains usable if proactive state is unavailable. */ }
       try { restoreOutcome = await invoke<RestoreOutcome | null>('backup_restore_outcome'); }
       catch { /* A missing report must not block the restored archive. */ }
-      try {
-        const ai = await invoke<AiSnapshot>('ai_snapshot');
-        // The remote engine needs no local model install or setup check.
-        setupNeeded = !ai.preferences.setup_completed && ai.preferences.engine !== 'openai-compatible';
-      }
-      catch { /* AI availability must not prevent archive access. Settings exposes recovery. */ }
       if (pendingStudiumRoom) handleStudiumActivation(pendingStudiumRoom);
     } catch (reason) {
       error = message(reason);
@@ -339,10 +327,6 @@
     const element = document.getElementById(target);
     element?.scrollIntoView({ block: 'start', behavior: 'instant' });
     element?.focus({ preventScroll: true });
-  }
-
-  function aiSettings() {
-    return openSettings('ai');
   }
 
   function updateSettings() {
@@ -428,9 +412,8 @@
     <header class="page-header"><h1>{scopedBoard?.name ?? heading}</h1>{#if scopedBoard}<p>{organizationLabel(scopedBoard.organization)} · 받은 소식</p>{/if}{#if page === 'today'}<p>{date}{#if summary}{' · '}읽지 않은 공지 {summary.unread.toLocaleString('ko-KR')}{#if summary.new_since_sync}{' · '}최근 동기화로 새 공지 {summary.new_since_sync.toLocaleString('ko-KR')}{/if}{/if}</p>{/if}</header>
     {#if !desktop && !loading}<div class="banner browser-notice" role="status"><Icon name="info" /><div><strong>데스크톱 앱에서 시작해 주세요</strong><p>브라우저에서는 화면만 둘러볼 수 있습니다. 설정 저장과 로컬 데이터 접근은 Rhythm 앱에서 사용할 수 있습니다.</p></div></div>{/if}
     {#if error}<div class="banner error" role="alert" transition:slide><Icon name="info" /><div><strong>작업을 완료하지 못했습니다</strong><p>{error}</p></div>{#if !snapshot && desktop}<button class="text-button" onclick={load}>다시 시도</button>{/if}</div>{/if}
-    {#if restoreOutcome}<div class="banner" role="status" transition:slide><Icon name="info" /><div><strong>백업 복원을 마쳤습니다</strong><p>공지 {restoreOutcome.documents.toLocaleString('ko-KR')}건과 첨부 자료 {restoreOutcome.resources.toLocaleString('ko-KR')}개를 복원하고 무결성을 확인했습니다.{#if restoreOutcome.unavailable_resources} 백업 당시 내려받지 못한 첨부 자료 {restoreOutcome.unavailable_resources.toLocaleString('ko-KR')}개는 포함되지 않았습니다.{/if}{#if restoreOutcome.models_needing_reinstall} 사용할 수 없는 AI 모델 {restoreOutcome.models_needing_reinstall.toLocaleString('ko-KR')}개는 다시 등록하거나 설치해 주세요.{/if} 이전 데이터는 데이터 폴더에 복구용으로 보관되어 있습니다.</p></div><button class="text-button" onclick={() => restoreOutcome = null}>닫기</button></div>{/if}
+    {#if restoreOutcome}<div class="banner" role="status" transition:slide><Icon name="info" /><div><strong>백업 복원을 마쳤습니다</strong><p>공지 {restoreOutcome.documents.toLocaleString('ko-KR')}건과 첨부 자료 {restoreOutcome.resources.toLocaleString('ko-KR')}개를 복원하고 무결성을 확인했습니다.{#if restoreOutcome.unavailable_resources} 백업 당시 내려받지 못한 첨부 자료 {restoreOutcome.unavailable_resources.toLocaleString('ko-KR')}개는 포함되지 않았습니다.{/if}{#if restoreOutcome.models_needing_reinstall} 사용할 수 없는 AI 모델 {restoreOutcome.models_needing_reinstall.toLocaleString('ko-KR')}개는 다시 설치해 주세요.{/if} 이전 데이터는 데이터 폴더에 복구용으로 보관되어 있습니다.</p></div><button class="text-button" onclick={() => restoreOutcome = null}>닫기</button></div>{/if}
     {#if desktop && availableUpdate && dismissedUpdate !== availableUpdate.version && page !== 'settings'}<div class="banner" role="status" transition:slide><Icon name="info" /><div><strong>Rhythm {availableUpdate.version} 버전을 설치할 수 있습니다</strong><p>설정 → 데이터 및 정보에서 내려받으면 업데이트 서명을 확인한 뒤 설치 여부를 묻습니다. 그 전에는 아무것도 바뀌지 않습니다.</p></div><button class="text-button" onclick={updateSettings}>업데이트 보기</button><button class="text-button" onclick={() => dismissedUpdate = availableUpdate?.version ?? ''}>나중에</button></div>{/if}
-    {#if desktop && setupNeeded && enabled.has('ai') && page !== 'settings'}<div class="banner ai-setup-banner" role="status" transition:slide><Icon name="cpu" /><div><strong>나의 기기에서 공지의 핵심을 정리하세요</strong><p>로컬 AI 모델을 선택하면 한국어 요약과 일정의 근거를 확인할 수 있습니다. 준비 전이나 오프라인에서도 공지는 계속 읽을 수 있습니다.</p></div><button class="text-button" onclick={aiSettings}>로컬 AI 설정하기</button><button class="text-button" onclick={() => setupNeeded = false}>나중에</button></div>{/if}
     <div class="save-notice" role="status" aria-live="polite">{#if notice}<span class="save-notice-body" transition:fly={{ y: 8 }}><Icon name="check" size={15} />{notice}</span>{/if}</div>
 
     {#if page === 'settings'}
@@ -450,7 +433,7 @@
             <div class="settings-group">
               <div class="settings-row"><span class="row-label">화면 테마</span><div class="segmented" role="group" aria-label="화면 테마">{#each themes as option}<button disabled={!snapshot || busy} class:selected={theme === option.id} aria-pressed={theme === option.id} onclick={() => save({ theme: option.id })}><Icon name={option.icon} size={15} />{option.label}</button>{/each}</div></div>
               <div class="settings-row"><span class="row-label">시간 표시<span class="row-detail">{clock.format === '12h' ? '오후 9:30' : '21:30'}</span></span><div class="segmented" role="group" aria-label="시간 표시">{#each clockFormats as option}<button disabled={!snapshot || busy} class:selected={clock.format === option.id} aria-pressed={clock.format === option.id} onclick={() => save({ clock_format: option.id })}>{option.label}</button>{/each}</div></div>
-              <div class="settings-row"><span class="row-label">전원 모드<Hint label="전원 모드">AI 자동 분석과 자동 동기화 간격에 적용됩니다. 절전은 자동 분석을 하지 않고 60분마다, 균형은 30분, 성능은 15분마다 확인합니다. AI는 한 번에 한 공지만 분석합니다.</Hint></span><div class="segmented" role="group" aria-label="전원 모드">{#each energyProfiles as option}<button disabled={!snapshot || busy} class:selected={snapshot?.settings.energy_profile === option.id} aria-pressed={snapshot?.settings.energy_profile === option.id} onclick={() => save({ energy_profile: option.id })}>{option.label}</button>{/each}</div></div>
+              <div class="settings-row"><span class="row-label">전원 모드<Hint label="전원 모드">자동 동기화 간격에 적용됩니다. 절전은 60분마다, 균형은 30분, 성능은 15분마다 확인합니다.</Hint></span><div class="segmented" role="group" aria-label="전원 모드">{#each energyProfiles as option}<button disabled={!snapshot || busy} class:selected={snapshot?.settings.energy_profile === option.id} aria-pressed={snapshot?.settings.energy_profile === option.id} onclick={() => save({ energy_profile: option.id })}>{option.label}</button>{/each}</div></div>
             </div>
             <div class="settings-group">
               <div class="settings-row"><span class="row-label">초기 설정<Hint label="초기 설정">처음 실행할 때 본 설정 단계를 다시 엽니다. 현재 설정을 그대로 보여 주며 아무것도 초기화하지 않습니다.</Hint></span><button class="button secondary small" disabled={!snapshot || busy} onclick={openSetup}>다시 실행</button></div>
@@ -463,7 +446,7 @@
           {:else if settingsPane === 'cybercampus'}
             <SourceSettings enabled={enabled.has('cybercampus')} extension="cybercampus" />
           {:else if settingsPane === 'ai'}
-            <AiSettings {desktop} onsetup={() => setupNeeded = false} />
+            <AiSettings {desktop} />
           {:else if settingsPane === 'personalization'}
             <PersonalizationSettings {desktop} />
           {:else if settingsPane === 'notifications'}
@@ -488,7 +471,7 @@
     {:else if page === 'studium'}
       <StudiumView {desktop} activation={studiumActivation} proactiveEnabled={enabled.has('proactive')} onactivation={handleProactiveActivation} onsettings={() => openSettings(enabled.has('proactive') ? 'notifications' : 'extensions')} />
     {:else}
-      <ArchiveView {page} {desktop} {enabled} onsetup={openSetup} onextensions={() => openSettings('extensions')} {sourceRequest} activation={proactiveActivation} onactivationhandled={() => proactiveActivation = null} onsettings={(pane) => openSettings(pane ?? 'extensions')} onaisettings={aiSettings}
+      <ArchiveView {page} {desktop} {enabled} onsetup={openSetup} onextensions={() => openSettings('extensions')} {sourceRequest} activation={proactiveActivation} onactivationhandled={() => proactiveActivation = null} onsettings={(pane) => openSettings(pane ?? 'extensions')}
         onsourcechange={(id) => activeSource = id}
         onweekpane={(visible) => weekPane = visible}
         ontasks={() => void navigate('tasks')}

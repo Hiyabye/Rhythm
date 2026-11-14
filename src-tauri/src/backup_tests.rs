@@ -2,7 +2,7 @@
 use super::*;
 use crate::archive::model::{ArticleInput, ResourceInput};
 use crate::storage::{
-    intelligence::{AiModel, AnalysisKey},
+    intelligence::{AiModel, ClassificationWrite},
     personalization::{PersonalInterestInput, PersonalizationProfile},
     proactive::{ProactiveEventKey, ProactiveEventKind, ProactiveSettings, ProactiveTaskInput},
     Store,
@@ -249,14 +249,9 @@ fn populated_profile(root: &Path) -> Store {
         store.personalization_remove_interest(learned.id).unwrap();
     }
 
-    store
-        .ai_upsert_model(&model(
-            "managed",
-            "managed",
-            "models/managed.gguf",
-            MANAGED_WEIGHTS,
-        ))
-        .unwrap();
+    let mut managed = model("managed", "managed", "models/managed.gguf", MANAGED_WEIGHTS);
+    managed.kind = "embedding".into();
+    store.ai_upsert_model(&managed).unwrap();
     store
         .ai_upsert_model(&model(
             "absent",
@@ -274,25 +269,9 @@ fn populated_profile(root: &Path) -> Store {
         ))
         .unwrap();
     let mut preferences = store.ai_preferences().unwrap();
-    preferences.active_model_id = Some("managed".into());
-    preferences.setup_completed = true;
+    preferences.embedding_model_id = Some("managed".into());
     store.ai_save_preferences(&preferences).unwrap();
-    let revision = store.document(first, None).unwrap().revision_id;
-    store
-        .ai_enqueue(
-            &AnalysisKey {
-                document_id: first,
-                revision_id: revision,
-                task: "analysis".into(),
-                model_sha256: digest(MANAGED_WEIGHTS),
-                prompt_version: 3,
-                schema_version: 1,
-                configuration_hash: "0".repeat(64),
-            },
-            &serde_json::json!({"id": "managed"}),
-            100,
-        )
-        .unwrap();
+    classify_notice(&store, first);
     store
         .proactive_save_settings(&ProactiveSettings {
             scheduler_enabled: true,
@@ -325,17 +304,24 @@ fn populated_profile(root: &Path) -> Store {
     store
 }
 
-fn complete_job(store: &mut Store) {
-    let job = store.ai_claim_next().unwrap().unwrap();
+/// Stores a vector and classification of `document` under the managed model.
+fn classify_notice(store: &Store, document: i64) {
+    let revision = store.document(document, None).unwrap().revision_id;
+    let model = digest(MANAGED_WEIGHTS);
     store
-        .ai_complete_job(
-            job.id,
-            &serde_json::json!({"category": "장학", "summary": "신청 기간 연장"}),
-            false,
-            10,
-            10,
-            5,
-        )
+        .ai_save_embedding(document, revision, &model, &[0.6, 0.8])
+        .unwrap();
+    store
+        .ai_save_classification(&ClassificationWrite {
+            document_id: document,
+            revision_id: revision,
+            model_sha256: &model,
+            config_hash: &"0".repeat(64),
+            category: "장학",
+            score: 0.8,
+            margin: 0.2,
+            low_confidence: false,
+        })
         .unwrap();
 }
 
@@ -398,8 +384,7 @@ fn assert_database_consistent(path: &Path) {
 fn populated_profile_round_trips_every_table_resource_and_model_decision() {
     let workspace = tempfile::tempdir().unwrap();
     let source = workspace.path().join("source");
-    let mut store = populated_profile(&source);
-    complete_job(&mut store);
+    let store = populated_profile(&source);
     rusqlite::Connection::open(source.join("rhythm.sqlite3")).unwrap().execute(
         "INSERT INTO notification_activation_tokens(token_hash,attempts_json,expires_at) VALUES(?1,'[]','2999-01-01T00:00:00Z')",
         ["a".repeat(64)],
@@ -462,7 +447,7 @@ fn populated_profile_round_trips_every_table_resource_and_model_decision() {
         "sources",
         "personalization_interests",
         "ai_models",
-        "ai_results",
+        "notice_classifications",
         "proactive_events",
         "proactive_tasks",
         "personalization_feedback",
@@ -649,8 +634,7 @@ fn restored_custom_model_path_is_only_a_validated_hint_without_filesystem_access
 fn restore_revokes_custom_model_directory_ownership_without_touching_weights_or_results() {
     let workspace = tempfile::tempdir().unwrap();
     let source = workspace.path().join("source");
-    let mut store = populated_profile(&source);
-    complete_job(&mut store);
+    let store = populated_profile(&source);
     let custom = workspace.path().join("외부 모델 저장 폴더");
     fs::create_dir_all(&custom).unwrap();
     let custom_text = custom.to_string_lossy().into_owned();
@@ -669,10 +653,11 @@ fn restore_revokes_custom_model_directory_ownership_without_touching_weights_or_
         inventory.status = status.into();
         inventory.downloaded_bytes = 7;
         inventory.resume_etag = Some("previous-etag".into());
+        inventory.kind = "embedding".into();
         store.ai_upsert_model(&inventory).unwrap();
     }
     let mut preferences = store.ai_preferences().unwrap();
-    preferences.active_model_id = Some("custom-installed".into());
+    preferences.embedding_model_id = Some("custom-installed".into());
     preferences.model_directory = Some(custom_text);
     store.ai_save_preferences(&preferences).unwrap();
     let snapshot = workspace.path().join("snapshot.sqlite3");
@@ -704,11 +689,17 @@ fn restore_revokes_custom_model_directory_ownership_without_touching_weights_or_
     let restored_path = target.join("rhythm.sqlite3");
     assert_database_consistent(&restored_path);
     let restored_rows = table_rows(&restored_path);
-    assert_eq!(restored_rows["ai_results"], source_rows["ai_results"]);
-    assert_eq!(restored_rows["ai_jobs"], source_rows["ai_jobs"]);
+    assert_eq!(
+        restored_rows["notice_classifications"],
+        source_rows["notice_classifications"]
+    );
+    assert_eq!(
+        restored_rows["notice_embeddings"],
+        source_rows["notice_embeddings"]
+    );
     let restored = Store::open(&restored_path).unwrap();
     assert_eq!(restored.ai_preferences().unwrap().model_directory, None);
-    assert_eq!(restored.ai_preferences().unwrap().active_model_id, None);
+    assert_eq!(restored.ai_preferences().unwrap().embedding_model_id, None);
     for id in [
         "custom-installed",
         "custom-interrupted",
@@ -793,8 +784,7 @@ fn restore_keeps_a_model_the_catalog_no_longer_offers() {
 fn restore_reconciles_duplicate_custom_and_external_models_without_losing_files_or_history() {
     let workspace = tempfile::tempdir().unwrap();
     let staging = workspace.path().join("staging");
-    let mut store = populated_profile(&staging);
-    complete_job(&mut store);
+    let store = populated_profile(&staging);
     let custom = workspace.path().join("중복 등록 모델");
     fs::create_dir(&custom).unwrap();
     let bytes = b"custom model also registered as an external reference";
@@ -814,11 +804,12 @@ fn restore_reconciles_duplicate_custom_and_external_models_without_losing_files_
         bytes,
     );
     managed.storage_directory = Some(canonical_directory.clone());
+    managed.kind = "embedding".into();
     store.ai_upsert_model(&managed).unwrap();
     let external = model("same-file-external", "external", &canonical_file, bytes);
     store.ai_upsert_model(&external).unwrap();
     let mut preferences = store.ai_preferences().unwrap();
-    preferences.active_model_id = Some(managed.id.clone());
+    preferences.embedding_model_id = Some(managed.id.clone());
     preferences.model_directory = Some(canonical_directory);
     store.ai_save_preferences(&preferences).unwrap();
     drop(store);
@@ -830,8 +821,10 @@ fn restore_reconciles_duplicate_custom_and_external_models_without_losing_files_
 
     assert_database_consistent(&database);
     let after = table_rows(&database);
-    assert_eq!(before["ai_results"], after["ai_results"]);
-    assert_eq!(before["ai_jobs"], after["ai_jobs"]);
+    assert_eq!(
+        before["notice_classifications"],
+        after["notice_classifications"]
+    );
     let restored = Store::open(&database).unwrap();
     assert!(restored.ai_model(&managed.id).unwrap().is_none());
     let retained = restored.ai_model(&external.id).unwrap().unwrap();
@@ -840,7 +833,7 @@ fn restore_reconciles_duplicate_custom_and_external_models_without_losing_files_
     assert_eq!(retained.status, "installed");
     assert_eq!(retained.sha256, external.sha256);
     assert_eq!(retained.storage_directory, None);
-    assert_eq!(restored.ai_preferences().unwrap().active_model_id, None);
+    assert_eq!(restored.ai_preferences().unwrap().embedding_model_id, None);
     assert_eq!(restored.ai_preferences().unwrap().model_directory, None);
     assert_eq!(fs::read(&file).unwrap(), bytes);
     restored.ai_remove_model(&retained.id).unwrap();
@@ -1191,8 +1184,7 @@ fn truncated_archive_is_rejected_and_staging_is_removed() {
 fn backup_rejects_a_resource_changed_after_its_digest_was_recorded() {
     let workspace = tempfile::tempdir().unwrap();
     let root = workspace.path().join("data");
-    let mut store = populated_profile(&root);
-    complete_job(&mut store);
+    let store = populated_profile(&root);
     let snapshot = workspace.path().join("snapshot.sqlite3");
     store.backup_to(&snapshot).unwrap();
     let (schema, documents) = store.backup_summary().unwrap();
@@ -1230,8 +1222,7 @@ fn write_populated_native_profile() {
         !root.join("rhythm.sqlite3").exists(),
         "RHYTHM_NATIVE_PROFILE_DIR must name a fresh directory"
     );
-    let mut store = populated_profile(&root);
-    complete_job(&mut store);
+    let store = populated_profile(&root);
     // Keep the history, but start no collection or OS notification.
     store
         .proactive_save_settings(&ProactiveSettings::default())
@@ -1360,7 +1351,7 @@ const BENCH_SOURCES: &[&str] = &[
 /// Builds a large synthetic profile through the real Store APIs.
 #[cfg(unix)]
 fn generate_large_profile(root: &Path, documents: u64, resource_mib: u64) {
-    let mut store = Store::open(&root.join("rhythm.sqlite3")).unwrap();
+    let store = Store::open(&root.join("rhythm.sqlite3")).unwrap();
     store.catalog(&crate::archive::definitions()).unwrap();
     for source in BENCH_SOURCES {
         store.subscribe(source, true).unwrap();
@@ -1478,23 +1469,7 @@ fn generate_large_profile(root: &Path, documents: u64, resource_mib: u64) {
                 .unwrap();
         }
         if index % 25 == 0 {
-            let revision = store.document(document, None).unwrap().revision_id;
-            store
-                .ai_enqueue(
-                    &AnalysisKey {
-                        document_id: document,
-                        revision_id: revision,
-                        task: "analysis".into(),
-                        model_sha256: digest(MANAGED_WEIGHTS),
-                        prompt_version: 3,
-                        schema_version: 1,
-                        configuration_hash: "0".repeat(64),
-                    },
-                    &serde_json::json!({"id": "managed"}),
-                    100,
-                )
-                .unwrap();
-            complete_job(&mut store);
+            classify_notice(&store, document);
         }
         if index >= notification_start && index % 2 == 0 {
             store
@@ -1549,13 +1524,14 @@ fn generate_large_profile(root: &Path, documents: u64, resource_mib: u64) {
             &b"other"[..],
         ),
     ] {
-        store
-            .ai_upsert_model(&model(id, ownership, path, bytes))
-            .unwrap();
+        let mut inventory = model(id, ownership, path, bytes);
+        if id == "managed" {
+            inventory.kind = "embedding".into();
+        }
+        store.ai_upsert_model(&inventory).unwrap();
     }
     let mut preferences = store.ai_preferences().unwrap();
-    preferences.active_model_id = Some("managed".into());
-    preferences.setup_completed = true;
+    preferences.embedding_model_id = Some("managed".into());
     store.ai_save_preferences(&preferences).unwrap();
     // Keep history but leave collection and OS notifications off.
     store

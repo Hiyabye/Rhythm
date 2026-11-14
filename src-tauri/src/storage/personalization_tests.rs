@@ -141,7 +141,7 @@ fn activity_sequence(store: &Store) -> i64 {
 }
 
 #[test]
-fn v3_upgrade_preserves_archive_settings_and_ai_data_and_imports_interests() {
+fn v3_upgrade_preserves_archive_settings_and_models_and_imports_interests() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("rhythm.sqlite3");
     let legacy_interests = format!(
@@ -247,28 +247,8 @@ fn v3_upgrade_preserves_archive_settings_and_ai_data_and_imports_interests() {
     assert!(store.document(1, None).unwrap().item.is_read);
     assert!(store.document(1, None).unwrap().item.saved);
     assert_eq!(store.connection.query_row("SELECT COUNT(*) FROM resources WHERE status='downloaded' AND local_path='resources/guide.pdf'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
-    assert_eq!(
-        store
-            .connection
-            .query_row(
-                "SELECT active_model_id FROM ai_preferences WHERE id=1",
-                [],
-                |row| row.get::<_, String>(0)
-            )
-            .unwrap(),
-        "model"
-    );
-    assert_eq!(
-        store
-            .connection
-            .query_row(
-                "SELECT COUNT(*) FROM ai_jobs WHERE status='completed'",
-                [],
-                |row| row.get::<_, i64>(0)
-            )
-            .unwrap(),
-        1
-    );
+    // Analysis results were retired with summaries (migration 033); the
+    // model row stays until the user removes it.
     assert_eq!(
         store
             .connection
@@ -352,14 +332,6 @@ fn v3_upgrade_preserves_archive_settings_and_ai_data_and_imports_interests() {
     assert_eq!(
         store
             .connection
-            .query_row("SELECT COUNT(*) FROM ai_results", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
-    assert_eq!(
-        store
-            .connection
             .query_row(
                 "SELECT extension_id FROM source_extensions WHERE source_id='old-source'",
                 [],
@@ -373,14 +345,6 @@ fn v3_upgrade_preserves_archive_settings_and_ai_data_and_imports_interests() {
     store.personalization_reset().unwrap();
     assert_eq!(store.settings().unwrap().interests, "");
     assert!(store.document(1, None).unwrap().item.saved);
-    assert_eq!(
-        store
-            .connection
-            .query_row("SELECT COUNT(*) FROM ai_results", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
 }
 
 #[test]
@@ -1078,41 +1042,6 @@ fn malformed_publication_dates_do_not_receive_freshness_reasons() {
         .find(|item| item.item.id == 1)
         .unwrap();
     assert!(!item.reasons.iter().any(|reason| reason.contains("최근")));
-}
-#[test]
-fn partial_ai_deadline_candidates_do_not_change_source_based_ranking() {
-    let (_directory, store) = store();
-    save_interest(&store, "인공지능", 5);
-    let before = store.personalization_recommendations(3).unwrap();
-    store.connection.execute(
-        "INSERT INTO ai_jobs(id,document_id,revision_id,task,model_sha256,model_identity_json,prompt_version,schema_version,configuration_hash,status)
-         VALUES(1,1,1,'notice_analysis','model-hash','{}',3,1,'config','completed')",
-        [],
-    ).unwrap();
-    store.connection.execute(
-        "INSERT INTO ai_results(job_id,document_id,revision_id,task,model_sha256,model_identity_json,prompt_version,schema_version,configuration_hash,result_json,partial,processed_chars,total_chars,duration_ms)
-         VALUES(1,1,1,'notice_analysis','model-hash','{}',3,1,'config',
-                '{\"facts\":[{\"kind\":\"deadline\",\"label\":\"마감\",\"value\":\"2099-02-31\",\"evidence_id\":\"source-1\"}]}',
-                1,10,10,1)",
-        [],
-    ).unwrap();
-    let after = store.personalization_recommendations(3).unwrap();
-    assert_eq!(
-        before
-            .items
-            .iter()
-            .map(|item| item.item.id)
-            .collect::<Vec<_>>(),
-        after
-            .items
-            .iter()
-            .map(|item| item.item.id)
-            .collect::<Vec<_>>()
-    );
-    assert!(after
-        .items
-        .iter()
-        .all(|item| !item.reasons.iter().any(|reason| reason.contains("마감"))));
 }
 #[test]
 fn old_behavioral_evidence_and_document_feedback_no_longer_dominate_ranking() {

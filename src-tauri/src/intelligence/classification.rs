@@ -9,10 +9,9 @@
 
 use crate::{
     intelligence::{
-        analysis,
         model_storage::resolve_model_path,
         models::{catalog, verify_file},
-        remote, Worker,
+        Worker,
     },
     storage::intelligence::{AiModel, AiPreferences},
     AppState,
@@ -48,6 +47,19 @@ pub(super) const INSTRUCTION: &str = "Instruct: Classify the given Korean univer
 /// search instruction ranked relevant notices highest (docs/AI_EVALUATION.md).
 pub(super) const SEARCH_INSTRUCTION: &str =
     "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ";
+
+/// The closed category set. `기타` has no prototypes: it is the fallback for
+/// a best score below [`MIN_SCORE`].
+pub const CATEGORIES: [&str; 8] = [
+    "학사",
+    "장학",
+    "수업·교육",
+    "연구",
+    "공모전·대회",
+    "인턴·채용",
+    "행사·활동",
+    "기타",
+];
 
 /// Authored Korean prototypes. They encode the same category definitions the
 /// generation prompt used and are deliberately separate from the evaluation
@@ -120,7 +132,7 @@ pub fn config_hash() -> &'static str {
         hasher.update(INSTRUCTION);
         hasher.update(BODY_CHARS.to_le_bytes());
         hasher.update(MIN_SCORE.to_le_bytes());
-        for category in crate::intelligence::analysis::CATEGORIES {
+        for category in CATEGORIES {
             hasher.update(category);
         }
         for (category, prototypes) in CATEGORY_PROTOTYPES {
@@ -233,8 +245,6 @@ pub struct Controller {
     failed: Mutex<Option<String>>,
     prototypes: AsyncMutex<Option<Prototypes>>,
     prototypes_sha: Mutex<Option<String>>,
-    /// Cancels the remote embedding request on quiesce/shutdown.
-    active_embedding: Mutex<Option<Arc<analysis::Cancellation>>>,
     /// Last search query vector (model identity, query, vector), so paging
     /// through results does not embed the same query again.
     last_query: Mutex<Option<(String, String, Vec<f32>)>>,
@@ -243,46 +253,30 @@ pub struct Controller {
 
 type LocalEngine<'a> = (tokio::sync::MutexGuard<'a, Worker>, std::path::PathBuf);
 
-enum Source {
-    Local(AiModel),
-    Remote(remote::EmbeddingConfig),
-}
-
-/// Chooses the embedding path from preferences. No network or SQLite work here;
-/// the caller supplies the selected local model. `None` means classification is
-/// off or no usable local model is selected.
-fn select_source(
-    preferences: &AiPreferences,
-    local_model: Option<AiModel>,
-) -> Result<Option<(Source, String)>, String> {
+/// The selected, installed embedding model and its identity (the artifact
+/// SHA-256). No network or SQLite work here. `None` means classification is
+/// off or no usable model is selected.
+fn select_model(preferences: &AiPreferences, model: Option<AiModel>) -> Option<(AiModel, String)> {
     if !preferences.classification_enabled {
-        return Ok(None);
+        return None;
     }
-    if preferences.engine == "openai-compatible" && preferences.remote_embeddings {
-        let config = remote::EmbeddingConfig::from_preferences(preferences)?;
-        let identity = remote::identity_hash(config.endpoint.origin(), &config.model);
-        return Ok(Some((Source::Remote(config), identity)));
-    }
-    Ok(local_model
-        .filter(|model| {
-            model.status == "installed" && model.kind == "embedding" && model.sha256.is_some()
+    model
+        .filter(|model| model.status == "installed" && model.kind == "embedding")
+        .and_then(|model| {
+            let identity = model.sha256.clone()?;
+            Some((model, identity))
         })
-        .map(|model| {
-            let identity = model.sha256.clone().unwrap_or_default();
-            (Source::Local(model), identity)
-        }))
 }
 
 impl Controller {
-    pub fn new(llama: &Path, runtime: &Path) -> Self {
+    /// `mode` is the saved execution mode; it applies only on Windows.
+    pub fn new(llama: &Path, runtime: &Path, mode: &str) -> Self {
         let pooling = catalog()
             .into_iter()
             .find(|entry| entry.kind == "embedding")
             .and_then(|entry| entry.pooling)
             .unwrap_or_else(|| "last".into());
-        Self::with_worker(Worker::embedding_configured(
-            llama, runtime, "auto", &pooling,
-        ))
+        Self::with_worker(Worker::configured(llama, runtime, mode, &pooling))
     }
 
     fn with_worker(worker: Worker) -> Self {
@@ -298,7 +292,6 @@ impl Controller {
             failed: Mutex::new(None),
             prototypes: AsyncMutex::new(None),
             prototypes_sha: Mutex::new(None),
-            active_embedding: Mutex::new(None),
             last_query: Mutex::new(None),
             wake: Notify::new(),
         }
@@ -316,8 +309,8 @@ impl Controller {
         self.wake.notify_waiters();
     }
 
-    /// Called after inventory or engine changes: the next batch re-verifies the
-    /// file, reads the current key and reloads the process.
+    /// Called after inventory or preference changes: the next batch
+    /// re-verifies the file and reloads the process.
     pub fn invalidate(&self) {
         if let Ok(mut verified) = self.verified.lock() {
             *verified = None;
@@ -338,14 +331,6 @@ impl Controller {
     /// classification paused; dropping it resumes work.
     pub async fn quiesce(self: &Arc<Self>) -> PauseGuard {
         self.paused.store(true, Ordering::Release);
-        if let Some(token) = self
-            .active_embedding
-            .lock()
-            .ok()
-            .and_then(|token| token.clone())
-        {
-            token.cancel();
-        }
         PauseGuard {
             controller: self.clone(),
             guard: Some(self.batch.clone().lock_owned().await),
@@ -357,23 +342,31 @@ impl Controller {
         self.wake();
     }
 
-    /// Stops the process without acquiring the batch guard. The caller must
-    /// hold a `PauseGuard` so no new batch starts before the file is removed.
-    pub async fn stop_worker(&self) {
-        self.worker.lock().await.shutdown().await;
+    /// Stops the process and waits until it is reaped, without acquiring the
+    /// batch guard. The caller must hold a `PauseGuard` so no new batch starts
+    /// before a model file is removed or an installer replaces the executable.
+    pub async fn stop_worker(&self) -> Result<(), String> {
+        let result = self.worker.lock().await.stop_confirmed().await;
         self.invalidate();
+        result
+    }
+
+    /// Applies a saved execution mode. The caller must hold a `PauseGuard`;
+    /// the running process is reaped so the next batch starts on the new build.
+    pub async fn set_execution_mode(&self, mode: &str) -> Result<(), String> {
+        let mut worker = self.worker.lock().await;
+        if worker.execution_mode() == mode {
+            return Ok(());
+        }
+        worker.stop_confirmed().await?;
+        worker.set_execution_mode(mode)?;
+        drop(worker);
+        self.invalidate();
+        Ok(())
     }
 
     pub async fn shutdown(&self) {
         self.paused.store(true, Ordering::Release);
-        if let Some(token) = self
-            .active_embedding
-            .lock()
-            .ok()
-            .and_then(|token| token.clone())
-        {
-            token.cancel();
-        }
         let _guard = self.batch.clone().lock_owned().await;
         self.worker.lock().await.shutdown().await;
     }
@@ -441,55 +434,31 @@ impl Controller {
             };
             preferences
         };
-        if !preferences.classification_enabled {
+        let model = {
+            let Ok(store) = app.store.try_lock() else {
+                return;
+            };
+            preferences
+                .embedding_model_id
+                .as_ref()
+                .and_then(|id| store.ai_model(id).ok().flatten())
+        };
+        let Some((model, identity)) = select_model(&preferences, model) else {
             self.unload_if_idle(true).await;
             return;
-        }
-        let local_model =
-            if preferences.engine == "openai-compatible" && preferences.remote_embeddings {
-                None
-            } else {
-                let Ok(store) = app.store.try_lock() else {
-                    return;
-                };
-                preferences
-                    .embedding_model_id
-                    .as_ref()
-                    .and_then(|id| store.ai_model(id).ok().flatten())
-            };
-        let (source, identity) = match select_source(&preferences, local_model) {
-            Ok(Some(source)) => source,
-            Ok(None) => {
-                self.unload_if_idle(true).await;
-                return;
-            }
-            Err(detail) => {
-                self.unload_if_idle(true).await;
-                self.set_failure("remote-config", &detail);
-                return;
-            }
         };
         if self.is_failed(&identity) {
             self.unload_if_idle(false).await;
             return;
         }
-        if app.analysis.running()
-            || app.models.busy()
-            || app.ai_operation.status().is_some()
-            || self.paused.load(Ordering::Acquire)
-        {
+        if app.models.busy() || self.paused.load(Ordering::Acquire) {
             return;
         }
         let candidates = {
             let Ok(store) = app.store.try_lock() else {
                 return;
             };
-            match store.ai_embedding_candidates(
-                &identity,
-                config_hash(),
-                BATCH,
-                matches!(source, Source::Remote(_)),
-            ) {
+            match store.ai_embedding_candidates(&identity, config_hash(), BATCH) {
                 Ok(candidates) => candidates,
                 Err(error) => {
                     eprintln!("Classification candidates: {error}");
@@ -513,76 +482,9 @@ impl Controller {
         if self.paused.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire) {
             return;
         }
-        let token = Arc::new(analysis::Cancellation::default());
-        if let Ok(mut active) = self.active_embedding.lock() {
-            *active = Some(token.clone());
-        }
-        enum Engine<'a> {
-            Local {
-                worker: tokio::sync::MutexGuard<'a, Worker>,
-                path: std::path::PathBuf,
-            },
-            Remote {
-                remote: Arc<remote::Remote>,
-                config: Box<remote::EmbeddingConfig>,
-                key: String,
-            },
-        }
-        impl Engine<'_> {
-            async fn embed(
-                &mut self,
-                inputs: &[String],
-                token: &analysis::Cancellation,
-            ) -> Result<Vec<Vec<f32>>, String> {
-                match self {
-                    Self::Local { worker, path } => worker.embed(path, inputs).await,
-                    Self::Remote {
-                        remote,
-                        config,
-                        key,
-                    } => remote.embed(config, key, inputs, token).await,
-                }
-            }
-        }
-        let mut engine = match source {
-            Source::Local(model) => {
-                let Some((worker, path)) =
-                    self.local_engine(&app.data_root, &model, &identity).await
-                else {
-                    self.clear_active_embedding();
-                    return;
-                };
-                Engine::Local { worker, path }
-            }
-            Source::Remote(config) => {
-                // A previously loaded local classifier must not keep memory.
-                self.worker.lock().await.shutdown().await;
-                let remote_owner = app.remote.clone();
-                let origin = config.endpoint.origin().to_owned();
-                let remote_for_read = remote_owner.clone();
-                let key = tokio::task::spawn_blocking(move || remote_for_read.key(&origin)).await;
-                let key = match key {
-                    Ok(Ok(Some(key))) => key,
-                    Ok(Ok(None)) => {
-                        self.set_failure(&identity, "원격 분류 API 키를 저장해 주세요.");
-                        self.clear_active_embedding();
-                        return;
-                    }
-                    _ => {
-                        self.set_failure(
-                            &identity,
-                            "운영체제 보안 저장소에서 API 키를 읽지 못했습니다.",
-                        );
-                        self.clear_active_embedding();
-                        return;
-                    }
-                };
-                Engine::Remote {
-                    remote: remote_owner,
-                    config: Box::new(config),
-                    key,
-                }
-            }
+        let Some((mut worker, path)) = self.local_engine(&app.data_root, &model, &identity).await
+        else {
+            return;
         };
         // Prototype vectors depend on the embedding model, not on the scoring
         // config, but a config change reuses them while reclassifying. The key
@@ -613,17 +515,9 @@ impl Controller {
                     }
                     let mut vectors = Vec::new();
                     for chunk in texts.chunks(crate::intelligence::MAX_EMBED_BATCH) {
-                        match engine.embed(chunk, &token).await {
+                        match worker.embed(&path, chunk).await {
                             Ok(values) => vectors.extend(values),
                             Err(error) => {
-                                self.clear_active_embedding();
-                                if token.check().is_err() {
-                                    // Quiesce/shutdown is not an engine failure.
-                                    if let Ok(mut state) = self.state.lock() {
-                                        *state = "waiting";
-                                    }
-                                    return;
-                                }
                                 eprintln!("Classification prototypes: {error}");
                                 self.set_failure(&identity, &error);
                                 return;
@@ -680,28 +574,20 @@ impl Controller {
             }
         }
         if !inputs.is_empty() {
-            match engine.embed(&inputs, &token).await {
+            match worker.embed(&path, &inputs).await {
                 Ok(vectors) => {
                     results.extend(targets.into_iter().zip(vectors).map(
                         |((document_id, revision_id), vector)| (document_id, revision_id, vector),
                     ));
                 }
                 Err(error) => {
-                    self.clear_active_embedding();
-                    if token.check().is_err() {
-                        if let Ok(mut state) = self.state.lock() {
-                            *state = "waiting";
-                        }
-                        return;
-                    }
                     eprintln!("Classification embedding: {error}");
                     self.set_failure(&identity, &error);
                     return;
                 }
             }
         }
-        drop(engine);
-        self.clear_active_embedding();
+        drop(worker);
         let mut written = 0u64;
         {
             let Ok(store) = app.store.try_lock() else {
@@ -746,12 +632,6 @@ impl Controller {
         }
     }
 
-    fn clear_active_embedding(&self) {
-        if let Ok(mut active) = self.active_embedding.lock() {
-            *active = None;
-        }
-    }
-
     /// The local worker and model path, verifying the file once per identity.
     /// A failed check marks the identity failed until invalidated.
     async fn local_engine(
@@ -793,8 +673,8 @@ impl Controller {
 
     /// Embeds a search query with the selected local embedding model, for
     /// comparison with stored notice vectors of the same model identity.
-    /// `None` means search stays text-only (see [`search_model`]), or the
-    /// engine is busy with an inventory or backend operation.
+    /// `None` means search stays text-only: classification is off, no model
+    /// is installed, or the engine is busy with an inventory operation.
     pub async fn query_vector(&self, app: &AppState, query: &str) -> Option<(String, Vec<f32>)> {
         let (preferences, model) = {
             let store = app.store.lock().ok()?;
@@ -805,8 +685,8 @@ impl Controller {
                 .and_then(|id| store.ai_model(id).ok().flatten());
             (preferences, model)
         };
-        let (model, identity) = search_model(&preferences, model)?;
-        if app.models.busy() || app.ai_operation.status().is_some() {
+        let (model, identity) = select_model(&preferences, model)?;
+        if app.models.busy() {
             return None;
         }
         let vector = self
@@ -865,19 +745,6 @@ impl Controller {
     }
 }
 
-/// The local model whose stored vectors a search query is compared with.
-/// Semantic search follows the classification switch and never uses remote
-/// embeddings: search queries are typed by the user and stay on the device.
-fn search_model(preferences: &AiPreferences, model: Option<AiModel>) -> Option<(AiModel, String)> {
-    if preferences.engine == "openai-compatible" && preferences.remote_embeddings {
-        return None;
-    }
-    match select_source(preferences, model) {
-        Ok(Some((Source::Local(model), identity))) => Some((model, identity)),
-        _ => None,
-    }
-}
-
 pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
     loop {
         if let Some(state) = handle.try_state::<AppState>() {
@@ -907,24 +774,10 @@ mod tests {
 
     fn preferences() -> AiPreferences {
         AiPreferences {
-            active_model_id: None,
-            setup_completed: false,
-            processing_mode: "explicit".into(),
-            automatic_limit: 3,
-            max_tokens: 1024,
             execution_mode: "auto".into(),
             model_directory: None,
             embedding_model_id: Some("embed".into()),
             classification_enabled: true,
-            engine: "local".into(),
-            remote_base_url: None,
-            remote_model: None,
-            remote_embedding_model: None,
-            remote_timeout_seconds: 120,
-            remote_consent: false,
-            remote_automatic: false,
-            remote_daily_limit: 20,
-            remote_embeddings: false,
         }
     }
 
@@ -953,63 +806,20 @@ mod tests {
     }
 
     #[test]
-    fn classification_source_requires_opt_in_and_separates_remote_identity() {
-        let (source, identity) = select_source(&preferences(), Some(embedding_model()))
-            .unwrap()
-            .unwrap();
-        assert!(matches!(source, Source::Local(_)));
-        assert_eq!(identity, "c".repeat(64));
-
-        let mut disabled = preferences();
-        disabled.classification_enabled = false;
-        assert!(select_source(&disabled, Some(embedding_model()))
-            .unwrap()
-            .is_none());
-        assert!(select_source(&preferences(), None).unwrap().is_none());
-        let mut wrong_kind = embedding_model();
-        wrong_kind.kind = "generation".into();
-        assert!(select_source(&preferences(), Some(wrong_kind))
-            .unwrap()
-            .is_none());
-
-        let mut remote = preferences();
-        remote.engine = "openai-compatible".into();
-        remote.remote_embeddings = true;
-        remote.remote_consent = true;
-        remote.remote_base_url = Some("https://api.example.com".into());
-        remote.remote_embedding_model = Some("embed".into());
-        let (source, remote_identity) = select_source(&remote, None).unwrap().unwrap();
-        assert!(matches!(source, Source::Remote(_)));
-        assert_eq!(remote_identity.len(), 64);
-        assert_ne!(remote_identity, identity);
-
-        remote.remote_consent = false;
-        assert!(select_source(&remote, None).is_err());
-        remote.remote_consent = true;
-        remote.remote_embedding_model = None;
-        assert!(select_source(&remote, None).is_err());
-    }
-
-    #[test]
-    fn search_uses_only_the_local_model_under_the_classification_switch() {
-        let (model, identity) = search_model(&preferences(), Some(embedding_model())).unwrap();
+    fn classification_and_search_need_the_switch_and_an_installed_embedding_model() {
+        let (model, identity) = select_model(&preferences(), Some(embedding_model())).unwrap();
         assert_eq!(model.id, "embed");
         assert_eq!(identity, "c".repeat(64));
         let mut disabled = preferences();
         disabled.classification_enabled = false;
-        assert!(search_model(&disabled, Some(embedding_model())).is_none());
-        assert!(search_model(&preferences(), None).is_none());
-        // Queries never go to the remote endpoint, even with a local model.
-        let mut remote = preferences();
-        remote.engine = "openai-compatible".into();
-        remote.remote_embeddings = true;
-        remote.remote_consent = true;
-        remote.remote_base_url = Some("https://api.example.com".into());
-        remote.remote_embedding_model = Some("embed".into());
-        assert!(search_model(&remote, Some(embedding_model())).is_none());
-        // Remote analysis alone keeps local search vectors.
-        remote.remote_embeddings = false;
-        assert!(search_model(&remote, Some(embedding_model())).is_some());
+        assert!(select_model(&disabled, Some(embedding_model())).is_none());
+        assert!(select_model(&preferences(), None).is_none());
+        let mut wrong_kind = embedding_model();
+        wrong_kind.kind = "generation".into();
+        assert!(select_model(&preferences(), Some(wrong_kind)).is_none());
+        let mut downloading = embedding_model();
+        downloading.status = "downloading".into();
+        assert!(select_model(&preferences(), Some(downloading)).is_none());
     }
 
     fn fake_controller() -> (tempfile::TempDir, Controller, AiModel) {

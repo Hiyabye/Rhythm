@@ -18,28 +18,16 @@ pub struct CatalogEntry {
     pub license: String,
     pub compatibility: String,
     pub reason: Option<String>,
-    /// `generation` (default) or `embedding`. Embedding entries are never
-    /// selectable for summary analysis and need their own explicit install.
+    /// Every offered entry is `embedding`. Inventory rows keep their own kind,
+    /// so a retired generation model still opens and can be removed.
     #[serde(default = "default_kind")]
     pub kind: String,
     /// Pooling mode passed to `llama-server --pooling`; embedding entries only.
     #[serde(default)]
     pub pooling: Option<String>,
-    /// Declared vector size; `None` for generation entries.
+    /// Declared vector size.
     #[serde(default)]
     pub embedding_dim: Option<u32>,
-    /// Optional vision projector (mmproj). Installing it is a separate action.
-    #[serde(default)]
-    pub projector: Option<ProjectorEntry>,
-}
-/// A pinned multimodal projector artifact from the same repository/revision.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ProjectorEntry {
-    pub filename: String,
-    pub bytes: u64,
-    /// Conservative estimate, not a measured peak.
-    pub memory_bytes: u64,
-    pub sha256: String,
 }
 pub(super) fn default_kind() -> String {
     "generation".into()
@@ -95,33 +83,15 @@ pub(super) fn validate_manifest(e: &CatalogEntry) -> Result<(), String> {
         || !hex(&e.revision, 40)
         || e.bytes == 0
         || e.bytes > 12 * 1024 * 1024 * 1024
-        || ![
-            "unsloth/Qwen3.5-2B-GGUF",
-            "unsloth/Qwen3.5-4B-GGUF",
-            "unsloth/gemma-4-E2B-it-GGUF",
-            "unsloth/gemma-4-E4B-it-GGUF",
-            "Qwen/Qwen3-Embedding-0.6B-GGUF",
-        ]
-        .contains(&e.repository.as_str())
-        || !["generation", "embedding"].contains(&e.kind.as_str())
-        || (e.kind == "embedding"
-            && (e
-                .pooling
-                .as_deref()
-                .is_none_or(|pooling| !["none", "mean", "cls", "last", "rank"].contains(&pooling))
-                || e.embedding_dim.is_none_or(|dim| dim == 0 || dim > 8192)))
-        || (e.kind == "generation" && (e.pooling.is_some() || e.embedding_dim.is_some()))
+        || e.repository != "Qwen/Qwen3-Embedding-0.6B-GGUF"
+        || e.kind != "embedding"
+        || e.pooling
+            .as_deref()
+            .is_none_or(|pooling| !["none", "mean", "cls", "last", "rank"].contains(&pooling))
+        || e.embedding_dim.is_none_or(|dim| dim == 0 || dim > 8192)
         || !e.filename.ends_with(".gguf")
         || e.filename.contains(['/', '\\', '\0'])
         || !e.id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        || e.projector.as_ref().is_some_and(|p| {
-            !hex(&p.sha256, 64)
-                || p.bytes == 0
-                || p.bytes > 4 * 1024 * 1024 * 1024
-                || p.memory_bytes == 0
-                || !p.filename.ends_with(".gguf")
-                || p.filename.contains(['/', '\\', '\0'])
-        })
     {
         return Err("모델 배포 목록의 고정 식별자나 검증 정보가 올바르지 않습니다.".into());
     }
@@ -133,40 +103,4 @@ pub(super) fn download_url(e: &CatalogEntry) -> Result<Url, String> {
         e.repository, e.revision, e.filename
     ))
     .map_err(|_| "모델 다운로드 주소가 올바르지 않습니다.".into())
-}
-/// The projector artifact of a catalog entry, resolved from the same pinned
-/// repository revision as the text weights.
-pub(super) fn projector_url(entry: &CatalogEntry) -> Result<(Url, &ProjectorEntry), String> {
-    let projector = entry
-        .projector
-        .as_ref()
-        .ok_or("이 모델은 이미지 인식을 지원하는 배포 항목이 없습니다.")?;
-    let url = Url::parse(&format!(
-        "https://huggingface.co/{}/resolve/{}/{}",
-        entry.repository, entry.revision, projector.filename
-    ))
-    .map_err(|_| "이미지 인식 모듈 다운로드 주소가 올바르지 않습니다.")?;
-    Ok((url, projector))
-}
-
-pub(super) fn projector_record(
-    model: &AiModel,
-    entry: &CatalogEntry,
-) -> Result<AiProjector, String> {
-    let projector = entry
-        .projector
-        .clone()
-        .ok_or("이 모델은 이미지 인식을 지원하는 배포 항목이 없습니다.")?;
-    Ok(AiProjector {
-        model_id: model.id.clone(),
-        path: format!("models/{}.gguf", projector.sha256),
-        sha256: None,
-        expected_sha256: projector.sha256,
-        expected_bytes: projector.bytes,
-        bytes: 0,
-        status: "pending".into(),
-        downloaded_bytes: 0,
-        resume_etag: None,
-        error: None,
-    })
 }

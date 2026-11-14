@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { archiveError, archiveDate, archiveDay, localDayKey, noticeTodo, taskTodo, wallTime } from '../../src/lib/archive-format';
+import { archiveError, archiveDate, archiveDay, localDayKey, noticeDateTodo, taskTodo, wallTime } from '../../src/lib/archive-format';
 
 test('storage failures have actionable Korean feedback rather than raw database diagnostics', () => {
   expect(archiveError('database or disk is full')).toContain('저장 공간이 부족');
@@ -46,11 +46,15 @@ test('times follow the 12/24-hour setting at midnight, noon and evening', () => 
 });
 
 test('todo prefills fit the stored title limit and keep only what the source supports', () => {
-  const long = noticeTodo('신청 마감', '가'.repeat(300), '2026-10-30', 7);
+  const date = { document_id: 7, ordinal: 0, title: '가'.repeat(300), day: '2026-10-30', time: '24:00', label: '신청 마감', kind: 'deadline' as const };
+  const long = noticeDateTodo(date);
   expect([...long.todo.title]).toHaveLength(200);
   expect(long.todo.title.endsWith('…')).toBe(true);
   expect(long.todo).toMatchObject({ day: '2026-10-30', time: null, document_id: 7 });
-  expect(noticeTodo('설명회', '공지', '2026-10-30', 7, true).caution).toContain('이미지에서 읽은 날짜');
+  const unlabeled = noticeDateTodo({ ...date, label: '', kind: 'date', time: '09:30' }).todo;
+  expect(unlabeled.title.startsWith('일정 · 가')).toBe(true);
+  expect([...unlabeled.title]).toHaveLength(200);
+  expect(unlabeled.time).toBe('09:30');
   const task = { course_key: 'A1', course_name: '자료구조실습', category: 'report', item_id: '1', label: '과제', title: '실습 과제 2', week: 9,
     opens_at: null, late_due_at: null, status: null, submitted_at: null, pending: true, updated_at: '2026-10-20T00:00:00Z' };
   expect(taskTodo({ ...task, due_at: '2026-10-26T23:59' }).todo).toEqual({ title: '실습 과제 2', day: '2026-10-26', time: '23:59', memo: '자료구조실습', document_id: null });

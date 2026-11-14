@@ -16,7 +16,7 @@ The job: never miss school information that matters, without checking a dozen un
 
 ## Product Purpose
 
-Rhythm collects public Sogang notice boards into a local archive. It ranks what matters to this user with explainable, deterministic rules and can summarize notices and extract dates with a local AI model. Archived content stays readable and searchable offline.
+Rhythm collects public Sogang notice boards into a local archive. It ranks what matters to this user with explainable, deterministic rules, finds dates in notice text for a local calendar, and can classify notices with a small local embedding model. Archived content stays readable and searchable offline.
 
 The direction is a personal planning hub: the place the user's day is organized around. Notices are the first data source. An opt-in Cybercampus connector adds the user's own course notices and deadlines. Possible later extensions (opportunities, calendar and tasks, a personal agent) share the same archive, search and personalization core. These extensions are possible future decisions, not current features.
 
@@ -24,9 +24,9 @@ Success: the user trusts Rhythm to bring forward what matters, at the right time
 
 ## Positioning
 
-- **Local-first by construction.** No account, cloud database or telemetry. Inference runs on the device in a bundled llama.cpp server that only Rhythm starts and can reach. A user-configured OpenAI-compatible API is an explicit opt-in alternative; the local engine stays the default, and only public notice text is sent, never personal data.
+- **Local-first by construction.** No account, cloud database or telemetry. Classification runs on the device in a bundled llama.cpp server that only Rhythm starts and can reach; notice text never leaves the device for AI.
 - **Explainable, not oracular.** Recommendations are ranked by deterministic score signals, never by a model. Today keeps each pick to one line, so the signals are not shown there (user decision, 2026-11-07). AI output is optional, labeled, and never drives ranking, urgency or notifications.
-- **User decides.** Subscriptions, collection, model installs, background sync, notifications, remote inference, automatic remote analysis and remote classification are all off until the user turns them on. Learned preferences can be inspected, edited and deleted.
+- **User decides.** Subscriptions, collection, model installs, background sync and notifications are all off until the user turns them on. Learned preferences can be inspected, edited and deleted.
 - **Archive, not a feed.** Notices are preserved with meaningful revision history, local attachments and offline reading. Fetch/parse failures never erase good content.
 
 ## Operating Context
@@ -40,14 +40,14 @@ Also supported but secondary: a quick check of Today, deep reading of long notic
 
 Environment: a desktop window with native window controls and a 640 px minimum width, a tray item (menu bar on macOS, notification area on Windows), native notifications and native confirmation dialogs. The window may be hidden for long periods.
 
-Current information architecture: every feature beyond the core shell is a built-in extension the user turns on, modeled on Obsidian's plugins (built-in only, never loaded from outside). The core is 오늘 and 설정 (확장 기능, 일반, 데이터 및 정보 with backup and updates). Extensions add 받은 소식 and its boards (서강대학교 공지), 과제·마감 (사이버캠퍼스), 탐색, 보관함, Today's 나를 위한 소식 and 앞으로 7일, AI 분석 and 알림·백그라운드, each with its own settings pane. A new profile starts blank; upgraded profiles keep what they had.
+Current information architecture: every feature beyond the core shell is a built-in extension the user turns on, modeled on Obsidian's plugins (built-in only, never loaded from outside). The core is 오늘 and 설정 (확장 기능, 일반, 데이터 및 정보 with backup and updates). Extensions add 받은 소식 and its boards (서강대학교 공지), 과제·마감 (사이버캠퍼스), 탐색, 보관함, Today's 나를 위한 소식 and 앞으로 7일, AI 분류 and 알림·백그라운드, each with its own settings pane. A new profile starts blank; upgraded profiles keep what they had.
 
 ## Capabilities and Constraints
 
 - 34 cataloged public sources, all supported (main academic, five computing, four engineering, nine electronic/system semiconductor department, three dormitory, seven mechanical engineering and five semiconductor engineering boards), plus the opt-in Cybercampus course-notice source that needs the user's own login. Unsupported sources, if any, are shown as such and are never presented as working.
 - Historical import (resumable, cancellable) stays a separate pass from incremental "new and changed" checks, but one manual **새로고침** runs the new-notice pass first and then continues unfinished history. Progress shows real counts and phases, never fabricated percentages.
 - Reader: sanitized local content only, with no scripts, iframes, remote images or live school pages. Original links open in the OS browser on explicit action. Attachments are revealed in Finder or File Explorer, never executed. Iframe-only notices keep metadata only and explain why, except that a school PDF-viewer body is shown as the PDF's extracted text with the PDF attached.
-- Local AI: Qwen3.5 2B/4B, Gemma 4 E2B/E4B and Qwen3-Embedding 0.6B GGUF, user-installed, run by a bundled llama.cpp server (Metal or CPU on macOS; Vulkan for NVIDIA GPUs or CPU on Windows). Summaries, a separate embedding-based category classification, and dates/facts grounded to source evidence. AI can be wrong, and the UI must say to verify in the original. Analysis shows real phase and elapsed time.
+- Local AI: the Qwen3-Embedding 0.6B GGUF, user-installed, run by a bundled llama.cpp server (Metal or CPU on macOS; Vulkan for NVIDIA GPUs or CPU on Windows) for category classification, similar notices and meaning-based search. AI summaries and the remote engine were retired (#226). Calendar dates come from deterministic text rules, not a model. Classification and dates can be wrong, and the UI must say to verify in the original.
 - Personalization: explicit interests, per-notice interested/not interested feedback, learned topics from saves and positive feedback only, 180-day expiry, full reset.
 - Lifecycle: close-to-background, login start, hidden login start, scheduler and notifications all default off. The automatic update check (builds with the updater key) defaults on by user decision; it only announces, and installing always needs confirmation.
 - Single-file `.rhythm-backup` backup/restore (unencrypted, excludes model weights). Restore quits the app and finalizes on the next manual launch.

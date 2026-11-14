@@ -43,6 +43,18 @@ fn database() -> (tempfile::TempDir, Store) {
         .unwrap();
     (directory, store)
 }
+/// What migration 033 removed, restored when a test rolls a profile back below
+/// schema 14: 014 rebuilds the preferences from the generation columns and
+/// indexes `ai_jobs`.
+const RETIRED_GENERATION: &str = "
+    CREATE TABLE ai_jobs(id INTEGER PRIMARY KEY,document_id INTEGER NOT NULL,revision_id INTEGER NOT NULL,task TEXT NOT NULL,model_sha256 TEXT NOT NULL,model_identity_json TEXT NOT NULL,prompt_version INTEGER NOT NULL,schema_version INTEGER NOT NULL,configuration_hash TEXT NOT NULL,priority INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'pending',error TEXT,duration_ms INTEGER,created_at TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL DEFAULT '');
+    CREATE TABLE ai_results(id INTEGER PRIMARY KEY,job_id INTEGER NOT NULL UNIQUE REFERENCES ai_jobs(id) ON DELETE CASCADE);
+    ALTER TABLE ai_preferences ADD COLUMN active_model_id TEXT;
+    ALTER TABLE ai_preferences ADD COLUMN setup_completed INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE ai_preferences ADD COLUMN processing_mode TEXT NOT NULL DEFAULT 'explicit';
+    ALTER TABLE ai_preferences ADD COLUMN automatic_limit INTEGER NOT NULL DEFAULT 3;
+    ALTER TABLE ai_preferences ADD COLUMN max_tokens INTEGER NOT NULL DEFAULT 1024;";
+
 #[test]
 fn schema_one_upgrade_preserves_every_preference() {
     let directory = tempfile::tempdir().unwrap();
@@ -1571,16 +1583,16 @@ fn schema_ten_upgrade_keeps_archive_and_adds_skipped_articles() {
             .unwrap();
         store
             .connection
-            .execute_batch(
-                "DROP TABLE skipped_articles; DROP TABLE ai_projectors; DROP TABLE notice_embeddings; DROP TABLE notice_classifications; DROP TABLE ai_remote_usage;
+            .execute_batch(&format!(
+                "DROP TABLE skipped_articles; DROP TABLE ai_projectors; DROP TABLE notice_embeddings; DROP TABLE notice_classifications;{RETIRED_GENERATION}
                  ALTER TABLE ai_models DROP COLUMN kind;
                  ALTER TABLE ai_preferences DROP COLUMN embedding_model_id;
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
                  ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
-                 PRAGMA user_version=10;",
-            )
+                 PRAGMA user_version=10;"
+            ))
             .unwrap();
     }
     let store = Store::open(&path).unwrap();
@@ -1624,7 +1636,7 @@ fn schema_eleven_upgrade_retries_mislabeled_and_newly_allowed_resources() {
                  UPDATE resources SET status='unsupported',error='{blocked}' WHERE filename IN ('b.png','d.pdf');
                  UPDATE resources SET status='unsupported',error='안전한 이미지 형식(PNG, JPEG, GIF, WebP)이 아니어서 보관하지 않았습니다.' WHERE filename='c.png';
                  DROP TABLE ai_projectors;
-                 DROP TABLE notice_embeddings; DROP TABLE notice_classifications; DROP TABLE ai_remote_usage;
+                 DROP TABLE notice_embeddings; DROP TABLE notice_classifications;{RETIRED_GENERATION}
                  ALTER TABLE ai_models DROP COLUMN kind;
                  ALTER TABLE ai_preferences DROP COLUMN embedding_model_id;
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
@@ -2048,7 +2060,7 @@ fn purge_returns_only_files_no_other_notice_uses() {
     assert_eq!(store.document(ids[1], None).unwrap().resources.len(), 1);
 }
 #[test]
-fn trashed_notices_leave_automatic_ai_work() {
+fn trashed_notices_leave_automatic_classification() {
     let (_directory, store) = database();
     let (kept, _) = store
         .upsert_article(
@@ -2065,20 +2077,13 @@ fn trashed_notices_leave_automatic_ai_work() {
         )
         .unwrap();
     store.trash_documents(&[trashed]).unwrap();
-    let backlog = store
-        .ai_backlog_candidates(10, false)
+    let candidates = store
+        .ai_embedding_candidates(&"a".repeat(64), &"b".repeat(64), 10)
         .unwrap()
         .into_iter()
         .map(|(id, _)| id)
         .collect::<Vec<_>>();
-    assert_eq!(backlog, [kept]);
-    let recent = store
-        .ai_recent_candidates("1970-01-01T00:00:00Z", 10, false)
-        .unwrap()
-        .into_iter()
-        .map(|(id, _)| id)
-        .collect::<Vec<_>>();
-    assert_eq!(recent, [kept]);
+    assert_eq!(candidates, [kept]);
 }
 
 fn linked_todo(document_id: Option<i64>) -> crate::storage::calendar::TodoInput {

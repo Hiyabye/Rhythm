@@ -8,7 +8,7 @@
   import ProactiveSettings from './ProactiveSettings.svelte';
   import ExtensionSettings from './ExtensionSettings.svelte';
   import Progress from './Progress.svelte';
-  import { fade, fly } from './motion';
+  import { fly } from './motion';
   import { contributed, enabledExtensions } from './extensions';
   import { archiveError, archiveSize } from './archive-format';
   import type { AiSnapshot, AutoUpdateCheck, CatalogEntry, ClockFormat, EnergyProfile, ProactiveActivation, ProactiveSnapshot, Settings, Snapshot, SourceInfo, Theme } from './types';
@@ -28,7 +28,7 @@
     { id: 'boards', label: '게시판', title: '받아 볼 게시판', line: '구독한 게시판만 가져옵니다. 구독만으로는 아무것도 내려받지 않습니다.', extension: 'sogang_notices' },
     { id: 'cybercampus', label: '사이버캠퍼스', title: '사이버캠퍼스 연결', line: '본인 강좌의 공지와 과제·마감을 가져옵니다. 로그인 정보는 운영체제 보안 저장소에만 저장합니다.', extension: 'cybercampus' },
     { id: 'interests', label: '관심사', title: '관심사', line: '추천 순위에만 쓰이며 이 기기에만 저장됩니다. 비워 두어도 됩니다.', extension: 'recommendations' },
-    { id: 'ai', label: 'AI', title: 'AI 요약', line: '공지 요약과 일정 근거를 만듭니다. AI 없이도 읽기, 검색, 추천을 모두 쓸 수 있습니다.', extension: 'ai' },
+    { id: 'ai', label: 'AI', title: '공지 분류', line: '작은 분류 모델이 이 기기에서 공지를 주제별로 나누고, 비슷한 공지와 뜻으로 찾는 검색에도 쓰입니다. 설치하지 않아도 읽기, 검색, 추천을 모두 쓸 수 있습니다.', extension: 'ai' },
     { id: 'background', label: '백그라운드', title: '백그라운드 실행', line: '처음에는 모두 꺼져 있습니다. 켜더라도 Rhythm이 실행 중이고 기기가 깨어 있을 때만 동작합니다.', extension: 'proactive' },
     { id: 'notifications', label: '알림', title: '알림', line: '새 공지를 운영체제 알림으로 받습니다. 처음에는 꺼져 있습니다.', extension: 'proactive' },
     { id: 'done', label: '완료', title: '준비가 끝났습니다', line: '지금까지 고른 설정입니다. 설정 → 일반에서 초기 설정을 다시 열 수 있습니다.' },
@@ -47,13 +47,7 @@
     { id: 'balanced', label: '균형' },
     { id: 'performance', label: '성능' },
   ];
-  type AiChoice = 'local' | 'remote' | 'later';
-  const aiChoices: { id: AiChoice; label: string; meta: string }[] = [
-    { id: 'local', label: '이 기기에서', meta: '로컬 모델 · 공지가 기기를 떠나지 않음' },
-    { id: 'remote', label: 'OpenAI 호환 API', meta: '직접 지정한 외부 주소로 전송' },
-    { id: 'later', label: '나중에', meta: 'AI 없이 시작' },
-  ];
-  const aiChoiceLabel: Record<AiChoice, string> = { local: '이 기기에서 실행', remote: 'OpenAI 호환 API', later: '나중에 설정' };
+
 
   let enabled = $derived(enabledExtensions(snapshot.extensions));
   let steps = $derived(contributed(allSteps, enabled));
@@ -66,11 +60,11 @@
   let chosen = $derived(snapshot.extensions.filter((extension) => extension.enabled).map((extension) => extension.display_name));
 
   let ai = $state<AiSnapshot | null>(null);
-  let aiChoice = $state<AiChoice | null>(null);
   let aiBusy = $state(false);
   let aiError = $state('');
-  let removal = $state<string | null>(null);
-  let offered = $derived(ai?.catalog.filter((entry) => ['verified', 'available'].includes(entry.compatibility) && entry.kind !== 'embedding') ?? []);
+  let embeddingEntry = $derived(ai?.catalog.find((entry) => entry.kind === 'embedding') ?? null);
+  let embeddingModel = $derived(ai?.models.find((model) => model.catalog_id === embeddingEntry?.id) ?? null);
+  const modelState: Record<string, string> = { pending: '내려받는 중', downloading: '내려받는 중', verifying: '확인하는 중', installed: '설치함', failed: '설치 실패', cancelled: '중단됨', missing: '파일 확인 필요' };
 
   let updaterConfigured = $state(false);
   let autoCheck = $state<boolean | null>(null);
@@ -103,8 +97,6 @@
         if (!active || request < applied) return;
         applied = request;
         ai = next;
-        aiChoice ??= next.preferences.engine === 'openai-compatible' ? 'remote'
-          : next.models.some((model) => model.kind !== 'embedding') ? 'local' : null;
       }).catch((reason) => { if (active && request >= applied) aiError = archiveError(reason); });
     };
     void refresh();
@@ -143,21 +135,8 @@
     finally { aiBusy = false; }
   }
 
-  async function chooseAi(choice: AiChoice) {
-    if (!ai || aiBusy) return;
-    aiChoice = choice;
-    // "나중에" keeps whatever engine is already saved.
-    const engine = choice === 'remote' ? 'openai-compatible' : choice === 'local' ? 'local' : ai.preferences.engine;
-    if (engine !== ai.preferences.engine) await aiCommand('ai_preferences', { preferences: { ...ai.preferences, engine } });
-  }
-
   function install(entry: CatalogEntry) {
     return aiCommand('ai_install', { catalogId: entry.id });
-  }
-
-  async function remove(id: string) {
-    await aiCommand('ai_remove', { id, confirmed: true });
-    removal = null;
   }
 
   async function toggleAutoCheck() {
@@ -193,7 +172,7 @@
         <div class="settings-group">
           <div class="settings-row"><span class="row-label">화면 테마</span><div class="segmented" role="group" aria-label="화면 테마">{#each themes as option}<button disabled={busy} class:selected={theme === option.id} aria-pressed={theme === option.id} onclick={() => onsave({ theme: option.id })}><Icon name={option.icon} size={15} />{option.label}</button>{/each}</div></div>
           <div class="settings-row"><span class="row-label">시간 표시<span class="row-detail">{snapshot.settings.clock_format === '12h' ? '오후 9:30' : '21:30'}</span></span><div class="segmented" role="group" aria-label="시간 표시">{#each clockFormats as option}<button disabled={busy} class:selected={snapshot.settings.clock_format === option.id} aria-pressed={snapshot.settings.clock_format === option.id} onclick={() => onsave({ clock_format: option.id })}>{option.label}</button>{/each}</div></div>
-          <div class="settings-row"><span class="row-label">전원 모드<Hint label="전원 모드">AI 자동 분석과 자동 동기화 간격에 적용됩니다. 절전은 자동 분석을 하지 않고 60분마다, 균형은 30분, 성능은 15분마다 확인합니다.</Hint></span><div class="segmented" role="group" aria-label="전원 모드">{#each energyProfiles as option}<button disabled={busy} class:selected={snapshot.settings.energy_profile === option.id} aria-pressed={snapshot.settings.energy_profile === option.id} onclick={() => onsave({ energy_profile: option.id })}>{option.label}</button>{/each}</div></div>
+          <div class="settings-row"><span class="row-label">전원 모드<Hint label="전원 모드">자동 동기화 간격에 적용됩니다. 절전은 60분마다, 균형은 30분, 성능은 15분마다 확인합니다.</Hint></span><div class="segmented" role="group" aria-label="전원 모드">{#each energyProfiles as option}<button disabled={busy} class:selected={snapshot.settings.energy_profile === option.id} aria-pressed={snapshot.settings.energy_profile === option.id} onclick={() => onsave({ energy_profile: option.id })}>{option.label}</button>{/each}</div></div>
           {#if updaterConfigured}<div class="settings-row"><span class="row-label">자동으로 업데이트 확인<Hint label="자동으로 업데이트 확인">앱이 실행 중일 때 하루에 한 번 GitHub에서 새 버전을 확인해 알려 드립니다. 내려받기와 설치는 직접 고를 때만 진행합니다.</Hint></span><button class="switch" class:on={autoCheck === true} role="switch" aria-label="자동으로 업데이트 확인" aria-checked={autoCheck === true} disabled={autoCheck === null} onclick={toggleAutoCheck}><span></span></button></div>{/if}
         </div>
       {:else if current === 'extensions'}
@@ -206,45 +185,21 @@
         <PersonalizationSettings desktop compact />
       {:else if current === 'ai'}
         {#if aiError}<p class="archive-error" role="alert">{aiError}</p>{/if}
-        {#if ai}
-          <ul class="model-grid setup-choices" aria-label="AI 사용 방식">
-            {#each aiChoices as option (option.id)}
-              <li class="model-tile installed" class:selected={aiChoice === option.id}>
-                <button class="model-select" aria-pressed={aiChoice === option.id} aria-label={`AI ${option.label}`} disabled={aiBusy} onclick={() => chooseAi(option.id)}></button>
-                <div class="model-heading"><h4>{option.label}</h4>{#if aiChoice === option.id}<span class="model-check"><Icon name="check" size={13} /><span>선택함</span></span>{/if}</div>
-                <p class="model-meta">{option.meta}</p>
-              </li>
-            {/each}
+        {#if ai && embeddingEntry}
+          {@const model = embeddingModel}
+          <ul class="model-grid" aria-label="분류 모델">
+            <li class="model-tile">
+              <div class="model-heading"><h4>{embeddingEntry.name}</h4>{#if model?.status === 'installed'}<span class="model-check"><Icon name="check" size={13} /><span>설치됨</span></span>{/if}</div>
+              <p class="model-meta">{embeddingEntry.use_case} · {archiveSize(embeddingEntry.bytes)}</p>
+              {#if model && ['downloading', 'pending'].includes(model.status)}
+                <label class="ai-progress"><span class="sr-only">{embeddingEntry.name} 다운로드</span><Progress max={model.expected_bytes || 1} value={model.downloaded_bytes} /><span>{archiveSize(model.downloaded_bytes)} / {archiveSize(model.expected_bytes ?? 0)}</span></label>
+              {:else if model?.status === 'verifying'}<p class="model-note" role="status">무결성 확인 중</p>{/if}
+              {#if !model || ['failed', 'cancelled', 'missing'].includes(model.status)}
+                <div class="model-actions"><button class="button small" disabled={aiBusy || ai.busy} aria-label={`${embeddingEntry.name} 다운로드 및 설치`} onclick={() => install(embeddingEntry!)}>{model ? '이어받기' : '설치'}</button></div>
+              {/if}
+            </li>
           </ul>
-          {#if aiChoice === 'local'}
-            <div class="settings-group-title"><h3>모델</h3><Hint label="모델">설치는 누를 때만 시작하며, 앱을 닫아도 다음 실행에서 이어받습니다. 불러오기와 동작 확인은 설정 → AI에서 마칩니다.</Hint></div>
-            <ul class="model-grid" aria-label="설치할 수 있는 모델">
-              {#each offered as entry (entry.id)}
-                {@const model = ai.models.find((row) => row.catalog_id === entry.id) ?? null}
-                {@const external = model?.ownership === 'external'}
-                <li class="model-tile">
-                  <div class="model-heading"><h4>{entry.name}</h4>{#if model?.status === 'installed'}<span class="model-check"><Icon name="check" size={13} /><span>설치됨</span></span>{/if}</div>
-                  <p class="model-meta">{entry.use_case} · {archiveSize(entry.bytes)}</p>
-                  {#if model && ['downloading', 'pending'].includes(model.status)}
-                    <label class="ai-progress"><span class="sr-only">{entry.name} 다운로드</span><Progress max={model.expected_bytes || 1} value={model.downloaded_bytes} /><span>{archiveSize(model.downloaded_bytes)} / {archiveSize(model.expected_bytes ?? 0)}</span></label>
-                  {:else if model?.status === 'verifying'}<p class="model-note" role="status">무결성 확인 중</p>{/if}
-                  {#if model && removal === model.id}
-                    <div class="model-confirm" role="group" aria-label={`${entry.name} 삭제 확인`} in:fade>
-                      <p class="model-note">{external ? '등록된 참조만 해제합니다. 외부 원본 파일은 삭제하지 않습니다.' : '모델 파일을 삭제할까요? 공지와 기존 AI 분석은 유지됩니다.'}</p>
-                      <div class="model-actions"><button class="button secondary small" disabled={aiBusy || ai.busy} onclick={() => remove(model.id)}>확인하고 {external ? '참조 해제' : '삭제'}</button><button class="text-button" onclick={() => removal = null}>취소</button></div>
-                    </div>
-                  {:else if !model || !['downloading', 'pending', 'verifying'].includes(model.status)}
-                    <div class="model-actions">
-                      {#if !model || ['failed', 'cancelled'].includes(model.status)}<button class="button small" disabled={aiBusy || ai.busy} aria-label={`${entry.name} 다운로드 및 설치`} onclick={() => install(entry)}>{model ? '이어받기' : '설치'}</button>{/if}
-                      {#if model}<button class="text-button" disabled={aiBusy || ai.busy} aria-label={`${entry.name} ${external ? '참조 해제' : '삭제'}`} onclick={() => removal = model.id}>{external ? '참조 해제' : '모델 삭제'}</button>{/if}
-                    </div>
-                  {/if}
-                </li>
-              {/each}
-            </ul>
-          {:else if aiChoice === 'remote'}
-            <p class="footnote setup-note">API 주소, 키, 전송 동의는 설정 → AI에서 입력합니다. 동의하기 전에는 아무것도 보내지 않습니다.</p>
-          {/if}
+          <p class="footnote setup-note">설치는 누를 때만 시작하며, 앱을 닫아도 다음 실행에서 이어받습니다. 나중에 설정 → AI에서 설치해도 됩니다.</p>
         {:else if !aiError}<p class="loading" role="status">모델 정보를 불러오는 중입니다…</p>{/if}
       {:else if current === 'background'}
         <ProactiveSettings desktop part="background" compact onopen={() => {}} {onactivation} />
@@ -255,7 +210,7 @@
         <div class="settings-group" role="group" aria-label="선택한 설정">
           <div class="settings-row"><span class="row-label">켠 기능<span class="row-detail">{chosen.length ? chosen.join(', ') : '오늘만 표시합니다. 설정 → 확장 기능에서 언제든 켤 수 있습니다.'}</span></span><span class="value">{chosen.length.toLocaleString('ko-KR')}개</span></div>
           {#if sourcesOn}<div class="settings-row"><span class="row-label">구독한 게시판</span><span class="value">{subscribed.length.toLocaleString('ko-KR')}개</span></div>{/if}
-          {#if enabled.has('ai')}<div class="settings-row"><span class="row-label">AI</span><span class="value">{aiChoice ? aiChoiceLabel[aiChoice] : '나중에 설정'}</span></div>{/if}
+          {#if enabled.has('ai')}<div class="settings-row"><span class="row-label">공지 분류</span><span class="value">{embeddingModel ? modelState[embeddingModel.status] ?? embeddingModel.status : '나중에 설정'}</span></div>{/if}
           {#if enabled.has('proactive')}
             <div class="settings-row"><span class="row-label">자동 동기화</span><span class="value">{proactive ? (proactive.settings.scheduler_enabled ? '켜짐' : '꺼짐') : '—'}</span></div>
             <div class="settings-row"><span class="row-label">알림</span><span class="value">{proactive ? (proactive.settings.notifications_enabled ? '켜짐' : '꺼짐') : '—'}</span></div>

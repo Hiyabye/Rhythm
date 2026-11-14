@@ -168,17 +168,10 @@ export interface Extension {
   available: boolean;
   enabled: boolean;
 }
-export interface WorkerStatus {
-  state: 'ready' | 'unavailable' | 'failed' | 'loading' | 'busy';
-  runtime_available: boolean;
-  model: string | null;
-  detail: string | null;
-}
 export interface Snapshot {
   settings: Settings;
   extensions: Extension[];
   storage: { path: string; bytes: number; schema_version: number };
-  worker: WorkerStatus;
   proactive: ProactiveSettings;
   /** False only for a profile that has not finished or skipped the first-run setup flow. */
   onboarding_completed: boolean;
@@ -270,16 +263,15 @@ export interface CatalogEntry {
   bytes: number; memory_bytes: number; description: string; use_case: string;
   repository: string; revision: string; filename: string; sha256: string; license: string;
   compatibility: 'verified' | 'available' | 'experimental' | 'unsupported'; reason: string | null;
-  /** `generation` models write summaries; `embedding` models classify notices. */
+  /** Every offered entry is an `embedding` model that classifies notices. */
   kind?: 'generation' | 'embedding';
   /** Pooling mode for an embedding entry. */
   pooling?: string | null;
   embedding_dim?: number | null;
-  /** Optional image-recognition module; absent means the model can only read text. */
-  projector?: { filename: string; bytes: number; memory_bytes: number; sha256: string } | null;
 }
 export interface AiModel {
   id: string; catalog_id: string | null; name: string; ownership: 'managed' | 'external';
+  /** `generation` rows are retired summary models the user has not removed yet. */
   kind?: 'generation' | 'embedding'; path: string;
   storage_directory?: string | null;
   sha256: string | null; expected_sha256: string | null; expected_bytes: number | null; bytes: number;
@@ -287,60 +279,10 @@ export interface AiModel {
   downloaded_bytes: number; resume_etag: string | null; error: string | null; created_at: string; updated_at: string;
 }
 export interface AiPreferences {
-  active_model_id: string | null; setup_completed: boolean; processing_mode: 'explicit' | 'recent' | 'backlog';
-  automatic_limit: number; max_tokens: number;
   execution_mode: 'auto' | 'cpu' | 'gpu';
   model_directory: string | null;
   embedding_model_id: string | null;
   classification_enabled: boolean;
-  engine: 'local' | 'openai-compatible';
-  remote_base_url: string | null;
-  remote_model: string | null;
-  remote_embedding_model: string | null;
-  remote_timeout_seconds: number;
-  remote_consent: boolean;
-  remote_automatic: boolean;
-  remote_daily_limit: number;
-  remote_embeddings: boolean;
-}
-export interface AnalysisKey {
-  document_id: number; revision_id: number; task: string; model_sha256: string;
-  prompt_version: number; schema_version: number; configuration_hash: string;
-}
-export interface AiJob extends AnalysisKey {
-  id: number; model_identity: { name?: string }; priority: number; status: string; error: string | null;
-  duration_ms: number | null; created_at: string; updated_at: string;
-}
-export interface AnalysisFact {
-  kind: string; label: string; value: string; evidence: string; date: string | null;
-  uncertainty: 'clear' | 'ambiguous' | 'unknown';
-  /** Absent on results produced before image support: those are text facts. */
-  origin?: 'text' | 'image';
-}
-export interface Analysis {
-  short_summary: string; summary: string;
-  uncertainty: 'clear' | 'ambiguous' | 'unknown'; facts: AnalysisFact[];
-}
-export interface AiResult extends AnalysisKey {
-  id: number; job_id: number; model_identity: { engine?: 'local' | 'openai-compatible'; name?: string; sha256?: string; max_tokens?: number; execution_mode?: string; runtime_policy?: string; loaded_backend?: string; images_used?: number; images_available?: number; origin?: string; host?: string; base?: string; timeout_seconds?: number }; result: Analysis;
-  partial: boolean; processed_chars: number; total_chars: number; duration_ms: number; created_at: string;
-}
-export interface AiOperation {
-  kind: 'load' | 'setup' | 'register';
-  phase: string;
-  elapsed_ms: number;
-  cancelling: boolean;
-}
-export interface AiDiagnostics {
-  job_id: number; phase: string; elapsed_ms: number;
-  stages_ms: Record<string, number>;
-  attempts: unknown[];
-  validation_errors: string[];
-}
-export interface AiProjector {
-  model_id: string; path: string; sha256: string | null; expected_sha256: string; expected_bytes: number; bytes: number;
-  status: 'pending' | 'downloading' | 'verifying' | 'installed' | 'failed' | 'cancelled' | 'missing';
-  downloaded_bytes: number; resume_etag: string | null; error: string | null;
 }
 export interface AiClassification {
   document_id: number; revision_id: number; category: string;
@@ -352,17 +294,11 @@ export interface SimilarNotice {
 }
 export interface DuplicateNotices { document_id: number; duplicates: SimilarNotice[] }
 export interface AiSnapshot {
-  catalog: CatalogEntry[]; models: AiModel[]; projectors: AiProjector[]; preferences: AiPreferences; jobs: AiJob[]; runtime: WorkerStatus;
+  catalog: CatalogEntry[]; models: AiModel[]; preferences: AiPreferences;
   classification: { state: 'idle' | 'classifying' | 'waiting' | 'disabled' | 'failed' | string; processed: number; detail?: string | null };
   hardware: { os: string; arch: string; ram_bytes: number; disk_available_bytes: number; backend: string };
   model_storage: { directory: string; custom: boolean; available_bytes: number | null; error: string | null };
   busy: boolean;
-  operation?: AiOperation | null;
-  progress?: AiDiagnostics | null;
-  analysis_contract?: { prompt_version: number; schema_version: number; configuration_hash: string | null };
-  remote_key_present?: boolean | null;
-  remote_usage_today?: number;
-  remote_host?: string | null;
 }
 export interface ArchiveQuery {
   query: string;

@@ -1,8 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { AiSnapshot, ArchivePage, ArchiveQuery, ArchiveSummary, AiResult, AiClassification, CalendarNoticeDates, CalendarTodo, CybercampusTask, NoticeDate, TodoPrefill, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
-  import analysisContract from './analysis-contract.json' with { type: 'json' };
+  import type { AiSnapshot, ArchivePage, ArchiveQuery, ArchiveSummary, AiClassification, CalendarNoticeDates, CalendarTodo, CybercampusTask, NoticeDate, TodoPrefill, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
   import { archiveDate, archiveDay, archiveError, kstInstant, localDayKey, noticeDateMark, wallTime } from './archive-format';
   import { clock } from './clock.svelte';
   import { confirmAction } from './confirm';
@@ -12,10 +11,10 @@
   import Icon from './Icon.svelte';
   import { fade, flip, slide } from './motion';
 
-  let { page, desktop, enabled, sourceRequest, activation, onactivationhandled, onsettings, onaisettings, onsetup, onextensions, onsourcechange, oncontext, onweekpane, ontasks, calendarRequest, oncalendar }: {
+  let { page, desktop, enabled, sourceRequest, activation, onactivationhandled, onsettings, onsetup, onextensions, onsourcechange, oncontext, onweekpane, ontasks, calendarRequest, oncalendar }: {
     page: string; desktop: boolean; enabled: Set<string>; sourceRequest: { id: string; token: number };
     activation: { document_id: number; revision_id: number; event_id: number } | null;
-    onactivationhandled: () => void; onsettings: (pane?: 'boards' | 'personalization') => void; onaisettings: () => void; onsetup: () => void; onextensions: () => void; onsourcechange: (id: string) => void;
+    onactivationhandled: () => void; onsettings: (pane?: 'boards' | 'personalization') => void; onsetup: () => void; onextensions: () => void; onsourcechange: (id: string) => void;
     oncontext: (context: { summary: ArchiveSummary | null; sources: SourceInfo[] | null; status: SyncStatus | null }) => void;
     onweekpane: (visible: boolean) => void;
     ontasks: () => void;
@@ -31,11 +30,9 @@
   let result = $state<ArchivePage>({ items: [], total: 0, categories: [] });
   let summary = $state<ArchiveSummary | null>(null);
   let sources = $state<SourceInfo[]>([]);
-  let recentAnalyses = $state<AiResult[]>([]);
   let classifications = $state<Record<number, AiClassification>>({});
   let duplicates = $state<Record<number, SimilarNotice[]>>({});
   let expandedDuplicates = $state<Record<number, boolean>>({});
-  let aiError = $state('');
   let aiSnapshot = $state<AiSnapshot | null>(null);
   let recommendations = $state<PersonalizedRecommendation[]>([]);
   let tasks = $state<CybercampusTask[]>([]);
@@ -187,32 +184,13 @@
       if (active && request === contextRequest) { summary = counts; sources = catalog; status = sync; oncontext({ summary: counts, sources: catalog, status: sync }); }
     } catch (reason) { if (active) error = archiveError(reason); }
     try {
-      const analyses = await invoke<AiResult[]>('ai_recent');
-      if (active && request === contextRequest) { recentAnalyses = analyses; aiError = ''; }
-    } catch (reason) { if (active && request === contextRequest) aiError = archiveError(reason); }
-    try {
       const snapshot = await invoke<AiSnapshot>('ai_snapshot');
       if (active && request === contextRequest) aiSnapshot = snapshot;
     } catch { if (active && request === contextRequest) aiSnapshot = null; }
   }
   // Stored AI output stays in SQLite while the AI extension is off; it is just not shown.
-  let analyses = $derived(ai ? recentAnalyses : []);
   let labels = $derived(ai ? classifications : {});
   let groupedCopies = $derived(ai ? duplicates : {});
-  function currentSummary(documentId: number): AiResult | null {
-    const analysis = analyses.find((value) => value.document_id === documentId);
-    const contract = aiSnapshot?.analysis_contract;
-    if (!analysis || !aiSnapshot || !contract || !contract.configuration_hash) return null;
-    if (contract.prompt_version !== analysisContract.prompt_version || contract.schema_version !== analysisContract.schema_version) return null;
-    if (analysis.prompt_version !== contract.prompt_version
-      || analysis.schema_version !== contract.schema_version
-      || analysis.configuration_hash !== contract.configuration_hash) return null;
-    const activeModel = aiSnapshot.models.find((model) => model.id === aiSnapshot?.preferences.active_model_id);
-    if (activeModel?.sha256 && analysis.model_sha256 !== activeModel.sha256) return null;
-    if (analysis.model_identity.max_tokens !== undefined
-      && analysis.model_identity.max_tokens !== aiSnapshot.preferences.max_tokens) return null;
-    return analysis;
-  }
   async function loadRecommendations() {
     const request = ++recommendationRequest;
     recommendationError = '';
@@ -517,7 +495,7 @@
 </script>
 
 {#if readerId !== null}
-  {#key `${readerId}:${readerRevisionId ?? ''}`}<DocumentReader id={readerId} initialRevisionId={readerRevisionId} enabledSources={sources.filter((item) => item.extension && enabled.has(item.extension)).map((item) => item.id)} {ai} onclose={closeReader} onchange={changed} {onaisettings} onopen={(id) => void openDocument(id, `notice-${id}`)}
+  {#key `${readerId}:${readerRevisionId ?? ''}`}<DocumentReader id={readerId} initialRevisionId={readerRevisionId} enabledSources={sources.filter((item) => item.extension && enabled.has(item.extension)).map((item) => item.id)} {ai} onclose={closeReader} onchange={changed} onopen={(id) => void openDocument(id, `notice-${id}`)}
     oncalendar={calendarOn && desktop ? (prefill) => oncalendar(prefill.todo.day, prefill) : undefined} />{/key}
 {:else}
   <section class="archive-view" aria-busy={loading} in:fade>
@@ -538,7 +516,7 @@
               <ol>
                 <li>설정 → 확장 기능에서 서강대학교 공지나 사이버캠퍼스를 켭니다.</li>
                 <li>새로 생긴 게시판 설정에서 게시판을 구독하고 새로고침을 누릅니다. 직접 시작하거나 자동 동기화를 켠 경우에만 네트워크를 사용합니다.</li>
-                <li>AI 분석, 알림·백그라운드 같은 기능도 확장 기능에서 필요할 때 켭니다. 켜더라도 Rhythm이 실행 중이고 기기가 깨어 있을 때만 동작합니다.</li>
+                <li>AI 분류, 알림·백그라운드 같은 기능도 확장 기능에서 필요할 때 켭니다. 켜더라도 Rhythm이 실행 중이고 기기가 깨어 있을 때만 동작합니다.</li>
               </ol>
               <p>데이터 저장 위치는 설정 → 데이터 및 정보에서 확인할 수 있습니다.</p>
               <button class="button" onclick={() => onsetup()}>초기 설정 열기</button>
@@ -575,9 +553,6 @@
               <p>{sourcesOn ? hasPreferences ? '관심 분야와 맞는 소식을 아직 찾지 못했습니다.' : '개인화 전에는 최근 공지를 표시합니다. 관심사를 설정하면 추천에 반영됩니다.' : '정보원 확장 기능이 꺼져 있어 새 추천은 표시하지 않습니다. 보관한 공지는 그대로 남아 있습니다.'}</p>
               {#if !hasPreferences}<button class="text-button" onclick={() => onsettings('personalization')}>관심 분야 설정</button>{/if}
             </div>
-          {/if}
-          {#if ai && aiError}
-            <p class="footnote">저장된 AI 결과를 불러오지 못했습니다. 공지 목록은 계속 사용할 수 있습니다.</p>
           {/if}
         </div>
 
@@ -679,14 +654,13 @@
     {#if result.items.length}
       <ul class="notice-list" aria-label="공지 목록">
         {#each listRows as { item, folded, member } (item.id)}
-          {@const analysis = analyses.find((value) => value.document_id === item.id)}
           {@const hiddenUnread = expandedDuplicates[item.id] ? 0 : folded.filter((copy) => !copy.is_read).length}
           <li class:notice-unread={!item.is_read || hiddenUnread > 0} class:notice-duplicate-member={member} class:has-duplicates={folded.length > 0} class:is-selecting={selecting} class:in-trash={page === 'trash'} animate:flip in:slide={{ duration: member ? 180 : 0 }}>
             {#if selecting}<input class="notice-select" type="checkbox" aria-label={`${item.title} 선택`} checked={chosen.has(item.id)} onchange={() => choose(item.id)} />{/if}
             <button class="notice-open" id={`notice-${item.id}`} onclick={() => open(item)}>
               <span class="notice-title"><span class="notice-read-dot" aria-hidden="true"></span><Highlighted text={item.title} {query} /><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}{hiddenUnread ? `, 접힌 같은 공지 ${hiddenUnread}건 읽지 않음` : ''}</span></span>
               <span class="notice-meta"><span>{item.source_name}</span><time datetime={item.published_at}>{archiveDate(item.published_at)}</time>{#if item.category}<span>{item.category}</span>{/if}</span>
-              {#if (analysis || labels[item.id]) && page !== 'search'}<span class="notice-ai-preview">{#if labels[item.id]}<span class="ai-tag">분류 · {labels[item.id].category}{labels[item.id].low_confidence ? ' · 확신 낮음' : ''}</span>{/if}{#if analysis}{#if labels[item.id]}{' · '}{/if}<span class="ai-tag">AI 요약</span> {analysis.result.short_summary}{/if}</span>{/if}
+              {#if labels[item.id] && page !== 'search'}<span class="notice-ai-preview"><span class="ai-tag">분류 · {labels[item.id].category}{labels[item.id].low_confidence ? ' · 확신 낮음' : ''}</span></span>{/if}
               {#if result.meaning_only?.includes(item.id)}<span class="notice-meaning-note">검색어는 없지만 뜻이 비슷한 공지</span>{/if}
               {#if groupedCopies[item.id]?.length}<span class="notice-duplicate-note">같은 공지 {groupedCopies[item.id].length}건 · {duplicateBoards(item)}</span>{/if}
               {#if page === 'search' && item.snippet}<span class="notice-snippet"><Highlighted text={item.snippet} {query} /></span>{/if}

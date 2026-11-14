@@ -16,17 +16,8 @@ fn catalog_offers_only_verified_models() {
         .inspect(|entry| assert_eq!(entry.compatibility, "verified", "{}", entry.id))
         .map(|entry| entry.id)
         .collect();
-    // 9B was never run and 0.8B failed the synthetic evaluation; both were removed.
-    assert_eq!(
-        ids,
-        [
-            "qwen35-2b",
-            "qwen35-4b",
-            "gemma4-e2b",
-            "gemma4-e4b",
-            "qwen3-embedding-0-6b"
-        ]
-    );
+    // Generation models were retired with summaries (#226).
+    assert_eq!(ids, ["qwen3-embedding-0-6b"]);
     let mut experimental = catalog().remove(0);
     experimental.compatibility = "experimental".into();
     assert!(check_installable(&experimental).is_err());
@@ -219,7 +210,7 @@ async fn existing_file_in_chosen_folder_is_never_adopted_for_deletion() {
     )
     .await
     .unwrap_err();
-    assert!(error.contains("모델 파일 등록"), "{error}");
+    assert!(error.contains("다른 설치 폴더"), "{error}");
     assert_ne!(model.status, "installed");
     assert_eq!(std::fs::read(&foreign).unwrap(), bytes);
 
@@ -478,18 +469,14 @@ async fn missing_custom_directory_never_redirects_install_or_remove_to_default()
 #[test]
 fn catalog_provenance_and_destination_policy() {
     let entries = catalog();
-    assert_eq!(entries.len(), 5);
+    assert_eq!(entries.len(), 1);
     for e in &entries {
         validate_manifest(e).unwrap();
         let origin = download_url(e).unwrap();
         validate_destination(&origin, &origin).unwrap();
-        if e.kind == "generation" {
-            assert_eq!(e.quantization, "Q4_K_M");
-        } else {
-            assert_eq!(e.kind, "embedding");
-            assert_eq!(e.quantization, "Q8_0");
-            assert!(e.pooling.is_some() && e.embedding_dim == Some(1024));
-        }
+        assert_eq!(e.kind, "embedding");
+        assert_eq!(e.quantization, "Q8_0");
+        assert!(e.pooling.is_some() && e.embedding_dim == Some(1024));
     }
     let e = &entries[0];
     for bad in [
@@ -666,208 +653,13 @@ async fn cancellation_unsupported_and_duplicate_admission() {
         .load(Ordering::Acquire));
 }
 #[tokio::test]
-async fn restored_external_model_reregisters_the_same_row_and_preserves_original_bytes() {
-    let (dir, store, entry, bytes) = fixture();
-    let custom = tempfile::tempdir().unwrap();
-    let path = custom.path().join(format!("{}.gguf", entry.sha256));
-    std::fs::write(&path, &bytes).unwrap();
-    let mut restored = inventory(&entry);
-    restored.ownership = "external".into();
-    restored.path = path.canonicalize().unwrap().to_str().unwrap().into();
-    restored.status = "missing".into();
-    restored.sha256 = Some(entry.sha256.clone());
-    restored.bytes = entry.bytes;
-    restored.error = Some("복원 후 다시 등록해 주세요.".into());
-    with_store(&store, |store| store.ai_upsert_model(&restored)).unwrap();
-
-    let registered = register(
-        store.clone(),
-        path.clone(),
-        Arc::new(AtomicBool::new(false)),
-    )
-    .await
-    .unwrap();
-    assert_eq!(registered.id, entry.id);
-    assert_eq!(registered.ownership, "external");
-    assert_eq!(registered.status, "installed");
-    assert_eq!(registered.storage_directory, None);
-    assert_eq!(registered.catalog_id, Some(entry.id.clone()));
-    assert_eq!(registered.expected_sha256, Some(entry.sha256));
-    assert_eq!(registered.expected_bytes, Some(entry.bytes));
-    assert_eq!(registered.source_revision, Some(entry.revision));
-    assert_eq!(registered.source_filename, Some(entry.filename));
-    assert_eq!(registered.name, entry.name);
-    assert_eq!(registered.error, None);
-    assert_eq!(store.lock().unwrap().ai_models().unwrap().len(), 1);
-    assert_eq!(std::fs::read(&path).unwrap(), bytes);
-    remove(store.clone(), dir.path().into(), registered.id, true)
-        .await
-        .unwrap();
-    assert!(store.lock().unwrap().ai_models().unwrap().is_empty());
-    assert_eq!(std::fs::read(&path).unwrap(), bytes);
-}
-
-#[tokio::test]
-async fn changed_restored_external_file_loses_catalog_provenance_after_verification() {
-    let (dir, store, entry, mut bytes) = fixture();
-    let path = dir.path().join("replaced.gguf");
-    std::fs::write(&path, &bytes).unwrap();
-    let mut restored = inventory(&entry);
-    restored.ownership = "external".into();
-    restored.path = path.canonicalize().unwrap().to_str().unwrap().into();
-    restored.status = "missing".into();
-    restored.sha256 = Some(entry.sha256.clone());
-    restored.bytes = entry.bytes;
-    with_store(&store, |store| store.ai_upsert_model(&restored)).unwrap();
-
-    // An unsupported replacement must leave the restored registration alone.
-    std::fs::write(&path, gguf("unsupported")).unwrap();
-    assert!(register(
-        store.clone(),
-        path.clone(),
-        Arc::new(AtomicBool::new(false))
-    )
-    .await
-    .is_err());
-    let unchanged = store.lock().unwrap().ai_model(&entry.id).unwrap().unwrap();
-    assert_eq!(unchanged.status, "missing");
-    assert_eq!(unchanged.sha256, Some(entry.sha256.clone()));
-
-    // Keep valid GGUF metadata and length, but change the verified identity.
-    bytes[100] ^= 1;
-    std::fs::write(&path, &bytes).unwrap();
-    let registered = register(
-        store.clone(),
-        path.clone(),
-        Arc::new(AtomicBool::new(false)),
-    )
-    .await
-    .unwrap();
-    assert_eq!(registered.id, entry.id);
-    assert_eq!(
-        registered.sha256,
-        Some(format!("{:x}", Sha256::digest(&bytes)))
-    );
-    assert_ne!(registered.sha256, Some(entry.sha256));
-    assert_eq!(registered.catalog_id, None);
-    assert_eq!(registered.expected_sha256, None);
-    assert_eq!(registered.expected_bytes, None);
-    assert_eq!(registered.source_revision, None);
-    assert_eq!(registered.source_filename, None);
-    assert_eq!(registered.name, "replaced.gguf");
-    assert_eq!(registered.ownership, "external");
-    assert_eq!(registered.storage_directory, None);
-    assert_eq!(store.lock().unwrap().ai_models().unwrap().len(), 1);
-    remove(store.clone(), dir.path().into(), registered.id, true)
-        .await
-        .unwrap();
-    assert_eq!(std::fs::read(&path).unwrap(), bytes);
-}
-
-#[tokio::test]
-async fn external_registration_is_reference_only_and_never_deletes_bytes() {
-    let (dir, store, _, bytes) = fixture();
-    let path = dir.path().join("existing.gguf");
-    std::fs::write(&path, bytes).unwrap();
-    let model = register(
-        store.clone(),
-        path.clone(),
-        Arc::new(AtomicBool::new(false)),
-    )
-    .await
-    .unwrap();
-    assert_eq!(model.ownership, "external");
-    assert_eq!(model.path, path.canonicalize().unwrap().to_str().unwrap());
-    assert!(!dir.path().join("models").exists());
-    let again = register(
-        store.clone(),
-        path.clone(),
-        Arc::new(AtomicBool::new(false)),
-    )
-    .await
-    .unwrap();
-    assert_eq!(again.id, model.id);
-    assert_eq!(store.lock().unwrap().ai_models().unwrap().len(), 1);
-    assert!(
-        remove(store.clone(), dir.path().into(), model.id.clone(), false)
-            .await
-            .is_err()
-    );
-    let connection = rusqlite::Connection::open(dir.path().join("rhythm.sqlite3")).unwrap();
-    connection.execute_batch("CREATE TRIGGER refuse_external_delete BEFORE DELETE ON ai_models BEGIN SELECT RAISE(ABORT, 'simulated inventory failure'); END;").unwrap();
-    let error = remove(store.clone(), dir.path().into(), model.id.clone(), true)
-        .await
-        .unwrap_err();
-    assert!(
-        error.contains("외부 모델 파일은 삭제하지 않았습니다"),
-        "{error}"
-    );
-    assert_eq!(std::fs::read(&path).unwrap(), gguf("qwen35"));
-    assert_eq!(
-        store
-            .lock()
-            .unwrap()
-            .ai_model(&model.id)
-            .unwrap()
-            .unwrap()
-            .status,
-        "installed"
-    );
-    connection
-        .execute_batch("DROP TRIGGER refuse_external_delete;")
-        .unwrap();
-    drop(connection);
-    remove(store.clone(), dir.path().into(), model.id, true)
-        .await
-        .unwrap();
-    assert!(path.exists());
-    assert!(store.lock().unwrap().ai_models().unwrap().is_empty());
-    std::fs::write(&path, gguf("unsupported")).unwrap();
-    assert!(register(store, path, Arc::new(AtomicBool::new(false)))
-        .await
-        .is_err());
-}
-#[tokio::test]
-async fn external_registration_accepts_uppercase_gguf_extension() {
-    let (dir, store, _, bytes) = fixture();
-    let path = dir.path().join("기존 모델.GGUF");
-    std::fs::write(&path, &bytes).unwrap();
-    let model = register(
-        store.clone(),
-        path.clone(),
-        Arc::new(AtomicBool::new(false)),
-    )
-    .await
-    .unwrap();
-    assert_eq!(model.ownership, "external");
-    remove(store, dir.path().into(), model.id, true)
-        .await
-        .unwrap();
-    assert_eq!(std::fs::read(path).unwrap(), bytes);
-}
-#[tokio::test]
-async fn managed_delete_clears_files_but_rejects_active_and_path_escape() {
+async fn managed_delete_clears_files_and_rejects_path_escape() {
     let (dir, store, e, bytes) = fixture();
     let mut m = inventory(&e);
     let cancel = Arc::new(AtomicBool::new(false));
     install(&store, dir.path(), &e, &mut m, &cancel, &Fake::new(bytes))
         .await
         .unwrap();
-    {
-        let s = store.lock().unwrap();
-        let mut p = s.ai_preferences().unwrap();
-        p.active_model_id = Some(m.id.clone());
-        s.ai_save_preferences(&p).unwrap();
-    }
-    assert!(remove(store.clone(), dir.path().into(), m.id.clone(), true)
-        .await
-        .is_err());
-    {
-        let s = store.lock().unwrap();
-        let mut p = s.ai_preferences().unwrap();
-        p.active_model_id = None;
-        s.ai_save_preferences(&p).unwrap();
-    }
     remove(store.clone(), dir.path().into(), m.id, true)
         .await
         .unwrap();
@@ -1183,113 +975,6 @@ async fn failed_inventory_delete_records_missing_weights_and_can_be_retried() {
         .await
         .unwrap();
     assert!(store.lock().unwrap().ai_model(&model.id).unwrap().is_none());
-}
-#[tokio::test]
-async fn model_removal_rejects_active_artifact_beyond_global_history_window() {
-    use crate::{archive::model::ArticleInput, storage::intelligence::AnalysisKey};
-    use serde_json::json;
-    let (dir, store, e, bytes) = fixture();
-    let mut model = inventory(&e);
-    install(
-        &store,
-        dir.path(),
-        &e,
-        &mut model,
-        &Arc::new(AtomicBool::new(false)),
-        &Fake::new(bytes),
-    )
-    .await
-    .unwrap();
-    let active;
-    {
-        let mut s = store.lock().unwrap();
-        s.catalog(&crate::archive::definitions()).unwrap();
-        let article = ArticleInput {
-            external_id: "model-test".into(),
-            canonical_url: "https://www.sogang.ac.kr/notice".into(),
-            title: "장학 안내".into(),
-            author: None,
-            category: None,
-            published_at: "2026-01-01".into(),
-            modified_at: None,
-            original: "original".into(),
-            unsupported_body: false,
-            body_html: "<p>신청 안내</p>".into(),
-            body_text: "신청 안내".into(),
-            resources: Vec::new(),
-            etag: None,
-            last_modified: None,
-        };
-        let (document_id, _) = s
-            .upsert_article("sogang-academic", &article, false)
-            .unwrap();
-        let revision_id = s.document(document_id, None).unwrap().revision_id;
-        let key = AnalysisKey {
-            document_id,
-            revision_id,
-            task: "notice_analysis".into(),
-            model_sha256: model.sha256.clone().unwrap(),
-            prompt_version: 1,
-            schema_version: 1,
-            configuration_hash: "b".repeat(64),
-        };
-        active = s.ai_enqueue(&key, &json!({"id":model.id}), 1).unwrap();
-        assert_eq!(s.ai_claim_next().unwrap().unwrap().id, active.id);
-        for version in 2..=105 {
-            let newer = s
-                .ai_enqueue(
-                    &AnalysisKey {
-                        prompt_version: version,
-                        model_sha256: "c".repeat(64),
-                        ..key.clone()
-                    },
-                    &json!({}),
-                    1,
-                )
-                .unwrap();
-            s.ai_finish_job(newer.id, "failed", None, None).unwrap();
-        }
-        assert!(!s
-            .ai_jobs(100)
-            .unwrap()
-            .iter()
-            .any(|job| job.id == active.id));
-    }
-    let error = remove(store.clone(), dir.path().into(), model.id.clone(), true)
-        .await
-        .unwrap_err();
-    assert!(error.contains("분석 작업"), "{error}");
-    assert!(dir.path().join(&model.path).exists());
-    assert!(store.lock().unwrap().ai_model(&model.id).unwrap().is_some());
-    store
-        .lock()
-        .unwrap()
-        .ai_finish_job(active.id, "cancelled", None, None)
-        .unwrap();
-    let saved = {
-        let mut s = store.lock().unwrap();
-        let key = s.ai_job(active.id).unwrap().unwrap().key;
-        let attempt = s.ai_enqueue(&key, &json!({"id":model.id}), 1).unwrap();
-        assert_eq!(s.ai_claim_next().unwrap().unwrap().id, attempt.id);
-        s.ai_complete_job(attempt.id, &json!({"summary":"기존 분석"}), false, 5, 5, 10)
-            .unwrap();
-        s.ai_document_results(key.document_id, Some(key.revision_id), 10)
-            .unwrap()
-            .remove(0)
-    };
-    remove(store.clone(), dir.path().into(), model.id, true)
-        .await
-        .unwrap();
-    assert!(!dir.path().join(model.path).exists());
-    let results = store
-        .lock()
-        .unwrap()
-        .ai_document_results(saved.key.document_id, Some(saved.key.revision_id), 10)
-        .unwrap();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].id, saved.id);
-    assert_eq!(results[0].result, saved.result);
-    assert_eq!(results[0].key.model_sha256, saved.key.model_sha256);
 }
 #[test]
 fn verified_architectures_accept_curated_families() {
@@ -1621,7 +1306,7 @@ async fn real_curated_model_install() {
 }
 
 fn installed_fixture() -> (tempfile::TempDir, Arc<Mutex<Store>>, CatalogEntry, AiModel) {
-    let (dir, store, mut entry, bytes) = fixture();
+    let (dir, store, entry, bytes) = fixture();
     std::fs::create_dir_all(dir.path().join("models")).unwrap();
     let mut model = inventory(&entry);
     std::fs::write(dir.path().join(&model.path), &bytes).unwrap();
@@ -1630,131 +1315,32 @@ fn installed_fixture() -> (tempfile::TempDir, Arc<Mutex<Store>>, CatalogEntry, A
     model.bytes = entry.bytes;
     model.downloaded_bytes = entry.bytes;
     with_store(&store, |s| s.ai_upsert_model(&model)).unwrap();
-    // The fake transport serves whatever bytes it is given; keep the catalog
-    // entry and the served artifact identical.
-    entry.projector = Some(ProjectorEntry {
-        filename: "mmproj-F16.gguf".into(),
-        bytes: 0,
-        memory_bytes: 1024 * 1024 * 1024,
-        sha256: "0".repeat(64),
-    });
     (dir, store, entry, model)
 }
-fn with_projector(mut entry: CatalogEntry, bytes: &[u8]) -> (CatalogEntry, Vec<u8>) {
-    entry.projector = Some(ProjectorEntry {
-        filename: "mmproj-F16.gguf".into(),
-        bytes: bytes.len() as u64,
-        memory_bytes: 1024 * 1024 * 1024,
-        sha256: format!("{:x}", Sha256::digest(bytes)),
-    });
-    (entry, bytes.to_vec())
-}
 #[tokio::test]
-async fn projector_installs_verifies_and_removes_without_touching_the_model() {
-    let (dir, store, entry, model) = installed_fixture();
+async fn removing_a_model_also_removes_its_retired_projector() {
+    // Vision projectors are no longer installed (#226), but a profile may
+    // still hold one beside a generation model.
+    let (dir, store, _entry, model) = installed_fixture();
     let projector_bytes = gguf("clip");
-    let (entry, projector_bytes) = with_projector(entry, &projector_bytes);
-    validate_manifest(&entry).unwrap();
-    let cancel = Arc::new(AtomicBool::new(false));
-    install_projector(
-        &store,
-        dir.path(),
-        &model,
-        &entry,
-        &cancel,
-        &Fake::new(projector_bytes.clone()),
-    )
-    .await
+    let sha256 = format!("{:x}", Sha256::digest(&projector_bytes));
+    let relative = format!("models/{sha256}.gguf");
+    std::fs::write(dir.path().join(&relative), &projector_bytes).unwrap();
+    with_store(&store, |s| {
+        s.ai_upsert_projector(&crate::storage::intelligence::AiProjector {
+            model_id: model.id.clone(),
+            path: relative.clone(),
+            sha256: Some(sha256.clone()),
+            expected_sha256: sha256.clone(),
+            expected_bytes: projector_bytes.len() as u64,
+            bytes: projector_bytes.len() as u64,
+            status: "installed".into(),
+            downloaded_bytes: projector_bytes.len() as u64,
+            resume_etag: None,
+            error: None,
+        })
+    })
     .unwrap();
-    let record = with_store(&store, |s| s.ai_projector(&model.id))
-        .unwrap()
-        .unwrap();
-    assert_eq!(record.status, "installed");
-    assert_eq!(
-        record.sha256.as_deref(),
-        Some(entry.projector.as_ref().unwrap().sha256.as_str())
-    );
-    let projector_path = dir.path().join(&record.path);
-    assert_eq!(std::fs::read(&projector_path).unwrap(), projector_bytes);
-    assert!(dir.path().join(&model.path).exists());
-    // A successful install is not repeated over the network.
-    assert!(install_projector(
-        &store,
-        dir.path(),
-        &model,
-        &entry,
-        &cancel,
-        &Fake::new(projector_bytes.clone()),
-    )
-    .await
-    .is_err());
-    remove_projector(&store, dir.path(), &model.id, false)
-        .await
-        .unwrap();
-    assert!(with_store(&store, |s| s.ai_projector(&model.id))
-        .unwrap()
-        .is_none());
-    assert!(!projector_path.exists());
-    let kept = with_store(&store, |s| s.ai_model(&model.id))
-        .unwrap()
-        .unwrap();
-    assert_eq!(kept.status, "installed");
-    assert!(dir.path().join(&kept.path).exists());
-}
-#[tokio::test]
-async fn projector_with_a_wrong_digest_is_rejected_and_reported() {
-    let (dir, store, entry, model) = installed_fixture();
-    let projector_bytes = gguf("clip");
-    let (mut entry, _) = with_projector(entry, &projector_bytes);
-    entry.projector.as_mut().unwrap().sha256 = "1".repeat(64);
-    let cancel = Arc::new(AtomicBool::new(false));
-    let error = install_projector(
-        &store,
-        dir.path(),
-        &model,
-        &entry,
-        &cancel,
-        &Fake::new(projector_bytes),
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        error.contains("SHA-256") || error.contains("무결성"),
-        "{error}"
-    );
-    let record = with_store(&store, |s| s.ai_projector(&model.id))
-        .unwrap()
-        .unwrap();
-    assert_eq!(record.status, "failed");
-    assert!(!dir
-        .path()
-        .join(&record.path)
-        .with_extension("part")
-        .exists());
-    assert!(!dir.path().join(&record.path).exists());
-}
-#[tokio::test]
-async fn projector_install_controller_shares_the_download_slot_and_reports_progress() {
-    let (dir, store, entry, model) = installed_fixture();
-    let projector_bytes = gguf("clip");
-    let (entry, projector_bytes) = with_projector(entry, &projector_bytes);
-    let controller = Controller::default();
-    controller
-        .start_projector(
-            store.clone(),
-            dir.path().into(),
-            model.id.clone(),
-            entry.clone(),
-            Fake::new(projector_bytes),
-        )
-        .unwrap();
-    wait_for_install(&controller).await;
-    let record = with_store(&store, |s| s.ai_projector(&model.id))
-        .unwrap()
-        .unwrap();
-    assert_eq!(record.status, "installed");
-    // Removal of the model removes its projector row and bytes.
-    let projector_path = dir.path().join(&record.path);
     remove_with_policy(
         store.clone(),
         dir.path().into(),
@@ -1764,12 +1350,11 @@ async fn projector_install_controller_shares_the_download_slot_and_reports_progr
     )
     .await
     .unwrap();
-    assert!(!projector_path.exists());
+    assert!(!dir.path().join(&relative).exists());
     assert!(with_store(&store, |s| s.ai_projector(&model.id))
         .unwrap()
         .is_none());
     assert!(with_store(&store, |s| s.ai_model(&model.id))
         .unwrap()
         .is_none());
-    assert!(dir.path().join(&entry.filename).exists() == entry.filename.is_empty());
 }

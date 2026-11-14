@@ -142,7 +142,7 @@ test('each window grants exactly the commands its own code invokes', () => {
 test('the mini window cannot reach the main window authority', () => {
   const mini = new Set(appCommands(capabilityFiles.find((entry) => entry.identifier === 'studium-mini')));
   for (const command of ['backup_restore', 'set_extension', 'save_settings', 'cybercampus_save_login',
-    'ai_remote_key', 'archive_purge', 'ai_analyze']) {
+    'ai_install', 'ai_remove', 'archive_purge']) {
     assert.ok(!mini.has(command), `studium-mini must not grant ${command}`);
   }
 });

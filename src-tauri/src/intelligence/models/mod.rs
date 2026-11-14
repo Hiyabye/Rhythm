@@ -1,8 +1,5 @@
 //! Curated weight installation. This transport is deliberately independent of notice collection.
-use crate::storage::{
-    intelligence::{AiModel, AiProjector},
-    Store,
-};
+use crate::storage::{intelligence::AiModel, Store};
 use reqwest::header;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -29,7 +26,6 @@ use catalog::*;
 pub use catalog::{catalog, CatalogEntry};
 use download::*;
 pub use gguf::verify_file;
-use gguf::*;
 pub(crate) use hardware::available_space;
 use hardware::*;
 pub use hardware::{hardware, refresh_disk_space, Hardware};
@@ -113,85 +109,6 @@ impl Controller {
         lease: Option<crate::operation_gate::AdmissionLease>,
     ) -> Result<(), String> {
         self.start_entry_with_transport(store, root, entry, lease, HttpsTransport)
-    }
-    /// Installs the optional vision projector for an installed model.
-    /// Shares the single download slot with model installation.
-    pub fn start_projector_admitted(
-        &self,
-        store: Arc<Mutex<Store>>,
-        root: PathBuf,
-        model_id: String,
-        lease: crate::operation_gate::AdmissionLease,
-    ) -> Result<(), String> {
-        self.start_projector_with_transport(
-            store,
-            root,
-            model_id,
-            None,
-            Some(lease),
-            HttpsTransport,
-        )
-    }
-    #[cfg(test)]
-    fn start_projector<T: Transport + Send + 'static>(
-        &self,
-        store: Arc<Mutex<Store>>,
-        root: PathBuf,
-        model_id: String,
-        entry: CatalogEntry,
-        transport: T,
-    ) -> Result<(), String> {
-        self.start_projector_with_transport(store, root, model_id, Some(entry), None, transport)
-    }
-    fn start_projector_with_transport<T: Transport + Send + 'static>(
-        &self,
-        store: Arc<Mutex<Store>>,
-        root: PathBuf,
-        model_id: String,
-        entry: Option<CatalogEntry>,
-        lease: Option<crate::operation_gate::AdmissionLease>,
-        transport: T,
-    ) -> Result<(), String> {
-        let mut active = self
-            .active
-            .lock()
-            .map_err(|_| "모델 설치 상태에 접근하지 못했습니다.")?;
-        if active.is_some() {
-            return Err("이미 다른 모델이나 이미지 인식 모듈을 설치하고 있습니다.".into());
-        }
-        let model = with_store(&store, |s| s.ai_model(&model_id))?
-            .filter(|model| model.status == "installed")
-            .ok_or("이미지 인식을 추가하려면 설치가 완료된 모델을 선택해 주세요.")?;
-        let entry = entry
-            .or_else(|| {
-                catalog()
-                    .into_iter()
-                    .find(|entry| Some(&entry.id) == model.catalog_id.as_ref())
-            })
-            .ok_or("이 모델은 배포 목록에 없어 이미지 인식 모듈을 자동으로 받을 수 없습니다.")?;
-        validate_manifest(&entry)?;
-        if with_store(&store, |s| s.ai_projector(&model_id))?
-            .is_some_and(|projector| projector.status == "installed")
-        {
-            return Err("이미 이미지 인식 모듈이 설치되어 있습니다.".into());
-        }
-        let cancel = Arc::new(AtomicBool::new(false));
-        *active = Some(cancel.clone());
-        let this = self.clone();
-        tokio::spawn(async move {
-            let _lease = lease;
-            if let Err(error) =
-                install_projector(&store, &root, &model, &entry, &cancel, &transport).await
-            {
-                if !cancel.load(Ordering::Acquire) {
-                    eprintln!("AI projector install: {error}");
-                }
-            }
-            if let Ok(mut active) = this.active.lock() {
-                *active = None;
-            }
-        });
-        Ok(())
     }
     fn start_entry_with_transport<T: Transport + Send + 'static>(
         &self,
@@ -302,91 +219,7 @@ pub(super) async fn remove_projector(
     with_store(store, |s| s.ai_remove_projector(model_id))
 }
 
-pub async fn register(
-    store: Arc<Mutex<Store>>,
-    path: PathBuf,
-    cancel: Arc<AtomicBool>,
-) -> Result<AiModel, String> {
-    check_cancel(&cancel)?;
-    if !path.is_absolute()
-        || !path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
-    {
-        return Err("기존 GGUF 파일의 전체 경로를 입력해 주세요.".into());
-    }
-    let path = path
-        .canonicalize()
-        .map_err(|_| "기존 모델 파일을 찾지 못했습니다.")?;
-    if !path.is_file() {
-        return Err("일반 GGUF 파일을 선택해 주세요.".into());
-    }
-    let copy = path.clone();
-    let token = cancel.clone();
-    let (hash, bytes) = tokio::task::spawn_blocking(move || verify_file(&copy, None, &token))
-        .await
-        .map_err(|_| "기존 모델 파일 검증이 중단되었습니다.")??;
-    check_cancel(&cancel)?;
-    let name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or("모델 파일 이름을 읽지 못했습니다.")?
-        .to_owned();
-    let path = path
-        .to_str()
-        .ok_or("모델 경로를 UTF-8로 읽지 못했습니다.")?
-        .to_owned();
-    let mut model = AiModel {
-        id: format!("external-{:x}", Sha256::digest(path.as_bytes())),
-        catalog_id: None,
-        name,
-        ownership: "external".into(),
-        kind: "generation".into(),
-        path,
-        storage_directory: None,
-        sha256: Some(hash),
-        expected_sha256: None,
-        expected_bytes: None,
-        bytes,
-        source_revision: None,
-        source_filename: None,
-        status: "installed".into(),
-        downloaded_bytes: bytes,
-        resume_etag: None,
-        error: None,
-        created_at: String::new(),
-        updated_at: String::new(),
-    };
-    with_store(&store, |s| {
-        // Restore deliberately keeps the original catalog ID while revoking
-        // managed-file ownership. Re-register that row instead of inserting a
-        // second external row with the same unique canonical path.
-        if let Some(previous) = s
-            .ai_models()?
-            .into_iter()
-            .find(|previous| previous.ownership == "external" && previous.path == model.path)
-        {
-            model.id = previous.id;
-            if previous.expected_sha256 == model.sha256
-                && previous.expected_bytes == Some(model.bytes)
-            {
-                // Only a freshly verified match may retain curated provenance.
-                model.catalog_id = previous.catalog_id;
-                model.expected_sha256 = previous.expected_sha256;
-                model.expected_bytes = previous.expected_bytes;
-                model.source_revision = previous.source_revision;
-                model.source_filename = previous.source_filename;
-                if model.catalog_id.is_some() {
-                    model.name = previous.name;
-                }
-            }
-        }
-        s.ai_upsert_model(&model)
-    })?;
-    Ok(model)
-}
-/// Call after stopping inference and unloading/clearing the selected model. External bytes are never removed.
+/// Call after stopping the embedding process that may map the file. External bytes are never removed.
 pub async fn remove(
     store: Arc<Mutex<Store>>,
     root: PathBuf,
@@ -407,17 +240,7 @@ pub async fn remove_with_policy(
         return Err("모델 삭제를 먼저 확인해 주세요.".into());
     }
     let model = with_store(&store, |s| {
-        if s.ai_preferences()?.active_model_id.as_deref() == Some(&id) {
-            return Err(
-                "사용 중인 모델입니다. 먼저 모델을 언로드하고 선택을 해제해 주세요.".into(),
-            );
-        }
         let model = s.ai_model(&id)?.ok_or("등록된 모델을 찾지 못했습니다.")?;
-        if let Some(hash) = &model.sha256 {
-            if s.ai_has_model_jobs(hash)? {
-                return Err("이 모델의 분석 작업을 먼저 취소해 주세요.".into());
-            }
-        }
         if ["pending", "downloading", "verifying"].contains(&model.status.as_str()) {
             return Err("모델 설치를 먼저 취소하고 완료될 때까지 기다려 주세요.".into());
         }

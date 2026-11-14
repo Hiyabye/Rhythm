@@ -23,45 +23,52 @@ mod proactive_tests;
 pub mod studium;
 pub(crate) mod studium_alerts;
 pub(crate) mod trash;
-pub(crate) const SCHEMA_VERSION: i64 = 32;
+pub(crate) const SCHEMA_VERSION: i64 = 33;
+
+/// Ordered schema migrations; index `n` upgrades `user_version` n to n+1.
+pub(super) const MIGRATIONS: [&str; 33] = [
+    include_str!("../../migrations/001_foundation.sql"),
+    include_str!("../../migrations/002_archive.sql"),
+    include_str!("../../migrations/003_intelligence.sql"),
+    include_str!("../../migrations/004_personalization.sql"),
+    include_str!("../../migrations/005_proactive.sql"),
+    include_str!("../../migrations/006_notification_attempts.sql"),
+    include_str!("../../migrations/007_notification_activation.sql"),
+    include_str!("../../migrations/008_ai_execution_mode.sql"),
+    include_str!("../../migrations/009_ai_model_directory.sql"),
+    include_str!("../../migrations/010_update_check.sql"),
+    include_str!("../../migrations/011_skipped_articles.sql"),
+    include_str!("../../migrations/012_resource_retry.sql"),
+    include_str!("../../migrations/013_ai_projector.sql"),
+    include_str!("../../migrations/014_ai_backlog_mode.sql"),
+    include_str!("../../migrations/015_ai_embedding.sql"),
+    include_str!("../../migrations/016_remote_engine.sql"),
+    include_str!("../../migrations/017_retire_eng_newsletter.sql"),
+    include_str!("../../migrations/018_cybercampus.sql"),
+    include_str!("../../migrations/019_onboarding.sql"),
+    include_str!("../../migrations/020_extensions.sql"),
+    include_str!("../../migrations/021_source_groups.sql"),
+    include_str!("../../migrations/022_calendar.sql"),
+    include_str!("../../migrations/023_studium.sql"),
+    include_str!("../../migrations/024_clock_format.sql"),
+    include_str!("../../migrations/025_trash.sql"),
+    include_str!("../../migrations/026_auto_trash.sql"),
+    include_str!("../../migrations/027_studium_interval.sql"),
+    include_str!("../../migrations/028_studium_favorites.sql"),
+    include_str!("../../migrations/029_studium_alerts.sql"),
+    include_str!("../../migrations/030_studium_mini.sql"),
+    include_str!("../../migrations/031_calendar_todo_notice.sql"),
+    include_str!("../../migrations/032_notice_dates.sql"),
+    include_str!("../../migrations/033_retire_generation.sql"),
+];
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
-    let migrations = [
-        include_str!("../../migrations/001_foundation.sql"),
-        include_str!("../../migrations/002_archive.sql"),
-        include_str!("../../migrations/003_intelligence.sql"),
-        include_str!("../../migrations/004_personalization.sql"),
-        include_str!("../../migrations/005_proactive.sql"),
-        include_str!("../../migrations/006_notification_attempts.sql"),
-        include_str!("../../migrations/007_notification_activation.sql"),
-        include_str!("../../migrations/008_ai_execution_mode.sql"),
-        include_str!("../../migrations/009_ai_model_directory.sql"),
-        include_str!("../../migrations/010_update_check.sql"),
-        include_str!("../../migrations/011_skipped_articles.sql"),
-        include_str!("../../migrations/012_resource_retry.sql"),
-        include_str!("../../migrations/013_ai_projector.sql"),
-        include_str!("../../migrations/014_ai_backlog_mode.sql"),
-        include_str!("../../migrations/015_ai_embedding.sql"),
-        include_str!("../../migrations/016_remote_engine.sql"),
-        include_str!("../../migrations/017_retire_eng_newsletter.sql"),
-        include_str!("../../migrations/018_cybercampus.sql"),
-        include_str!("../../migrations/019_onboarding.sql"),
-        include_str!("../../migrations/020_extensions.sql"),
-        include_str!("../../migrations/021_source_groups.sql"),
-        include_str!("../../migrations/022_calendar.sql"),
-        include_str!("../../migrations/023_studium.sql"),
-        include_str!("../../migrations/024_clock_format.sql"),
-        include_str!("../../migrations/025_trash.sql"),
-        include_str!("../../migrations/026_auto_trash.sql"),
-        include_str!("../../migrations/027_studium_interval.sql"),
-        include_str!("../../migrations/028_studium_favorites.sql"),
-        include_str!("../../migrations/029_studium_alerts.sql"),
-        include_str!("../../migrations/030_studium_mini.sql"),
-        include_str!("../../migrations/031_calendar_todo_notice.sql"),
-        include_str!("../../migrations/032_notice_dates.sql"),
-    ];
-    for (index, migration) in migrations.iter().enumerate().skip(version as usize) {
+    for (index, migration) in MIGRATIONS.iter().enumerate().skip(version as usize) {
         let transaction = connection.transaction().map_err(|e| e.to_string())?;
+        // 033 drops the remote engine's origin, the only pointer to its API key.
+        if index == 32 {
+            intelligence::clear_retired_remote_key(&transaction);
+        }
         transaction
             .execute_batch(migration)
             .map_err(|e| e.to_string())?;

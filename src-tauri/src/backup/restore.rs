@@ -177,6 +177,14 @@ pub(super) fn reconcile_model_inventory(
             |row| row.get(0),
         )
         .map_err(|_| "백업 분류 모델 정보를 확인하지 못했습니다.")?;
+    // Backups before schema 33 still select a (now retired) generation model.
+    let has_generation_selection: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('ai_preferences') WHERE name='active_model_id')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| "백업 모델 선택 정보를 확인하지 못했습니다.")?;
     let has_projectors: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='ai_projectors')",
@@ -190,15 +198,20 @@ pub(super) fn reconcile_model_inventory(
     if has_custom_directories {
         // A backup must never grant permission to delete or resume writing to
         // an arbitrary directory outside this installation's model folder.
-        // Keep the old path and analysis history as registration hints only.
+        // Keep the old path only as a hint for the user.
         transaction
-            .execute_batch(
-                "UPDATE ai_preferences SET model_directory=NULL;
-                 UPDATE ai_preferences SET active_model_id=NULL WHERE active_model_id IN (
-                     SELECT id FROM ai_models WHERE ownership='managed' AND storage_directory IS NOT NULL
-                 );",
-            )
+            .execute("UPDATE ai_preferences SET model_directory=NULL", [])
             .map_err(|_| "백업의 외부 모델 폴더 권한을 초기화하지 못했습니다.")?;
+        if has_generation_selection {
+            transaction
+                .execute(
+                    "UPDATE ai_preferences SET active_model_id=NULL WHERE active_model_id IN (
+                         SELECT id FROM ai_models WHERE ownership='managed' AND storage_directory IS NOT NULL
+                     )",
+                    [],
+                )
+                .map_err(|_| "백업의 외부 모델 폴더 권한을 초기화하지 못했습니다.")?;
+        }
         if has_embedding_model {
             transaction
                 .execute(
@@ -230,16 +243,16 @@ pub(super) fn reconcile_model_inventory(
             if already_external {
                 // A managed file may also have been explicitly registered as
                 // external. Keep that existing reference and remove only the
-                // duplicate inventory row; analysis history has no model FK.
+                // duplicate inventory row.
                 transaction
                     .execute("DELETE FROM ai_models WHERE id=?1", [&id])
                     .map_err(|_| "백업의 중복 모델 등록을 정리하지 못했습니다.")?;
                 continue;
             }
             let error = if absolute.is_some() {
-                "다른 저장 폴더의 모델은 복원 후 다시 등록하거나 설치해 주세요. 원본 파일은 변경하지 않았습니다."
+                "다른 저장 폴더의 모델은 복원 후 다시 설치해 주세요. 원본 파일은 변경하지 않았습니다."
             } else {
-                "백업의 모델 경로를 확인하지 못했습니다. 원본 파일을 다시 등록하거나 설치해 주세요. 원본 파일은 변경하지 않았습니다."
+                "백업의 모델 경로를 확인하지 못했습니다. 모델을 다시 설치해 주세요. 원본 파일은 변경하지 않았습니다."
             };
             transaction
                 .execute(
@@ -285,12 +298,14 @@ pub(super) fn reconcile_model_inventory(
     for id in missing {
         transaction.execute("UPDATE ai_models SET status='missing',error='해당 모델 파일이 없거나 무결성 확인에 실패했습니다. 다시 설치해 주세요.' WHERE id=?1", [&id])
             .map_err(|_| "백업 모델 상태를 갱신하지 못했습니다.")?;
-        transaction
-            .execute(
-                "UPDATE ai_preferences SET active_model_id=NULL WHERE active_model_id=?1",
-                [&id],
-            )
-            .map_err(|_| "백업에서 사용할 모델을 정리하지 못했습니다.")?;
+        if has_generation_selection {
+            transaction
+                .execute(
+                    "UPDATE ai_preferences SET active_model_id=NULL WHERE active_model_id=?1",
+                    [&id],
+                )
+                .map_err(|_| "백업에서 사용할 모델을 정리하지 못했습니다.")?;
+        }
         if has_embedding_model {
             transaction
                 .execute(

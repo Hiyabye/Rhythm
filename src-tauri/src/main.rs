@@ -15,7 +15,6 @@ mod storage;
 mod studium;
 mod updater;
 use extensions::Registry;
-use intelligence::Worker;
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -37,14 +36,10 @@ pub(crate) struct AppState {
     pub(crate) studium_views: Arc<studium::views::Views>,
     network: archive::Client,
     registry: Registry,
-    pub(crate) worker: Arc<tokio::sync::Mutex<Worker>>,
     pub(crate) classifier: Arc<intelligence::classification::Controller>,
-    pub(crate) analysis: Arc<intelligence::analysis::Controller>,
-    pub(crate) remote: Arc<intelligence::remote::Remote>,
     pub(crate) models: intelligence::models::Controller,
     hardware: intelligence::models::Hardware,
     ai_gate: tokio::sync::Mutex<()>,
-    pub(crate) ai_operation: intelligence::operations::Controller,
     maintenance_shutdown: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) operation_gate: Arc<operation_gate::AdmissionGate>,
     pub(crate) restore_outcome: Option<backup::RestoreOutcome>,
@@ -55,7 +50,6 @@ pub(crate) struct AppMaintenanceGuard {
     proactive: Arc<proactive::Scheduler>,
     studium_notifications: Arc<studium::notification::Notifications>,
     studium_views: Arc<studium::views::Views>,
-    analysis: Arc<intelligence::analysis::Controller>,
     classifier_guard: Option<intelligence::classification::PauseGuard>,
 }
 
@@ -75,7 +69,6 @@ impl AppMaintenanceGuard {
 impl Drop for AppMaintenanceGuard {
     fn drop(&mut self) {
         drop(self.classifier_guard.take());
-        self.analysis.resume();
         if let Err(error) = self.proactive.start() {
             eprintln!("Proactive: 유지보수 후 스케줄러를 다시 시작하지 못했습니다: {error}");
         }
@@ -93,7 +86,6 @@ struct MaintenancePreparation {
     proactive: Arc<proactive::Scheduler>,
     studium_notifications: Arc<studium::notification::Notifications>,
     studium_views: Arc<studium::views::Views>,
-    analysis: Arc<intelligence::analysis::Controller>,
     armed: bool,
 }
 
@@ -102,7 +94,6 @@ impl Drop for MaintenancePreparation {
         if !self.armed {
             return;
         }
-        self.analysis.resume();
         let proactive = self.proactive.clone();
         let studium_notifications = self.studium_notifications.clone();
         let studium_views = self.studium_views.clone();
@@ -126,17 +117,14 @@ impl AppState {
             proactive: self.proactive.clone(),
             studium_notifications: self.studium_notifications.clone(),
             studium_views: self.studium_views.clone(),
-            analysis: self.analysis.clone(),
             armed: true,
         };
         self.archive.cancel();
-        self.analysis.stop();
         self.models.cancel();
-        self.ai_operation.cancel();
+        // A command admitted before the reservation may start a download
+        // under the AI gate; cancel again once it has released the gate.
         let ai_gate = self.ai_gate.lock().await;
-        self.analysis.stop();
         self.models.cancel();
-        self.ai_operation.cancel();
         drop(ai_gate);
         self.proactive.quiesce().await;
         self.studium_notifications.quiesce().await;
@@ -145,7 +133,6 @@ impl AppState {
         if let Some(completion) = studium_completion {
             completion.wait().await;
         }
-        self.analysis.wait().await;
         self.models.wait().await;
         let gate = preparation
             .reservation
@@ -162,7 +149,6 @@ impl AppState {
             proactive: self.proactive.clone(),
             studium_notifications: self.studium_notifications.clone(),
             studium_views: self.studium_views.clone(),
-            analysis: self.analysis.clone(),
             classifier_guard: Some(classifier_guard),
         })
     }
@@ -405,11 +391,6 @@ fn main() {
             backup::remove_stale_backup_snapshots(&data_root);
             let store =
                 Store::open(&data_root.join("rhythm.sqlite3")).map_err(std::io::Error::other)?;
-            if restore_outcome.is_some() {
-                store
-                    .reset_remote_after_restore()
-                    .map_err(std::io::Error::other)?;
-            }
             store
                 .catalog(&archive::definitions())
                 .map_err(std::io::Error::other)?;
@@ -456,22 +437,15 @@ fn main() {
             )
             .map_err(std::io::Error::other)?;
             // Bundled llama.cpp builds; the private runtime directory holds the
-            // server's socket or per-launch access key.
+            // embedding server's socket or per-launch access key.
             let llama = app.path().resource_dir().map_err(std::io::Error::other)?.join("llama");
-            let runtime = data_root.join("run");
-            // The embedding process needs its own socket/key directory; sharing
-            // `run/` would let either server remove the other's files.
+            let mode = store.lock().map_err(|_| std::io::Error::other("설정 잠금 오류"))?
+                .ai_preferences().map_err(std::io::Error::other)?.execution_mode;
             let classifier = Arc::new(intelligence::classification::Controller::new(
                 &llama,
-                &runtime.join("embedding"),
+                &data_root.join("run").join("embedding"),
+                &mode,
             ));
-            let worker = tauri::async_runtime::block_on(async {
-                let mode = store.lock().map_err(|_| std::io::Error::other("설정 잠금 오류"))?
-                    .ai_preferences().map_err(std::io::Error::other)?.execution_mode;
-                let mut worker = Worker::launch_configured(&llama, &runtime, &mode);
-                worker.refresh().await;
-                Ok::<_, std::io::Error>(worker)
-            })?;
             let hardware = intelligence::models::hardware(&data_root);
             let maintenance_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
             app.manage(updater::State::default());
@@ -489,14 +463,10 @@ fn main() {
                 studium_views: studium_views.clone(),
                 archive,
                 network,
-                worker: Arc::new(tokio::sync::Mutex::new(worker)),
                 classifier,
-                analysis: Arc::new(intelligence::analysis::Controller::default()),
-                remote: Arc::new(intelligence::remote::Remote::native()),
                 models: intelligence::models::Controller::default(),
                 hardware,
                 ai_gate: tokio::sync::Mutex::new(()),
-                ai_operation: intelligence::operations::Controller::default(),
                 maintenance_shutdown: maintenance_shutdown.clone(),
                 operation_gate,
                 restore_outcome,
@@ -521,10 +491,6 @@ fn main() {
                 maintenance_shutdown.clone(),
             ));
             tauri::async_runtime::spawn(archive::run_notice_dates(
-                app.handle().clone(),
-                maintenance_shutdown.clone(),
-            ));
-            tauri::async_runtime::spawn(intelligence::maintenance::run(
                 app.handle().clone(),
                 maintenance_shutdown,
             ));
@@ -589,7 +555,6 @@ fn main() {
             proactive::proactive_history,
             proactive::proactive_clear_history,
             commands::set_extension,
-            commands::worker_status,
             commands::calendar_todos,
             commands::calendar_notice_dates,
             commands::calendar_set_all_deadlines,
@@ -602,27 +567,9 @@ fn main() {
             intelligence::commands::ai_choose_model_directory,
             intelligence::commands::ai_reset_model_directory,
             intelligence::commands::ai_install,
-            intelligence::commands::ai_install_projector,
-            intelligence::commands::ai_remove_projector,
             intelligence::commands::ai_cancel_download,
-            intelligence::commands::ai_cancel_operation,
-            intelligence::commands::ai_diagnostics,
-            intelligence::commands::ai_register,
-            intelligence::commands::ai_select,
-            intelligence::commands::ai_load,
-            intelligence::commands::ai_unload,
-            intelligence::commands::ai_restart,
             intelligence::commands::ai_remove,
             intelligence::commands::ai_preferences,
-            intelligence::commands::ai_remote_status,
-            intelligence::commands::ai_remote_key,
-            intelligence::commands::ai_remote_key_clear,
-            intelligence::commands::ai_remote_test,
-            intelligence::commands::ai_analyze,
-            intelligence::commands::ai_cancel,
-            intelligence::commands::ai_results,
-            intelligence::commands::ai_document_jobs,
-            intelligence::commands::ai_recent,
             intelligence::commands::ai_classifications,
             intelligence::commands::ai_classification,
             intelligence::commands::ai_similar_notices,
@@ -683,8 +630,6 @@ fn main() {
                     .ok()
                     .flatten();
             state.registry.stop_all();
-            state.ai_operation.cancel();
-            state.analysis.stop();
             state.models.cancel();
             tauri::async_runtime::block_on(async {
                 state.studium_views.shutdown().await;
@@ -698,10 +643,8 @@ fn main() {
                     // signalled cancellation; exit must join that job as well.
                     state.studium.wait().await;
                 }
-                state.analysis.wait().await;
                 state.models.wait().await;
                 state.classifier.shutdown().await;
-                state.worker.lock().await.shutdown().await;
             });
         }
         _ => {}
