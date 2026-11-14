@@ -1,6 +1,5 @@
 import type { Page } from '@playwright/test';
-import analysisContract from '../../src/lib/analysis-contract.json' with { type: 'json' };
-import type { AiOperation, CalendarTodo, ClockFormat, NoticeDate, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation, StudiumMiniStatus, StudiumSeatLayout, StudiumSnapshot, Theme } from '../../src/lib/types';
+import type { CalendarTodo, ClockFormat, NoticeDate, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation, StudiumMiniStatus, StudiumSeatLayout, StudiumSnapshot, Theme } from '../../src/lib/types';
 
 // Invented regular marker origins, unrelated to the school's real floor plans.
 export function syntheticStudiumLayout(total: number): StudiumSeatLayout {
@@ -38,6 +37,7 @@ export interface FixtureOptions {
   imageError?: boolean;
   imageDelay?: number;
   queryGate?: boolean;
+  // A retired Qwen3.5 4B summary model is still installed.
   aiInstalled?: boolean;
   aiEmbeddingInstalled?: boolean;
   aiClassificationLow?: boolean;
@@ -46,16 +46,10 @@ export interface FixtureOptions {
   // With aiEmbeddingInstalled, relevance search adds one meaning-only notice.
   aiSemanticSearch?: boolean;
   aiRetiredModel?: boolean;
-  aiResult?: boolean;
-  aiImageResult?: boolean;
-  aiProjectorState?: 'downloading' | 'installed' | 'failed' | 'cancelled' | 'missing';
-  aiPartial?: boolean;
-  aiSetupNeeded?: boolean;
   // A fresh profile that has not finished the first-run setup flow.
   onboardingNeeded?: boolean;
   // Windows-flavored defaults (paths); pair with a Windows user agent.
   windows?: boolean;
-  aiRuntimeDetail?: string;
   aiModelDirectoryGate?: boolean;
   aiModelStorageAvailable?: number | null;
   sourceCount?: number;
@@ -65,15 +59,6 @@ export interface FixtureOptions {
   initialNotificationsEnabled?: boolean;
   capabilitiesError?: boolean;
   aiExecutionMode?: 'auto' | 'cpu' | 'gpu';
-  aiEngine?: 'local' | 'openai-compatible';
-  aiRemoteBase?: string | null;
-  aiRemoteModel?: string | null;
-  aiRemoteEmbeddingModel?: string | null;
-  aiRemoteConsent?: boolean;
-  aiRemoteAutomatic?: boolean;
-  aiRemoteEmbeddings?: boolean;
-  aiRemoteKey?: boolean;
-  aiRemoteResult?: boolean;
   aiExecutionError?: boolean;
   aiModelDirectory?: string;
   aiModelDirectoryChoice?: string | null;
@@ -81,15 +66,9 @@ export interface FixtureOptions {
   aiModelStorageError?: string;
   aiRemoveError?: boolean;
   aiInstallError?: boolean;
-  aiInferenceError?: boolean;
   aiDelay?: number;
-  aiText?: string;
   revisions?: boolean;
-  aiResultLag?: boolean;
-  aiLoadDelay?: number;
-  aiSetupDelay?: number;
   aiLowResources?: boolean;
-  analysisContract?: 'current' | 'prompt-v2';
   initialInterests?: PersonalInterest[];
   feedbackWriteDelay?: number;
   profileSaveDelay?: number;
@@ -134,7 +113,7 @@ export interface FixtureOptions {
 // Only the IPC boundary is faked: tests exercise the production Svelte build,
 // DOM reconstruction, reactivity and browser keyboard/layout behavior.
 export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
-  await page.addInitScript(({ options, contract }: { options: FixtureOptions; contract: typeof analysisContract }) => {
+  await page.addInitScript(({ options }: { options: FixtureOptions }) => {
     const copy = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
     const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const entries: DocumentItem[] = Array.from({ length: options.count ?? 2 }, (_, index) => ({
@@ -189,11 +168,11 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     };
     const snapshot = { settings: { theme: 'light', energy_profile: 'eco', interests: '', clock_format: options.clockFormat ?? '12h', auto_trash_months: 0 },
       extensions: ([['sogang_notices', '서강대학교 공지'], ['cybercampus', '사이버캠퍼스'], ['search', '탐색'], ['saved', '보관함'],
-        ['recommendations', '나를 위한 소식'], ['week', '앞으로 7일'], ['calendar', '캘린더'], ['ai', 'AI 분석'], ['proactive', '알림·백그라운드'], ['studium', '열람실']] as const).map(([id, display_name]) => ({
+        ['recommendations', '나를 위한 소식'], ['week', '앞으로 7일'], ['calendar', '캘린더'], ['ai', 'AI 분류'], ['proactive', '알림·백그라운드'], ['studium', '열람실']] as const).map(([id, display_name]) => ({
         id, display_name, description: `${display_name} 설명`, available: true,
         enabled: options.extensions?.[id] ?? (id === 'sogang_notices' ? options.enabled ?? true : id !== 'studium') })),
       storage: { path: '/isolated/rhythm.sqlite3', bytes: 4096, schema_version: 5 },
-      worker: { state: 'ready', runtime_available: true, model: null, detail: null }, proactive: copy(proactiveSettings),
+      proactive: copy(proactiveSettings),
       onboarding_completed: !options.onboardingNeeded };
     const studium: StudiumSnapshot = {
       rooms: [
@@ -222,40 +201,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     const chosenModelDirectory = options.windows ? 'D:\\로컬 모델\\Rhythm' : '/Volumes/로컬 모델/Rhythm';
     const modelStorage = { directory: options.aiModelDirectory ?? defaultModelDirectory, custom: Boolean(options.aiModelDirectory), available_bytes: (options.aiModelStorageAvailable === undefined ? 27000000000 : options.aiModelStorageAvailable) as number | null, error: options.aiModelStorageError ?? null as string | null };
     const modelNames: Record<string, string> = { 'qwen35-2b': 'Qwen3.5 2B', 'qwen35-4b': 'Qwen3.5 4B', 'qwen35-9b': 'Qwen3.5 9B', 'qwen3-embedding-0-6b': 'Qwen3-Embedding 0.6B' };
-    const projectorSpec = { filename: 'mmproj-F16.gguf', bytes: 1234567, memory_bytes: 2345678, sha256: 'c'.repeat(64) };
     const model = (id = 'qwen35-4b', kind: 'generation' | 'embedding' = 'generation') => ({ id, catalog_id: id, name: modelNames[id] ?? id, ownership: 'managed', kind, path: `models/${id}.gguf`, storage_directory: null as string | null, sha256: 'a'.repeat(64), expected_sha256: 'a'.repeat(64), expected_bytes: kind === 'embedding' ? 639150592 : 2740937888, bytes: kind === 'embedding' ? 639150592 : 2740937888, source_revision: 'pinned-revision', source_filename: `${id}.gguf`, status: 'installed', downloaded_bytes: kind === 'embedding' ? 639150592 : 2740937888, resume_etag: null, error: null as string | null, created_at: '2026-10-24 12:00:00', updated_at: '2026-10-24 12:00:00' });
-    const projectorRow = (status: 'downloading' | 'installed' | 'failed' | 'cancelled' | 'missing', downloaded = 0) => ({ model_id: 'qwen35-4b', path: `${options.aiModelDirectory ?? defaultModelDirectory}${separator}${projectorSpec.filename}`, sha256: status === 'installed' ? projectorSpec.sha256 : null as string | null, expected_sha256: projectorSpec.sha256, expected_bytes: projectorSpec.bytes, bytes: status === 'installed' ? projectorSpec.bytes : 0, status, downloaded_bytes: downloaded, resume_etag: null as string | null, error: status === 'failed' ? '이미지 인식 모듈 다운로드에 실패했습니다. 연결을 확인하고 다시 시도해 주세요.' : null as string | null });
-    const analysis = (id: number, documentId: number, revisionId: number) => ({
-      id, job_id: id, document_id: documentId, revision_id: revisionId, task: 'notice_analysis',
-      model_sha256: 'a'.repeat(64),
-      prompt_version: options.analysisContract === 'prompt-v2' ? 2 : contract.prompt_version,
-      schema_version: contract.schema_version,
-      configuration_hash: 'b'.repeat(64),
-      model_identity: options.aiRemoteResult
-        ? { engine: 'openai-compatible' as const, name: options.aiRemoteModel ?? 'test-model', host: 'api.example.com', origin: 'https://api.example.com', ...(options.aiImageResult ? { images_used: 1, images_available: 2 } : {}) }
-        : { engine: 'local' as const, name: 'Qwen3.5 4B', ...(options.aiImageResult ? { images_used: 1, images_available: 2 } : {}) },
-      result: {
-        short_summary: options.aiText ?? '장학금 신청 일정과 제출 서류를 확인하세요.',
-        summary: '대상 학생은 안내된 기간에 신청서를 제출해야 합니다.',
-        uncertainty: 'clear',
-        facts: options.aiImageResult ? [
-          { kind: 'deadline', label: '신청 마감', value: '2026년 10월 30일까지 신청', evidence: '2026년 10월 30일까지 신청서를 제출하세요.', date: '2026-10-30', uncertainty: 'clear', origin: 'text' as const },
-          { kind: 'deadline', label: '현장 접수', value: '이미지 안내문에 적힌 접수 일정', evidence: '[이미지 1]', date: '2026-11-03', uncertainty: 'ambiguous' as const, origin: 'image' as const },
-        ] : [{
-          kind: 'deadline', label: '신청 마감', value: '2026년 10월 30일까지 신청',
-          evidence: '2026년 10월 30일까지 신청서를 제출하세요.',
-          date: '2026-10-30', uncertainty: 'clear',
-        }],
-      },
-      partial: options.aiPartial ?? false,
-      processed_chars: 100,
-      total_chars: options.aiPartial ? 10000 : 100,
-      duration_ms: 1250,
-      created_at: '2026-10-24 12:00:00',
-    });
-    const embeddingCatalog = { id: 'qwen3-embedding-0-6b', kind: 'embedding', name: 'Qwen3-Embedding 0.6B', parameters: '0.6B', quantization: 'Q8_0', bytes: 639150592, memory_bytes: 2147483648, description: '공지 분류용 임베딩 모델', use_case: '공지 주제 분류', repository: 'Qwen/Qwen3-Embedding-0.6B-GGUF', revision: 'pinned-revision', filename: 'Qwen3-Embedding-0.6B-Q8_0.gguf', sha256: 'd'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null, pooling: 'last', embedding_dim: 1024, projector: null };
-    const ai = { model_storage: modelStorage, catalog: [...['qwen35-4b', 'qwen35-2b'].map((id) => ({ id, kind: 'generation' as const, name: modelNames[id], parameters: modelNames[id].split(' ')[1], quantization: 'Q4_K_M', bytes: 2740937888, memory_bytes: 6000000000, description: '한국어 공지 분석용 로컬 모델', use_case: '균형 잡힌 공지 분석', repository: 'unsloth/Qwen3.5-4B-GGUF', revision: 'pinned-revision', filename: `${id}.gguf`, sha256: 'a'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null, projector: id === 'qwen35-4b' ? projectorSpec : null })), embeddingCatalog], models: [...(options.aiInstalled ? [model()] : []), ...(options.aiRetiredModel ? [model('qwen35-9b')] : []), ...(options.aiEmbeddingInstalled ? [model('qwen3-embedding-0-6b', 'embedding')] : [])], projectors: options.aiInstalled && options.aiProjectorState ? [projectorRow(options.aiProjectorState, options.aiProjectorState === 'downloading' ? 600000 : 0)] : [], preferences: { active_model_id: options.aiInstalled ? 'qwen35-4b' : null as string | null, setup_completed: !options.aiSetupNeeded, processing_mode: 'explicit', automatic_limit: 3, max_tokens: 1024, execution_mode: options.aiExecutionMode ?? 'auto', model_directory: options.aiModelDirectory ?? null as string | null, embedding_model_id: options.aiEmbeddingInstalled ? 'qwen3-embedding-0-6b' : null as string | null, classification_enabled: true, engine: (options.aiEngine ?? 'local') as 'local' | 'openai-compatible', remote_base_url: options.aiRemoteBase ?? null as string | null, remote_model: options.aiRemoteModel ?? null as string | null, remote_embedding_model: options.aiRemoteEmbeddingModel ?? null as string | null, remote_timeout_seconds: 120, remote_consent: options.aiRemoteConsent ?? false, remote_automatic: options.aiRemoteAutomatic ?? false, remote_daily_limit: 20, remote_embeddings: options.aiRemoteEmbeddings ?? false }, remote_key_present: options.aiRemoteKey ?? false, remote_usage_today: 0, remote_host: options.aiRemoteBase ? (options.aiRemoteBase.includes('://') ? options.aiRemoteBase.replace(/^https?:\/\//, '').split('/')[0] : options.aiRemoteBase) : null as string | null, jobs: [] as any[], runtime: { state: 'ready', runtime_available: true, model: null as string | null, detail: options.aiRuntimeDetail ?? null }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, operation: null as AiOperation | null, progress: null as any, analysis_contract: { prompt_version: contract.prompt_version, schema_version: contract.schema_version, configuration_hash: 'b'.repeat(64) }, classification: { state: options.aiEmbeddingInstalled ? 'idle' : 'disabled', processed: 0 } };
-    const analyses = options.aiResult ? [analysis(1, 1, 1)] : [];
+    const embeddingCatalog = { id: 'qwen3-embedding-0-6b', kind: 'embedding', name: 'Qwen3-Embedding 0.6B', parameters: '0.6B', quantization: 'Q8_0', bytes: 639150592, memory_bytes: 2147483648, description: '공지 분류용 임베딩 모델', use_case: '공지 주제 분류', repository: 'Qwen/Qwen3-Embedding-0.6B-GGUF', revision: 'pinned-revision', filename: 'Qwen3-Embedding-0.6B-Q8_0.gguf', sha256: 'd'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null, pooling: 'last', embedding_dim: 1024 };
+    const ai = { model_storage: modelStorage, catalog: [embeddingCatalog], models: [...(options.aiInstalled ? [model()] : []), ...(options.aiRetiredModel ? [model('qwen35-9b')] : []), ...(options.aiEmbeddingInstalled ? [model('qwen3-embedding-0-6b', 'embedding')] : [])], preferences: { execution_mode: options.aiExecutionMode ?? 'auto', model_directory: options.aiModelDirectory ?? null as string | null, embedding_model_id: options.aiEmbeddingInstalled ? 'qwen3-embedding-0-6b' : null as string | null, classification_enabled: true }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, classification: { state: options.aiEmbeddingInstalled ? 'idle' : 'disabled', processed: 0 } };
     const classifications = entries.map((item) => ({
       document_id: item.id, revision_id: 1, category: '장학',
       low_confidence: Boolean(options.aiClassificationLow), created_at: '2026-10-24 12:00:00',
@@ -264,7 +212,6 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     const similar: Record<number, ReturnType<typeof similarNotice>[]> = options.aiSimilar && options.aiEmbeddingInstalled ? { 1: [similarNotice(2, true), similarNotice(3, false)], 2: [similarNotice(1, true)], 3: [similarNotice(1, false)] } : {};
     let personalization = { profile: { university: '', department: '', study_level: '' }, interests: copy(options.initialInterests ?? []), learning_enabled: true };
     const documentFeedback = new Map<number, string>();
-    let resultLagUsed = false;
     let lifecycle = { close_to_background: false, start_hidden: false, launch_at_login: false, autostart_enabled: false as boolean | null, tray_available: true };
     const callbacks = new Map<number, (event: { event: string; id: number; payload: unknown }) => void>();
     let callbackId = 0;
@@ -290,7 +237,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       snapshot.settings.clock_format = value;
       for (const [id, handler] of clockListeners) callbacks.get(handler)?.({ event: 'rhythm://clock-format-changed', id, payload: value });
     };
-    const fixture = { ai, analyses, options, entries, studium, mini, emitStudiumState, emitTheme, emitClockFormat, studiumStateListenerCount: () => stateListeners.size, themeListenerCount: () => themeListeners.size, clockListenerCount: () => clockListeners.size, miniSettingsResolvers: [] as Array<() => void>, releaseMiniSettings() { this.miniSettingsResolvers.splice(0).forEach((release) => release()); }, studiumSnapshotGate: false, studiumSnapshotResolvers: [] as Array<() => void>, releaseStudiumSnapshots() { this.studiumSnapshotResolvers.splice(0).forEach((release) => release()); }, studiumStatusDelay: 0, studiumSaveError: options.studiumSaveError ?? false, studiumAlertSaveError: options.studiumAlertSaveError ?? false, studiumCancelRequested: null as number | null, studiumJobAutomatic: studium.automatic.active && studium.running, calls: [] as { command: string; args: any }[], sourceDelay: options.sourceDelay ?? 0,
+    const fixture = { ai, options, entries, studium, mini, emitStudiumState, emitTheme, emitClockFormat, studiumStateListenerCount: () => stateListeners.size, themeListenerCount: () => themeListeners.size, clockListenerCount: () => clockListeners.size, miniSettingsResolvers: [] as Array<() => void>, releaseMiniSettings() { this.miniSettingsResolvers.splice(0).forEach((release) => release()); }, studiumSnapshotGate: false, studiumSnapshotResolvers: [] as Array<() => void>, releaseStudiumSnapshots() { this.studiumSnapshotResolvers.splice(0).forEach((release) => release()); }, studiumStatusDelay: 0, studiumSaveError: options.studiumSaveError ?? false, studiumAlertSaveError: options.studiumAlertSaveError ?? false, studiumCancelRequested: null as number | null, studiumJobAutomatic: studium.automatic.active && studium.running, calls: [] as { command: string; args: any }[], sourceDelay: options.sourceDelay ?? 0,
       finishStudiumCancel() {
         if (this.studiumCancelRequested !== studium.job_id || !studium.running) return;
         studium.running = false;
@@ -315,7 +262,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       modelDirectoryResolvers: [] as Array<() => void>,
       releaseModelDirectory() { this.modelDirectoryResolvers.splice(0).forEach((release) => release()); },
       dialogs: [] as string[], dialogAnswers: [] as ('ok' | 'cancel')[], trashCalls: [] as { command: string; ids: number[] | null }[],
-      stateDelay: 0, subscribeError: false, snapshotFailures: 0, resultsFailures: 0, documentJobs: [] as any[], retryMessage: '자료를 내려받지 못했습니다. 연결을 확인해 주세요.',
+      stateDelay: 0, subscribeError: false, snapshotFailures: 0, retryMessage: '자료를 내려받지 못했습니다. 연결을 확인해 주세요.',
       queryResolvers: [] as Array<() => void>,
       emitUpdater: (payload: unknown) => {
         if (updaterHandler !== null) callbacks.get(updaterHandler)?.({ event: 'updater://progress', id: ++eventId, payload: copy(payload) });
@@ -337,16 +284,6 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       completeSync: () => { sync = { ...sync, running: false, message: '가져오기를 마쳤습니다.', active: [] }; },
       syncMode: (mode: string, page = 1) => { sync = { ...sync, running: true, mode, active: [board(mode, page)] }; },
       syncBoards: (ids: string[]) => { sync = { ...sync, running: true, mode: 'refresh', active: ids.map((id) => board('historical', 1, id)) }; } };
-    let operationStarted = 0;
-    let analysisStarted = 0;
-    async function operation(kind: AiOperation['kind'], delay: number) {
-      const current: AiOperation = { kind, phase: kind === 'setup' ? 'setup' : 'verifying', elapsed_ms: 0, cancelling: false };
-      ai.operation = current; operationStarted = Date.now();
-      try {
-        while (Date.now() - operationStarted < delay && !current.cancelling) await wait(25);
-        if (current.cancelling) throw 'AI 작업을 취소했습니다.';
-      } finally { if (ai.operation === current) ai.operation = null; }
-    }
     let calendarTodos = copy(options.calendarTodos ?? []);
     const noticeDates = copy(options.noticeDates ?? []);
     let calendarAllDeadlines = options.calendarAllDeadlines ?? false;
@@ -606,7 +543,6 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             }
             return copy(studium);
           case 'complete_onboarding': snapshot.onboarding_completed = true; return copy(snapshot);
-          case 'worker_status': return copy(snapshot.worker);
           case 'personalization_get': return copy(personalization);
           case 'personalization_save_profile':
             await wait(options.profileSaveDelay ?? 0);
@@ -661,27 +597,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           }
           case 'ai_snapshot': {
             if (fixture.snapshotFailures > 0) { fixture.snapshotFailures -= 1; throw '모델 정보를 일시적으로 확인하지 못했습니다.'; }
-            if (ai.operation) ai.operation.elapsed_ms = Date.now() - operationStarted;
-            if (ai.progress && analysisStarted) ai.progress.elapsed_ms = Date.now() - analysisStarted;
-            ai.busy = Boolean(ai.operation) || ai.jobs.some((job) => ['pending', 'running'].includes(job.status)) || ai.models.some((model) => ['pending', 'downloading', 'verifying'].includes(model.status));
+            ai.busy = ai.models.some((model) => ['pending', 'downloading', 'verifying'].includes(model.status));
             return copy(ai);
           }
-          case 'ai_document_jobs': return copy([...ai.jobs, ...fixture.documentJobs].filter((job) => job.document_id === args.documentId && job.revision_id === args.revisionId).sort((a, b) => b.id - a.id));
-          case 'ai_diagnostics': return copy(ai.progress?.job_id === args.jobId ? ai.progress : null);
           case 'ai_classifications': return copy(classifications.filter((row) => args.documentIds.includes(row.document_id)));
           case 'ai_classification': return copy(classifications.find((row) => row.document_id === args.documentId && row.revision_id === args.revisionId) ?? null);
           case 'ai_similar_notices': return copy(similar[args.documentId] ?? []);
           case 'ai_duplicate_notices': return copy(args.documentIds.flatMap((id: number) => { const duplicates = (similar[id] ?? []).filter((row) => row.duplicate); return duplicates.length ? [{ document_id: id, duplicates }] : []; }));
           case 'ai_classification_preferences': ai.preferences.classification_enabled = Boolean(args.enabled); ai.classification = { state: args.enabled ? 'idle' : 'disabled', processed: ai.classification.processed }; return null;
-          case 'ai_recent': return copy(analyses.filter((result) => result.revision_id === 1));
-          case 'ai_results':
-            if (fixture.resultsFailures > 0) { fixture.resultsFailures -= 1; throw '분석 정보를 일시적으로 확인하지 못했습니다.'; }
-            if (options.aiResultLag && !resultLagUsed && ai.jobs.some((job) => job.status === 'completed')) { resultLagUsed = true; return []; }
-            return copy(analyses.filter((result) => result.document_id === args.documentId && result.revision_id === args.revisionId).sort((a, b) => b.id - a.id));
-          case 'ai_remote_status': return Boolean(ai.remote_key_present);
-          case 'ai_remote_key': if (!args.key || String(args.key).trim() === '') throw 'API 키를 확인해 주세요.'; ai.remote_key_present = true; return null;
-          case 'ai_remote_key_clear': ai.remote_key_present = false; return null;
-          case 'ai_remote_test': if (!ai.remote_key_present) throw '원격 AI API 키를 저장해 주세요.'; return `연결되었습니다 · ${ai.preferences.remote_model ?? '모델'} · ${ai.remote_host ?? 'API'}`;
           case 'ai_install': {
             const entry = ai.catalog.find((value) => value.id === args.catalogId);
             let installed = ai.models.find((value) => value.id === args.catalogId);
@@ -703,24 +626,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             }, options.aiDelay ?? 1800);
             return null;
           }
-          case 'ai_cancel_download': ai.models.forEach((model) => { if (model.status === 'downloading') model.status = 'cancelled'; }); ai.projectors.forEach((projector) => { if (projector.status === 'downloading') projector.status = 'cancelled'; }); return null;
-          case 'ai_install_projector': {
-            let projector = ai.projectors.find((value) => value.model_id === args.modelId);
-            if (!projector) { projector = projectorRow('downloading', 600000); ai.projectors.push(projector); }
-            projector.status = 'downloading'; projector.downloaded_bytes = 600000; projector.error = null;
-            setTimeout(() => { if (projector!.status !== 'downloading') return; projector!.status = 'installed'; projector!.sha256 = projector!.expected_sha256; projector!.bytes = projector!.expected_bytes; projector!.downloaded_bytes = projector!.expected_bytes; }, options.aiDelay ?? 1800);
-            return null;
-          }
-          case 'ai_remove_projector':
-            if (!args.confirmed) throw '이미지 인식 모듈 삭제를 확인해 주세요.';
-            ai.projectors = ai.projectors.filter((projector) => projector.model_id !== args.modelId);
-            return null;
-          case 'ai_register': ai.models.push({ ...model('external-model'), catalog_id: null as any, ownership: 'external', path: args.path, name: '외부 로컬 모델' }); return null;
-          case 'ai_select': ai.preferences.active_model_id = args.id; ai.runtime.model = null; return null;
-          case 'ai_load': await operation('load', options.aiLoadDelay ?? 0); ai.runtime.model = ai.models.find((value) => value.id === ai.preferences.active_model_id)?.path ?? null; return null;
-          case 'ai_cancel_operation': if (ai.operation) ai.operation.cancelling = true; return null;
-          case 'ai_unload':
-          case 'ai_restart': ai.runtime.model = null; return null;
+          case 'ai_cancel_download': ai.models.forEach((model) => { if (model.status === 'downloading') model.status = 'cancelled'; }); return null;
           case 'ai_choose_model_directory': {
             if (options.aiModelDirectoryGate) await new Promise<void>((resolve) => fixture.modelDirectoryResolvers.push(resolve));
             if (options.aiModelDirectoryChoice === null) return false;
@@ -737,39 +643,11 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             return null;
           case 'ai_preferences':
             if (args.preferences.model_directory !== ai.preferences.model_directory) throw '모델 설치 폴더는 폴더 선택 명령으로 변경해 주세요.';
-            if (args.preferences.remote_base_url !== ai.preferences.remote_base_url) {
-              ai.preferences.remote_consent = false;
-              ai.preferences.remote_automatic = false;
-              ai.preferences.remote_embeddings = false;
-              ai.remote_key_present = null;
-              args.preferences.remote_consent = false;
-              args.preferences.remote_automatic = false;
-              args.preferences.remote_embeddings = false;
-              ai.remote_host = args.preferences.remote_base_url ? String(args.preferences.remote_base_url).replace(/^https?:\/\//, '').split('/')[0] : null;
-            }
-            if (args.preferences.engine === 'openai-compatible' && args.preferences.remote_consent && !args.preferences.remote_base_url) throw 'API 주소를 먼저 입력해 주세요.';
-            if (args.preferences.engine === 'openai-compatible' && args.preferences.remote_consent && !args.preferences.remote_model) throw '원격 모델 이름을 입력해 주세요.';
-            if (args.preferences.execution_mode !== ai.preferences.execution_mode) {
-              if (options.aiExecutionError) throw '실행 장치를 저장하지 못했습니다. 다시 시도해 주세요.';
-              ai.runtime.model = null;
-            }
-            if (args.preferences.setup_completed && !ai.preferences.setup_completed) await operation('setup', options.aiSetupDelay ?? 0);
+            if (args.preferences.execution_mode !== ai.preferences.execution_mode && options.aiExecutionError) throw '실행 장치를 저장하지 못했습니다. 다시 시도해 주세요.';
             Object.assign(ai.preferences, args.preferences); return null;
           case 'ai_remove':
             if (options.aiRemoveError && !args.keepFiles && ai.models.find((model) => model.id === args.id)?.ownership === 'managed') throw '모델 폴더에 접근할 수 없습니다.';
-            ai.models = ai.models.filter((model) => model.id !== args.id); if (ai.preferences.active_model_id === args.id) ai.preferences.active_model_id = null; return null;
-          case 'ai_analyze': {
-            const cached = analyses.find((result) => result.document_id === args.documentId && result.revision_id === args.revisionId);
-            if (cached && !args.regenerate) return { cached: copy(cached), job: null };
-            const generated = analysis(analyses.length + ai.jobs.length + 1, args.documentId, args.revisionId);
-            const job = { ...generated, model_identity: options.aiRemoteResult ? { engine: 'openai-compatible', name: options.aiRemoteModel ?? 'test-model', host: 'api.example.com' } : { engine: 'local', name: 'Qwen3.5 4B' }, priority: 100, status: 'running', error: null as string | null, updated_at: '2026-10-24 12:00:00' };
-            ai.jobs.unshift(job);
-            analysisStarted = Date.now();
-            ai.progress = { job_id: job.id, phase: 'inference', elapsed_ms: 0, stages_ms: {}, attempts: [{}] };
-            setTimeout(() => { if (job.status !== 'running') return; job.status = options.aiInferenceError ? 'failed' : 'completed'; job.error = options.aiInferenceError ? '로컬 추론에 실패했습니다. 다시 요청해 주세요.' : null; ai.progress = null; if (!options.aiInferenceError) analyses.push(generated); }, options.aiDelay ?? 300);
-            return { cached: null, job: copy(job) };
-          }
-          case 'ai_cancel': { const job = [...ai.jobs, ...fixture.documentJobs].find((job) => job.id === args.id); if (job) job.status = 'cancelled'; if (ai.progress?.job_id === args.id) ai.progress = null; return null; }
+            ai.models = ai.models.filter((model) => model.id !== args.id); if (ai.preferences.embedding_model_id === args.id) ai.preferences.embedding_model_id = null; return null;
           case 'archive_sources': { const result = copy(sources).map((source) => ({ ...source, unread: entries.filter((x) => x.source_id === source.id && !x.is_read && !x.trashed).length })); await wait(fixture.sourceDelay); return result; }
           case 'archive_summary': {
             // As the store: notices in 휴지통 count only as trashed.
@@ -905,7 +783,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     // synchronous-looking `window.confirm` returns an always-truthy Promise.
     window.alert = (text?: unknown) => { void (window as any).__TAURI_INTERNALS__.invoke('plugin:dialog|message', { message: String(text) }); };
     window.confirm = (async (text?: unknown) => 'Ok' === await (window as any).__TAURI_INTERNALS__.invoke('plugin:dialog|message', { message: String(text), buttons: 'OkCancel' })) as unknown as typeof window.confirm;
-  }, { options, contract: analysisContract });
+  }, { options });
 }
 
 export async function callCount(page: Page, command: string) {

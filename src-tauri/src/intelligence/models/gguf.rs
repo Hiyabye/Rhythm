@@ -6,25 +6,6 @@ pub fn verify_file(
     expected: Option<(&str, u64)>,
     cancel: &AtomicBool,
 ) -> Result<(String, u64), String> {
-    verify_artifact(path, expected, cancel, true)
-}
-
-/// A projector is a GGUF multimodal encoder, not a text model: its
-/// architecture is `clip`, so only the container and the pinned identity apply.
-pub(super) fn verify_projector_file(
-    path: &Path,
-    expected: Option<(&str, u64)>,
-    cancel: &AtomicBool,
-) -> Result<(String, u64), String> {
-    verify_artifact(path, expected, cancel, false)
-}
-
-pub(super) fn verify_artifact(
-    path: &Path,
-    expected: Option<(&str, u64)>,
-    cancel: &AtomicBool,
-    require_architecture: bool,
-) -> Result<(String, u64), String> {
     let mut file = File::open(path).map_err(|_| "모델 파일을 열지 못했습니다.")?;
     let size = file
         .metadata()
@@ -33,7 +14,7 @@ pub(super) fn verify_artifact(
     if size == 0 || size > 32 * 1024 * 1024 * 1024 || expected.is_some_and(|(_, n)| n != size) {
         return Err("모델 파일 크기가 올바르지 않습니다.".into());
     }
-    validate_gguf(&file, size, require_architecture)?;
+    validate_gguf(&file, size)?;
     file.rewind().map_err(|_| "모델 파일을 읽지 못했습니다.")?;
     let mut hash = Sha256::new();
     let mut buffer = vec![0; 1024 * 1024];
@@ -135,11 +116,9 @@ pub(super) fn skip_value(
         _ => Err("지원하지 않는 GGUF 메타데이터입니다.".into()),
     }
 }
-pub(super) fn validate_gguf(
-    file: &File,
-    size: u64,
-    require_architecture: bool,
-) -> Result<(), String> {
+/// The embedding model is `qwen3`. `qwen35` and `gemma4` are the retired
+/// generation models, which a user may still have installed.
+pub(super) fn validate_gguf(file: &File, size: u64) -> Result<(), String> {
     let file = &mut GgufReader {
         reader: BufReader::new(file),
         position: 0,
@@ -159,9 +138,6 @@ pub(super) fn validate_gguf(
         let key = gguf_string(file, 1024)?;
         let kind = read_u32(file)?;
         if key == "general.architecture" {
-            if !require_architecture {
-                return Ok(());
-            }
             if kind != 8 {
                 return Err("GGUF 모델 아키텍처 형식이 올바르지 않습니다.".into());
             }
@@ -175,9 +151,5 @@ pub(super) fn validate_gguf(
         }
         skip_value(file, kind, size, false)?;
     }
-    if require_architecture {
-        Err("GGUF 모델 아키텍처를 찾지 못했습니다.".into())
-    } else {
-        Ok(())
-    }
+    Err("GGUF 모델 아키텍처를 찾지 못했습니다.".into())
 }

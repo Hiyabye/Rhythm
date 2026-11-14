@@ -34,7 +34,7 @@ const board = { id: 'computing-updates', name: '소식', organization: '소프�
 const cyber = { id: 'cybercampus', name: '강의 공지', organization: '서강대학교 · 사이버캠퍼스', supported: true, subscribed: true, family: 'cybercampus' };
 
 async function open(page: Page, options: FixtureOptions = {}) {
-  await mockDesktop(page, { count: titles.length, sourceList: [board, cyber], aiInstalled: true, aiSemanticSearch: true, aiResult: true,
+  await mockDesktop(page, { count: titles.length, sourceList: [board, cyber], aiEmbeddingInstalled: true, aiSemanticSearch: true,
     initialInterests: [{ id: 1, name: '장학금', aliases: ['장학'], priority: 3, polarity: 'positive', origin: 'explicit', evidence_count: 0, evidence_summary: null, updated_at: '2026-10-27' }],
     cybercampusId: '20990001', cybercampusTasks: tasks, ...options });
   // Runs after the fixture's own init script and edits its entries in place.
@@ -67,20 +67,18 @@ test('inbox', async ({ page }) => {
   await shot(page, 'inbox');
 });
 test('explore search', async ({ page }) => {
-  await open(page, { aiEmbeddingInstalled: true });
+  await open(page);
   await nav(page, '탐색');
   await page.getByRole('searchbox').first().fill('장학');
   await expect(page.locator('#notice-1')).toBeVisible();
   await shot(page, 'explore');
 });
-test('reader with AI analysis', async ({ page }) => {
-  await open(page);
-  // The canned analysis names a 30 October deadline, so publish the notice before it.
-  await page.evaluate(() => { (window as any).__fixture.entries[0].published_at = '2026-10-24'; });
+test('reader with notice dates', async ({ page }) => {
+  await open(page, { noticeDates: [{ document_id: 1, ordinal: 0, title: titles[0][0], day: day(5), time: '18:00', label: '신청 마감', kind: 'deadline' }] });
   await nav(page, '받은 소식');
   await page.locator('#notice-1').click();
   await expect(page.locator('.reader-header h2')).toHaveText(titles[0][0]);
-  await expect(page.getByRole('region', { name: '공지 AI 분석' }).getByText('장학금 신청 일정과 제출 서류를 확인하세요.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: /공지 속 날짜/ })).toContainText('신청 마감');
   await shot(page, 'reader');
 });
 test('deadlines', async ({ page }) => {
@@ -93,6 +91,6 @@ test('deadlines', async ({ page }) => {
 test('settings AI', async ({ page }) => {
   await open(page);
   await openSettings(page, 'AI');
-  await expect(page.getByText('Qwen3.5 4B').first()).toBeVisible();
+  await expect(page.getByRole('group', { name: '공지 분류' })).toContainText('Qwen3-Embedding 0.6B');
   await shot(page, 'settings-ai');
 });

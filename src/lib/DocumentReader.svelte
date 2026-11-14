@@ -2,17 +2,16 @@
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import type { AiClassification, DocumentDetail, NoticeDate, SimilarNotice, SyncStatus, TodoPrefill } from './types';
-  import { archiveDate, archiveError, archiveSize, noticeDateMark, noticeDateTodo, noticeTodo, resourceStatus } from './archive-format';
+  import { archiveDate, archiveError, archiveSize, noticeDateMark, noticeDateTodo, resourceStatus } from './archive-format';
   import { clock } from './clock.svelte';
   import { confirmAction } from './confirm';
   import Icon from './Icon.svelte';
-  import AnalysisPanel from './AnalysisPanel.svelte';
   import { fly } from './motion';
 
   // `enabledSources` lists the sources whose extension is on: only those may download more files.
   // `oncalendar` is set only while the calendar extension is on.
-  let { id, initialRevisionId = null, enabledSources, ai, onclose, onchange, onaisettings, onopen, oncalendar }: {
-    id: number; initialRevisionId?: number | null; enabledSources: string[]; ai: boolean; onclose: () => void; onchange: () => void; onaisettings: () => void; onopen: (id: number) => void;
+  let { id, initialRevisionId = null, enabledSources, ai, onclose, onchange, onopen, oncalendar }: {
+    id: number; initialRevisionId?: number | null; enabledSources: string[]; ai: boolean; onclose: () => void; onchange: () => void; onopen: (id: number) => void;
     oncalendar?: (prefill: TodoPrefill) => void;
   } = $props();
   let detail = $state<DocumentDetail | null>(null);
@@ -392,8 +391,6 @@
         </label>
       {/if}
     </header>
-    {#if ai}{#key detail.revision_id}<AnalysisPanel documentId={detail.item.id} revisionId={detail.revision_id} onsettings={onaisettings} {onchange}
-      oncalendar={oncalendar && ((fact) => oncalendar(noticeTodo(fact.label, detail!.item.title, fact.date!, detail!.item.id, fact.origin === 'image')))} />{/key}{/if}
     {#if detail.body_html === '' && detail.body_text === ''}
       <p class="reader-plain" role="status"><strong>본문 미지원</strong> · 이 공지의 본문은 로컬에 보관되지 않았습니다. 학교 원문을 열어 확인해 주세요.</p>
     {:else}

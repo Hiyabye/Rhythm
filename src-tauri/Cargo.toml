@@ -44,7 +44,7 @@ sha2 = { version = "0.10", features = ["asm"] }
 block2 = "0.6.2"
 objc2-user-notifications = { version = "0.3.2", features = ["block2", "UNUserNotificationCenter", "UNNotificationSettings"] }
 mac-usernotifications = { version = "=0.3.1", default-features = false }
-# Remote API keys stay in the OS credential store, never SQLite or a file.
+# Credentials (the eClass login) stay in the OS credential store, never SQLite or a file.
 keyring = { version = "4.2", default-features = false, features = ["v1", "apple-native-keyring-store"] }
 # Windows registers login startup in the per-user Run key instead.
 [target.'cfg(not(windows))'.dependencies]

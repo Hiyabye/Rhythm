@@ -25,7 +25,6 @@ fn execution_preference_migrates_schema_seven_and_persists_without_resetting_arc
     let mut preferences = store.ai_preferences().unwrap();
     assert_eq!(preferences.execution_mode, "auto");
     assert_eq!(preferences.model_directory, None);
-    assert_eq!(preferences.max_tokens, 2048);
     assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
     assert_eq!(
         store
@@ -63,165 +62,8 @@ fn execution_preference_old_payload_defaults_to_auto() {
     .unwrap();
     assert_eq!(preferences.execution_mode, "auto");
     assert_eq!(preferences.model_directory, None);
-    assert_eq!(preferences.engine, "local");
-    assert_eq!(preferences.remote_base_url, None);
-    assert_eq!(preferences.remote_model, None);
-    assert_eq!(preferences.remote_embedding_model, None);
-    assert_eq!(preferences.remote_timeout_seconds, 120);
-    assert!(!preferences.remote_consent);
-    assert!(!preferences.remote_automatic);
-    assert_eq!(preferences.remote_daily_limit, 20);
-    assert!(!preferences.remote_embeddings);
-}
-
-#[test]
-fn remote_engine_migrates_schema_fifteen_and_persists_disabled() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("db");
-    populated_schema_two(&path);
-    let connection = Connection::open(&path).unwrap();
-    for migration in [
-        include_str!("../../migrations/003_intelligence.sql"),
-        include_str!("../../migrations/004_personalization.sql"),
-        include_str!("../../migrations/005_proactive.sql"),
-        include_str!("../../migrations/006_notification_attempts.sql"),
-        include_str!("../../migrations/007_notification_activation.sql"),
-        include_str!("../../migrations/008_ai_execution_mode.sql"),
-        include_str!("../../migrations/009_ai_model_directory.sql"),
-        include_str!("../../migrations/010_update_check.sql"),
-        include_str!("../../migrations/011_skipped_articles.sql"),
-        include_str!("../../migrations/012_resource_retry.sql"),
-        include_str!("../../migrations/013_ai_projector.sql"),
-        include_str!("../../migrations/014_ai_backlog_mode.sql"),
-        include_str!("../../migrations/015_ai_embedding.sql"),
-    ] {
-        connection.execute_batch(migration).unwrap();
-    }
-    drop(connection);
-    let store = Store::open(&path).unwrap();
-    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
-    let mut preferences = store.ai_preferences().unwrap();
-    // Upgrading never opts into remote inference or its cost-bearing modes.
-    assert_eq!(preferences.engine, "local");
-    assert!(!preferences.remote_consent);
-    assert!(!preferences.remote_automatic);
-    assert!(!preferences.remote_embeddings);
-    assert_eq!(preferences.remote_timeout_seconds, 120);
-    assert_eq!(preferences.remote_daily_limit, 20);
-
-    preferences.engine = "openai-compatible".into();
-    preferences.remote_base_url = Some("https://api.example.com/v1".into());
-    preferences.remote_model = Some("test-model".into());
-    preferences.remote_embedding_model = Some("test-embedding".into());
-    preferences.remote_timeout_seconds = 45;
-    preferences.remote_consent = true;
-    preferences.remote_automatic = true;
-    preferences.remote_daily_limit = 7;
-    preferences.remote_embeddings = true;
-    store.ai_save_preferences(&preferences).unwrap();
-    drop(store);
-
-    let reopened = Store::open(&path).unwrap();
-    let stored = reopened.ai_preferences().unwrap();
-    assert_eq!(stored.engine, "openai-compatible");
-    assert_eq!(
-        stored.remote_base_url.as_deref(),
-        Some("https://api.example.com/v1")
-    );
-    assert_eq!(stored.remote_model.as_deref(), Some("test-model"));
-    assert_eq!(
-        stored.remote_embedding_model.as_deref(),
-        Some("test-embedding")
-    );
-    assert_eq!(stored.remote_timeout_seconds, 45);
-    assert!(stored.remote_consent);
-    assert!(stored.remote_automatic);
-    assert_eq!(stored.remote_daily_limit, 7);
-    assert!(stored.remote_embeddings);
-}
-
-#[test]
-fn api_key_is_not_a_persisted_preference_or_backup_field() {
-    let (directory, store) = database();
-    let mut preferences = store.ai_preferences().unwrap();
-    preferences.engine = "openai-compatible".into();
-    preferences.remote_base_url = Some("https://api.example.com".into());
-    preferences.remote_model = Some("model".into());
-    preferences.remote_consent = true;
-    store.ai_save_preferences(&preferences).unwrap();
-    // The credential-store value is never passed to SQLite. A distinctive
-    // marker verifies the database and its WAL contain no key material.
-    let marker = "sk-rhythm-must-not-persist-7f4a";
-    let raw = std::fs::read(directory.path().join("db")).unwrap();
-    assert!(!raw
-        .windows(marker.len())
-        .any(|window| window == marker.as_bytes()));
-    let wal = std::fs::read(directory.path().join("db-wal")).unwrap_or_default();
-    assert!(!wal
-        .windows(marker.len())
-        .any(|window| window == marker.as_bytes()));
-}
-
-#[test]
-fn remote_automatic_usage_is_bounded_and_releasable() {
-    let (_directory, store) = database();
-    assert_eq!(store.ai_remote_usage_today().unwrap(), 0);
-    assert!(store.ai_reserve_remote_automatic(2).unwrap());
-    assert!(store.ai_reserve_remote_automatic(2).unwrap());
-    assert!(!store.ai_reserve_remote_automatic(2).unwrap());
-    assert_eq!(store.ai_remote_usage_today().unwrap(), 2);
-    store.ai_release_remote_automatic().unwrap();
-    assert_eq!(store.ai_remote_usage_today().unwrap(), 1);
-    assert!(store.ai_reserve_remote_automatic(2).unwrap());
-    assert!(!store.ai_reserve_remote_automatic(0).unwrap());
-}
-
-#[test]
-fn invalid_remote_preferences_are_rejected_without_persisting() {
-    let (_directory, store) = database();
-    let initial = store.ai_preferences().unwrap();
-    let mut preferences = initial.clone();
-    preferences.engine = "cloud".into();
-    assert!(store.ai_save_preferences(&preferences).is_err());
-    preferences = initial.clone();
-    preferences.remote_timeout_seconds = 5;
-    assert!(store.ai_save_preferences(&preferences).is_err());
-    preferences = initial.clone();
-    preferences.remote_daily_limit = 201;
-    assert!(store.ai_save_preferences(&preferences).is_err());
-    preferences = initial.clone();
-    preferences.remote_base_url = Some("https://api.example.com\n".into());
-    assert!(store.ai_save_preferences(&preferences).is_err());
-    preferences = initial.clone();
-    preferences.remote_model = Some("   ".into());
-    assert!(store.ai_save_preferences(&preferences).is_err());
-    assert_eq!(store.ai_preferences().unwrap(), initial);
-}
-
-#[test]
-fn restore_disables_remote_preferences_until_a_new_consent() {
-    let (_directory, store) = database();
-    let mut preferences = store.ai_preferences().unwrap();
-    preferences.engine = "openai-compatible".into();
-    preferences.remote_base_url = Some("https://api.example.com".into());
-    preferences.remote_model = Some("model".into());
-    preferences.remote_consent = true;
-    preferences.remote_automatic = true;
-    preferences.remote_embeddings = true;
-    store.ai_save_preferences(&preferences).unwrap();
-    store.reset_remote_after_restore().unwrap();
-    let restored = store.ai_preferences().unwrap();
-    assert_eq!(restored.engine, "local");
-    assert!(!restored.remote_consent);
-    assert!(!restored.remote_automatic);
-    assert!(!restored.remote_embeddings);
-    // The address and model remain as inert configuration; only authorization
-    // is revoked, so the user can review what will be re-enabled.
-    assert_eq!(
-        restored.remote_base_url.as_deref(),
-        Some("https://api.example.com")
-    );
-    assert_eq!(restored.remote_model.as_deref(), Some("model"));
+    assert_eq!(preferences.embedding_model_id, None);
+    assert!(preferences.classification_enabled);
 }
 
 #[test]
@@ -253,7 +95,6 @@ fn model_directory_migrates_schema_eight_without_relocating_models() {
     let preferences = store.ai_preferences().unwrap();
     assert_eq!(preferences.model_directory, None);
     assert_eq!(preferences.execution_mode, "gpu");
-    assert_eq!(preferences.max_tokens, 2048);
     let old = store.ai_model("old").unwrap().unwrap();
     assert_eq!(old.storage_directory, None);
     assert_eq!(old.path, "models/old.gguf");
@@ -368,67 +209,6 @@ fn model_directory_rejects_malformed_input_without_changing_preferences_or_inven
     integrity(&store);
 }
 
-#[test]
-fn actual_backend_provenance_commits_with_result_and_survives_reopen() {
-    let (directory, mut store) = database();
-    let job = store
-        .ai_enqueue(&key(), &json!({"id":"test","execution_mode":"auto"}), 1)
-        .unwrap();
-    store.ai_claim_next().unwrap();
-    store.connection.execute_batch("CREATE TRIGGER reject_gpu_result BEFORE INSERT ON ai_results BEGIN SELECT RAISE(ABORT,'test result failure'); END;").unwrap();
-    assert!(store
-        .ai_complete_job_with_backend(
-            job.id,
-            &json!({"summary":"tested"}),
-            false,
-            4,
-            4,
-            10,
-            Some("vulkan"),
-            None
-        )
-        .is_err());
-    assert!(store
-        .ai_job(job.id)
-        .unwrap()
-        .unwrap()
-        .model_identity
-        .get("loaded_backend")
-        .is_none());
-    assert!(store.ai_cached_result(&key()).unwrap().is_none());
-    store
-        .connection
-        .execute_batch("DROP TRIGGER reject_gpu_result;")
-        .unwrap();
-    let result = store
-        .ai_complete_job_with_backend(
-            job.id,
-            &json!({"summary":"tested"}),
-            false,
-            4,
-            4,
-            10,
-            Some("vulkan"),
-            None,
-        )
-        .unwrap();
-    assert_eq!(result.model_identity["loaded_backend"], "vulkan");
-    assert_eq!(
-        store.ai_job(job.id).unwrap().unwrap().model_identity["loaded_backend"],
-        "vulkan"
-    );
-    drop(store);
-    let reopened = Store::open(&directory.path().join("db")).unwrap();
-    assert_eq!(
-        reopened
-            .ai_cached_result(&key())
-            .unwrap()
-            .unwrap()
-            .model_identity["loaded_backend"],
-        "vulkan"
-    );
-}
-
 fn populated_schema_two(path: &Path) {
     let connection = Connection::open(path).unwrap();
     connection
@@ -451,17 +231,6 @@ fn database() -> (tempfile::TempDir, Store) {
     let path = directory.path().join("db");
     populated_schema_two(&path);
     (directory, Store::open(&path).unwrap())
-}
-fn key() -> AnalysisKey {
-    AnalysisKey {
-        document_id: 1,
-        revision_id: 1,
-        task: "notice_analysis".into(),
-        model_sha256: "a".repeat(64),
-        prompt_version: 1,
-        schema_version: 1,
-        configuration_hash: "b".repeat(64),
-    }
 }
 fn model(id: &str, ownership: &str) -> AiModel {
     AiModel {
@@ -512,573 +281,6 @@ fn integrity(store: &Store) {
         .unwrap();
 }
 #[test]
-fn active_jobs_and_document_history_are_independent_of_global_history_window() {
-    let (_directory, mut store) = database();
-    let active_key = key();
-    let active = store
-        .ai_enqueue(&active_key, &json!({"id":"old-model"}), 1)
-        .unwrap();
-    assert_eq!(store.ai_claim_next().unwrap().unwrap().id, active.id);
-    let pending_key = AnalysisKey {
-        prompt_version: 2,
-        ..key()
-    };
-    let pending = store
-        .ai_enqueue(&pending_key, &json!({"id":"old-model"}), 50)
-        .unwrap();
-    for version in 3..=105 {
-        let newer_key = AnalysisKey {
-            prompt_version: version,
-            model_sha256: "c".repeat(64),
-            ..key()
-        };
-        let newer = store
-            .ai_enqueue(&newer_key, &json!({"id":"other-model"}), 100)
-            .unwrap();
-        store.ai_finish_job(newer.id, "failed", None, None).unwrap();
-    }
-    assert!(!store
-        .ai_jobs(100)
-        .unwrap()
-        .iter()
-        .any(|job| job.id == active.id || job.id == pending.id));
-    let visible = store.ai_active_jobs().unwrap();
-    assert_eq!(
-        visible.iter().map(|job| job.id).collect::<Vec<_>>(),
-        [pending.id, active.id]
-    );
-    assert_eq!(visible[0].status, "pending");
-    assert_eq!(visible[1].status, "running");
-    assert!(store.ai_has_model_jobs(&active_key.model_sha256).unwrap());
-    assert!(!store.ai_has_model_jobs(&"c".repeat(64)).unwrap());
-    assert!(!store.ai_has_model_jobs(&"d".repeat(64)).unwrap());
-
-    store.connection.execute_batch("INSERT INTO documents(id,source_id,external_id,canonical_url,title,published_at,body_html,body_text,content_hash,historical) VALUES(2,'test','second','https://www.sogang.ac.kr/second','다른 공지','2026-01-01','<p>본문</p>','본문','secondhash',1); INSERT INTO document_revisions(id,document_id,canonical_url,title,published_at,original,body_html,body_text,content_hash) VALUES(2,2,'https://www.sogang.ac.kr/second','다른 공지','2026-01-01','original','<p>본문</p>','본문','secondhash');").unwrap();
-    let other = store
-        .ai_enqueue(
-            &AnalysisKey {
-                document_id: 2,
-                revision_id: 2,
-                ..key()
-            },
-            &json!({}),
-            1,
-        )
-        .unwrap();
-    assert_eq!(
-        store.ai_document_jobs(1, 1, 1).unwrap()[0]
-            .key
-            .prompt_version,
-        105
-    );
-    let local_history = store.ai_document_jobs(1, 1, 20).unwrap();
-    assert!(local_history.iter().any(|job| job.id == active.id));
-    assert!(local_history.iter().any(|job| job.id == pending.id));
-    assert_eq!(local_history.len(), 22);
-    assert_eq!(store.ai_document_jobs(1, 1, 1000).unwrap().len(), 102);
-    assert_eq!(store.ai_document_jobs(2, 2, 10).unwrap()[0].id, other.id);
-    assert!(store.ai_document_jobs(1, 2, 10).unwrap().is_empty());
-    assert!(store.ai_document_jobs(1, 1, 0).unwrap().is_empty());
-    store
-        .ai_finish_job(active.id, "cancelled", None, None)
-        .unwrap();
-    store
-        .ai_finish_job(pending.id, "cancelled", None, None)
-        .unwrap();
-    store
-        .ai_finish_job(other.id, "cancelled", None, None)
-        .unwrap();
-    assert!(!store.ai_has_model_jobs(&active_key.model_sha256).unwrap());
-    assert!(store.ai_active_jobs().unwrap().is_empty());
-    integrity(&store);
-}
-fn recent_article(
-    external_id: &str,
-    published_at: &str,
-    body: &str,
-) -> crate::archive::model::ArticleInput {
-    crate::archive::model::ArticleInput {
-        external_id: external_id.into(),
-        canonical_url: format!("https://www.sogang.ac.kr/notice/{external_id}"),
-        title: "분석할 공지".into(),
-        author: None,
-        category: None,
-        published_at: published_at.into(),
-        modified_at: None,
-        original: body.into(),
-        unsupported_body: false,
-        body_html: format!("<p>{body}</p>"),
-        body_text: body.into(),
-        resources: vec![],
-        etag: None,
-        last_modified: None,
-    }
-}
-fn recent_record(
-    store: &Store,
-    external_id: &str,
-    published_at: &str,
-    historical: bool,
-    collected_at: &str,
-) -> (i64, i64) {
-    let (id, _) = store
-        .upsert_article(
-            "test",
-            &recent_article(external_id, published_at, "신청 안내"),
-            historical,
-        )
-        .unwrap();
-    let revision = store.document(id, None).unwrap().revision_id;
-    store
-        .connection
-        .execute(
-            "UPDATE documents SET collected_at=?2 WHERE id=?1",
-            params![id, collected_at],
-        )
-        .unwrap();
-    store
-        .connection
-        .execute(
-            "UPDATE document_revisions SET collected_at=?2 WHERE id=?1",
-            params![revision, collected_at],
-        )
-        .unwrap();
-    (id, revision)
-}
-#[test]
-fn recent_candidates_follow_ingestion_not_publication_and_exclude_startup_backfill() {
-    let (_directory, store) = database();
-    let boundary = "2026-10-25T12:00:00.500Z";
-    store.connection.execute_batch("UPDATE documents SET collected_at='2026-10-01T00:00:00.000Z'; UPDATE document_revisions SET collected_at='2026-10-01T00:00:00.000Z';").unwrap();
-    for index in 0..25 {
-        recent_record(
-            &store,
-            &format!("newer-publication-{index}"),
-            "2026-10-25",
-            false,
-            "2026-10-25T11:59:59.000Z",
-        );
-    }
-    let expected = recent_record(
-        &store,
-        "late-arrival",
-        "2025-01-01",
-        false,
-        "2026-10-25T12:00:00.501Z",
-    );
-    recent_record(
-        &store,
-        "backfill",
-        "2026-12-31",
-        true,
-        "2026-10-25T12:00:00.900Z",
-    );
-    recent_record(&store, "at-boundary", "2026-12-30", false, boundary);
-    assert_eq!(
-        store.ai_recent_candidates(boundary, 20, false).unwrap(),
-        [expected]
-    );
-    assert!(store
-        .ai_recent_candidates(boundary, 0, false)
-        .unwrap()
-        .is_empty());
-    integrity(&store);
-}
-#[test]
-fn recent_candidates_include_meaningful_revisions_of_old_and_historical_documents() {
-    let (_directory, store) = database();
-    let boundary = "2026-10-25T12:00:00.500Z";
-    store.connection.execute_batch("UPDATE documents SET collected_at='2026-10-01T00:00:00.000Z'; UPDATE document_revisions SET collected_at='2026-10-01T00:00:00.000Z';").unwrap();
-    let mut expected = Vec::new();
-    for (external, historical) in [("old-arrival", false), ("old-history", true)] {
-        let (id, original_revision) = recent_record(
-            &store,
-            external,
-            "2025-01-01",
-            historical,
-            "2026-10-01T00:00:00.000Z",
-        );
-        let old_attempt = store
-            .ai_enqueue(
-                &AnalysisKey {
-                    document_id: id,
-                    revision_id: original_revision,
-                    ..key()
-                },
-                &json!({}),
-                1,
-            )
-            .unwrap();
-        store
-            .ai_finish_job(old_attempt.id, "failed", None, None)
-            .unwrap();
-        let changed = recent_article(
-            external,
-            "2025-01-01",
-            "정정: 신청 마감은 2026년 10월 30일입니다.",
-        );
-        assert!(store.upsert_article("test", &changed, false).unwrap().1);
-        let revision = store.document(id, None).unwrap().revision_id;
-        assert_ne!(revision, original_revision);
-        store
-            .connection
-            .execute(
-                "UPDATE document_revisions SET collected_at='2026-10-25T12:00:00.600Z' WHERE id=?1",
-                [revision],
-            )
-            .unwrap();
-        assert_eq!(
-            store.document(id, None).unwrap().item.historical,
-            historical
-        );
-        // A validator/timestamp-only check does not create another revision.
-        assert!(!store.upsert_article("test", &changed, false).unwrap().1);
-        assert_eq!(store.document(id, None).unwrap().revision_id, revision);
-        expected.insert(0, (id, revision));
-    }
-    recent_record(
-        &store,
-        "fresh-backfill",
-        "2026-12-31",
-        true,
-        "2026-10-25T12:00:00.900Z",
-    );
-    assert_eq!(
-        store.ai_recent_candidates(boundary, 20, false).unwrap(),
-        expected
-    );
-    integrity(&store);
-}
-#[test]
-fn recent_candidates_never_retry_cached_failed_cancelled_or_active_revisions() {
-    let (_directory, mut store) = database();
-    let boundary = "2026-10-25T12:00:00.500Z";
-    store.connection.execute_batch("UPDATE documents SET collected_at='2026-10-01T00:00:00.000Z'; UPDATE document_revisions SET collected_at='2026-10-01T00:00:00.000Z';").unwrap();
-    let candidate_key = |(document_id, revision_id)| AnalysisKey {
-        document_id,
-        revision_id,
-        ..key()
-    };
-    let cached = recent_record(
-        &store,
-        "cached",
-        "2025-01-01",
-        false,
-        "2026-10-25T12:00:00.600Z",
-    );
-    let job = store
-        .ai_enqueue(&candidate_key(cached), &json!({}), 100)
-        .unwrap();
-    store.ai_claim_next().unwrap().unwrap();
-    store
-        .ai_complete_job(job.id, &json!({"summary":"저장된 결과"}), false, 1, 1, 1)
-        .unwrap();
-    let first_job = job.id;
-    for status in ["failed", "cancelled", "stale"] {
-        let identity = recent_record(
-            &store,
-            status,
-            "2025-01-01",
-            false,
-            "2026-10-25T12:00:00.600Z",
-        );
-        let job = store
-            .ai_enqueue(&candidate_key(identity), &json!({}), 100)
-            .unwrap();
-        store.ai_finish_job(job.id, status, None, None).unwrap();
-    }
-    let running = recent_record(
-        &store,
-        "running",
-        "2025-01-01",
-        false,
-        "2026-10-25T12:00:00.600Z",
-    );
-    let running_job = store
-        .ai_enqueue(&candidate_key(running), &json!({}), 100)
-        .unwrap();
-    assert_eq!(store.ai_claim_next().unwrap().unwrap().id, running_job.id);
-    let pending = recent_record(
-        &store,
-        "pending",
-        "2025-01-01",
-        false,
-        "2026-10-25T12:00:00.600Z",
-    );
-    store
-        .ai_enqueue(&candidate_key(pending), &json!({}), 100)
-        .unwrap();
-    for version in 10..120 {
-        let noise = store
-            .ai_enqueue(
-                &AnalysisKey {
-                    prompt_version: version,
-                    ..key()
-                },
-                &json!({}),
-                1,
-            )
-            .unwrap();
-        store.ai_finish_job(noise.id, "failed", None, None).unwrap();
-    }
-    assert!(store
-        .ai_jobs(100)
-        .unwrap()
-        .iter()
-        .all(|job| job.id != first_job));
-    let untouched = recent_record(
-        &store,
-        "unprocessed",
-        "2024-01-01",
-        false,
-        "2026-10-25T12:00:00.600Z",
-    );
-    assert_eq!(
-        store.ai_recent_candidates(boundary, 20, false).unwrap(),
-        [untouched]
-    );
-    assert!(store
-        .ai_cached_result(&candidate_key(cached))
-        .unwrap()
-        .is_some());
-    integrity(&store);
-}
-#[test]
-fn recent_candidate_window_is_bounded_and_has_stable_ingestion_order() {
-    let (_directory, store) = database();
-    let boundary = "2026-10-25T12:00:00.500Z";
-    store.connection.execute_batch("UPDATE documents SET collected_at='2026-10-01T00:00:00.000Z'; UPDATE document_revisions SET collected_at='2026-10-01T00:00:00.000Z';").unwrap();
-    let mut identities = Vec::new();
-    for index in 0..105 {
-        identities.push(recent_record(
-            &store,
-            &format!("candidate-{index}"),
-            "2025-01-01",
-            false,
-            "2026-10-25T12:00:00.600Z",
-        ));
-    }
-    identities.reverse();
-    assert_eq!(
-        store.ai_recent_candidates(boundary, 3, false).unwrap(),
-        identities[..3]
-    );
-    assert_eq!(
-        store.ai_recent_candidates(boundary, 1000, false).unwrap(),
-        identities[..100]
-    );
-    integrity(&store);
-}
-#[test]
-fn backlog_candidates_include_backfill_and_order_by_publication_newest_first() {
-    let (_directory, store) = database();
-    store
-        .connection
-        .execute("DELETE FROM documents", [])
-        .unwrap();
-    let old = recent_record(
-        &store,
-        "backfill-old",
-        "2024-03-01",
-        true,
-        "2026-10-01T00:00:00.000Z",
-    );
-    let new = recent_record(
-        &store,
-        "newest",
-        "2026-09-01",
-        false,
-        "2026-10-01T00:00:00.000Z",
-    );
-    let attempted = recent_record(
-        &store,
-        "attempted",
-        "2026-10-01",
-        false,
-        "2026-10-01T00:00:00.000Z",
-    );
-    store
-        .ai_enqueue(
-            &AnalysisKey {
-                document_id: attempted.0,
-                revision_id: attempted.1,
-                ..key()
-            },
-            &json!({}),
-            1,
-        )
-        .unwrap();
-    let empty = store
-        .upsert_article(
-            "test",
-            &recent_article("empty-body", "2026-11-01", ""),
-            false,
-        )
-        .unwrap()
-        .0;
-    assert!(store.document(empty, None).unwrap().body_text.is_empty());
-    assert_eq!(store.ai_backlog_candidates(20, false).unwrap(), [new, old]);
-    assert_eq!(store.ai_backlog_candidates(1, false).unwrap(), [new]);
-    assert!(store.ai_backlog_candidates(0, false).unwrap().is_empty());
-    integrity(&store);
-}
-#[test]
-fn remote_candidates_never_include_cybercampus_documents() {
-    let (_directory, store) = database();
-    store.catalog(&crate::archive::definitions()).unwrap();
-    store
-        .connection
-        .execute("DELETE FROM documents", [])
-        .unwrap();
-    let public = recent_record(
-        &store,
-        "public",
-        "2026-10-01",
-        false,
-        "2026-10-02T00:00:00.000Z",
-    );
-    let (id, _) = store
-        .upsert_article(
-            "cybercampus",
-            &recent_article("A202631099990101-9000001", "2026-10-03", "과제 안내"),
-            false,
-        )
-        .unwrap();
-    let course = (id, store.document(id, None).unwrap().revision_id);
-    store
-        .connection
-        .execute_batch(
-            "UPDATE documents SET collected_at='2026-10-02T00:00:00.000Z';
-             UPDATE document_revisions SET collected_at='2026-10-02T00:00:00.000Z';",
-        )
-        .unwrap();
-    let boundary = "2026-10-01T00:00:00.000Z";
-    // The local engine may analyze the user's course notices.
-    assert_eq!(
-        store.ai_recent_candidates(boundary, 20, false).unwrap(),
-        [course, public]
-    );
-    assert_eq!(
-        store.ai_backlog_candidates(20, false).unwrap(),
-        [course, public]
-    );
-    // A remote engine never receives them, automatically or by classification.
-    assert_eq!(
-        store.ai_recent_candidates(boundary, 20, true).unwrap(),
-        [public]
-    );
-    assert_eq!(store.ai_backlog_candidates(20, true).unwrap(), [public]);
-    let model = "a".repeat(64);
-    let config = "b".repeat(64);
-    assert_eq!(
-        store
-            .ai_embedding_candidates(&model, &config, 10, false)
-            .unwrap()
-            .len(),
-        2
-    );
-    assert_eq!(
-        store
-            .ai_embedding_candidates(&model, &config, 10, true)
-            .unwrap(),
-        [public]
-    );
-}
-#[test]
-fn backlog_mode_migrates_schema_thirteen_and_persists_across_reopen() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("db");
-    populated_schema_two(&path);
-    let connection = Connection::open(&path).unwrap();
-    for migration in [
-        include_str!("../../migrations/003_intelligence.sql"),
-        include_str!("../../migrations/004_personalization.sql"),
-        include_str!("../../migrations/005_proactive.sql"),
-        include_str!("../../migrations/006_notification_attempts.sql"),
-        include_str!("../../migrations/007_notification_activation.sql"),
-        include_str!("../../migrations/008_ai_execution_mode.sql"),
-        include_str!("../../migrations/009_ai_model_directory.sql"),
-        include_str!("../../migrations/010_update_check.sql"),
-        include_str!("../../migrations/011_skipped_articles.sql"),
-        include_str!("../../migrations/012_resource_retry.sql"),
-        include_str!("../../migrations/013_ai_projector.sql"),
-    ] {
-        connection.execute_batch(migration).unwrap();
-    }
-    connection
-        .execute_batch(
-            "UPDATE ai_preferences SET processing_mode='recent',setup_completed=1,
-             automatic_limit=7,max_tokens=2048;",
-        )
-        .unwrap();
-    drop(connection);
-    let store = Store::open(&path).unwrap();
-    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
-    let mut preferences = store.ai_preferences().unwrap();
-    assert_eq!(preferences.processing_mode, "recent");
-    assert!(preferences.setup_completed);
-    assert_eq!(preferences.automatic_limit, 7);
-    assert_eq!(preferences.max_tokens, 2048);
-    preferences.processing_mode = "backlog".into();
-    store.ai_save_preferences(&preferences).unwrap();
-    assert_eq!(store.ai_preferences().unwrap().processing_mode, "backlog");
-    preferences.processing_mode = "invalid".into();
-    assert!(store.ai_save_preferences(&preferences).is_err());
-    drop(store);
-    assert_eq!(
-        Store::open(&path)
-            .unwrap()
-            .ai_preferences()
-            .unwrap()
-            .processing_mode,
-        "backlog"
-    );
-}
-#[test]
-fn queue_claims_direct_requests_before_idle_backlog_work() {
-    let (_directory, mut store) = database();
-    let backlog = recent_record(
-        &store,
-        "backlog",
-        "2026-05-01",
-        true,
-        "2026-10-01T00:00:00.000Z",
-    );
-    let direct = recent_record(
-        &store,
-        "direct",
-        "2026-05-02",
-        false,
-        "2026-10-01T00:00:00.000Z",
-    );
-    let backlog_job = store
-        .ai_enqueue(
-            &AnalysisKey {
-                document_id: backlog.0,
-                revision_id: backlog.1,
-                ..key()
-            },
-            &json!({}),
-            10,
-        )
-        .unwrap();
-    let direct_job = store
-        .ai_enqueue(
-            &AnalysisKey {
-                document_id: direct.0,
-                revision_id: direct.1,
-                ..key()
-            },
-            &json!({}),
-            100,
-        )
-        .unwrap();
-    assert_eq!(store.ai_claim_next().unwrap().unwrap().id, direct_job.id);
-    assert_eq!(store.ai_claim_next().unwrap().unwrap().id, backlog_job.id);
-    assert!(store.ai_claim_next().unwrap().is_none());
-    integrity(&store);
-}
-#[test]
 fn populated_schema_two_upgrade_preserves_archive_and_settings() {
     let (directory, store) = database();
     assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
@@ -1095,7 +297,7 @@ fn populated_schema_two_upgrade_preserves_archive_and_settings() {
         Some("resources/test.pdf")
     );
     assert_eq!(store.sources().unwrap()[0].next_page, 12);
-    assert_eq!(store.ai_preferences().unwrap().processing_mode, "explicit");
+    assert!(store.ai_preferences().unwrap().classification_enabled);
     integrity(&store);
     drop(store);
     let reopened = Store::open(&directory.path().join("db")).unwrap();
@@ -1144,160 +346,196 @@ fn schema_three_failure_rolls_back_without_touching_populated_archive() {
     );
 }
 #[test]
-fn active_dedup_and_cache_identity_preserve_good_result_across_regeneration() {
-    let (_directory, mut store) = database();
-    let identity = json!({"name":"Qwen test","sha256":"a".repeat(64)});
-    let first = store.ai_enqueue(&key(), &identity, 1).unwrap();
-    let promoted = store.ai_enqueue(&key(), &identity, 10).unwrap();
-    assert_eq!(promoted.id, first.id);
-    assert_eq!(promoted.priority, 10);
-    assert_eq!(store.ai_jobs(10).unwrap().len(), 1);
-    assert!(store.ai_cached_result(&key()).unwrap().is_none());
-    assert_eq!(store.ai_claim_next().unwrap().unwrap().id, first.id);
-    assert!(store.ai_claim_next().unwrap().is_none());
-    let saved = store
-        .ai_complete_job(first.id, &json!({"summary":"장학 신청"}), false, 20, 20, 42)
-        .unwrap();
-    assert_eq!(store.ai_job(first.id).unwrap().unwrap().status, "completed");
-    assert_eq!(
-        store.ai_cached_result(&key()).unwrap().unwrap().id,
-        saved.id
-    );
-    for changed_key in [
-        AnalysisKey {
-            model_sha256: "c".repeat(64),
-            ..key()
-        },
-        AnalysisKey {
-            prompt_version: 2,
-            ..key()
-        },
-        AnalysisKey {
-            schema_version: 2,
-            ..key()
-        },
-        AnalysisKey {
-            configuration_hash: "d".repeat(64),
-            ..key()
-        },
-        AnalysisKey {
-            revision_id: 2,
-            ..key()
-        },
-        AnalysisKey {
-            task: "other".into(),
-            ..key()
-        },
-    ] {
-        assert!(store.ai_cached_result(&changed_key).unwrap().is_none());
-    }
-    let retry = store.ai_enqueue(&key(), &identity, 10).unwrap();
-    assert_ne!(first.id, retry.id);
-    store
-        .ai_finish_job(retry.id, "cancelled", None, None)
-        .unwrap();
-    assert!(store
-        .ai_complete_job(retry.id, &json!({"summary":"no"}), false, 1, 1, 1)
-        .is_err());
-    assert_eq!(
-        store.ai_cached_result(&key()).unwrap().unwrap().id,
-        saved.id
-    );
-    assert_eq!(store.ai_document_results(1, Some(1), 10).unwrap().len(), 1);
-    assert_eq!(store.ai_recent_results(10).unwrap().len(), 1);
-    integrity(&store);
-}
-#[test]
-fn restart_recovers_work_without_losing_inventory_or_results() {
-    let (directory, mut store) = database();
-    let running = store.ai_enqueue(&key(), &json!({}), 1).unwrap();
-    store.ai_claim_next().unwrap().unwrap();
-    let pending = store
-        .ai_enqueue(
-            &AnalysisKey {
-                prompt_version: 2,
-                ..key()
-            },
-            &json!({}),
-            1,
-        )
-        .unwrap();
+fn restart_recovers_interrupted_downloads_without_losing_inventory() {
+    let (directory, store) = database();
     let mut downloading = model("download", "managed");
     downloading.status = "downloading".into();
     downloading.downloaded_bytes = 17;
     downloading.resume_etag = Some("\"pinned\"".into());
     store.ai_upsert_model(&downloading).unwrap();
+    store
+        .ai_upsert_model(&model("installed", "external"))
+        .unwrap();
     drop(store);
     let store = Store::open(&directory.path().join("db")).unwrap();
-    assert_eq!(store.ai_job(running.id).unwrap().unwrap().status, "failed");
-    assert_eq!(store.ai_job(pending.id).unwrap().unwrap().status, "pending");
     let recovered = store.ai_model("download").unwrap().unwrap();
     assert_eq!(recovered.status, "cancelled");
     assert_eq!(recovered.downloaded_bytes, 17);
     assert_eq!(recovered.resume_etag, downloading.resume_etag);
+    assert_eq!(
+        store.ai_model("installed").unwrap().unwrap().status,
+        "installed"
+    );
     integrity(&store);
 }
 #[test]
-fn model_unregistration_clears_selection_but_never_removes_file_or_results() {
-    let (directory, mut store) = database();
+fn model_unregistration_clears_selection_but_never_removes_file() {
+    let (directory, store) = database();
     let path = directory.path().join("external.gguf");
     std::fs::write(&path, b"GGUF retained").unwrap();
     let mut external = model("local", "external");
+    external.kind = "embedding".into();
     external.path = path.to_str().unwrap().into();
     store.ai_upsert_model(&external).unwrap();
-    assert_eq!(store.ai_models().unwrap().len(), 1);
     let mut preferences = store.ai_preferences().unwrap();
-    preferences.active_model_id = Some("local".into());
-    preferences.setup_completed = true;
+    preferences.embedding_model_id = Some("local".into());
     store.ai_save_preferences(&preferences).unwrap();
-    let job = store
-        .ai_enqueue(&key(), &json!({"name":"external"}), 1)
-        .unwrap();
-    store.ai_claim_next().unwrap();
-    store
-        .ai_complete_job(job.id, &json!({"summary":"saved"}), false, 3, 3, 1)
-        .unwrap();
     store.ai_remove_model("local").unwrap();
     assert!(path.exists());
-    assert!(store.ai_preferences().unwrap().active_model_id.is_none());
-    assert!(store.ai_preferences().unwrap().setup_completed);
-    assert!(store.ai_cached_result(&key()).unwrap().is_some());
-    store.set_enabled("sogang_notices", false).unwrap();
-    assert!(store.ai_cached_result(&key()).unwrap().is_some());
+    assert!(store.ai_preferences().unwrap().embedding_model_id.is_none());
     assert!(store.document(1, None).unwrap().item.saved);
     integrity(&store);
 }
+
+/// A real schema-32 profile: migrations 001–032 in order, then populated.
+fn populated_schema_thirty_two(path: &Path) {
+    let mut connection = Connection::open(path).unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+    for migration in &super::MIGRATIONS[..32] {
+        let transaction = connection.transaction().unwrap();
+        transaction.execute_batch(migration).unwrap();
+        transaction.commit().unwrap();
+    }
+    let embedding = "e".repeat(64);
+    let generation = "a".repeat(64);
+    let remote = "f".repeat(64);
+    connection.execute_batch(&format!("
+        INSERT INTO sources(id,name,organization,description,url,family,supported,subscribed) VALUES('test','학사','서강','공지','https://www.sogang.ac.kr/','main',1,1);
+        INSERT INTO documents(id,source_id,external_id,canonical_url,title,published_at,body_html,body_text,content_hash,historical) VALUES(1,'test','notice','https://www.sogang.ac.kr/notice','장학 공지','2026-01-01','<p>본문</p>','본문','hash',0);
+        INSERT INTO document_revisions(id,document_id,canonical_url,title,published_at,original,body_html,body_text,content_hash) VALUES(1,1,'https://www.sogang.ac.kr/notice','장학 공지','2026-01-01','original','<p>본문</p>','본문','hash');
+        INSERT INTO ai_models(id,catalog_id,name,ownership,kind,path,sha256,bytes,status) VALUES
+          ('qwen35-4b','qwen35-4b','Qwen3.5 4B','managed','generation','models/{generation}.gguf','{generation}',8,'installed'),
+          ('qwen3-embedding-0-6b','qwen3-embedding-0-6b','Qwen3-Embedding 0.6B','managed','embedding','models/{embedding}.gguf','{embedding}',8,'installed');
+        INSERT INTO ai_projectors(model_id,path,sha256,expected_sha256,expected_bytes,bytes,status) VALUES('qwen35-4b','models/{}.gguf','{}','{}',4,4,'installed');
+        UPDATE ai_preferences SET active_model_id='qwen35-4b',setup_completed=1,processing_mode='backlog',
+          execution_mode='cpu',model_directory='/Volumes/Models',embedding_model_id='qwen3-embedding-0-6b',
+          classification_enabled=0,engine='openai-compatible',remote_base_url='https://API.Example.com:8443/v1',
+          remote_model='summary',remote_embedding_model='embed',remote_consent=1,remote_automatic=1,remote_embeddings=1;
+        INSERT INTO ai_jobs(id,document_id,revision_id,task,model_sha256,model_identity_json,prompt_version,schema_version,configuration_hash,status)
+          VALUES(1,1,1,'notice_analysis','{generation}','{{}}',5,3,'{generation}','completed');
+        INSERT INTO ai_results(job_id,document_id,revision_id,task,model_sha256,model_identity_json,prompt_version,schema_version,configuration_hash,result_json,partial,processed_chars,total_chars,duration_ms)
+          VALUES(1,1,1,'notice_analysis','{generation}','{{}}',5,3,'{generation}','{{\"summary\":\"요약\"}}',0,2,2,1);
+        INSERT INTO ai_remote_usage(day,attempts) VALUES('2026-11-13',3);
+        INSERT INTO notice_embeddings(document_id,revision_id,model_sha256,dim,vector) VALUES(1,1,'{embedding}',1,x'0000803f'),(1,1,'{remote}',1,x'0000803f');
+        INSERT INTO notice_classifications(document_id,revision_id,model_sha256,config_hash,category,score,margin,low_confidence)
+          VALUES(1,1,'{embedding}','{generation}','장학',0.9,0.2,0),(1,1,'{remote}','{generation}','장학',0.9,0.2,0);
+        INSERT INTO calendar_todos(title,day,document_id) VALUES('장학 신청','2026-03-01',1);
+    ", "c".repeat(64), "c".repeat(64), "c".repeat(64))).unwrap();
+}
+
 #[test]
-fn boundaries_reject_wrong_revision_invalid_inventory_and_late_result_failure() {
-    let (_directory, mut store) = database();
-    assert!(store
-        .ai_enqueue(
-            &AnalysisKey {
-                document_id: 99,
-                ..key()
-            },
-            &json!({}),
-            1
-        )
-        .is_err());
-    let mut invalid = model("invalid", "external");
-    invalid.sha256 = None;
-    assert!(store.ai_upsert_model(&invalid).is_err());
-    let mut preferences = store.ai_preferences().unwrap();
-    preferences.active_model_id = Some("missing".into());
-    assert!(store.ai_save_preferences(&preferences).is_err());
-    let job = store.ai_enqueue(&key(), &json!({}), 1).unwrap();
-    store.ai_claim_next().unwrap();
-    assert!(store
-        .ai_complete_job(job.id, &json!({}), false, 2, 3, 1)
-        .is_err());
-    store.connection.execute_batch("CREATE TRIGGER reject_ai_complete BEFORE UPDATE OF status ON ai_jobs WHEN new.status='completed' BEGIN SELECT RAISE(ABORT,'test completion failure'); END;").unwrap();
-    assert!(store
-        .ai_complete_job(job.id, &json!({"summary":"no commit"}), false, 3, 3, 1)
-        .is_err());
-    assert!(store.ai_cached_result(&key()).unwrap().is_none());
-    assert_eq!(store.ai_job(job.id).unwrap().unwrap().status, "running");
+fn schema_thirty_three_retires_generation_and_remote_but_keeps_embedding_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    populated_schema_thirty_two(&path);
+    DELETED_REMOTE_KEYS.with(|keys| keys.borrow_mut().clear());
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
+    // The key was deleted under the normalized origin before the column went.
+    assert_eq!(
+        DELETED_REMOTE_KEYS.with(|keys| keys.borrow().clone()),
+        ["https://api.example.com:8443"]
+    );
+    for table in ["ai_jobs", "ai_results", "ai_remote_usage"] {
+        let count: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name=?1",
+                [table],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "{table}");
+    }
+    assert_eq!(
+        store.ai_preferences().unwrap(),
+        AiPreferences {
+            execution_mode: "cpu".into(),
+            model_directory: Some("/Volumes/Models".into()),
+            embedding_model_id: Some("qwen3-embedding-0-6b".into()),
+            classification_enabled: false,
+        }
+    );
+    // Installed generation models and their projectors stay until removed.
+    assert_eq!(store.ai_models().unwrap().len(), 2);
+    assert!(store.ai_projector("qwen35-4b").unwrap().is_some());
+    // Only the remote-derived vectors are deleted.
+    let hashes = |table: &str| -> Vec<String> {
+        store
+            .connection
+            .prepare(&format!("SELECT model_sha256 FROM {table}"))
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    assert_eq!(hashes("notice_embeddings"), ["e".repeat(64)]);
+    assert_eq!(hashes("notice_classifications"), ["e".repeat(64)]);
+    assert_eq!(store.document(1, None).unwrap().body_text, "본문");
+    let todo: Option<i64> = store
+        .connection
+        .query_row("SELECT document_id FROM calendar_todos", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(todo, Some(1));
     integrity(&store);
+    drop(store);
+    // Reopening runs no migration again.
+    Store::open(&path).unwrap();
+    assert!(DELETED_REMOTE_KEYS.with(|keys| keys.borrow().len()) == 1);
+}
+
+#[test]
+fn schema_thirty_three_failure_rolls_back_to_thirty_two() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    populated_schema_thirty_two(&path);
+    // A leftover rebuild table makes the migration fail midway.
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE ai_preferences_033(id INTEGER);")
+        .unwrap();
+    assert!(Store::open(&path).is_err());
+    let connection = Connection::open(&path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        32
+    );
+    for (sql, expected) in [
+        ("SELECT COUNT(*) FROM ai_results", 1),
+        ("SELECT COUNT(*) FROM ai_jobs", 1),
+        ("SELECT COUNT(*) FROM notice_embeddings", 2),
+        (
+            "SELECT COUNT(*) FROM ai_preferences WHERE engine='openai-compatible'",
+            1,
+        ),
+    ] {
+        assert_eq!(
+            connection
+                .query_row(sql, [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            expected,
+            "{sql}"
+        );
+    }
+}
+
+#[test]
+fn a_profile_without_a_remote_origin_deletes_no_key() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    populated_schema_thirty_two(&path);
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("UPDATE ai_preferences SET remote_base_url=NULL;")
+        .unwrap();
+    DELETED_REMOTE_KEYS.with(|keys| keys.borrow_mut().clear());
+    Store::open(&path).unwrap();
+    assert!(DELETED_REMOTE_KEYS.with(|keys| keys.borrow().is_empty()));
 }
 
 #[test]
@@ -1389,16 +627,13 @@ fn embedding_schema_upgrades_schema_fourteen_without_losing_preferences() {
         connection.execute_batch(migration).unwrap();
     }
     connection
-        .execute_batch(
-            "UPDATE ai_preferences SET processing_mode='backlog',max_tokens=2048 WHERE id=1;",
-        )
+        .execute_batch("UPDATE ai_preferences SET execution_mode='gpu' WHERE id=1;")
         .unwrap();
     drop(connection);
     let store = Store::open(&path).unwrap();
     assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
     let preferences = store.ai_preferences().unwrap();
-    assert_eq!(preferences.processing_mode, "backlog");
-    assert_eq!(preferences.max_tokens, 2048);
+    assert_eq!(preferences.execution_mode, "gpu");
     assert_eq!(preferences.embedding_model_id, None);
     assert!(preferences.classification_enabled);
     // New tables and the model role column exist and default generation.
@@ -1466,12 +701,12 @@ fn classification_roundtrip_is_model_and_config_scoped() {
         .unwrap()
         .is_none());
     assert!(store
-        .ai_embedding_candidates(&model_a, &config, 10, false)
+        .ai_embedding_candidates(&model_a, &config, 10)
         .unwrap()
         .is_empty());
     assert_eq!(
         store
-            .ai_embedding_candidates(&model_b, &config, 10, false)
+            .ai_embedding_candidates(&model_b, &config, 10)
             .unwrap(),
         vec![(1, revision)]
     );
@@ -1512,10 +747,15 @@ fn classification_roundtrip_is_model_and_config_scoped() {
         store.ai_preferences().unwrap().embedding_model_id,
         Some(model.id.clone())
     );
-    // A generation model cannot occupy the embedding slot, and vice versa.
-    preferences.active_model_id = Some(model.id.clone());
+    // A generation model cannot occupy the embedding slot.
+    let mut generation = model.clone();
+    generation.id = "generation-test".into();
+    generation.catalog_id = None;
+    generation.kind = "generation".into();
+    generation.path = "/tmp/generation-test.gguf".into();
+    store.ai_upsert_model(&generation).unwrap();
+    preferences.embedding_model_id = Some(generation.id.clone());
     assert!(store.ai_save_preferences(&preferences).is_err());
-    preferences.active_model_id = None;
     preferences.embedding_model_id = None;
     store.ai_save_preferences(&preferences).unwrap();
     store.ai_remove_model(&model.id).unwrap();
@@ -1535,7 +775,7 @@ fn embedded_notice(
     vector: &[f32],
     model_sha256: &str,
 ) -> (i64, i64) {
-    let mut article = recent_article(external_id, "2026-03-01", body);
+    let mut article = notice_article(external_id, "2026-03-01", body);
     article.title = title.into();
     let (id, _) = store.upsert_article(source_id, &article, true).unwrap();
     let revision = store.document(id, None).unwrap().revision_id;
@@ -1550,6 +790,28 @@ fn embedded_notice(
     (id, revision)
 }
 
+fn notice_article(
+    external_id: &str,
+    published_at: &str,
+    body: &str,
+) -> crate::archive::model::ArticleInput {
+    crate::archive::model::ArticleInput {
+        external_id: external_id.into(),
+        canonical_url: format!("https://www.sogang.ac.kr/notice/{external_id}"),
+        title: "공지".into(),
+        author: None,
+        category: None,
+        published_at: published_at.into(),
+        modified_at: None,
+        original: body.into(),
+        unsupported_body: false,
+        body_html: format!("<p>{body}</p>"),
+        body_text: body.into(),
+        resources: vec![],
+        etag: None,
+        last_modified: None,
+    }
+}
 #[test]
 fn similar_notices_flag_only_exact_cross_posts_and_isolate_model_hashes() {
     let (_directory, store) = database();
@@ -1609,7 +871,7 @@ fn similar_notices_flag_only_exact_cross_posts_and_isolate_model_hashes() {
     // An embedding of an outdated revision is not compared.
     let (revised, _) =
         embedded_notice(&store, "test", "g", title, body, &[1.0, 0.0, 0.0], &model_a);
-    let mut changed = recent_article("g", "2026-03-01", "변경된 본문 3월 10일 17시");
+    let mut changed = notice_article("g", "2026-03-01", "변경된 본문 3월 10일 17시");
     changed.title = title.into();
     assert!(store.upsert_article("test", &changed, true).unwrap().1);
 

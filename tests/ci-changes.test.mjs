@@ -35,7 +35,7 @@ test('each area selects only its own jobs', () => {
 });
 
 test('frontend files read by Rust tests also run the Rust jobs', () => {
-  for (const file of ['src/lib/analysis-contract.json', 'src/lib/UpdaterSettings.svelte']) {
+  for (const file of ['src/lib/UpdaterSettings.svelte']) {
     assert.deepEqual(classify([file]), { ...none, frontend: true, rust: true }, file);
   }
   // Windows CI runs its PowerShell scripts before the Rust tests.

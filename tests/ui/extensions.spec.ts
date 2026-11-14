@@ -33,7 +33,7 @@ test('turning an extension on adds its page, widget and settings, and off remove
   await expect(panes.getByRole('button', { name: '게시판', exact: true })).toBeVisible();
   await expect(panes.getByRole('button', { name: '사이버캠퍼스', exact: true })).toBeVisible();
   await expect(sidebar.locator('.source-group-heading')).toHaveText(['서강대학교 공지', '사이버캠퍼스']);
-  for (const [extension, pane] of [['나를 위한 소식', '개인화'], ['AI 분석', 'AI'], ['알림·백그라운드', '알림·백그라운드']]) {
+  for (const [extension, pane] of [['나를 위한 소식', '개인화'], ['AI 분류', 'AI'], ['알림·백그라운드', '알림·백그라운드']]) {
     await toggle(extension);
     await expect(panes.getByRole('button', { name: pane, exact: true })).toBeVisible();
   }
@@ -47,18 +47,17 @@ test('turning an extension on adds its page, widget and settings, and off remove
   await openSettings(page, '확장 기능');
   await toggle('탐색');
   await expect(sidebar.getByRole('button', { name: '탐색', exact: true })).toHaveCount(0);
-  await toggle('AI 분석');
+  await toggle('AI 분류');
   await expect(panes.getByRole('button', { name: 'AI', exact: true })).toHaveCount(0);
 });
 
-test('without the AI extension the reader hides analysis and Today hides AI dates', async ({ page }) => {
-  await mockDesktop(page, { aiResult: true, extensions: { ai: false } });
+test('without the AI extension the list and reader hide stored classifications and similar notices', async ({ page }) => {
+  await mockDesktop(page, { count: 3, aiEmbeddingInstalled: true, aiSimilar: true, extensions: { ai: false } });
   await page.goto('/');
-  const week = page.getByRole('complementary', { name: '앞으로 7일', exact: true });
-  await expect(week).toBeVisible();
-  await expect(week.locator('.event-notice')).toHaveCount(0);
   await page.getByRole('button', { name: '받은 소식', exact: true }).click();
+  await expect(page.locator('#notice-1')).toBeVisible();
+  await expect(page.locator('#notice-1')).not.toContainText('분류 · 장학');
   await page.locator('#notice-1').click();
   await expect(page.locator('.reader-body')).toBeVisible();
-  await expect(page.getByRole('region', { name: '공지 AI 분석' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: /비슷한 공지/ })).toHaveCount(0);
 });

@@ -2,7 +2,7 @@
 //! the user deletes it permanently; only then is the document removed and its
 //! `(source_id, external_id)` recorded so no sync archives it again.
 use super::Store;
-use rusqlite::{params_from_iter, OptionalExtension};
+use rusqlite::params_from_iter;
 
 /// SQL condition, for a query whose documents are aliased `d`, that keeps only
 /// notices outside 휴지통.
@@ -120,20 +120,6 @@ impl Store {
             return Ok(Vec::new());
         }
         let list = placeholders(targets.len());
-        // A running or queued analysis would lose the notice it writes to.
-        let busy: Option<i64> = tx
-            .query_row(
-                &format!(
-                    "SELECT 1 FROM ai_jobs WHERE document_id IN ({list}) AND status IN ('pending','running') LIMIT 1"
-                ),
-                params_from_iter(&targets),
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-        if busy.is_some() {
-            return Err("AI 분석이 진행 중인 공지가 있어 영구 삭제하지 않았습니다. 분석이 끝난 뒤 다시 시도해 주세요.".into());
-        }
         let paths: Vec<String> = {
             let mut statement = tx
                 .prepare(&format!(

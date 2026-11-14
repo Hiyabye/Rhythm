@@ -11,13 +11,6 @@ async function openAiAdvanced(page: Page) {
   await openSettings(page, 'AI');
   await page.getByText('고급', { exact: true }).click();
 }
-async function modelInfo(page: Page, name: string) {
-  await page.getByRole('button', { name: `${name} 정보`, exact: true }).click();
-  return page.getByRole('dialog', { name: `${name} 정보`, exact: true });
-}
-function engine(page: Page) {
-  return page.locator('.settings-row').filter({ hasText: 'AI 엔진' }).first();
-}
 function permission(page: Page) {
   return page.locator('.settings-row').filter({ hasText: '운영체제 알림 권한' });
 }
@@ -34,36 +27,34 @@ test('Windows build offers manual installer updates without invoking updater com
   expect(await callCount(page, 'updater_check')).toBe(0);
 });
 
-test('execution device selection persists across settings remount and unloads the old model', async ({ page }) => {
-  await mockDesktop(page, { windows: true, aiInstalled: true }); await page.goto('/');
+test('execution device selection persists across settings remount', async ({ page }) => {
+  await mockDesktop(page, { windows: true, aiEmbeddingInstalled: true }); await page.goto('/');
   await openAiAdvanced(page);
   const mode = page.getByLabel('AI 실행 장치', { exact: true });
   await expect(mode).toHaveValue('auto');
-  await page.getByRole('button', { name: '선택한 모델 불러오기', exact: true }).click();
-  await expect(engine(page)).toContainText('모델 준비됨');
   await mode.selectOption('cpu');
-  await expect(mode).toHaveValue('cpu');
-  await expect(engine(page)).toContainText('모델 없이 대기 중');
+  await expect(page.getByText('AI 실행 장치를 저장했습니다.', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '받은 소식', exact: true }).click();
   await openAiAdvanced(page);
   await expect(mode).toHaveValue('cpu');
   await mode.selectOption('gpu');
   await expect(mode).toHaveValue('gpu');
-  expect(await callCount(page, 'ai_preferences')).toBe(2);
+  const saved = await page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'ai_preferences').map((call: any) => call.args.preferences));
+  expect(saved).toEqual([
+    { execution_mode: 'cpu', model_directory: null, embedding_model_id: 'qwen3-embedding-0-6b', classification_enabled: true },
+    { execution_mode: 'gpu', model_directory: null, embedding_model_id: 'qwen3-embedding-0-6b', classification_enabled: true },
+  ]);
 });
-
-test('execution device save failure restores the persisted choice and shows fallback status', async ({ page }) => {
-  await mockDesktop(page, { windows: true, aiExecutionMode: 'auto', aiExecutionError: true, aiRuntimeDetail: 'GPU 메모리가 부족해 CPU로 전환했습니다.' });
+test('execution device save failure restores the persisted choice', async ({ page }) => {
+  await mockDesktop(page, { windows: true, aiExecutionMode: 'auto', aiExecutionError: true });
   await page.goto('/');
   await openAiAdvanced(page);
-  await expect(engine(page)).toContainText('GPU 메모리가 부족해 CPU로 전환했습니다.');
   const mode = page.getByLabel('AI 실행 장치', { exact: true });
   await mode.selectOption('gpu');
   await expect(page.getByText('실행 장치를 저장하지 못했습니다. 다시 시도해 주세요.', { exact: true })).toBeVisible();
   await expect(mode).toHaveValue('auto');
   expect(await callCount(page, 'ai_install')).toBe(0);
 });
-
 test('model installation folder changes persist and only new downloads use the chosen location', async ({ page }) => {
   const directory = 'D:\\로컬 모델\\Rhythm';
   await mockDesktop(page, { windows: true, aiInstalled: true, aiModelDirectoryChoice: directory, aiDelay: 10000 });
@@ -74,29 +65,22 @@ test('model installation folder changes persist and only new downloads use the c
   await expect(storage.getByRole('button', { name: '기본 위치로 되돌리기', exact: true })).toBeDisabled();
   await storage.getByRole('button', { name: '설치 폴더 선택', exact: true }).click();
   await expect(storage.getByText(directory, { exact: true })).toBeVisible();
-  const existing = await modelInfo(page, 'Qwen3.5 4B');
-  await expect(existing.getByText('models/qwen35-4b.gguf', { exact: true })).toBeVisible();
-  await expect(existing.getByText(directory, { exact: true })).toHaveCount(0);
-  await page.keyboard.press('Escape');
   await page.getByRole('button', { name: '받은 소식', exact: true }).click();
   await openAiAdvanced(page);
   await expect(storage.getByText(directory, { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Qwen3.5 2B 다운로드 및 설치', exact: true }).click();
+  const models = () => page.evaluate(() => (window as any).__fixture.ai.models.map((model: any) => [model.id, model.path, model.storage_directory]));
+  await page.getByRole('button', { name: '분류 모델 설치', exact: true }).click();
   await expect(storage.getByRole('button', { name: '설치 폴더 선택', exact: true })).toBeDisabled();
   await expect(storage.getByRole('button', { name: '기본 위치로 되돌리기', exact: true })).toBeDisabled();
-  let added = await modelInfo(page, 'Qwen3.5 2B');
-  await expect(added.getByText(directory, { exact: true })).toBeVisible();
-  await expect(added.getByText(`${directory}\\qwen35-2b.gguf`, { exact: true })).toBeVisible();
-  await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: '다운로드 중단', exact: true }).click();
+  // The existing model stays where it was; only the new download uses the chosen folder.
+  expect(await models()).toEqual([['qwen35-4b', 'models/qwen35-4b.gguf', null], ['qwen3-embedding-0-6b', `${directory}\\qwen3-embedding-0-6b.gguf`, directory]]);
+  await page.getByRole('group', { name: '공지 분류' }).getByRole('button', { name: '중단', exact: true }).click();
   await storage.getByRole('button', { name: '기본 위치로 되돌리기', exact: true }).click();
   await expect(storage.getByText('C:\\Rhythm-test\\models', { exact: true })).toBeVisible();
-  added = await modelInfo(page, 'Qwen3.5 2B');
-  await expect(added.getByText(directory, { exact: true })).toBeVisible();
+  expect((await models())[1]).toEqual(['qwen3-embedding-0-6b', `${directory}\\qwen3-embedding-0-6b.gguf`, directory]);
   expect(await callCount(page, 'ai_preferences')).toBe(0);
   expect(await callCount(page, 'ai_reset_model_directory')).toBe(1);
 });
-
 test('cancelling the model installation folder picker preserves the selected folder', async ({ page }) => {
   const directory = 'D:\\현재 모델';
   await mockDesktop(page, { windows: true, aiModelDirectory: directory, aiModelDirectoryChoice: null });
@@ -132,24 +116,19 @@ test('model installation folder changes explain and preserve a cancelled downloa
   await mockDesktop(page, { windows: true, aiDelay: 10000 });
   await page.goto('/');
   await openAiAdvanced(page);
-  await page.getByRole('button', { name: 'Qwen3.5 4B 다운로드 및 설치', exact: true }).click();
-  await page.getByRole('button', { name: '다운로드 중단', exact: true }).click();
+  const section = page.getByRole('group', { name: '공지 분류' });
+  await section.getByRole('button', { name: '분류 모델 설치', exact: true }).click();
+  await section.getByRole('button', { name: '중단', exact: true }).click();
   const storage = page.getByRole('group', { name: '모델 설치 폴더', exact: true });
   await storage.getByRole('button', { name: '설치 폴더 선택', exact: true }).click();
   await expect(storage.getByText('D:\\로컬 모델\\Rhythm', { exact: true })).toBeVisible();
   await storage.getByRole('button', { name: '모델 설치 폴더 설명', exact: true }).click();
   await expect(page.getByText('중단한 다운로드는 원래 폴더에서 이어받습니다.', { exact: false })).toBeVisible();
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: 'Qwen3.5 4B 설치 다시 시도 / 이어받기', exact: true }).click();
-  // Wait for the mocked install to finish: the tile's layout change can scroll the page, which closes an open popover.
-  await expect(page.getByRole('button', { name: 'Qwen3.5 4B 선택', exact: true })).toBeVisible({ timeout: 15000 });
-  const installed = await modelInfo(page, 'Qwen3.5 4B');
-  await expect(installed.getByText('C:\\Rhythm-test\\models', { exact: true })).toBeVisible();
-  await expect(installed.getByText('C:\\Rhythm-test\\models\\qwen35-4b.gguf', { exact: true })).toBeVisible();
-  await expect(installed.getByText('D:\\로컬 모델\\Rhythm', { exact: true })).toHaveCount(0);
+  await section.getByRole('button', { name: '다시 설치', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).__fixture.ai.models[0].path)).toBe('C:\\Rhythm-test\\models\\qwen3-embedding-0-6b.gguf');
   expect(await callCount(page, 'ai_install')).toBe(2);
 });
-
 test('model installation folder picker locks its controls while pending and reports unavailable storage', async ({ page }) => {
   await mockDesktop(page, { windows: true, aiModelDirectory: 'D:\\현재 모델', aiModelDirectoryGate: true, aiModelStorageAvailable: null, aiModelStorageError: '설치 폴더에 접근할 수 없습니다. 다른 폴더를 선택해 주세요.' });
   await page.goto('/');
@@ -164,8 +143,8 @@ test('model installation folder picker locks its controls while pending and repo
   await page.evaluate(() => (window as any).__fixture.releaseModelDirectory());
   await expect(storage.getByText('D:\\로컬 모델\\Rhythm', { exact: true })).toBeVisible();
   await expect(storage.getByRole('alert')).toHaveCount(0);
+  // The pane polls the snapshot, so a storage change shows without a manual refresh.
   await page.evaluate(() => { (window as any).__fixture.ai.model_storage.available_bytes = 0; });
-  await page.getByRole('button', { name: 'AI 엔진 상태 새로고침', exact: true }).click();
   await expect(storage.getByText('남은 공간 0 B', { exact: true })).toBeVisible();
 });
 

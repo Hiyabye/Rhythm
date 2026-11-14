@@ -1,8 +1,8 @@
-//! Persistent AI inventory, attempts and validated result cache. No filesystem or inference work.
+//! Persistent AI model inventory, preferences, notice vectors and classifications.
+//! No filesystem or inference work.
 use super::Store;
 use rusqlite::{params, params_from_iter, types::Value as SqlValue, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AiModel {
@@ -11,7 +11,8 @@ pub struct AiModel {
     pub name: String,
     pub ownership: String,
     /// `generation` or `embedding`; persisted so a retired catalog entry keeps
-    /// its role and an embedding model can never be selected for analysis.
+    /// its role. Generation models are no longer offered (#226); existing rows
+    /// stay until the user removes them.
     #[serde(default = "default_model_kind")]
     pub kind: String,
     pub path: String,
@@ -52,44 +53,16 @@ pub struct AiProjector {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiPreferences {
-    pub active_model_id: Option<String>,
-    pub setup_completed: bool,
-    pub processing_mode: String,
-    pub automatic_limit: u32,
-    pub max_tokens: u32,
+    /// Windows device choice for the embedding process; ignored elsewhere.
     #[serde(default = "default_execution_mode")]
     pub execution_mode: String,
     #[serde(default)]
     pub model_directory: Option<String>,
-    /// Selected embedding model; independent from the generation model.
     #[serde(default)]
     pub embedding_model_id: Option<String>,
     /// Automatic classification runs only when an embedding model is installed.
     #[serde(default = "default_enabled")]
     pub classification_enabled: bool,
-    /// `local` (default) or `openai-compatible`. The local engine stays fully supported.
-    #[serde(default = "default_engine")]
-    pub engine: String,
-    /// Normalized base URL of the user-chosen OpenAI-compatible endpoint.
-    #[serde(default)]
-    pub remote_base_url: Option<String>,
-    #[serde(default)]
-    pub remote_model: Option<String>,
-    /// Separate embedding model; classification stays local unless remote embeddings are on.
-    #[serde(default)]
-    pub remote_embedding_model: Option<String>,
-    #[serde(default = "default_remote_timeout")]
-    pub remote_timeout_seconds: u32,
-    /// Explicit consent for sending notice text to the configured origin.
-    #[serde(default)]
-    pub remote_consent: bool,
-    /// Automatic (recent/backlog) remote analysis is a separate, cost-bearing opt-in.
-    #[serde(default)]
-    pub remote_automatic: bool,
-    #[serde(default = "default_remote_daily_limit")]
-    pub remote_daily_limit: u32,
-    #[serde(default)]
-    pub remote_embeddings: bool,
 }
 
 fn default_model_kind() -> String {
@@ -98,18 +71,6 @@ fn default_model_kind() -> String {
 
 fn default_enabled() -> bool {
     true
-}
-
-fn default_engine() -> String {
-    "local".into()
-}
-
-fn default_remote_timeout() -> u32 {
-    120
-}
-
-fn default_remote_daily_limit() -> u32 {
-    20
 }
 
 /// One revision-scoped embedding classification. The raw score and margin stay
@@ -158,51 +119,8 @@ fn default_execution_mode() -> String {
     "auto".into()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AnalysisKey {
-    pub document_id: i64,
-    pub revision_id: i64,
-    pub task: String,
-    pub model_sha256: String,
-    pub prompt_version: u32,
-    pub schema_version: u32,
-    pub configuration_hash: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AiJob {
-    pub id: i64,
-    #[serde(flatten)]
-    pub key: AnalysisKey,
-    pub model_identity: Value,
-    pub priority: i32,
-    pub status: String,
-    pub error: Option<String>,
-    pub duration_ms: Option<u64>,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AiResult {
-    pub id: i64,
-    pub job_id: i64,
-    #[serde(flatten)]
-    pub key: AnalysisKey,
-    pub model_identity: Value,
-    pub result: Value,
-    pub partial: bool,
-    pub processed_chars: u64,
-    pub total_chars: u64,
-    pub duration_ms: u64,
-    pub created_at: String,
-}
-
 const PROJECTOR_COLUMNS: &str = "model_id,path,sha256,expected_sha256,expected_bytes,bytes,status,downloaded_bytes,resume_etag,error";
 const MODEL_COLUMNS: &str = "id,catalog_id,name,ownership,path,sha256,expected_sha256,expected_bytes,bytes,source_revision,source_filename,status,downloaded_bytes,resume_etag,error,created_at,updated_at,storage_directory,kind";
-const JOB_COLUMNS: &str = "id,document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,priority,status,error,duration_ms,created_at,updated_at";
-const RESULT_COLUMNS: &str = "id,job_id,document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,result_json,partial,processed_chars,total_chars,duration_ms,created_at";
-const KEY_WHERE: &str = "document_id=?1 AND revision_id=?2 AND task=?3 AND model_sha256=?4 AND prompt_version=?5 AND schema_version=?6 AND configuration_hash=?7";
 /// Upper bound on rows returned by the list/candidate queries below.
 const MAX_LIST_LIMIT: u32 = 100;
 /// Byte cap for stored paths and error text.
@@ -383,27 +301,6 @@ fn classification_row(row: &Row<'_>) -> rusqlite::Result<AiClassification> {
         created_at: row.get(4)?,
     })
 }
-fn json_column(row: &Row<'_>, column: usize) -> rusqlite::Result<Value> {
-    let value: String = row.get(column)?;
-    serde_json::from_str(&value).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(
-            column,
-            rusqlite::types::Type::Text,
-            Box::new(error),
-        )
-    })
-}
-fn key_row(row: &Row<'_>, offset: usize) -> rusqlite::Result<AnalysisKey> {
-    Ok(AnalysisKey {
-        document_id: row.get(offset)?,
-        revision_id: row.get(offset + 1)?,
-        task: row.get(offset + 2)?,
-        model_sha256: row.get(offset + 3)?,
-        prompt_version: row.get(offset + 4)?,
-        schema_version: row.get(offset + 5)?,
-        configuration_hash: row.get(offset + 6)?,
-    })
-}
 fn model_row(row: &Row<'_>) -> rusqlite::Result<AiModel> {
     Ok(AiModel {
         id: row.get(0)?,
@@ -427,19 +324,6 @@ fn model_row(row: &Row<'_>) -> rusqlite::Result<AiModel> {
         kind: row.get(18)?,
     })
 }
-fn job_row(row: &Row<'_>) -> rusqlite::Result<AiJob> {
-    Ok(AiJob {
-        id: row.get(0)?,
-        key: key_row(row, 1)?,
-        model_identity: json_column(row, 8)?,
-        priority: row.get(9)?,
-        status: row.get(10)?,
-        error: row.get(11)?,
-        duration_ms: row.get::<_, Option<i64>>(12)?.map(|v| v as u64),
-        created_at: row.get(13)?,
-        updated_at: row.get(14)?,
-    })
-}
 fn projector_row(row: &Row<'_>) -> rusqlite::Result<AiProjector> {
     Ok(AiProjector {
         model_id: row.get(0)?,
@@ -452,20 +336,6 @@ fn projector_row(row: &Row<'_>) -> rusqlite::Result<AiProjector> {
         downloaded_bytes: row.get::<_, i64>(7)? as u64,
         resume_etag: row.get(8)?,
         error: row.get(9)?,
-    })
-}
-fn result_row(row: &Row<'_>) -> rusqlite::Result<AiResult> {
-    Ok(AiResult {
-        id: row.get(0)?,
-        job_id: row.get(1)?,
-        key: key_row(row, 2)?,
-        model_identity: json_column(row, 9)?,
-        result: json_column(row, 10)?,
-        partial: row.get(11)?,
-        processed_chars: row.get::<_, i64>(12)? as u64,
-        total_chars: row.get::<_, i64>(13)? as u64,
-        duration_ms: row.get::<_, i64>(14)? as u64,
-        created_at: row.get(15)?,
     })
 }
 pub(super) fn valid_hash(value: &str) -> bool {
@@ -486,20 +356,6 @@ fn validate_model_directory(directory: Option<&str>) -> Result<(), String> {
     }
     Ok(())
 }
-fn validate_key(key: &AnalysisKey) -> Result<(), String> {
-    if key.document_id <= 0
-        || key.revision_id <= 0
-        || key.task.is_empty()
-        || key.task.len() > 64
-        || !valid_hash(&key.model_sha256)
-        || !valid_hash(&key.configuration_hash)
-        || key.prompt_version == 0
-        || key.schema_version == 0
-    {
-        return Err("AI 분석 식별자가 올바르지 않습니다.".into());
-    }
-    Ok(())
-}
 fn changed(count: usize) -> Result<(), String> {
     if count == 0 {
         Err("AI 항목을 찾을 수 없거나 상태가 변경되었습니다.".into())
@@ -508,12 +364,70 @@ fn changed(count: usize) -> Result<(), String> {
     }
 }
 
-/// The source holding the user's personal data (the Cybercampus connector,
-/// #86). Its documents never go to a remote engine, automatically or on request.
-pub const PRIVATE_SOURCE: &str = crate::archive::cybercampus::SOURCE_ID;
+/// Service name the retired remote engine stored its API key under, keyed by
+/// the normalized origin.
+#[cfg(all(not(test), any(target_os = "macos", windows)))]
+const RETIRED_REMOTE_KEY_SERVICE: &str = "io.github.hiyabye.rhythm.remote-ai";
+
+/// Deletes the retired remote engine's API key (#226) while migration 033 can
+/// still read the saved origin. The key was only ever in the OS credential
+/// store. Best effort: a locked or unavailable store must not keep the profile
+/// from opening, so a failure is logged and the key stays behind.
+pub(super) fn clear_retired_remote_key(connection: &rusqlite::Connection) {
+    let base: Option<String> = connection
+        .query_row(
+            "SELECT remote_base_url FROM ai_preferences WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten();
+    let Some(origin) = base
+        .as_deref()
+        .and_then(|base| url::Url::parse(base).ok())
+        .map(|url| url.origin().ascii_serialization())
+        .filter(|origin| origin != "null")
+    else {
+        return;
+    };
+    if let Err(error) = delete_remote_key(&origin) {
+        eprintln!("AI: 이전 원격 API 키를 삭제하지 못했습니다: {error}");
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Origins whose key a test migration deleted; tests never touch the real store.
+    pub(super) static DELETED_REMOTE_KEYS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn delete_remote_key(origin: &str) -> Result<(), String> {
+    DELETED_REMOTE_KEYS.with(|keys| keys.borrow_mut().push(origin.to_owned()));
+    Ok(())
+}
+
+#[cfg(all(not(test), any(target_os = "macos", windows)))]
+fn delete_remote_key(origin: &str) -> Result<(), String> {
+    match keyring::Entry::new(RETIRED_REMOTE_KEY_SERVICE, origin)
+        .map_err(|error| error.to_string())?
+        .delete_credential()
+    {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Other hosts never had a credential store backend, so no key was saved.
+#[cfg(all(not(test), not(any(target_os = "macos", windows))))]
+fn delete_remote_key(_origin: &str) -> Result<(), String> {
+    Ok(())
+}
+
 impl Store {
     pub(super) fn reset_ai_interrupted(&self) -> Result<(), String> {
-        self.connection.execute_batch("UPDATE ai_jobs SET status='failed',error='앱 종료로 분석이 중단되었습니다. 다시 시도해 주세요.',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status='running'; UPDATE ai_models SET status='cancelled',error='설치가 중단되었습니다. 이어받기를 선택해 주세요.',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status IN ('downloading','verifying'); UPDATE ai_projectors SET status='cancelled',error='이미지 인식 모듈 설치가 중단되었습니다. 이어받기를 선택해 주세요.',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status IN ('downloading','verifying');").map_err(|e|e.to_string())
+        self.connection.execute_batch("UPDATE ai_models SET status='cancelled',error='설치가 중단되었습니다. 이어받기를 선택해 주세요.',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status IN ('downloading','verifying'); UPDATE ai_projectors SET status='cancelled',error='이미지 인식 모듈 설치가 중단되었습니다. 이어받기를 선택해 주세요.',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status IN ('downloading','verifying');").map_err(|e|e.to_string())
     }
     pub fn ai_models(&self) -> Result<Vec<AiModel>, String> {
         self.connection
@@ -607,6 +521,9 @@ impl Store {
         }
         Ok(())
     }
+    /// Projector rows only come from the retired vision install, so only tests
+    /// write or list them; removal and restore read one through `ai_projector`.
+    #[cfg(test)]
     pub fn ai_projectors(&self) -> Result<Vec<AiProjector>, String> {
         self.connection
             .prepare(&format!(
@@ -629,6 +546,7 @@ impl Store {
             .map_err(|e| e.to_string())
     }
     /// Caller owns filesystem validation; `installed` requires the actual artifact identity.
+    #[cfg(test)]
     pub fn ai_upsert_projector(&self, projector: &AiProjector) -> Result<(), String> {
         if projector.path.is_empty()
             || projector.path.len() > MAX_FIELD_BYTES
@@ -672,30 +590,32 @@ impl Store {
         Ok(())
     }
     /// The preferences automatic AI work obeys. With the AI extension off the
-    /// stored choices are kept, but no analysis, classification or semantic
-    /// search runs on its own.
+    /// stored choices are kept, but no classification or semantic search runs.
     pub fn ai_effective_preferences(&self) -> Result<AiPreferences, String> {
         let mut preferences = self.ai_preferences()?;
         if !self.enabled(crate::extensions::AI)? {
-            preferences.processing_mode = "explicit".into();
             preferences.classification_enabled = false;
-            preferences.remote_automatic = false;
         }
         Ok(preferences)
     }
     pub fn ai_preferences(&self) -> Result<AiPreferences, String> {
-        self.connection.query_row("SELECT active_model_id,setup_completed,processing_mode,automatic_limit,max_tokens,execution_mode,model_directory,embedding_model_id,classification_enabled,engine,remote_base_url,remote_model,remote_embedding_model,remote_timeout_seconds,remote_consent,remote_automatic,remote_daily_limit,remote_embeddings FROM ai_preferences WHERE id=1",[],|r|Ok(AiPreferences { active_model_id:r.get(0)?,setup_completed:r.get(1)?,processing_mode:r.get(2)?,automatic_limit:r.get(3)?,max_tokens:r.get(4)?,execution_mode:r.get(5)?,model_directory:r.get(6)?,embedding_model_id:r.get(7)?,classification_enabled:r.get(8)?,engine:r.get(9)?,remote_base_url:r.get(10)?,remote_model:r.get(11)?,remote_embedding_model:r.get(12)?,remote_timeout_seconds:r.get(13)?,remote_consent:r.get(14)?,remote_automatic:r.get(15)?,remote_daily_limit:r.get(16)?,remote_embeddings:r.get(17)? })).map_err(|e|e.to_string())
+        self.connection
+            .query_row(
+                "SELECT execution_mode,model_directory,embedding_model_id,classification_enabled FROM ai_preferences WHERE id=1",
+                [],
+                |r| {
+                    Ok(AiPreferences {
+                        execution_mode: r.get(0)?,
+                        model_directory: r.get(1)?,
+                        embedding_model_id: r.get(2)?,
+                        classification_enabled: r.get(3)?,
+                    })
+                },
+            )
+            .map_err(|e| e.to_string())
     }
     pub fn ai_save_preferences(&self, preferences: &AiPreferences) -> Result<(), String> {
         validate_model_directory(preferences.model_directory.as_deref())?;
-        if let Some(id) = &preferences.active_model_id {
-            if self
-                .ai_model(id)?
-                .is_none_or(|m| m.status != "installed" || m.kind != "generation")
-            {
-                return Err("설치가 완료된 분석 모델을 선택해 주세요.".into());
-            }
-        }
         if let Some(id) = &preferences.embedding_model_id {
             if self
                 .ai_model(id)?
@@ -704,86 +624,21 @@ impl Store {
                 return Err("설치가 완료된 분류 모델을 선택해 주세요.".into());
             }
         }
-        let bounded_field = |value: &Option<String>| {
-            value.as_deref().is_some_and(|value| {
-                value.len() > 2048 || value.contains('\0') || value.chars().any(char::is_control)
-            })
-        };
-        if !["explicit", "recent", "backlog"].contains(&preferences.processing_mode.as_str())
-            || !["auto", "cpu", "gpu"].contains(&preferences.execution_mode.as_str())
-            || !["local", "openai-compatible"].contains(&preferences.engine.as_str())
-            || preferences.automatic_limit > 20
-            || !(128..=4096).contains(&preferences.max_tokens)
-            || !(10..=600).contains(&preferences.remote_timeout_seconds)
-            || preferences.remote_daily_limit > 200
-            || bounded_field(&preferences.remote_base_url)
-            || bounded_field(&preferences.remote_model)
-            || bounded_field(&preferences.remote_embedding_model)
-            || preferences
-                .remote_model
-                .as_deref()
-                .is_some_and(|value| value.trim().is_empty())
-            || preferences
-                .remote_embedding_model
-                .as_deref()
-                .is_some_and(|value| value.trim().is_empty())
-        {
+        if !crate::intelligence::valid_execution_mode(&preferences.execution_mode) {
             return Err("AI 처리 설정을 확인해 주세요.".into());
         }
-        self.connection.execute("UPDATE ai_preferences SET active_model_id=?1,setup_completed=?2,processing_mode=?3,automatic_limit=?4,max_tokens=?5,execution_mode=?6,model_directory=?7,embedding_model_id=?8,classification_enabled=?9,engine=?10,remote_base_url=?11,remote_model=?12,remote_embedding_model=?13,remote_timeout_seconds=?14,remote_consent=?15,remote_automatic=?16,remote_daily_limit=?17,remote_embeddings=?18 WHERE id=1", params![preferences.active_model_id,preferences.setup_completed,preferences.processing_mode,preferences.automatic_limit,preferences.max_tokens,preferences.execution_mode,preferences.model_directory,preferences.embedding_model_id,preferences.classification_enabled,preferences.engine,preferences.remote_base_url,preferences.remote_model,preferences.remote_embedding_model,preferences.remote_timeout_seconds,preferences.remote_consent,preferences.remote_automatic,preferences.remote_daily_limit,preferences.remote_embeddings]).map_err(|e|e.to_string())?;
+        self.connection
+            .execute(
+                "UPDATE ai_preferences SET execution_mode=?1,model_directory=?2,embedding_model_id=?3,classification_enabled=?4 WHERE id=1",
+                params![
+                    preferences.execution_mode,
+                    preferences.model_directory,
+                    preferences.embedding_model_id,
+                    preferences.classification_enabled
+                ],
+            )
+            .map_err(|e| e.to_string())?;
         Ok(())
-    }
-    /// A restored backup may contain remote engine preferences. They stay
-    /// disabled until the user consents again; the key itself is never in the
-    /// backup and remains in the OS credential store.
-    pub fn reset_remote_after_restore(&self) -> Result<(), String> {
-        self.connection
-            .execute(
-                "UPDATE ai_preferences SET engine='local',remote_consent=0,remote_automatic=0,remote_embeddings=0 WHERE id=1",
-                [],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-    /// Reserves one automatic remote attempt for the current local date.
-    /// Direct user requests do not call this. `false` means the daily cap is reached.
-    pub fn ai_reserve_remote_automatic(&self, limit: u32) -> Result<bool, String> {
-        if limit == 0 {
-            return Ok(false);
-        }
-        self.connection
-            .execute(
-                "DELETE FROM ai_remote_usage WHERE day<strftime('%Y-%m-%d','now','localtime','-7 days')",
-                [],
-            )
-            .map_err(|error| error.to_string())?;
-        let changed = self
-            .connection
-            .execute(
-                "INSERT INTO ai_remote_usage(day,attempts) VALUES(strftime('%Y-%m-%d','now','localtime'),1) ON CONFLICT(day) DO UPDATE SET attempts=attempts+1 WHERE attempts<?1",
-                [limit],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(changed == 1)
-    }
-    /// Returns a reservation when no job was actually admitted.
-    pub fn ai_release_remote_automatic(&self) -> Result<(), String> {
-        self.connection
-            .execute(
-                "UPDATE ai_remote_usage SET attempts=attempts-1 WHERE day=strftime('%Y-%m-%d','now','localtime') AND attempts>0",
-                [],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-    pub fn ai_remote_usage_today(&self) -> Result<u32, String> {
-        self.connection
-            .query_row(
-                "SELECT COALESCE((SELECT attempts FROM ai_remote_usage WHERE day=strftime('%Y-%m-%d','now','localtime')),0)",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| error.to_string())
     }
     /// Changes only the destination for future downloads, never model inventory.
     pub fn ai_save_model_directory(&self, directory: Option<&str>) -> Result<(), String> {
@@ -796,140 +651,6 @@ impl Store {
             .map_err(|error| error.to_string())?;
         Ok(())
     }
-    /// Deduplicates pending/running attempts. Cache lookup is explicit via `ai_cached_result`.
-    pub fn ai_enqueue(
-        &self,
-        key: &AnalysisKey,
-        model_identity: &Value,
-        priority: i32,
-    ) -> Result<AiJob, String> {
-        validate_key(key)?;
-        let identity = serde_json::to_string(model_identity).map_err(|e| e.to_string())?;
-        if identity.len() > 16384 {
-            return Err("모델 정보가 너무 큽니다.".into());
-        }
-        self.connection.execute("INSERT INTO ai_jobs(document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,priority) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT DO UPDATE SET priority=MAX(ai_jobs.priority,excluded.priority)",params![key.document_id,key.revision_id,key.task,key.model_sha256,key.prompt_version,key.schema_version,key.configuration_hash,identity,priority]).map_err(|e|e.to_string())?;
-        self.connection.query_row(&format!("SELECT {JOB_COLUMNS} FROM ai_jobs WHERE {KEY_WHERE} AND status IN ('pending','running')"),params![key.document_id,key.revision_id,key.task,key.model_sha256,key.prompt_version,key.schema_version,key.configuration_hash],job_row).map_err(|e|e.to_string())
-    }
-    pub fn ai_job(&self, id: i64) -> Result<Option<AiJob>, String> {
-        self.connection
-            .query_row(
-                &format!("SELECT {JOB_COLUMNS} FROM ai_jobs WHERE id=?1"),
-                [id],
-                job_row,
-            )
-            .optional()
-            .map_err(|e| e.to_string())
-    }
-    pub fn ai_jobs(&self, limit: u32) -> Result<Vec<AiJob>, String> {
-        self.connection
-            .prepare(&format!(
-                "SELECT {JOB_COLUMNS} FROM ai_jobs ORDER BY id DESC LIMIT ?1"
-            ))
-            .map_err(|e| e.to_string())?
-            .query_map([limit.min(MAX_LIST_LIMIT)], job_row)
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())
-    }
-    /// Active work is authoritative and must not disappear behind a bounded history window.
-    pub fn ai_active_jobs(&self) -> Result<Vec<AiJob>, String> {
-        self.connection
-            .prepare(&format!(
-                "SELECT {JOB_COLUMNS} FROM ai_jobs WHERE status IN ('pending','running') ORDER BY id DESC"
-            ))
-            .map_err(|e| e.to_string())?
-            .query_map([], job_row)
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())
-    }
-    /// Limit terminal history without hiding any active work for this revision.
-    pub fn ai_document_jobs(
-        &self,
-        document_id: i64,
-        revision_id: i64,
-        limit: u32,
-    ) -> Result<Vec<AiJob>, String> {
-        if limit == 0 {
-            return Ok(Vec::new());
-        }
-        self.connection
-            .prepare(&format!(
-                "SELECT {JOB_COLUMNS} FROM ai_jobs WHERE document_id=?1 AND revision_id=?2
-                 AND (status IN ('pending','running') OR id IN (
-                     SELECT id FROM ai_jobs WHERE document_id=?1 AND revision_id=?2
-                     AND status NOT IN ('pending','running') ORDER BY id DESC LIMIT ?3
-                 )) ORDER BY id DESC"
-            ))
-            .map_err(|e| e.to_string())?
-            .query_map(
-                params![document_id, revision_id, limit.min(MAX_LIST_LIMIT)],
-                job_row,
-            )
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())
-    }
-    /// Latest revisions received after this session began, not latest publications.
-    /// Initial historical backfill is excluded, but a meaningful later revision is
-    /// eligible even if the document was originally historical. Any prior attempt
-    /// suppresses automatic reanalysis/retry; explicit requests remain independent.
-    /// `remote` excludes private sources, which never go to a remote engine.
-    pub fn ai_recent_candidates(
-        &self,
-        boundary: &str,
-        limit: u32,
-        remote: bool,
-    ) -> Result<Vec<(i64, i64)>, String> {
-        self.connection
-            .prepare(
-                "SELECT d.id,r.id FROM documents d
-                 JOIN document_revisions r ON r.id=(
-                     SELECT MAX(latest.id) FROM document_revisions latest WHERE latest.document_id=d.id
-                 )
-                 WHERE r.collected_at>?1
-                   AND (d.historical=0 OR EXISTS(
-                       SELECT 1 FROM document_revisions earlier WHERE earlier.document_id=d.id AND earlier.id<r.id
-                   ))
-                   AND NOT EXISTS(SELECT 1 FROM ai_jobs j WHERE j.document_id=d.id AND j.revision_id=r.id)
-                   AND (?3=0 OR d.source_id<>?4)
-                   AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
-                 ORDER BY r.collected_at DESC,r.id DESC LIMIT ?2",
-            )
-            .map_err(|e| e.to_string())?
-            .query_map(params![boundary, limit.min(MAX_LIST_LIMIT), remote, PRIVATE_SOURCE], id_pair)
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())
-    }
-    /// Latest revisions of notices that still have no attempt for that revision,
-    /// newest publication first. Unlike `ai_recent_candidates` this includes the
-    /// initial historical backfill; it is the opt-in idle backlog pass. Notices
-    /// without archived text are skipped because the pipeline cannot ground them.
-    pub fn ai_backlog_candidates(
-        &self,
-        limit: u32,
-        remote: bool,
-    ) -> Result<Vec<(i64, i64)>, String> {
-        self.connection
-            .prepare(
-                "SELECT d.id,r.id FROM documents d
-                 JOIN document_revisions r ON r.id=(
-                     SELECT MAX(latest.id) FROM document_revisions latest WHERE latest.document_id=d.id
-                 )
-                 WHERE length(trim(d.body_text))>0
-                   AND NOT EXISTS(SELECT 1 FROM ai_jobs j WHERE j.document_id=d.id AND j.revision_id=r.id)
-                   AND (?2=0 OR d.source_id<>?3)
-                   AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
-                 ORDER BY d.published_at DESC,d.id DESC LIMIT ?1",
-            )
-            .map_err(|e| e.to_string())?
-            .query_map(params![limit.min(MAX_LIST_LIMIT), remote, PRIVATE_SOURCE], id_pair)
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())
-    }
     /// Latest revisions whose current model/config classification is missing,
     /// newest publication first. A stored vector from another config is reused
     /// by the caller, so this query only tracks the classification row.
@@ -938,7 +659,6 @@ impl Store {
         model_sha256: &str,
         config_hash: &str,
         limit: u32,
-        remote: bool,
     ) -> Result<Vec<(i64, i64)>, String> {
         if !valid_hash(model_sha256) || !valid_hash(config_hash) {
             return Err("분류 모델 정보가 올바르지 않습니다.".into());
@@ -955,12 +675,14 @@ impl Store {
                        WHERE c.document_id=d.id AND c.revision_id=r.id
                          AND c.model_sha256=?1 AND c.config_hash=?2
                    )
-                   AND (?4=0 OR d.source_id<>?5)
                    AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
                  ORDER BY r.collected_at DESC,r.id DESC LIMIT ?3",
             )
             .map_err(|e| e.to_string())?
-            .query_map(params![model_sha256, config_hash, limit.min(MAX_LIST_LIMIT), remote, PRIVATE_SOURCE], id_pair)
+            .query_map(
+                params![model_sha256, config_hash, limit.min(MAX_LIST_LIMIT)],
+                id_pair,
+            )
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
@@ -1259,155 +981,5 @@ impl Store {
             results.push((document_id, similar));
         }
         Ok(results)
-    }
-    pub fn ai_has_model_jobs(&self, model_sha256: &str) -> Result<bool, String> {
-        self.connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM ai_jobs WHERE model_sha256=?1 AND status IN ('pending','running'))",
-                [model_sha256],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())
-    }
-    /// Cancels only a pending/running attempt. Returns false when it already reached
-    /// a terminal state, so a concurrent completion is not treated as an error.
-    pub fn ai_cancel_if_running(&self, id: i64, error: &str) -> Result<bool, String> {
-        self.connection
-            .execute(
-                "UPDATE ai_jobs SET status='cancelled',error=?2,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?1 AND status IN ('pending','running')",
-                params![id, error],
-            )
-            .map(|count| count > 0)
-            .map_err(|e| e.to_string())
-    }
-    /// Atomically claims one pending job. Application-level concurrency remains one worker.
-    pub fn ai_claim_next(&mut self) -> Result<Option<AiJob>, String> {
-        let transaction = self.connection.transaction().map_err(|e| e.to_string())?;
-        let id = transaction
-            .query_row(
-                "SELECT id FROM ai_jobs WHERE status='pending' ORDER BY priority DESC,id LIMIT 1",
-                [],
-                |r| r.get::<_, i64>(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-        let Some(id) = id else {
-            return Ok(None);
-        };
-        transaction.execute("UPDATE ai_jobs SET status='running',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?1",[id]).map_err(|e|e.to_string())?;
-        let job = transaction
-            .query_row(
-                &format!("SELECT {JOB_COLUMNS} FROM ai_jobs WHERE id=?1"),
-                [id],
-                job_row,
-            )
-            .map_err(|e| e.to_string())?;
-        transaction.commit().map_err(|e| e.to_string())?;
-        Ok(Some(job))
-    }
-    pub fn ai_finish_job(
-        &self,
-        id: i64,
-        status: &str,
-        error: Option<&str>,
-        duration_ms: Option<u64>,
-    ) -> Result<(), String> {
-        if duration_ms.is_some_and(|v| v > i64::MAX as u64)
-            || !["failed", "cancelled", "stale"].contains(&status)
-            || error.is_some_and(|e| e.len() > MAX_FIELD_BYTES)
-        {
-            return Err("AI 작업 상태를 확인해 주세요.".into());
-        }
-        changed(self.connection.execute("UPDATE ai_jobs SET status=?2,error=?3,duration_ms=?4,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?1 AND status IN ('pending','running')",params![id,status,error,duration_ms.map(|v|v as i64)]).map_err(|e|e.to_string())?)
-    }
-    /// The pipeline must schema-validate and ground `result` before invoking this method.
-    #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
-    pub fn ai_complete_job(
-        &mut self,
-        id: i64,
-        result: &Value,
-        partial: bool,
-        processed_chars: u64,
-        total_chars: u64,
-        duration_ms: u64,
-    ) -> Result<AiResult, String> {
-        self.ai_complete_job_with_backend(
-            id,
-            result,
-            partial,
-            processed_chars,
-            total_chars,
-            duration_ms,
-            None,
-            None,
-        )
-    }
-    #[allow(clippy::too_many_arguments)]
-    pub fn ai_complete_job_with_backend(
-        &mut self,
-        id: i64,
-        result: &Value,
-        partial: bool,
-        processed_chars: u64,
-        total_chars: u64,
-        duration_ms: u64,
-        loaded_backend: Option<&str>,
-        images: Option<(u64, u64)>,
-    ) -> Result<AiResult, String> {
-        let encoded = serde_json::to_string(result).map_err(|e| e.to_string())?;
-        if total_chars > i64::MAX as u64
-            || duration_ms > i64::MAX as u64
-            || !result.is_object()
-            || encoded.len() > 128 * 1024
-            || processed_chars > total_chars
-            || (!partial && processed_chars != total_chars)
-            || loaded_backend
-                .is_some_and(|backend| !["cpu", "vulkan", "cuda", "metal"].contains(&backend))
-        {
-            return Err("AI 분석 결과의 범위나 형식을 확인해 주세요.".into());
-        }
-        let transaction = self.connection.transaction().map_err(|e| e.to_string())?;
-        if let Some(backend) = loaded_backend {
-            // Record only an observed successful inference backend, atomically
-            // with the result. An automatic fallback remains visible on reopen.
-            changed(transaction.execute("UPDATE ai_jobs SET model_identity_json=json_set(model_identity_json,'$.loaded_backend',?2) WHERE id=?1 AND status='running'", params![id, backend]).map_err(|e| e.to_string())?)?;
-        }
-        if let Some((used, available)) = images {
-            if used > available || available > 64 {
-                return Err("이미지 분석 범위를 확인해 주세요.".into());
-            }
-            // Which archived images reached the model is part of the stored
-            // result's provenance; it is not part of the semantic cache key.
-            changed(transaction.execute("UPDATE ai_jobs SET model_identity_json=json_set(model_identity_json,'$.images_used',?2,'$.images_available',?3) WHERE id=?1 AND status='running'", params![id, used as i64, available as i64]).map_err(|e| e.to_string())?)?;
-        }
-        changed(transaction.execute("INSERT INTO ai_results(job_id,document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,result_json,partial,processed_chars,total_chars,duration_ms) SELECT id,document_id,revision_id,task,model_sha256,prompt_version,schema_version,configuration_hash,model_identity_json,?2,?3,?4,?5,?6 FROM ai_jobs WHERE id=?1 AND status='running'", params![id,encoded,partial,processed_chars as i64,total_chars as i64,duration_ms as i64]).map_err(|e|e.to_string())?)?;
-        let result_id = transaction.last_insert_rowid();
-        transaction.execute("UPDATE ai_jobs SET status='completed',error=NULL,duration_ms=?2,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?1",params![id,duration_ms as i64]).map_err(|e|e.to_string())?;
-        let stored = transaction
-            .query_row(
-                &format!("SELECT {RESULT_COLUMNS} FROM ai_results WHERE id=?1"),
-                [result_id],
-                result_row,
-            )
-            .map_err(|e| e.to_string())?;
-        transaction.commit().map_err(|e| e.to_string())?;
-        Ok(stored)
-    }
-    pub fn ai_cached_result(&self, key: &AnalysisKey) -> Result<Option<AiResult>, String> {
-        validate_key(key)?;
-        self.connection.query_row(&format!("SELECT {RESULT_COLUMNS} FROM ai_results WHERE {KEY_WHERE} ORDER BY id DESC LIMIT 1"),params![key.document_id,key.revision_id,key.task,key.model_sha256,key.prompt_version,key.schema_version,key.configuration_hash],result_row).optional().map_err(|e|e.to_string())
-    }
-    pub fn ai_document_results(
-        &self,
-        document_id: i64,
-        revision_id: Option<i64>,
-        limit: u32,
-    ) -> Result<Vec<AiResult>, String> {
-        self.connection.prepare(&format!("SELECT {RESULT_COLUMNS} FROM ai_results WHERE document_id=?1 AND (?2 IS NULL OR revision_id=?2) ORDER BY id DESC LIMIT ?3")).map_err(|e|e.to_string())?.query_map(params![document_id,revision_id,limit.min(MAX_LIST_LIMIT)],result_row).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())
-    }
-    pub fn ai_recent_results(&self, limit: u32) -> Result<Vec<AiResult>, String> {
-        // One latest result per current revision, not a history/regeneration flood.
-        self.connection.prepare(&format!("SELECT {RESULT_COLUMNS} FROM ai_results a WHERE a.id=(SELECT MAX(b.id) FROM ai_results b WHERE b.document_id=a.document_id AND b.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=a.document_id)) AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=a.document_id) ORDER BY a.id DESC LIMIT ?1")).map_err(|e|e.to_string())?.query_map([limit.min(MAX_LIST_LIMIT)],result_row).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())
     }
 }

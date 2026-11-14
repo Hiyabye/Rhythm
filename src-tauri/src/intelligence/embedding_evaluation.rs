@@ -5,8 +5,7 @@
 //! the pinned `llama-server` is staged. It uses the committed synthetic Korean
 //! fixtures only, never the production profile.
 use super::{
-    analysis::CATEGORIES,
-    classification::CATEGORY_PROTOTYPES,
+    classification::{CATEGORIES, CATEGORY_PROTOTYPES},
     evaluation::{cases, Case},
     Worker,
 };
@@ -160,16 +159,17 @@ async fn actual_embedding_classification_evaluation() {
     let cases = cases();
     let runtime =
         std::env::temp_dir().join(format!("rhythm-embedding-eval-{}", std::process::id()));
-    let mut configured = Worker::embedding_configured(&llama, &runtime, "auto", &pooling);
+    let mut configured = Worker::configured(&llama, &runtime, "auto", &pooling);
     if std::env::var("RHYTHM_EMBEDDING_EVAL_FORCE_CPU").as_deref() == Ok("1") {
         configured.force_cpu();
     }
     let worker = Arc::new(AsyncMutex::new(configured));
     let load_started = Instant::now();
     {
+        // The first request starts the server and loads the model.
         let mut worker = worker.lock().await;
         worker
-            .load(&model)
+            .embed(&model, &["load".into()])
             .await
             .expect("embedding server must load the model");
     }
@@ -314,9 +314,7 @@ async fn actual_semantic_search_evaluation() {
     assert!(model.is_file(), "missing model: {}", model.display());
     let cases = cases();
     let runtime = std::env::temp_dir().join(format!("rhythm-search-eval-{}", std::process::id()));
-    let worker = AsyncMutex::new(Worker::embedding_configured(
-        &llama, &runtime, "auto", "last",
-    ));
+    let worker = AsyncMutex::new(Worker::configured(&llama, &runtime, "auto", "last"));
     // Notices are embedded exactly as the production classifier stores them.
     let notices = cases
         .iter()

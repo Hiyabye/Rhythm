@@ -1,10 +1,9 @@
 //! Tauri commands for settings, onboarding, lifecycle preferences, extensions and
-//! the worker status. Startup and shared state stay in `main.rs`.
+//! the calendar. Startup and shared state stay in `main.rs`.
 use crate::{
     archive::sync::with_store as locked,
     core,
     extensions::{self, ExtensionInfo},
-    intelligence::WorkerStatus,
     storage::{
         calendar::{CalendarTodo, TodoInput},
         notice_dates::{CalendarNoticeDates, NoticeDate},
@@ -21,7 +20,6 @@ pub struct Snapshot {
     settings: Settings,
     extensions: Vec<ExtensionInfo>,
     storage: StorageInfo,
-    worker: WorkerStatus,
     proactive: ProactiveSettings,
     onboarding_completed: bool,
 }
@@ -31,7 +29,6 @@ pub(crate) fn storage_error(error: String) -> String {
 }
 
 async fn snapshot(state: &AppState) -> Result<Snapshot, String> {
-    let worker = runtime_status(state);
     let store = state
         .store
         .lock()
@@ -40,7 +37,6 @@ async fn snapshot(state: &AppState) -> Result<Snapshot, String> {
         settings: store.settings().map_err(storage_error)?,
         extensions: state.registry.list(&store).map_err(storage_error)?,
         storage: store.info().map_err(storage_error)?,
-        worker,
         proactive: store.proactive_settings().map_err(storage_error)?,
         onboarding_completed: store.onboarding_completed().map_err(storage_error)?,
     })
@@ -269,9 +265,9 @@ pub async fn set_extension(
             extensions::STUDIUM => {
                 finish_studium_disable(&state.store, &state.studium, studium_completion).await?;
             }
-            extensions::AI => {
-                crate::intelligence::commands::stop_for_disabled_extension(state.inner()).await?
-            }
+            // The classifier sees the extension off on its next pass and
+            // stops its process; wake it instead of waiting for the timer.
+            extensions::AI => state.classifier.wake(),
             _ => {}
         }
         view_result?;
@@ -349,26 +345,6 @@ pub(crate) async fn finish_studium_disable(
         studium.clear();
     }
     Ok(())
-}
-fn runtime_status(state: &AppState) -> WorkerStatus {
-    state
-        .worker
-        .try_lock()
-        .map(|mut w| w.status())
-        .unwrap_or(WorkerStatus {
-            state: "busy".into(),
-            runtime_available: true,
-            model: None,
-            detail: Some("로컬 AI 작업을 처리하고 있습니다.".into()),
-        })
-}
-#[tauri::command]
-pub async fn worker_status(state: tauri::State<'_, AppState>) -> Result<WorkerStatus, String> {
-    let _lease = state.operation_gate.shared().await?;
-    match state.worker.try_lock() {
-        Ok(mut worker) => Ok(worker.refresh().await),
-        Err(_) => Ok(runtime_status(&state)),
-    }
 }
 #[tauri::command]
 pub async fn calendar_todos(

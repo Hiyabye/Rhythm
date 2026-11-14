@@ -116,7 +116,7 @@
   async function resetPersonalization() {
     let confirmed: boolean;
     try {
-      confirmed = await confirmAction('개인화 프로필, 관심사, 학습된 기억과 공지별 피드백을 모두 지울까요? 지운 내용은 되돌릴 수 없습니다.\n\n보관한 공지, 읽음·저장 상태와 AI 분석 결과는 유지됩니다.', '초기화');
+      confirmed = await confirmAction('개인화 프로필, 관심사, 학습된 기억과 공지별 피드백을 모두 지울까요? 지운 내용은 되돌릴 수 없습니다.\n\n보관한 공지, 읽음·저장 상태와 공지 분류 결과는 유지됩니다.', '초기화');
     } catch (reason) {
       error = `${archiveError(reason)} 확인 창을 열지 못해 초기화하지 않았습니다.`;
       return;

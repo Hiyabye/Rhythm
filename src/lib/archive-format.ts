@@ -66,16 +66,6 @@ function todoTitle(text: string): string {
   return characters.length > todoTitleLimit ? `${characters.slice(0, todoTitleLimit - 1).join('')}…` : characters.join('');
 }
 
-/** A todo form for an AI-read date of a notice. The date is a guess until the user checks it. */
-export function noticeTodo(label: string, noticeTitle: string, day: string, documentId: number, image = false): TodoPrefill {
-  return {
-    todo: { title: todoTitle(`${label} · ${noticeTitle}`), day: day.slice(0, 10), time: null, memo: '', document_id: documentId },
-    caution: image
-      ? 'AI가 이미지에서 읽은 날짜라 확정되지 않았습니다. 원문에서 날짜와 시간을 확인한 뒤 저장하세요.'
-      : 'AI가 원문에서 읽은 날짜입니다. 틀릴 수 있으니 원문에서 날짜와 시간을 확인한 뒤 저장하세요.',
-  };
-}
-
 const noticeDateKinds: Record<NoticeDate['kind'], string> = { deadline: '마감', start: '시작', date: '일정' };
 /** The mark shown before a notice date, such as "마감 오후 6:00". */
 export function noticeDateMark(date: NoticeDate, format: ClockFormat): string {

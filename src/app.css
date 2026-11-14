@@ -582,7 +582,7 @@ button svg {
   font-size: 13px;
   font-weight: 650;
 }
-.settings-group-title h3,.setup-title h3 {
+.settings-group-title h3 {
   font: inherit;
 }
 .settings-group-title :focus,.settings-group-title:focus {
@@ -661,10 +661,6 @@ button svg {
 }
 .settings-pane input::placeholder,.popover input::placeholder {
   color: var(--muted);
-}
-.number-field {
-  width: 76px;
-  font-variant-numeric: tabular-nums;
 }
 .hint,.row-icon {
   display: inline-grid;
@@ -1088,25 +1084,7 @@ button svg {
   margin: 8px 4px 0;
 }
 
-/* AI: model tiles, setup steps and the running operation. */
-.ai-setup {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 18px;
-  margin-bottom: 14px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-}
-.setup-title {
-  flex-basis: 100%;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  font-size: 13px;
-  font-weight: 650;
-}
+/* AI: model tiles and setup steps. */
 .setup-steps {
   flex: 1;
   display: flex;
@@ -1141,24 +1119,6 @@ button svg {
   background: var(--accent-fill);
   color: var(--accent-text);
 }
-.ai-operation {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 14px;
-  padding: 10px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-}
-.ai-operation>div {
-  flex: 1;
-  min-width: 0;
-}
-.ai-operation p {
-  font-size: 12px;
-  color: var(--secondary);
-  font-variant-numeric: tabular-nums;
-}
 .model-grid {
   list-style: none;
   margin: 0;
@@ -1183,22 +1143,8 @@ button svg {
 .model-tile.installed:hover {
   border-color: var(--secondary);
 }
-.model-tile.selected,.model-tile.selected:hover {
-  border-color: var(--accent);
-  background: var(--soft);
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-/* The selection button covers the tile; other controls sit above it. */
-.model-select {
-  position: absolute;
-  inset: 0;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-}
 .model-heading,.model-meta,.model-note {
   position: relative;
-  pointer-events: none;
 }
 .model-heading {
   display: flex;
@@ -1237,34 +1183,6 @@ button svg {
   gap: 10px;
   margin-top: auto;
   padding-top: 8px;
-  pointer-events: none;
-}
-/* Only the controls take the pointer; empty row space still selects the tile. */
-.model-actions > * {
-  pointer-events: auto;
-}
-.model-projector {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: auto;
-  padding-top: 8px;
-  pointer-events: none;
-}
-.model-projector > * {
-  pointer-events: auto;
-}
-.model-info {
-  margin-left: auto;
-}
-/* The setup flow confirms a removal inside the tile, in place of its actions. */
-.model-confirm {
-  margin-top: auto;
-  padding-top: 8px;
-}
-.model-confirm .model-actions {
-  padding-top: 6px;
 }
 .ai-progress {
   display: grid;
@@ -1732,17 +1650,6 @@ select:focus-visible {
   margin-top: 4px;
   color: var(--secondary);
   word-break: keep-all;
-}
-.setup-choices {
-  grid-template-columns: repeat(3,minmax(0,1fr));
-}
-.setup-choices .model-tile {
-  min-height: 72px;
-}
-@media (max-width:640px) {
-  .setup-choices {
-    grid-template-columns: minmax(0,1fr);
-  }
 }
 .setup-note {
   margin: 12px 4px 0;

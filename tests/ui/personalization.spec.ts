@@ -333,15 +333,3 @@ test('Today recommendation feedback can be reversed without opening the document
   const feedback = (await fixtureCalls(page)).filter((call) => call.command === 'personalization_set_feedback');
   expect(feedback.map((call) => call.args.feedback)).toEqual(['interested', null]);
 });
-
-test('current production analysis contract does not show a stale warning', async ({ page }) => {
-  await mockDesktop(page, { aiResult: true, aiInstalled: true }); await page.goto('/');
-  await page.getByRole('button', { name: /한국어 공지 01/ }).first().click();
-  await expect(page.getByText('이 결과는 현재 모델 또는 분석 방식·설정과 다릅니다.', { exact: false })).toHaveCount(0);
-});
-
-test('explicit prompt-v2 fixture warns and is not treated as a current Today summary', async ({ page }) => {
-  await mockDesktop(page, { aiResult: true, aiInstalled: true, analysisContract: 'prompt-v2' }); await page.goto('/');
-  await page.getByRole('button', { name: /한국어 공지 01/ }).first().click();
-  await expect(page.getByText('이 결과는 현재 모델 또는 분석 방식·설정과 다릅니다.', { exact: false })).toBeVisible();
-});
