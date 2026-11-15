@@ -230,6 +230,7 @@ mod tests {
             memo: String::new(),
             done: false,
             document_id: None,
+            reminder_minutes: None,
         }
     }
     fn task(item: &str, due_at: Option<&str>) -> CybercampusTask {

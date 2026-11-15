@@ -67,10 +67,14 @@ pub(crate) fn advance_delivery_clock(connection: &Connection) -> Result<String, 
             [&watermark],
         )
         .map_err(|e| e.to_string())?;
-    connection.execute(
-        "DELETE FROM studium_alert_attempts WHERE attempted_at<strftime('%Y-%m-%dT%H:%M:%fZ',?1,'-604800 seconds')",
-        [&watermark],
-    ).map_err(|e| e.to_string())?;
+    for table in ["studium_alert_attempts", "calendar_reminder_attempts"] {
+        connection
+            .execute(
+                &format!("DELETE FROM {table} WHERE attempted_at<strftime('%Y-%m-%dT%H:%M:%fZ',?1,'-604800 seconds')"),
+                [&watermark],
+            )
+            .map_err(|e| e.to_string())?;
+    }
     Ok(watermark)
 }
 
@@ -84,6 +88,7 @@ pub(crate) fn delivery_attempt_count(
             "SELECT COUNT(*) FROM (
            SELECT attempted_at FROM proactive_delivery_attempts
            UNION ALL SELECT attempted_at FROM studium_alert_attempts
+           UNION ALL SELECT attempted_at FROM calendar_reminder_attempts
          ) WHERE attempted_at>=strftime('%Y-%m-%dT%H:%M:%fZ',?1,'-'||?2||' seconds')",
             params![watermark, seconds as i64],
             |row| row.get(0),

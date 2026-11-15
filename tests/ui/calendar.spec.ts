@@ -8,7 +8,7 @@ const deadline: CybercampusTask = { course_key: 'A1', course_name: '자료구조
   opens_at: null, due_at: '2026-10-26T23:59', late_due_at: null, status: null, submitted_at: null, pending: true, updated_at: '2026-10-20T00:00:00Z' };
 const noticeDate = (overrides: Partial<NoticeDate & { saved: boolean }>): NoticeDate & { saved?: boolean } => ({
   document_id: 1, ordinal: 0, title: '한국어 공지 01', day: '2026-10-30', time: '18:00', end_day: null, end_time: null, label: '신청 마감', kind: 'deadline', ...overrides });
-const todo = (overrides: Partial<CalendarTodo>): CalendarTodo => ({ id: 1, title: '장학금 서류', day: '2026-10-25', time: null, memo: '', done: false, document_id: null, ...overrides });
+const todo = (overrides: Partial<CalendarTodo>): CalendarTodo => ({ id: 1, title: '장학금 서류', day: '2026-10-25', time: null, memo: '', done: false, document_id: null, reminder_minutes: null, ...overrides });
 
 async function openCalendar(page: Page) {
   await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name: '캘린더' }).click();
@@ -153,6 +153,47 @@ test('the week pane shows a multi-day notice date that started before today', as
   await expect(week.locator('.week-day').nth(0).locator('.event-notice')).toContainText('일정 한국어 공지 01');
   await expect(week.locator('.week-day').nth(1).locator('.event-notice')).toContainText('29일 오후 5:00');
   await expect(week.locator('.week-day').nth(2).locator('.event-notice')).toHaveCount(0);
+});
+
+test('a todo reminder offers choices that fit its time and is saved with it', async ({ page }) => {
+  await mockDesktop(page);
+  await page.goto('/');
+  await openCalendar(page);
+  const panel = page.getByRole('region', { name: /10월 24일 토요일/ });
+  await panel.getByRole('button', { name: '할 일 추가' }).click();
+  await panel.getByRole('textbox', { name: '제목' }).fill('보고서 제출');
+  const reminder = panel.getByRole('combobox', { name: '알림' });
+  await expect(reminder.getByRole('option')).toHaveText(['알림 없음', '당일 오전 9:00', '전날 오전 9:00']);
+  await expect(panel.getByRole('note')).toHaveCount(0);
+  await panel.getByRole('combobox', { name: '시' }).selectOption('9');
+  await expect(reminder.getByRole('option')).toHaveText(['알림 없음', '제시간', '10분 전', '30분 전', '1시간 전', '하루 전']);
+  await reminder.selectOption('10분 전');
+  await expect(panel.getByText('Rhythm이 열려 있고 알림·백그라운드에서 알림을 켠 동안 보냅니다.', { exact: false })).toBeVisible();
+  // Clearing the time drops a choice an untimed todo cannot have.
+  await panel.getByRole('combobox', { name: '시' }).selectOption('');
+  await expect(reminder).toHaveValue(await reminder.locator('option', { hasText: '알림 없음' }).getAttribute('value') ?? '');
+  await panel.getByRole('combobox', { name: '시' }).selectOption('9');
+  await reminder.selectOption('10분 전');
+  await panel.getByRole('button', { name: '추가', exact: true }).click();
+  await expect(panel.getByRole('status')).toHaveText('할 일을 추가했습니다.');
+  await expect(panel.getByRole('list', { name: '10월 24일 일정' })).toContainText('알림 10분 전');
+  const created = await page.evaluate(() => (window as any).__fixture.calls.find((call: any) => call.command === 'calendar_create_todo').args.todo);
+  expect(created).toMatchObject({ title: '보고서 제출', time: '09:00', reminder_minutes: 10 });
+
+  await panel.getByRole('button', { name: '보고서 제출 수정' }).click();
+  await expect(panel.getByRole('combobox', { name: '알림' })).toHaveValue(await panel.getByRole('combobox', { name: '알림' }).locator('option', { hasText: '10분 전' }).getAttribute('value') ?? '');
+});
+
+test('a clicked reminder opens the calendar on the todo day, also before the window listened', async ({ page }) => {
+  await mockDesktop(page, { pendingReminderDay: '2026-11-03', calendarTodos: [todo({ id: 4, day: '2026-11-03', time: '10:00', title: '면담', reminder_minutes: 30 })] });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '2026년 11월' })).toBeVisible();
+  const day = page.getByRole('region', { name: /11월 3일 화요일/ });
+  await expect(day).toContainText('오전 10:00 면담');
+  await expect(day).toContainText('알림 30분 전');
+  await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name: '오늘', exact: true }).click();
+  await page.evaluate(() => (window as any).__fixture.emitReminder('2026-10-30'));
+  await expect(page.getByRole('region', { name: /10월 30일 금요일/ })).toBeVisible();
 });
 
 test('export saves todos and open deadlines to a chosen .ics file', async ({ page }) => {

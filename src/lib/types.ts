@@ -410,6 +410,8 @@ export interface CalendarTodo {
   memo: string;
   done: boolean;
   document_id: number | null;
+  // Minutes before `time` (09:00 for an untimed todo); null for no reminder.
+  reminder_minutes: number | null;
 }
 // calendar_export: what the exported `.ics` file holds.
 export interface CalendarExport {
@@ -423,6 +425,7 @@ export interface TodoInput {
   memo: string;
   // Read only on create; editing keeps the link.
   document_id?: number | null;
+  reminder_minutes?: number | null;
 }
 // A prefilled todo form opened from a notice, an AI date or an eClass deadline.
 // `caution` says what to check before saving, such as an AI-read date.

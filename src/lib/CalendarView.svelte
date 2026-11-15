@@ -37,7 +37,22 @@
   let feedback = $state('');
   let busy = $state(false);
   let editing = $state<number | null>(null);
-  let draft = $state<TodoInput>({ title: '', day: '', time: null, memo: '' });
+  let draft = $state<TodoInput>({ title: '', day: '', time: null, memo: '', reminder_minutes: null });
+  // storage/calendar `TIMED_REMINDERS` and `UNTIMED_REMINDERS`; an untimed todo counts from 09:00.
+  let reminders = $derived(draft.time
+    ? [[0, '제시간'], [10, '10분 전'], [30, '30분 전'], [60, '1시간 전'], [1440, '하루 전']] as const
+    : [[0, `당일 ${wallTime('09:00', clock.format)}`], [1440, `전날 ${wallTime('09:00', clock.format)}`]] as const);
+  function reminderLabel(todo: CalendarTodo): string {
+    const minutes = todo.reminder_minutes;
+    if (minutes === null) return '';
+    if (!todo.time) return `${minutes ? '전날' : '당일'} ${wallTime('09:00', clock.format)}`;
+    return ({ 0: '제시간', 10: '10분 전', 30: '30분 전', 60: '1시간 전', 1440: '하루 전' } as Record<number, string>)[minutes] ?? '';
+  }
+  function setTime(time: string | null) {
+    draft.time = time;
+    // Adding or clearing the time changes the choices; keep only one still offered.
+    if (!reminders.some(([minutes]) => minutes === draft.reminder_minutes)) draft.reminder_minutes = null;
+  }
   // Set while the new-todo form came prefilled; such a form also shows its date.
   let caution = $state<string | null>(null);
   let grid = $state<HTMLElement>();
@@ -210,13 +225,13 @@
   function startAdd() {
     editing = 0;
     caution = null;
-    draft = { title: '', day: selected, time: null, memo: '' };
+    draft = { title: '', day: selected, time: null, memo: '', reminder_minutes: null };
   }
   async function startPrefill(request: TodoPrefill) {
     selected = request.todo.day;
     editing = 0;
     caution = request.caution;
-    draft = { ...request.todo };
+    draft = { reminder_minutes: null, ...request.todo };
     feedback = '';
     await tick();
     document.getElementById('calendar-todo-title')?.focus();
@@ -228,7 +243,7 @@
   function startEdit(todo: CalendarTodo) {
     editing = todo.id;
     caution = null;
-    draft = { title: todo.title, day: todo.day, time: todo.time, memo: todo.memo };
+    draft = { title: todo.title, day: todo.day, time: todo.time, memo: todo.memo, reminder_minutes: todo.reminder_minutes };
   }
   async function submit(event: SubmitEvent) {
     event.preventDefault();
@@ -292,8 +307,13 @@
     <label class="todo-field todo-title-field"><span class="field-label">제목</span><input id={editing === 0 ? 'calendar-todo-title' : undefined} bind:value={draft.title} maxlength="200" required placeholder="예: 장학금 서류 내기" /></label>
     <div class="todo-row">
       {#if editing || caution}<label class="todo-field"><span class="field-label">날짜</span><input type="date" bind:value={draft.day} required /></label>{/if}
-      <div class="todo-field"><span class="field-label" aria-hidden="true">시간 (선택)</span><TimeField value={draft.time} label="시간 (선택)" optional onchange={(time) => draft.time = time} /></div>
+      <div class="todo-field"><span class="field-label" aria-hidden="true">시간 (선택)</span><TimeField value={draft.time} label="시간 (선택)" optional onchange={setTime} /></div>
+      <label class="todo-field"><span class="field-label">알림</span><select bind:value={draft.reminder_minutes}>
+        <option value={null}>알림 없음</option>
+        {#each reminders as [minutes, text]}<option value={minutes}>{text}</option>{/each}
+      </select></label>
     </div>
+    {#if draft.reminder_minutes !== null}<p class="footnote todo-reminder-note">Rhythm이 열려 있고 알림·백그라운드에서 알림을 켠 동안 보냅니다. 앱이 꺼져 있던 사이의 알림은 할 일 시간이 지나기 전이면 다음 실행 때 보냅니다.</p>{/if}
     <label class="todo-field"><span class="field-label">메모 (선택)</span><textarea bind:value={draft.memo} maxlength="2000" rows="2"></textarea></label>
     <div class="todo-actions">
       <button type="button" class="button secondary small" onclick={cancel}>취소</button>
@@ -370,6 +390,7 @@
             <label class="todo-check"><input type="checkbox" checked={todo.done} disabled={busy || !desktop} onchange={() => void toggle(todo)} /><span class="sr-only">{todo.done ? '완료함' : '완료 표시'}</span></label>
             <div class="todo-body">
               <span class="todo-title">{#if todo.time}<span class="ai-mark todo-mark">{wallTime(todo.time, clock.format)}</span>{' '}{/if}{todo.title}</span>
+              {#if todo.reminder_minutes !== null}<span class="todo-reminder"><Icon name="bell" size={12} />알림 {reminderLabel(todo)}</span>{/if}
               {#if todo.memo}<span class="todo-memo">{todo.memo}</span>{/if}
             </div>
             <div class="todo-buttons">
@@ -432,6 +453,9 @@
   .todo-title { font-size: 12.5px; font-weight: 550; line-height: 1.4; overflow-wrap: anywhere; }
   .todo.done .todo-title { text-decoration: line-through; color: var(--muted); }
   .todo-memo { font-size: 11.5px; color: var(--secondary); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .todo-reminder { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--secondary); }
+  .todo-field select { font: inherit; font-size: 13px; color: var(--text); background: var(--field); border: 1px solid var(--line-strong); border-radius: 6px; padding: 4px 8px; }
+  .todo-reminder-note { margin: 0; }
   .todo-buttons { display: flex; gap: 2px; }
   .text-button.danger { color: var(--danger); }
   .todo-form { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }

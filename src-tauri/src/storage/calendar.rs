@@ -1,15 +1,26 @@
 //! Todos the user makes on the calendar. `day` and `time` are local wall-clock
 //! values; they never leave this device. A todo made from a notice keeps a
 //! link to it (`document_id`), shown only while the notice is outside 휴지통.
-use super::Store;
+//! An optional reminder (#189) is sent through the native notification path
+//! while Rhythm is open; see [`Store::calendar_due_reminders`].
+use super::{proactive, Store};
+use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use rusqlite::{params, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const MAX_TITLE: usize = 200;
 const MAX_MEMO: usize = 2000;
 const MAX_TODOS: i64 = 5000;
 /// A month grid shows at most six weeks.
 const MAX_RANGE_DAYS: i64 = 62;
+/// Minutes before a timed todo's time; an untimed todo counts from 09:00 of its
+/// day and offers only the same morning or the morning before.
+const TIMED_REMINDERS: [i64; 5] = [0, 10, 30, 60, 1440];
+const UNTIMED_REMINDERS: [i64; 2] = [0, 1440];
+const UNTIMED_REMINDER_HOUR: u32 = 9;
+const MAX_REMINDER_TOKENS: i64 = 64;
+const MAX_DUE_REMINDERS: i64 = 50;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CalendarTodo {
@@ -20,6 +31,7 @@ pub struct CalendarTodo {
     pub memo: String,
     pub done: bool,
     pub document_id: Option<i64>,
+    pub reminder_minutes: Option<i64>,
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct TodoInput {
@@ -31,6 +43,17 @@ pub struct TodoInput {
     /// Read only when the todo is created; editing keeps the link it has.
     #[serde(default)]
     pub document_id: Option<i64>,
+    #[serde(default)]
+    pub reminder_minutes: Option<i64>,
+}
+/// A reminder whose moment has come for a todo still ahead.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DueReminder {
+    pub todo_id: i64,
+    pub title: String,
+    pub day: String,
+    pub time: Option<String>,
+    pub minutes: i64,
 }
 
 /// Days since 1970-01-01 of a valid `YYYY-MM-DD`, or `None`.
@@ -95,7 +118,65 @@ fn validated(input: &TodoInput) -> Result<(String, Option<&str>, String), String
     if memo.chars().count() > MAX_MEMO {
         return Err(format!("메모는 {MAX_MEMO}자 이하로 입력해 주세요."));
     }
+    let allowed: &[i64] = if time.is_some() {
+        &TIMED_REMINDERS
+    } else {
+        &UNTIMED_REMINDERS
+    };
+    if input
+        .reminder_minutes
+        .is_some_and(|minutes| !allowed.contains(&minutes))
+    {
+        return Err("할 일 알림 시점을 확인해 주세요.".into());
+    }
     Ok((title.to_owned(), time, memo.to_owned()))
+}
+
+/// When the reminder is due and until when it still helps: a timed todo's own
+/// time, or the end of an untimed todo's day. A reminder missed while Rhythm
+/// was closed is still sent late within that window, never after it.
+fn reminder_window(
+    day: &str,
+    time: Option<&str>,
+    minutes: i64,
+) -> Option<(NaiveDateTime, NaiveDateTime)> {
+    let day = NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()?;
+    let (anchor, until) = match time {
+        Some(time) => {
+            let at = day.and_time(NaiveTime::parse_from_str(time, "%H:%M").ok()?);
+            (at, at)
+        }
+        None => (
+            day.and_hms_opt(UNTIMED_REMINDER_HOUR, 0, 0)?,
+            (day + Duration::days(1)).and_hms_opt(0, 0, 0)?,
+        ),
+    };
+    Some((anchor - Duration::minutes(minutes), until))
+}
+fn due_reminder(row: &Row, now: NaiveDateTime) -> rusqlite::Result<Option<DueReminder>> {
+    let reminder = DueReminder {
+        todo_id: row.get(0)?,
+        title: row.get(1)?,
+        day: row.get(2)?,
+        time: row.get(3)?,
+        minutes: row.get(4)?,
+    };
+    Ok(
+        reminder_window(&reminder.day, reminder.time.as_deref(), reminder.minutes)
+            .filter(|(from, until)| *from <= now && now < *until)
+            .map(|_| reminder),
+    )
+}
+const REMINDER_COLUMNS: &str = "id,title,day,time,reminder_minutes FROM calendar_todos
+    WHERE NOT done AND reminder_minutes IS NOT NULL AND NOT reminder_sent";
+fn valid_token(token: &str) -> bool {
+    token.len() == 64
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+fn digest(token: &str) -> String {
+    format!("{:x}", Sha256::digest(token.as_bytes()))
 }
 fn todo(row: &Row) -> rusqlite::Result<CalendarTodo> {
     Ok(CalendarTodo {
@@ -106,12 +187,13 @@ fn todo(row: &Row) -> rusqlite::Result<CalendarTodo> {
         memo: row.get(4)?,
         done: row.get(5)?,
         document_id: row.get(6)?,
+        reminder_minutes: row.get(7)?,
     })
 }
 // A trashed notice hides its link; restoring the notice brings it back.
 const COLUMNS: &str = "id,title,day,time,memo,done,
     CASE WHEN EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=calendar_todos.document_id)
-      THEN NULL ELSE document_id END";
+      THEN NULL ELSE document_id END,reminder_minutes";
 const NOT_FOUND: &str = "할 일을 찾을 수 없습니다. 이미 삭제되었을 수 있습니다.";
 
 impl Store {
@@ -207,8 +289,16 @@ impl Store {
         }
         self.connection
             .execute(
-                "INSERT INTO calendar_todos(title,day,time,memo,document_id) VALUES(?1,?2,?3,?4,?5)",
-                params![title, input.day, time, memo, input.document_id],
+                "INSERT INTO calendar_todos(title,day,time,memo,document_id,reminder_minutes)
+                 VALUES(?1,?2,?3,?4,?5,?6)",
+                params![
+                    title,
+                    input.day,
+                    time,
+                    memo,
+                    input.document_id,
+                    input.reminder_minutes
+                ],
             )
             .map_err(|e| e.to_string())?;
         self.calendar_todo(self.connection.last_insert_rowid())
@@ -219,9 +309,11 @@ impl Store {
         let changed = self
             .connection
             .execute(
-                "UPDATE calendar_todos SET title=?2,day=?3,time=?4,memo=?5,
+                // Moving the todo or changing its reminder rearms the reminder.
+                "UPDATE calendar_todos SET title=?2,day=?3,time=?4,memo=?5,reminder_minutes=?6,
+                   reminder_sent=reminder_sent AND day=?3 AND time IS ?4 AND reminder_minutes IS ?6,
                    updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?1",
-                params![id, title, input.day, time, memo],
+                params![id, title, input.day, time, memo, input.reminder_minutes],
             )
             .map_err(|e| e.to_string())?;
         if changed == 0 {
@@ -244,6 +336,160 @@ impl Store {
         }
         self.calendar_todo(id)
     }
+    /// Reminders due at local `now`, while the 캘린더 extension and notifications
+    /// are on. A sent reminder stays latched until the todo moves.
+    pub(crate) fn calendar_due_reminders(
+        &self,
+        now: NaiveDateTime,
+    ) -> Result<Vec<DueReminder>, String> {
+        if !self.reminders_allowed()? {
+            return Ok(Vec::new());
+        }
+        // The earliest reminder is a day ahead, so only today and tomorrow can be due.
+        let today = now.date();
+        let mut statement = self
+            .connection
+            .prepare(&format!(
+                "SELECT {REMINDER_COLUMNS} AND day BETWEEN ?1 AND ?2
+                 ORDER BY day, time IS NULL, time, id LIMIT {MAX_DUE_REMINDERS}"
+            ))
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map(
+                [today.to_string(), (today + Duration::days(1)).to_string()],
+                |row| due_reminder(row, now),
+            )
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::transpose)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string());
+        rows
+    }
+    fn reminders_allowed(&self) -> Result<bool, String> {
+        Ok(self.enabled(crate::extensions::CALENDAR)?
+            && self.proactive_effective_settings()?.notifications_enabled)
+    }
+    /// The final check before the OS handoff, under the same Store boundary:
+    /// rechecks the todo, quiet hours and the shared rate limit, then records the
+    /// attempt, the click token and the latch together. A reminder held back here
+    /// stays due, so it goes out on a later pass while the todo is still ahead.
+    pub(crate) fn calendar_reminder_reserve(
+        &self,
+        todo_id: i64,
+        token: &str,
+        now: NaiveDateTime,
+    ) -> Result<Option<DueReminder>, String> {
+        if !valid_token(token) {
+            return Err("알림 활성화 정보가 올바르지 않습니다.".into());
+        }
+        if !self.reminders_allowed()?
+            || self
+                .proactive_effective_settings()?
+                .quiet_hours
+                .contains(self.proactive_local_minutes()?)
+        {
+            return Ok(None);
+        }
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let reminder = transaction
+            .query_row(
+                &format!("SELECT {REMINDER_COLUMNS} AND id=?1"),
+                [todo_id],
+                |row| due_reminder(row, now),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .flatten();
+        let Some(reminder) = reminder else {
+            return Ok(None);
+        };
+        let watermark = proactive::advance_delivery_clock(&transaction)?;
+        transaction
+            .execute(
+                "DELETE FROM calendar_reminder_tokens WHERE expires_at<=?1",
+                [&watermark],
+            )
+            .map_err(|e| e.to_string())?;
+        let tokens: i64 = transaction
+            .query_row("SELECT COUNT(*) FROM calendar_reminder_tokens", [], |row| {
+                row.get(0)
+            })
+            .map_err(|e| e.to_string())?;
+        if tokens >= MAX_REMINDER_TOKENS
+            || proactive::delivery_attempt_count(&transaction, &watermark, 600)?
+                >= i64::from(proactive::MAX_DELIVERY_ATTEMPTS)
+        {
+            transaction.commit().map_err(|e| e.to_string())?;
+            return Ok(None);
+        }
+        transaction
+            .execute(
+                "INSERT INTO calendar_reminder_tokens(token_hash,todo_id,expires_at,created_at)
+                 VALUES(?1,?2,strftime('%Y-%m-%dT%H:%M:%fZ',?3,'+1800 seconds'),?3)",
+                params![digest(token), todo_id, watermark],
+            )
+            .map_err(|e| e.to_string())?;
+        transaction
+            .execute(
+                "INSERT INTO calendar_reminder_attempts(attempted_at) VALUES(?1)",
+                [&watermark],
+            )
+            .map_err(|e| e.to_string())?;
+        transaction
+            .execute(
+                "UPDATE calendar_todos SET reminder_sent=1 WHERE id=?1",
+                [todo_id],
+            )
+            .map_err(|e| e.to_string())?;
+        transaction.commit().map_err(|e| e.to_string())?;
+        Ok(Some(reminder))
+    }
+    /// A clicked reminder's one-use token: the todo's current day, or `None`
+    /// when the token is unknown, expired or used, or the calendar or
+    /// notifications were turned off since.
+    pub(crate) fn calendar_reminder_consume(&self, token: &str) -> Result<Option<String>, String> {
+        if !valid_token(token) {
+            return Ok(None);
+        }
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let watermark = proactive::advance_delivery_clock(&transaction)?;
+        transaction
+            .execute(
+                "DELETE FROM calendar_reminder_tokens WHERE expires_at<=?1",
+                [&watermark],
+            )
+            .map_err(|e| e.to_string())?;
+        let day: Option<String> = transaction
+            .query_row(
+                "SELECT t.day FROM calendar_reminder_tokens r JOIN calendar_todos t ON t.id=r.todo_id
+                 WHERE r.token_hash=?1",
+                [digest(token)],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        transaction
+            .execute(
+                "DELETE FROM calendar_reminder_tokens WHERE token_hash=?1",
+                [digest(token)],
+            )
+            .map_err(|e| e.to_string())?;
+        let allowed = self.reminders_allowed()?;
+        transaction.commit().map_err(|e| e.to_string())?;
+        Ok(day.filter(|_| allowed))
+    }
+    pub(crate) fn calendar_reminder_invalidate_tokens(&self) -> Result<(), String> {
+        self.connection
+            .execute("DELETE FROM calendar_reminder_tokens", [])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
     /// Deleting a todo that is already gone succeeds, so a repeated click is harmless.
     pub fn calendar_delete_todo(&self, id: i64) -> Result<(), String> {
         self.calendar_writable()?;
@@ -254,6 +500,8 @@ impl Store {
     }
 }
 
+#[cfg(test)]
+mod reminder_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +520,7 @@ mod tests {
             time: time.map(Into::into),
             memo: String::new(),
             document_id: None,
+            reminder_minutes: None,
         }
     }
 

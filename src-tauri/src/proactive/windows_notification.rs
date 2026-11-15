@@ -439,6 +439,18 @@ pub(crate) fn prepare_studium(
     )
 }
 
+pub(super) fn prepare_reminder(
+    title: &str,
+    body: &str,
+    token: &str,
+) -> Result<PreparedToast, String> {
+    prepare_for_uri(
+        title,
+        body,
+        &format!("{}{token}", super::reminders::TOKEN_PREFIX),
+    )
+}
+
 fn prepare_for_uri(title: &str, body: &str, uri: &str) -> Result<PreparedToast, String> {
     if !protocol_registered_to_current_exe() {
         return Err(
