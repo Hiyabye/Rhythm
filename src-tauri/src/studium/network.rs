@@ -9,7 +9,7 @@ use std::{
 };
 use url::Url;
 
-pub(crate) const RESPONSE_LIMIT: usize = 1_000_000;
+pub(crate) const RESPONSE_LIMIT: usize = parser::MAX_PAGE_BYTES;
 
 pub(crate) fn validate_url(url: &Url) -> Result<(), String> {
     let denied = || "허용된 열람실 조회 주소가 아닙니다.".to_string();
@@ -33,7 +33,7 @@ pub(crate) fn validate_url(url: &Url) -> Result<(), String> {
     }
 }
 
-/// One manual cycle shares its policy. Transport keeps cross-cycle pacing.
+/// One check cycle (manual or automatic) shares its policy. Transport keeps cross-cycle pacing.
 pub(crate) struct Session<'a, T> {
     transport: &'a T,
     policy: Robots,

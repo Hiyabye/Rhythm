@@ -51,7 +51,7 @@ fn fixture() -> (tempfile::TempDir, Arc<Mutex<Store>>, CatalogEntry, Vec<u8>) {
     let store = Arc::new(Mutex::new(
         Store::open(&dir.path().join("rhythm.sqlite3")).unwrap(),
     ));
-    let bytes = gguf("qwen35");
+    let bytes = gguf("qwen3");
     let mut entry = catalog().remove(0);
     entry.bytes = bytes.len() as u64;
     entry.sha256 = format!("{:x}", Sha256::digest(&bytes));
@@ -1049,7 +1049,7 @@ fn gguf_architecture_is_found_after_values_that_span_the_read_buffer() {
 /// status/range validators; no body or secret redirect URL is logged.
 #[cfg(windows)]
 #[tokio::test]
-#[ignore = "downloads pinned 2B GGUF; set RHYTHM_MODEL_RESUME_DIR to a new isolated directory under .build-tools"]
+#[ignore = "downloads the pinned embedding GGUF (~610 MiB); set RHYTHM_MODEL_RESUME_DIR to a new isolated directory under .build-tools"]
 async fn real_curated_model_cancel_resume() {
     #[derive(Clone, Debug)]
     struct Observation {
@@ -1132,7 +1132,7 @@ async fn real_curated_model_cancel_resume() {
 
     let entry = catalog()
         .into_iter()
-        .find(|entry| entry.id == "qwen35-2b")
+        .find(|entry| entry.id == "qwen3-embedding-0-6b")
         .unwrap();
     let store = Arc::new(Mutex::new(
         Store::open(&root.join("rhythm.sqlite3")).unwrap(),
@@ -1292,7 +1292,7 @@ async fn real_curated_model_install() {
                 .unwrap()
                 .embedding_model_id,
             Some(id.clone()),
-            "an embedding install selects itself without touching the generation model"
+            "an embedding install selects itself"
         );
     }
     eprintln!(

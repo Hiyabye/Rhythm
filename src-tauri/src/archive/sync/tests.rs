@@ -261,8 +261,7 @@ impl Transport for Fake {
     }
 }
 fn setup(ids: &[&str]) -> (TempDir, SharedStore) {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(&dir.path().join("rhythm.sqlite3")).unwrap();
+    let (dir, store) = crate::storage::temp_store();
     store.catalog(&catalog::definitions()).unwrap();
     store.set_enabled("sogang_notices", true).unwrap();
     for id in ids {

@@ -301,15 +301,13 @@ async fn notices<H: Http>(
             continue;
         }
         current.discovered += 1;
-        if existing.is_some()
-            && with_store(store, |s| {
+        if let Some(id) = existing {
+            if with_store(store, |s| {
                 s.listing_unchanged(SOURCE_ID, &external_id, &marker)
-            })?
-        {
-            if let Some(id) = existing {
+            })? {
                 pending(connector, http, store, root, cancel, id, resource_bytes).await?;
+                continue;
             }
-            continue;
         }
         match notice(
             connector,

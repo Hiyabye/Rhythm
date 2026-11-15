@@ -23,7 +23,46 @@ mod proactive_tests;
 pub mod studium;
 pub(crate) mod studium_alerts;
 pub(crate) mod trash;
+/// A fresh store in a temporary directory that lives as long as the guard.
+#[cfg(test)]
+pub(crate) fn temp_store() -> (tempfile::TempDir, Store) {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(&directory.path().join("rhythm.sqlite3")).unwrap();
+    (directory, store)
+}
+
 pub(crate) const SCHEMA_VERSION: i64 = 34;
+
+// Statements that roll a test profile back below the migration that added each
+// object, newest first; a rollback test joins the ones that migration needs
+// and keeps its own `PRAGMA user_version`. 035 and later add their fragment here.
+#[cfg(test)]
+pub(crate) const UNDO_DATES: &str = "DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; ";
+#[cfg(test)]
+pub(crate) const UNDO_TODO_DOCUMENT: &str = "DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; ";
+#[cfg(test)]
+pub(crate) const UNDO_TODOS: &str =
+    "DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; ";
+#[cfg(test)]
+pub(crate) const UNDO_MINI_GEOMETRY: &str = "DROP TABLE studium_mini_geometry; ";
+#[cfg(test)]
+pub(crate) const UNDO_ALERTS: &str = "DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; ";
+#[cfg(test)]
+pub(crate) const UNDO_FAVORITES: &str = "DROP TABLE studium_favorite_seats; ";
+#[cfg(test)]
+pub(crate) const UNDO_INTERVAL: &str =
+    "ALTER TABLE studium_preferences DROP COLUMN interval_minutes; ";
+#[cfg(test)]
+pub(crate) const UNDO_AUTO_TRASH: &str = "ALTER TABLE settings DROP COLUMN auto_trash_months; ";
+#[cfg(test)]
+pub(crate) const UNDO_TRASH: &str = "DROP TABLE trashed_documents; DROP TABLE deleted_notices; ";
+#[cfg(test)]
+pub(crate) const UNDO_CLOCK: &str = "ALTER TABLE settings DROP COLUMN clock_format; ";
+#[cfg(test)]
+pub(crate) const UNDO_STUDIUM: &str =
+    "DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ";
+#[cfg(test)]
+pub(crate) const UNDO_GROUPS: &str = "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; ";
 
 /// Ordered schema migrations; index `n` upgrades `user_version` n to n+1.
 pub(super) const MIGRATIONS: [&str; 34] = [
@@ -413,13 +452,9 @@ mod tests {
             .unwrap()
             .connection
             .execute_batch(
-                "DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; DROP TABLE studium_mini_geometry;
-                 DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules;
-                 DROP TABLE studium_favorite_seats;
-                 ALTER TABLE studium_preferences DROP COLUMN interval_minutes;
-                 ALTER TABLE settings DROP COLUMN auto_trash_months;
+                &format!("{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_INTERVAL}{UNDO_AUTO_TRASH}
                  UPDATE settings SET theme='dark',clock_format='24h';
-                 PRAGMA user_version=25;",
+                 PRAGMA user_version=25;"),
             )
             .unwrap();
         let db = Store::open(&path).unwrap();
@@ -497,26 +532,7 @@ mod tests {
         let path = dir.path().join("db");
         {
             let connection = Connection::open(&path).unwrap();
-            for migration in [
-                include_str!("../../migrations/001_foundation.sql"),
-                include_str!("../../migrations/002_archive.sql"),
-                include_str!("../../migrations/003_intelligence.sql"),
-                include_str!("../../migrations/004_personalization.sql"),
-                include_str!("../../migrations/005_proactive.sql"),
-                include_str!("../../migrations/006_notification_attempts.sql"),
-                include_str!("../../migrations/007_notification_activation.sql"),
-                include_str!("../../migrations/008_ai_execution_mode.sql"),
-                include_str!("../../migrations/009_ai_model_directory.sql"),
-                include_str!("../../migrations/010_update_check.sql"),
-                include_str!("../../migrations/011_skipped_articles.sql"),
-                include_str!("../../migrations/012_resource_retry.sql"),
-                include_str!("../../migrations/013_ai_projector.sql"),
-                include_str!("../../migrations/014_ai_backlog_mode.sql"),
-                include_str!("../../migrations/015_ai_embedding.sql"),
-                include_str!("../../migrations/016_remote_engine.sql"),
-                include_str!("../../migrations/017_retire_eng_newsletter.sql"),
-                include_str!("../../migrations/018_cybercampus.sql"),
-            ] {
+            for migration in &MIGRATIONS[..18] {
                 connection.execute_batch(migration).unwrap();
             }
             connection
@@ -552,7 +568,7 @@ mod tests {
                            VALUES('cybercampus','사이버캠퍼스','서강대학교','','https://eclass.sogang.ac.kr/','cybercampus',1,{subscribed}),
                                  ('sogang-academic','학사','서강대학교','','https://www.sogang.ac.kr/','sogang',1,1);
                          INSERT INTO source_extensions VALUES('cybercampus','sogang_notices'),('sogang-academic','sogang_notices');
-                         ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                         {UNDO_GROUPS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
                          PRAGMA user_version=19;",
                         notices = notices as i32,
                         subscribed = subscribed as i32,
@@ -592,13 +608,9 @@ mod tests {
             .unwrap()
             .connection
             .execute_batch(
-                "DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; DROP TABLE studium_mini_geometry;
-                 DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules;
-                 DROP TABLE studium_favorite_seats;
-                 ALTER TABLE studium_preferences DROP COLUMN interval_minutes;
-                 ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                &format!("{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_INTERVAL}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
                  UPDATE settings SET theme='dark',energy_profile='eco',interests='장학금';
-                 PRAGMA user_version=23;",
+                 PRAGMA user_version=23;"),
             )
             .unwrap();
         let db = Store::open(&path).unwrap();
@@ -650,9 +662,9 @@ mod tests {
             db.set_enabled("search", true).unwrap();
             db.connection
                 .execute_batch(
-                    "DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                    &format!("{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
                      DELETE FROM extension_preferences WHERE extension_id='calendar';
-                     PRAGMA user_version=21;",
+                     PRAGMA user_version=21;"),
                 )
                 .unwrap();
         }
@@ -687,17 +699,7 @@ mod tests {
         let path = dir.path().join("db");
         {
             let connection = Connection::open(&path).unwrap();
-            for migration in [
-                include_str!("../../migrations/001_foundation.sql"),
-                include_str!("../../migrations/002_archive.sql"),
-                include_str!("../../migrations/003_intelligence.sql"),
-                include_str!("../../migrations/004_personalization.sql"),
-                include_str!("../../migrations/005_proactive.sql"),
-                include_str!("../../migrations/006_notification_attempts.sql"),
-                include_str!("../../migrations/007_notification_activation.sql"),
-                include_str!("../../migrations/008_ai_execution_mode.sql"),
-                include_str!("../../migrations/009_ai_model_directory.sql"),
-            ] {
+            for migration in &MIGRATIONS[..9] {
                 connection.execute_batch(migration).unwrap();
             }
             connection

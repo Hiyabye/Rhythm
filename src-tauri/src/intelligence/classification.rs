@@ -61,8 +61,7 @@ pub const CATEGORIES: [&str; 8] = [
     "기타",
 ];
 
-/// Authored Korean prototypes. They encode the same category definitions the
-/// generation prompt used and are deliberately separate from the evaluation
+/// Authored Korean prototypes, deliberately separate from the evaluation
 /// fixtures in `evaluation.json`.
 pub(super) const CATEGORY_PROTOTYPES: [(&str, &[&str]); 7] = [
     ("학사", &[

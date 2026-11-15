@@ -3,7 +3,7 @@
 These bounded samples were retrieved from public Sogang University pages during the
 v0.2.0 implementation (2026-10-24). They are deterministic compatibility fixtures,
 not a feed or a copy of the university archive. University-authored content retains
-its original rights; Rhythm's MIT license does not relicense it.
+its original rights; Rhythm's GPL-3.0-or-later license does not relicense it.
 
 - `main-list-exact.json`, `main-page2.json`: pages 1 and 2 of
   `https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData/boardList`, with
@@ -188,15 +188,6 @@ chrome outside `#inner_wrap` was removed, and line endings are LF.
   image in some notices (for example `notice` 34) is not a fetchable resource; the
   parser test injects one into a fixture to prove it is dropped while the text and
   original response stay archived.
-
-## Vision fixture
-
-- `vision/poster.png`: wholly synthetic Korean notice poster drawn locally with
-  AppKit (2026-11-05) for the local vision (`--mmproj`) evaluation. It is not
-  collected university content and contains no real personal data: the title,
-  deadline, eligibility, documents, method and the `02-705-0000` phone number are
-  invented. It exists to check that an archived image reaches the model and that
-  image-derived dates are labelled unverified, not to measure general quality.
 
 `dates/notices.json` is synthetic: short Korean notice texts written for the #226
 date-extractor prototype (`archive/dates.rs`), not captured from any site.

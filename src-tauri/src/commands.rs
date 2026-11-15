@@ -28,7 +28,7 @@ pub(crate) fn storage_error(error: String) -> String {
     "로컬 데이터를 읽거나 저장하지 못했습니다. 저장 공간과 파일 권한을 확인해 주세요.".into()
 }
 
-async fn snapshot(state: &AppState) -> Result<Snapshot, String> {
+fn snapshot(state: &AppState) -> Result<Snapshot, String> {
     let store = state
         .store
         .lock()
@@ -44,7 +44,7 @@ async fn snapshot(state: &AppState) -> Result<Snapshot, String> {
 #[tauri::command]
 pub async fn get_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
     let _lease = state.operation_gate.shared().await?;
-    snapshot(&state).await
+    snapshot(&state)
 }
 #[tauri::command]
 pub async fn save_settings(
@@ -66,7 +66,7 @@ pub async fn save_settings(
     let _ = app.emit("rhythm://theme-changed", &settings.theme);
     let _ = app.emit("rhythm://clock-format-changed", &settings.clock_format);
     state.studium_views.refresh();
-    snapshot(&state).await
+    snapshot(&state)
 }
 /// Ends the first-run setup flow. A rerun from Settings ends the same way, so
 /// completion is never cleared.
@@ -81,7 +81,7 @@ pub async fn complete_onboarding(state: tauri::State<'_, AppState>) -> Result<Sn
             .complete_onboarding()
             .map_err(storage_error)?;
     }
-    snapshot(&state).await
+    snapshot(&state)
 }
 
 #[derive(Serialize)]
@@ -275,7 +275,7 @@ pub async fn set_extension(
         state.studium_notifications.resume_after_quiesce().await;
     }
     state.studium_views.refresh();
-    snapshot(&state).await
+    snapshot(&state)
 }
 
 #[cfg(test)]

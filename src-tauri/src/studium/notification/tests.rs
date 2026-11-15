@@ -6,7 +6,6 @@ use crate::{
         sync::Transport,
     },
     extensions::{PROACTIVE, STUDIUM},
-    storage::Store,
     studium::{commands::start_with_transport, model::AlertRuleInput},
 };
 use chrono::{Datelike, Timelike};
@@ -157,8 +156,7 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
-        let directory = tempfile::tempdir().unwrap();
-        let store = Store::open(&directory.path().join("alerts.sqlite3")).unwrap();
+        let (directory, store) = crate::storage::temp_store();
         store.set_enabled(STUDIUM, true).unwrap();
         store.set_enabled(PROACTIVE, true).unwrap();
         let mut settings = store.proactive_settings().unwrap();

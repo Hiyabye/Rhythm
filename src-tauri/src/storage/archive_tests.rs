@@ -106,12 +106,9 @@ fn studium_interval_upgrade_preserves_released_trash_state_and_settings() {
     store
         .connection
         .execute_batch(
-            "INSERT INTO deleted_notices(source_id,external_id) VALUES('one','removed');
-             DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; DROP TABLE studium_mini_geometry;
-             DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules;
-             DROP TABLE studium_favorite_seats;
-             ALTER TABLE studium_preferences DROP COLUMN interval_minutes;
-             PRAGMA user_version=26;",
+            &format!("INSERT INTO deleted_notices(source_id,external_id) VALUES('one','removed');
+             {UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_INTERVAL}
+             PRAGMA user_version=26;"),
         )
         .unwrap();
     drop(store);
@@ -1590,7 +1587,7 @@ fn schema_ten_upgrade_keeps_archive_and_adds_skipped_articles() {
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                 {UNDO_GROUPS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
                  PRAGMA user_version=10;"
             ))
             .unwrap();
@@ -1642,7 +1639,7 @@ fn schema_eleven_upgrade_retries_mislabeled_and_newly_allowed_resources() {
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
+                 {UNDO_GROUPS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
                  PRAGMA user_version=11;"
             ))
             .unwrap();
@@ -1673,10 +1670,10 @@ fn retired_eng_newsletter_row_is_removed_but_archived_data_is_kept() {
         Connection::open(path)
             .unwrap()
             .execute_batch(
-                "DROP TABLE cybercampus_tasks; DROP TABLE cybercampus_courses;
+                &format!("DROP TABLE cybercampus_tasks; DROP TABLE cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
-                 PRAGMA user_version=16",
+                 {UNDO_GROUPS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
+                 PRAGMA user_version=16"),
             )
             .unwrap();
     }
@@ -1827,8 +1824,8 @@ fn schema_twenty_upgrade_keeps_every_subscription_with_groups_on() {
         store
             .connection
             .execute_batch(
-                "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; DROP TABLE studium_mini_geometry; DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; DROP TABLE studium_favorite_seats; DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ALTER TABLE settings DROP COLUMN clock_format; DROP TABLE trashed_documents; DROP TABLE deleted_notices; ALTER TABLE settings DROP COLUMN auto_trash_months;
-                 PRAGMA user_version=20;",
+                &format!("{UNDO_GROUPS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
+                 PRAGMA user_version=20;"),
             )
             .unwrap();
     }
@@ -2184,11 +2181,10 @@ fn schema_thirty_upgrade_keeps_todos_without_links() {
     store.calendar_create_todo(&linked_todo(None)).unwrap();
     store
         .connection
-        .execute_batch(
-            "DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document;
-             ALTER TABLE calendar_todos DROP COLUMN document_id;
-             PRAGMA user_version=30;",
-        )
+        .execute_batch(&format!(
+            "{UNDO_DATES}{UNDO_TODO_DOCUMENT}
+             PRAGMA user_version=30;"
+        ))
         .unwrap();
     drop(store);
 
@@ -2436,9 +2432,10 @@ fn schema_thirty_one_upgrade_backfills_dates_and_rolls_back_on_failure() {
         )
         .unwrap();
     store.set_document_state(id, None, Some(true)).unwrap();
-    let rollback = "DROP TABLE notice_dates; DROP TABLE notice_date_extractions;
-                    ALTER TABLE settings DROP COLUMN calendar_all_deadlines;
-                    PRAGMA user_version=31;";
+    let rollback = &format!(
+        "{UNDO_DATES}
+                    PRAGMA user_version=31;"
+    );
     store.connection.execute_batch(rollback).unwrap();
     drop(store);
 

@@ -83,14 +83,9 @@ fn date(value: &str) -> Result<String, String> {
         return invalid();
     }
     let parts: Vec<_> = day.split('-').map(|v| v.parse::<u32>()).collect();
-    if parts.len() != 3 || parts.iter().any(Result::is_err) {
+    let [Ok(year), Ok(month), Ok(day_number)] = parts[..] else {
         return invalid();
-    }
-    let (year, month, day_number) = (
-        parts[0].as_ref().unwrap(),
-        parts[1].as_ref().unwrap(),
-        parts[2].as_ref().unwrap(),
-    );
+    };
     let max = match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -98,7 +93,7 @@ fn date(value: &str) -> Result<String, String> {
         2 => 28,
         _ => 0,
     };
-    if !(1900..=2200).contains(year) || *day_number == 0 || *day_number > max {
+    if !(1900..=2200).contains(&year) || day_number == 0 || day_number > max {
         return invalid();
     }
     Ok(day)
@@ -125,20 +120,13 @@ pub fn list_url(source: &SourceDefinition, page: u32) -> Result<Url, String> {
     if page == 0 || !source.supported {
         return invalid();
     }
-    if source.family == "community" {
-        return community::list_url(source, page);
-    }
-    if source.family == "engineering" {
-        return engineering::list_url(source, page);
-    }
-    if source.family == "dormitory" {
-        return dormitory::list_url(source, page);
-    }
-    if source.family == "mechanical" {
-        return mechanical::list_url(source, page);
-    }
-    if source.family == "semiconductor" {
-        return semiconductor::list_url(source, page);
+    match source.family.as_str() {
+        "community" => return community::list_url(source, page),
+        "engineering" => return engineering::list_url(source, page),
+        "dormitory" => return dormitory::list_url(source, page),
+        "mechanical" => return mechanical::list_url(source, page),
+        "semiconductor" => return semiconductor::list_url(source, page),
+        _ => {}
     }
     if source.id == "sogang-academic" {
         let mut url =
@@ -168,20 +156,13 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
     if !source.supported || !positive(&entry.external_id) {
         return invalid();
     }
-    if source.family == "community" {
-        return community::detail_url(source, entry);
-    }
-    if source.family == "engineering" {
-        return engineering::detail_url(source, entry);
-    }
-    if source.family == "dormitory" {
-        return dormitory::detail_url(source, entry);
-    }
-    if source.family == "mechanical" {
-        return mechanical::detail_url(source, entry);
-    }
-    if source.family == "semiconductor" {
-        return semiconductor::detail_url(source, entry);
+    match source.family.as_str() {
+        "community" => return community::detail_url(source, entry),
+        "engineering" => return engineering::detail_url(source, entry),
+        "dormitory" => return dormitory::detail_url(source, entry),
+        "mechanical" => return mechanical::detail_url(source, entry),
+        "semiconductor" => return semiconductor::detail_url(source, entry),
+        _ => {}
     }
     if source.id == "sogang-academic" {
         let mut url = Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData").unwrap();
@@ -207,20 +188,14 @@ pub fn listing(source: &SourceDefinition, page: u32, body: &str) -> Result<Listi
     if body.len() > 4 * 1024 * 1024 || page == 0 || !source.supported {
         return invalid();
     }
-    if source.family == "community" {
-        community::listing(source, page, body)
-    } else if source.family == "engineering" {
-        engineering::listing(source, page, body)
-    } else if source.family == "dormitory" {
-        dormitory::listing(source, page, body)
-    } else if source.family == "mechanical" {
-        mechanical::listing(source, page, body)
-    } else if source.family == "semiconductor" {
-        semiconductor::listing(source, page, body)
-    } else if source.id == "sogang-academic" {
-        main_listing(page, body)
-    } else {
-        computing_listing(source, page, body)
+    match source.family.as_str() {
+        "community" => community::listing(source, page, body),
+        "engineering" => engineering::listing(source, page, body),
+        "dormitory" => dormitory::listing(source, page, body),
+        "mechanical" => mechanical::listing(source, page, body),
+        "semiconductor" => semiconductor::listing(source, page, body),
+        _ if source.id == "sogang-academic" => main_listing(page, body),
+        _ => computing_listing(source, page, body),
     }
 }
 fn main_listing(page: u32, body: &str) -> Result<ListingPage, String> {
@@ -432,20 +407,13 @@ pub fn article(
     if body.len() > 4 * 1024 * 1024 {
         return invalid();
     }
-    if source.family == "community" {
-        return community::article(source, entry, body);
-    }
-    if source.family == "engineering" {
-        return engineering::article(source, entry, body);
-    }
-    if source.family == "dormitory" {
-        return dormitory::article(source, entry, body);
-    }
-    if source.family == "mechanical" {
-        return mechanical::article(source, entry, body);
-    }
-    if source.family == "semiconductor" {
-        return semiconductor::article(source, entry, body);
+    match source.family.as_str() {
+        "community" => return community::article(source, entry, body),
+        "engineering" => return engineering::article(source, entry, body),
+        "dormitory" => return dormitory::article(source, entry, body),
+        "mechanical" => return mechanical::article(source, entry, body),
+        "semiconductor" => return semiconductor::article(source, entry, body),
+        _ => {}
     }
     let (title, author, category, published_at, modified_at, content, mut resources) =
         if source.id == "sogang-academic" {

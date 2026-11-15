@@ -400,8 +400,7 @@ async fn actual_semantic_search_evaluation() {
     }
     // The shipped path end to end: stored vectors, the production query
     // instruction and the store's fused ranking, against text-only ranking.
-    let directory = tempfile::tempdir().unwrap();
-    let store = crate::storage::Store::open(&directory.path().join("search.sqlite3")).unwrap();
+    let (_directory, store) = crate::storage::temp_store();
     super::evaluation::seed(&store);
     let sha = "e".repeat(64);
     let mut ids = std::collections::HashMap::new();

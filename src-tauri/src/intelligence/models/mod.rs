@@ -220,6 +220,7 @@ pub(super) async fn remove_projector(
 }
 
 /// Call after stopping the embedding process that may map the file. External bytes are never removed.
+#[cfg(test)]
 pub async fn remove(
     store: Arc<Mutex<Store>>,
     root: PathBuf,

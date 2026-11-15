@@ -7,7 +7,7 @@ use std::{
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
     sync::{
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicU64, AtomicU8, Ordering},
         Arc, LazyLock, Mutex,
     },
 };
@@ -357,8 +357,8 @@ fn referenced_resources(
     Ok(files)
 }
 
-/// Writes a standard ZIP archive. The caller supplies a SQLite online-backup
-/// snapshot (never the live WAL database file) and the resources directory.
+/// Rejects a snapshot whose schema version or notice count differs from the
+/// values recorded when the backup started.
 fn validate_snapshot_summary(
     path: &Path,
     expected_schema: i64,
@@ -398,6 +398,8 @@ pub(crate) fn create(
         &cancellation,
     )
 }
+/// Writes a standard ZIP archive. The caller supplies a SQLite online-backup
+/// snapshot (never the live WAL database file) and the resources directory.
 fn create_cancellable(
     destination: &Path,
     snapshot: &Path,
@@ -427,7 +429,7 @@ fn create_cancellable(
     if destination.exists() {
         return Err("같은 이름의 파일이 이미 있습니다. 다른 저장 위치를 선택해 주세요.".into());
     }
-    static NEXT_TEMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
     let parent = destination
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -435,7 +437,7 @@ fn create_cancellable(
     let temporary = parent.join(format!(
         ".rhythm-backup-{}-{}.tmp",
         std::process::id(),
-        NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
     ));
     let _guard = RemoveOnDrop(temporary.clone());
     let file = std::fs::OpenOptions::new()
@@ -655,11 +657,11 @@ fn inspect_cancellable(
     path: &Path,
     cancellation: &BackupCancellation,
 ) -> Result<BackupPreview, String> {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    static NEXT: AtomicU64 = AtomicU64::new(1);
     let staging = std::env::temp_dir().join(format!(
         "rhythm-backup-inspect-{}-{}",
         std::process::id(),
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        NEXT.fetch_add(1, Ordering::Relaxed),
     ));
     let cleanup = RemoveDirectoryOnDrop(staging.clone());
     let preview = extract_verified_cancellable(path, &staging, cancellation)?;
@@ -757,11 +759,11 @@ pub(crate) async fn backup_create(
         let _registration = registration;
         let _maintenance = maintenance;
         check_cancellation(Some(&cancellation))?;
-        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        static SEQUENCE: AtomicU64 = AtomicU64::new(1);
         let snapshot = root.join(format!(
             ".rhythm-backup-{}-{}.sqlite3",
             std::process::id(),
-            SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));
         let cleanup = RemoveOnDrop(snapshot.clone());
         let (schema, documents) = {
