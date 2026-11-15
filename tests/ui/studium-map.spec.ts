@@ -20,6 +20,19 @@ async function openStudium(page: Page) {
   await nav(page).getByRole('button', { name: '열람실', exact: true }).click();
   await expect(page.getByRole('heading', { name: '확인할 열람실', exact: true })).toBeVisible();
 }
+// Chromium animates keyboard scrolling and drops an arrow key pressed during that
+// animation, so a second press waits until the first scroll has settled.
+async function scrollSettled(page: Page) {
+  await viewport(page).evaluate((node) => new Promise<void>((done) => {
+    let last = '';
+    const check = () => {
+      const position = `${node.scrollLeft},${node.scrollTop}`;
+      if (position === last) done();
+      else { last = position; setTimeout(check, 100); }
+    };
+    check();
+  }));
+}
 async function openMap(page: Page) {
   await page.getByRole('button', { name: '좌석 배치도 열기', exact: true }).click();
   await expect(viewport(page)).toBeVisible();
@@ -122,6 +135,7 @@ test('map zoom is bounded and its keyboard scroll region pans and resets locally
   await viewport(page).focus();
   await page.keyboard.press('ArrowRight');
   await expect.poll(() => viewport(page).evaluate((node) => node.scrollLeft)).toBeGreaterThan(0);
+  await scrollSettled(page);
   await page.keyboard.press('ArrowDown');
   await expect.poll(() => viewport(page).evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
   await expect(viewport(page)).toBeFocused();
