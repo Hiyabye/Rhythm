@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { mockDesktop, openSettings, type FixtureOptions } from './fixture';
+import { cybercampusTask, mockDesktop, openSettings, type FixtureOptions } from './fixture';
 import type { CybercampusTask } from '../../src/lib/types';
 
 // Regenerates the README screenshots in docs/screenshots/ from the mocked IPC
@@ -19,10 +19,7 @@ const titles: [string, string, string][] = [
 ];
 const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
 const kst = (days: number, hour = 23) => new Date(Date.now() + days * 86_400_000 + 9 * 3_600_000).toISOString().slice(0, 11) + String(hour).padStart(2, '0') + ':59';
-function task(overrides: Partial<CybercampusTask>): CybercampusTask {
-  return { course_key: 'A1', course_name: '자료구조', category: 'report', item_id: '1', label: '과제', title: '실습 과제', week: 9,
-    opens_at: null, due_at: null, late_due_at: null, status: null, submitted_at: null, pending: false, updated_at: '2026-11-06T00:00:00Z', ...overrides };
-}
+const task = (overrides: Partial<CybercampusTask>) => cybercampusTask({ course_name: '자료구조', ...overrides });
 const tasks = [
   task({ item_id: '1', title: '연결 리스트 구현 과제', due_at: kst(1), status: '미제출' }),
   task({ item_id: '2', course_key: 'B2', course_name: '운영체제', title: '프로세스 스케줄링 보고서', due_at: kst(3, 18), status: '미제출' }),

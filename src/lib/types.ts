@@ -264,14 +264,14 @@ export interface CatalogEntry {
   repository: string; revision: string; filename: string; sha256: string; license: string;
   compatibility: 'verified' | 'available' | 'experimental' | 'unsupported'; reason: string | null;
   /** Every offered entry is an `embedding` model that classifies notices. */
-  kind?: 'generation' | 'embedding';
+  kind?: 'embedding';
   /** Pooling mode for an embedding entry. */
   pooling?: string | null;
   embedding_dim?: number | null;
 }
 export interface AiModel {
   id: string; catalog_id: string | null; name: string; ownership: 'managed' | 'external';
-  /** `generation` rows are retired summary models the user has not removed yet. */
+  /** `generation` rows are retired generation models (summaries, #226) the user has not removed yet. */
   kind?: 'generation' | 'embedding'; path: string;
   storage_directory?: string | null;
   sha256: string | null; expected_sha256: string | null; expected_bytes: number | null; bytes: number;

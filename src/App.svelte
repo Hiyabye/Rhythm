@@ -17,8 +17,7 @@
   import { contributed, enabledExtensions, navigation, settingsPanes, sourceExtensions, type SettingsPane } from './lib/extensions';
   import Hint from './lib/Hint.svelte';
   import { fade, fly, slide } from './lib/motion';
-  import './lib/ai.css';
-  import { archiveError as message, archiveDay, localDayKey, openTask, timeOptions } from './lib/archive-format';
+  import { archiveError as message, archiveDay, localDayKey, openTask, organizationLabel, timeOptions } from './lib/archive-format';
   import { clock } from './lib/clock.svelte';
   import type { ArchiveSummary, AutoTrashMonths, ClockFormat, EnergyProfile, Settings, Snapshot, SourceInfo, SyncStatus, Theme, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusTask, TodoPrefill } from './lib/types';
 
@@ -343,10 +342,6 @@
     page = 'inbox';
     notice = '';
     await showTop();
-  }
-
-  function organizationLabel(organization: string): string {
-    return organization.replace(/^서강대학교\s*·\s*/, '') || organization;
   }
 
   function checkedLabel(value: string): string {

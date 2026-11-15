@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { callCount, mockDesktop, openSettings, syntheticStudiumLayout } from './fixture';
+import { callCount, mockDesktop, openSettings, openStudium, syntheticStudiumLayout } from './fixture';
 import type { StudiumRoomState } from '../../src/lib/types';
 
 const preferences = { room_ids: ['5', '6'], view_room: '5' };
@@ -15,11 +15,6 @@ function row(id = '5', numbers: number[] = [1, 84]): StudiumRoomState {
 const nav = (page: Page) => page.getByRole('navigation', { name: '기본 탐색', exact: true });
 const map = (page: Page) => page.locator('.seat-map');
 const viewport = (page: Page) => page.getByRole('region', { name: /좌석 배치도 · 방향키로 이동/ });
-async function openStudium(page: Page) {
-  await page.goto('/');
-  await nav(page).getByRole('button', { name: '열람실', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '확인할 열람실', exact: true })).toBeVisible();
-}
 // Chromium animates keyboard scrolling and drops an arrow key pressed during that
 // animation, so a second press waits until the first scroll has settled.
 async function scrollSettled(page: Page) {

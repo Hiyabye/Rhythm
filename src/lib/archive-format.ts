@@ -1,4 +1,4 @@
-import type { ClockFormat, CybercampusTask, NoticeDate, TodoPrefill } from './types';
+import type { ClockFormat, CybercampusTask, NoticeDate, StudiumRoomState, TodoPrefill } from './types';
 
 export function archiveError(reason: unknown): string {
   if (typeof reason !== 'string') return '작업을 완료하지 못했습니다. 다시 시도해 주세요.';
@@ -132,4 +132,23 @@ export function sourceStatus(status: string): string {
 export function resourceStatus(status: string): string {
   return ({ downloaded: '로컬 저장됨', pending: '다운로드 대기', failed: '다운로드 실패',
     too_large: '용량 제한 초과', unsupported: '다운로드 미지원' } as Record<string, string>)[status] ?? '확인 필요';
+}
+
+export function organizationLabel(organization: string): string {
+  return organization.replace(/^서강대학교\s*·\s*/, '') || organization;
+}
+
+export function studiumStateLabel(value: StudiumRoomState | undefined): string {
+  if (value?.status === 'ready') return value.result?.remaining === 0 ? '빈 좌석 없음' : `빈 좌석 ${value.result?.remaining ?? '—'}석`;
+  if (value?.status === 'count_only') return `빈 좌석 ${value.result?.remaining ?? '—'}석 · 번호 확인 불가`;
+  if (value?.status === 'loading') return '확인 중';
+  if (value?.status === 'failed') return '확인 실패';
+  if (value?.status === 'cancelled') return '확인 취소됨';
+  return '아직 확인하지 않았습니다';
+}
+
+/** A seat observation older than five minutes, or more than a minute ahead of the PC clock. */
+export function isStaleObservation(value: string, now: number): boolean {
+  const age = now - Date.parse(value);
+  return !Number.isFinite(age) || age > 300_000 || age < -60_000;
 }

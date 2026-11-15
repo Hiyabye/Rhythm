@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { archiveError, archiveDate, archiveDay, localDayKey, noticeDateMark, noticeDateOn, noticeDateSpan, noticeDateTodo, taskTodo, wallTime } from '../../src/lib/archive-format';
+import { archiveError, archiveDate, archiveDay, isStaleObservation, localDayKey, noticeDateMark, noticeDateOn, noticeDateSpan, noticeDateTodo, organizationLabel, studiumStateLabel, taskTodo, wallTime } from '../../src/lib/archive-format';
+import type { StudiumRoomState, StudiumSeatData } from '../../src/lib/types';
 
 test('storage failures have actionable Korean feedback rather than raw database diagnostics', () => {
   expect(archiveError('database or disk is full')).toContain('저장 공간이 부족');
@@ -68,4 +69,27 @@ test('todo prefills fit the stored title limit and keep only what the source sup
     opens_at: null, late_due_at: null, status: null, submitted_at: null, pending: true, updated_at: '2026-10-20T00:00:00Z' };
   expect(taskTodo({ ...task, due_at: '2026-10-26T23:59' }).todo).toEqual({ title: '실습 과제 2', day: '2026-10-26', time: '23:59', memo: '자료구조실습', document_id: null });
   expect(taskTodo({ ...task, due_at: '2026-10-26' }).todo.time).toBeNull();
+});
+
+test('shared labels keep organization suffixes and seat states distinct', () => {
+  expect(organizationLabel('서강대학교 · 공과대학')).toBe('공과대학');
+  expect(organizationLabel('서강대학교 · ')).toBe('서강대학교 · ');
+  const room = (status: StudiumRoomState['status'], remaining?: number): StudiumRoomState => ({
+    room_id: 'r', status, error: null, checked_at: null,
+    result: remaining === undefined ? null : { remaining } as StudiumSeatData,
+  });
+  expect(studiumStateLabel(room('ready', 0))).toBe('빈 좌석 없음');
+  expect(studiumStateLabel(room('ready', 3))).toBe('빈 좌석 3석');
+  expect(studiumStateLabel(room('count_only', 2))).toBe('빈 좌석 2석 · 번호 확인 불가');
+  expect(studiumStateLabel(room('failed'))).toBe('확인 실패');
+  expect(studiumStateLabel(undefined)).toBe('아직 확인하지 않았습니다');
+});
+
+test('seat observations are stale after five minutes, a minute in the future or unparsable', () => {
+  const now = Date.parse('2026-11-15T12:00:00Z');
+  expect(isStaleObservation('2026-11-15T11:55:00Z', now)).toBe(false);
+  expect(isStaleObservation('2026-11-15T11:54:59Z', now)).toBe(true);
+  expect(isStaleObservation('2026-11-15T12:01:00Z', now)).toBe(false);
+  expect(isStaleObservation('2026-11-15T12:01:01Z', now)).toBe(true);
+  expect(isStaleObservation('잘못된 시각', now)).toBe(true);
 });

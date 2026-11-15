@@ -1,10 +1,7 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { mockDesktop, callCount, answerDialogs, dialogMessages, openSettings } from './fixture';
+import { mockDesktop, callCount, answerDialogs, dialogMessages, openSettings, permission } from './fixture';
 
-function permission(page: Page) {
-  return page.locator('.settings-row').filter({ hasText: '운영체제 알림 권한' });
-}
 function history(page: Page) {
   return page.getByRole('list', { name: '알림 기록', exact: true });
 }

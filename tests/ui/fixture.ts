@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import type { CalendarTodo, ClockFormat, NoticeDate, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation, StudiumMiniStatus, StudiumSeatLayout, StudiumSnapshot, Theme } from '../../src/lib/types';
 
 // Invented regular marker origins, unrelated to the school's real floor plans.
@@ -45,6 +45,7 @@ export interface FixtureOptions {
   aiSimilar?: boolean;
   // With aiEmbeddingInstalled, relevance search adds one meaning-only notice.
   aiSemanticSearch?: boolean;
+  // Another retired generation model (Qwen3.5 9B), removal-only.
   aiRetiredModel?: boolean;
   // A fresh profile that has not finished the first-run setup flow.
   onboardingNeeded?: boolean;
@@ -52,10 +53,8 @@ export interface FixtureOptions {
   windows?: boolean;
   aiModelDirectoryGate?: boolean;
   aiModelStorageAvailable?: number | null;
-  sourceCount?: number;
   // Replaces the default two-board catalog.
   sourceList?: { id: string; name: string; organization: string; supported: boolean; subscribed?: boolean; group?: string | null; family?: string; last_error?: string | null; skipped_count?: number; skipped?: { external_id: string; url: string; reason: string; skipped_at: string; archived: boolean }[] }[];
-  sourceDelay?: number;
   initialNotificationsEnabled?: boolean;
   capabilitiesError?: boolean;
   aiExecutionMode?: 'auto' | 'cpu' | 'gpu';
@@ -68,12 +67,10 @@ export interface FixtureOptions {
   aiInstallError?: boolean;
   aiDelay?: number;
   revisions?: boolean;
-  aiLowResources?: boolean;
   initialInterests?: PersonalInterest[];
   feedbackWriteDelay?: number;
   profileSaveDelay?: number;
   interestSaveDelay?: number;
-  interestRemovalDelay?: number;
   personalizationResetDelay?: number;
   proactiveSaveError?: boolean;
   proactiveClearError?: boolean;
@@ -84,7 +81,6 @@ export interface FixtureOptions {
   notificationRequestResult?: string;
   notificationTestRequested?: boolean;
   restoreSupportError?: string;
-  notificationRequestError?: boolean;
   backupInspectError?: boolean;
   backupRestoreError?: boolean;
   restoreOutcome?: { documents: number; resources: number; unavailable_resources: number; models_needing_reinstall: number };
@@ -94,10 +90,7 @@ export interface FixtureOptions {
   updaterCheckError?: string;
   updaterInstallError?: boolean;
   updaterRestartError?: boolean;
-  updateAvailable?: boolean;
-  // Automatic update checks: the stored preference (default on) and whether a
-  // check already found 1.1.1 before the window subscribed.
-  autoUpdateCheck?: boolean;
+  // Automatic update checks: whether a check already found 1.1.1 before the window subscribed.
   autoUpdateFound?: boolean;
   // Saved Cybercampus login ID; `cybercampus_save_login` accepts only the password "right".
   cybercampusId?: string | null;
@@ -142,11 +135,6 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       return !group || (group.enabled && groupOn(group.parent));
     };
     const reconcile = () => { sources = sources.map((source) => ({ ...source, subscribed: source.selected && groupOn(source.group) })); };
-    if ((options.sourceCount ?? 0) > sources.length) {
-      sources.push(...Array.from({ length: options.sourceCount! - sources.length }, (_, index) => ({
-        ...sources[0], id: `extra-source-${index}`, name: `추가 정보원 ${index + 1}`,
-      })));
-    }
     const proactiveSettings: ProactiveSettings = { close_to_background: false, launch_at_login: false, start_hidden: false,
       scheduler_enabled: false, scheduler_paused: false, scheduler_interval_minutes: 0, scheduler_retry_minutes: 15,
       notifications_enabled: options.initialNotificationsEnabled ?? false, notification_sensitivity: 'important',
@@ -201,10 +189,10 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     const defaultModelDirectory = options.windows ? 'C:\\Rhythm-test\\models' : '/isolated/models';
     const chosenModelDirectory = options.windows ? 'D:\\로컬 모델\\Rhythm' : '/Volumes/로컬 모델/Rhythm';
     const modelStorage = { directory: options.aiModelDirectory ?? defaultModelDirectory, custom: Boolean(options.aiModelDirectory), available_bytes: (options.aiModelStorageAvailable === undefined ? 27000000000 : options.aiModelStorageAvailable) as number | null, error: options.aiModelStorageError ?? null as string | null };
-    const modelNames: Record<string, string> = { 'qwen35-2b': 'Qwen3.5 2B', 'qwen35-4b': 'Qwen3.5 4B', 'qwen35-9b': 'Qwen3.5 9B', 'qwen3-embedding-0-6b': 'Qwen3-Embedding 0.6B' };
+    const modelNames: Record<string, string> = { 'qwen35-4b': 'Qwen3.5 4B', 'qwen35-9b': 'Qwen3.5 9B', 'qwen3-embedding-0-6b': 'Qwen3-Embedding 0.6B' };
     const model = (id = 'qwen35-4b', kind: 'generation' | 'embedding' = 'generation') => ({ id, catalog_id: id, name: modelNames[id] ?? id, ownership: 'managed', kind, path: `models/${id}.gguf`, storage_directory: null as string | null, sha256: 'a'.repeat(64), expected_sha256: 'a'.repeat(64), expected_bytes: kind === 'embedding' ? 639150592 : 2740937888, bytes: kind === 'embedding' ? 639150592 : 2740937888, source_revision: 'pinned-revision', source_filename: `${id}.gguf`, status: 'installed', downloaded_bytes: kind === 'embedding' ? 639150592 : 2740937888, resume_etag: null, error: null as string | null, created_at: '2026-10-24 12:00:00', updated_at: '2026-10-24 12:00:00' });
     const embeddingCatalog = { id: 'qwen3-embedding-0-6b', kind: 'embedding', name: 'Qwen3-Embedding 0.6B', parameters: '0.6B', quantization: 'Q8_0', bytes: 639150592, memory_bytes: 2147483648, description: '공지 분류용 임베딩 모델', use_case: '공지 주제 분류', repository: 'Qwen/Qwen3-Embedding-0.6B-GGUF', revision: 'pinned-revision', filename: 'Qwen3-Embedding-0.6B-Q8_0.gguf', sha256: 'd'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null, pooling: 'last', embedding_dim: 1024 };
-    const ai = { model_storage: modelStorage, catalog: [embeddingCatalog], models: [...(options.aiInstalled ? [model()] : []), ...(options.aiRetiredModel ? [model('qwen35-9b')] : []), ...(options.aiEmbeddingInstalled ? [model('qwen3-embedding-0-6b', 'embedding')] : [])], preferences: { execution_mode: options.aiExecutionMode ?? 'auto', model_directory: options.aiModelDirectory ?? null as string | null, embedding_model_id: options.aiEmbeddingInstalled ? 'qwen3-embedding-0-6b' : null as string | null, classification_enabled: true }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: options.aiLowResources ? 4294967296 : 17179869184, disk_available_bytes: options.aiLowResources ? 0 : 27000000000, backend: 'cpu' }, busy: false, classification: { state: options.aiEmbeddingInstalled ? 'idle' : 'disabled', processed: 0 } };
+    const ai = { model_storage: modelStorage, catalog: [embeddingCatalog], models: [...(options.aiInstalled ? [model()] : []), ...(options.aiRetiredModel ? [model('qwen35-9b')] : []), ...(options.aiEmbeddingInstalled ? [model('qwen3-embedding-0-6b', 'embedding')] : [])], preferences: { execution_mode: options.aiExecutionMode ?? 'auto', model_directory: options.aiModelDirectory ?? null as string | null, embedding_model_id: options.aiEmbeddingInstalled ? 'qwen3-embedding-0-6b' : null as string | null, classification_enabled: true }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: 17179869184, disk_available_bytes: 27000000000, backend: 'cpu' }, busy: false, classification: { state: options.aiEmbeddingInstalled ? 'idle' : 'disabled', processed: 0 } };
     const classifications = entries.map((item) => ({
       document_id: item.id, revision_id: 1, category: '장학',
       low_confidence: Boolean(options.aiClassificationLow), created_at: '2026-10-24 12:00:00',
@@ -219,7 +207,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     let eventId = 0;
     let updaterHandler: number | null = null;
     let availableHandler: number | null = null;
-    let autoUpdateCheck = options.autoUpdateCheck ?? true;
+    let autoUpdateCheck = true;
     let notificationHandler: number | null = null;
     let studiumNotificationHandler: number | null = null;
     let pendingStudiumActivation = options.pendingStudiumActivation ?? null;
@@ -238,7 +226,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       snapshot.settings.clock_format = value;
       for (const [id, handler] of clockListeners) callbacks.get(handler)?.({ event: 'rhythm://clock-format-changed', id, payload: value });
     };
-    const fixture = { ai, options, entries, studium, mini, emitStudiumState, emitTheme, emitClockFormat, studiumStateListenerCount: () => stateListeners.size, themeListenerCount: () => themeListeners.size, clockListenerCount: () => clockListeners.size, miniSettingsResolvers: [] as Array<() => void>, releaseMiniSettings() { this.miniSettingsResolvers.splice(0).forEach((release) => release()); }, studiumSnapshotGate: false, studiumSnapshotResolvers: [] as Array<() => void>, releaseStudiumSnapshots() { this.studiumSnapshotResolvers.splice(0).forEach((release) => release()); }, studiumStatusDelay: 0, studiumSaveError: options.studiumSaveError ?? false, studiumAlertSaveError: options.studiumAlertSaveError ?? false, studiumCancelRequested: null as number | null, studiumJobAutomatic: studium.automatic.active && studium.running, calls: [] as { command: string; args: any }[], sourceDelay: options.sourceDelay ?? 0,
+    const fixture = { ai, options, entries, studium, mini, emitStudiumState, emitTheme, emitClockFormat, studiumStateListenerCount: () => stateListeners.size, themeListenerCount: () => themeListeners.size, clockListenerCount: () => clockListeners.size, miniSettingsResolvers: [] as Array<() => void>, releaseMiniSettings() { this.miniSettingsResolvers.splice(0).forEach((release) => release()); }, studiumSnapshotGate: false, studiumSnapshotResolvers: [] as Array<() => void>, releaseStudiumSnapshots() { this.studiumSnapshotResolvers.splice(0).forEach((release) => release()); }, studiumStatusDelay: 0, studiumSaveError: options.studiumSaveError ?? false, studiumAlertSaveError: options.studiumAlertSaveError ?? false, studiumCancelRequested: null as number | null, studiumJobAutomatic: studium.automatic.active && studium.running, calls: [] as { command: string; args: any }[],
       finishStudiumCancel() {
         if (this.studiumCancelRequested !== studium.job_id || !studium.running) return;
         studium.running = false;
@@ -363,7 +351,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'updater_configured': return options.updaterConfigured ?? false;
           case 'updater_check':
             if (options.updaterCheckError) throw options.updaterCheckError;
-            return options.updateAvailable === false ? null : { version: '1.1.1', currentVersion: '1.1.0', date: null, body: '안정 버전 업데이트' };
+            return { version: '1.1.1', currentVersion: '1.1.0', date: null, body: '안정 버전 업데이트' };
           case 'updater_auto_check':
             return { enabled: autoUpdateCheck, available: options.updaterConfigured && options.autoUpdateFound
               ? { version: '1.1.1', currentVersion: '1.1.0', date: null, body: '안정 버전 업데이트' } : null };
@@ -378,7 +366,6 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             return null;
           case 'notification_authorization': return notificationAuthorization;
           case 'notification_request_permission':
-            if (options.notificationRequestError) throw '알림 권한 요청을 사용할 수 없습니다.';
             notificationAuthorization = options.notificationRequestResult ?? 'authorized';
             return { status: notificationAuthorization, test_notification_requested: options.notificationTestRequested ?? Boolean(options.windows) };
           case 'get_snapshot': {
@@ -558,7 +545,6 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             return copy(personalization);
           }
           case 'personalization_remove_interest':
-            await wait(options.interestRemovalDelay ?? 0);
             personalization.interests = personalization.interests.filter((item) => item.id !== args.id); return copy(personalization);
           case 'personalization_set_learning': personalization.learning_enabled = args.enabled; return copy(personalization);
           case 'personalization_reset': {
@@ -610,7 +596,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             const entry = ai.catalog.find((value) => value.id === args.catalogId);
             let installed = ai.models.find((value) => value.id === args.catalogId);
             if (!installed) {
-              installed = model(args.catalogId, entry?.kind === 'embedding' ? 'embedding' : 'generation');
+              installed = model(args.catalogId, 'embedding');
               installed.storage_directory = ai.model_storage.directory;
               installed.path = `${ai.model_storage.directory}${separator}${args.catalogId}.gguf`;
               ai.models.push(installed);
@@ -649,7 +635,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'ai_remove':
             if (options.aiRemoveError && !args.keepFiles && ai.models.find((model) => model.id === args.id)?.ownership === 'managed') throw '모델 폴더에 접근할 수 없습니다.';
             ai.models = ai.models.filter((model) => model.id !== args.id); if (ai.preferences.embedding_model_id === args.id) ai.preferences.embedding_model_id = null; return null;
-          case 'archive_sources': { const result = copy(sources).map((source) => ({ ...source, unread: entries.filter((x) => x.source_id === source.id && !x.is_read && !x.trashed).length })); await wait(fixture.sourceDelay); return result; }
+          case 'archive_sources': { return copy(sources).map((source) => ({ ...source, unread: entries.filter((x) => x.source_id === source.id && !x.is_read && !x.trashed).length })); }
           case 'archive_summary': {
             // As the store: notices in 휴지통 count only as trashed.
             const live = entries.filter((x) => !x.trashed);
@@ -814,6 +800,21 @@ export async function dialogMessages(page: Page) {
 
 export type SettingsPane = '확장 기능' | '일반' | '게시판' | '사이버캠퍼스' | '개인화' | 'AI' | '알림·백그라운드' | '데이터 및 정보';
 /** Opens Settings from the sidebar and shows one pane. */
+export async function navigate(page: Page, name: string) {
+  await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name, exact: true }).click();
+}
+export async function openStudium(page: Page) {
+  await page.goto('/');
+  await navigate(page, '열람실');
+  await expect(page.getByRole('heading', { name: '확인할 열람실', exact: true })).toBeVisible();
+}
+export function permission(page: Page) {
+  return page.locator('.settings-row').filter({ hasText: '운영체제 알림 권한' });
+}
+export function cybercampusTask(overrides: Partial<CybercampusTask>): CybercampusTask {
+  return { course_key: 'A1', course_name: '자료구조실습', category: 'report', item_id: '1', label: '과제', title: '실습 과제', week: 9,
+    opens_at: null, due_at: null, late_due_at: null, status: null, submitted_at: null, pending: false, updated_at: '2026-11-06T00:00:00Z', ...overrides };
+}
 export async function openSettings(page: Page, pane: SettingsPane) {
   await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name: '설정', exact: true }).click();
   await page.getByRole('navigation', { name: '설정 항목', exact: true }).getByRole('button', { name: pane, exact: true }).click();

@@ -1,13 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { mockDesktop, callCount, openSettings, syncMode } from './fixture';
+import { mockDesktop, callCount, navigate, openSettings, syncMode } from './fixture';
 import type { ResourceRecord } from '../../src/lib/types';
 
 const image: ResourceRecord = { id: 7, url: 'https://computing.sogang.ac.kr/web/file/editor/test.png', filename: '본문.png',
   kind: 'attachment', status: 'downloaded', mime: 'image/png', bytes: 70, local_path: 'resources/hash.png', sha256: 'abc', error: null };
 
-async function navigate(page: import('@playwright/test').Page, name: string) {
-  await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name, exact: true }).click();
-}
 
 // Failure regressions are intentionally asserted through user-visible content,
 // not snapshots of the components' private state.
