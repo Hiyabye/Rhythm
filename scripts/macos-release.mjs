@@ -128,7 +128,7 @@ function release({ updater }) {
     config.bundle.createUpdaterArtifacts = true;
     config.plugins = { updater: { pubkey } };
   }
-  run('node', ['scripts/desktop.mjs', 'build', '--bundles', 'app', '--config', JSON.stringify(config)], { env });
+  run(process.execPath, ['scripts/desktop.mjs', 'build', '--bundles', 'app', '--config', JSON.stringify(config)], { env });
 
   const bundle = resolve('target/release/bundle');
   const app = join(bundle, 'macos/Rhythm.app');

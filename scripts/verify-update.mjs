@@ -18,7 +18,7 @@ const PACKAGES = {
   'windows-x86_64': (asset, version) => asset === `Rhythm_${version}_x64-setup.exe`,
   'windows-x86_64-nsis': (asset, version) => asset === `Rhythm_${version}_x64-setup.exe`,
 };
-export const UPDATER_TARGETS = Object.keys(PACKAGES).sort();
+const UPDATER_TARGETS = Object.keys(PACKAGES).sort();
 
 function unwrap(value, what) {
   const text = String(value ?? '').trim();

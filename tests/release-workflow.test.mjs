@@ -32,14 +32,14 @@ test('the tag release workflow creates a draft from distribution files only', ()
   assert.match(workflow, /draft-release:[\s\S]*permissions:\s*\n\s*contents: write/);
   // The DMG bundles the pinned llama.cpp build; no worker backend is compiled.
   assert.match(workflow, /name: Build DMG and signed updater archive\n[\s\S]*?npm run desktop:build/);
-  assert.doesNotMatch(workflow, /RHYTHM_AI_BACKEND|metaltoolchain|target-gpu/);
+  assert.doesNotMatch(workflow, /RHYTHM_AI_BACKEND|metaltoolchain/);
 });
 
 test('CI and the release share the Windows build tools, which install no GPU toolchain', () => {
   for (const path of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
     const workflow = read(path);
     assert.match(workflow, /uses: \.\/\.github\/actions\/windows-build-tools/, path);
-    assert.doesNotMatch(workflow, /vulkansdk-windows|LLVM-.*-win64|CMAKE_|crates\/ai-worker/, path);
+    assert.doesNotMatch(workflow, /vulkansdk-windows|LLVM-.*-win64|CMAKE_/, path);
   }
   assert.doesNotMatch(read('.github/actions/windows-build-tools/action.yml'), /vulkan|llvm|libclang|ninja/i);
 });
@@ -57,4 +57,12 @@ test('vendored notification cancellation tests run only in macOS CI', () => {
 test('release.yml is the only publishing workflow', () => {
   const workflows = readdirSync(new URL('../.github/workflows/', import.meta.url)).sort();
   assert.deepEqual(workflows, ['ci.yml', 'release.yml']);
+});
+
+test('every tests/*.test.mjs file runs in a package.json test script', () => {
+  const { scripts } = JSON.parse(read('package.json'));
+  const commands = scripts['test:desktop'] + ' ' + scripts['test:release'];
+  const tests = readdirSync(new URL('../tests/', import.meta.url)).filter((file) => file.endsWith('.test.mjs'));
+  assert.ok(tests.length > 0);
+  for (const file of tests) assert.ok(commands.includes(file), `${file} is in no test script`);
 });

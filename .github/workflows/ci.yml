@@ -106,7 +106,7 @@ jobs:
       - name: Stage the pinned llama.cpp build
         run: node scripts/stage-llama.mjs
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - name: Test storage and worker lifecycle (no model weights)
+      - name: Run workspace tests (no model weights)
         run: cargo test --locked --workspace
       # This macOS-only dependency is excluded from workspace membership.
       # These tests exercise Rust oneshots/registry cleanup, not OS alerts.

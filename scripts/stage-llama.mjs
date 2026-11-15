@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { sha256Hex } from './release-common.mjs';
 
 const pinned = JSON.parse(readFileSync(new URL('./llama-cpp.json', import.meta.url), 'utf8'));
 // macOS ships one build (Metal with CPU fallback); Windows ships Vulkan for
@@ -21,7 +22,7 @@ export function variantsFor(platform, arch) {
   return variants;
 }
 
-const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
+const sha256 = (file) => sha256Hex(readFileSync(file));
 
 // GitHub's release CDN intermittently answers CI runners with 5xx; retry those
 // and network errors with backoff, but fail at once on any other status.

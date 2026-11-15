@@ -18,13 +18,15 @@ const rules = {
     // Rust CI stages the pinned llama.cpp build; the real-server test runs it.
     /^scripts\/(stage-llama\.mjs|llama-cpp\.json)$/,
     // Rust tests read these through include_str!.
-    /^src\/lib\/UpdaterSettings\.svelte$/],
+    /^src\/lib\/UpdaterSettings\.svelte$/,
+    // tauri-build fails when a bundled resource is missing or renamed.
+    /^assets\/licenses\//],
   // Release builds run on main only; a pull request never builds packages.
   packaging: [/^scripts\//, /^src-tauri\/(tauri[^/]*\.conf\.json|build\.rs|Cargo\.toml)$/,
     /^src-tauri\/(icons|capabilities)\//, /^Cargo\.(toml|lock)$/,
     /^package(-lock)?\.json$/,
-    // Bundled as an app resource.
-    /^LICENSE$/],
+    // Bundled as app resources.
+    /^LICENSE$/, /^assets\/licenses\//],
 };
 
 // Markdown under src-tauri/ or scripts/ is documentation; no Rust

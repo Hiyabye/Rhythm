@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { mkdirSync, copyFileSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { win32 } from 'node:path';
+import { checksumLine, remapFlags } from './release-common.mjs';
 import { updaterSigningArgs } from './updater-signing.mjs';
 
 // Windows-only paths, so the orchestration tests behave the same on any host.
@@ -58,14 +58,11 @@ export function desktop({ platform = process.platform, arch = process.arch, env 
 // Release binaries embed source paths in panic locations; map the builder's
 // home, Cargo home and checkout to neutral prefixes (the last match wins).
 function releaseEnv(env, cwd, home) {
-  const remaps = [
+  return remapFlags(env, [
     [home, 'C:\\home'],
     [env.CARGO_HOME ?? join(home, '.cargo'), 'C:\\cargo'],
     [resolve(cwd), 'C:\\rhythm'],
-  ].map(([from, to]) => `--remap-path-prefix=${from}=${to}`);
-  const existing = env.CARGO_ENCODED_RUSTFLAGS
-    ?? (env.RUSTFLAGS ?? '').split(/\s+/).filter(Boolean).join('\x1f');
-  return { ...env, CARGO_ENCODED_RUSTFLAGS: [existing, ...remaps].filter(Boolean).join('\x1f') };
+  ]);
 }
 
 // The distribution folder holds exactly the installer and its checksum, plus
@@ -82,8 +79,8 @@ function publishInstaller({ cwd, targetDir, files, copy, mkdir, signed }) {
   files.remove(output, { recursive: true, force: true });
   mkdir(output, { recursive: true });
   copy(join(bundle, name), join(output, name));
-  const digest = createHash('sha256').update(files.read(join(output, name))).digest('hex');
-  files.write(join(output, `${name}.sha256`), `${digest}  ${name}\n`);
+  const { digest, text } = checksumLine(name, files.read(join(output, name)));
+  files.write(join(output, `${name}.sha256`), text);
   if (signed) copy(join(bundle, `${name}.sig`), join(output, `${name}.sig`));
   console.log(`Distribution files in ${output}:\n  ${name}\n  ${name}.sha256 (${digest})${signed ? `\n  ${name}.sig` : ''}`);
 }
