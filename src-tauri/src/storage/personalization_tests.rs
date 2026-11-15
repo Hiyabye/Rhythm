@@ -69,8 +69,7 @@ fn add_document(
 }
 
 fn store() -> (tempfile::TempDir, Store) {
-    let directory = tempfile::tempdir().unwrap();
-    let store = Store::open(&directory.path().join("rhythm.sqlite3")).unwrap();
+    let (directory, store) = crate::storage::temp_store();
     store
         .catalog_for_extension("test_extension", &[source_definition()])
         .unwrap();

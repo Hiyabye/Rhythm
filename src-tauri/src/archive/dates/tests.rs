@@ -2,8 +2,8 @@ use super::*;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
-/// The synthetic evaluation notices (`intelligence/evaluation.json`), which the
-/// retired generation models were scored on; published 2026-01-01 like that harness.
+/// The synthetic evaluation notices shared with the embedding evaluation
+/// (`intelligence/evaluation.json`); published 2026-01-01 like that harness.
 #[derive(Deserialize)]
 struct AiCase {
     id: String,
@@ -133,7 +133,7 @@ fn synthetic_ai_evaluation_deadlines() {
         cases.len(),
         started.elapsed()
     );
-    report("AI evaluation set", &outcomes);
+    report("shared evaluation notices", &outcomes);
     assert!(outcomes.iter().all(Outcome::deadlines_exact));
 }
 

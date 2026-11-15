@@ -307,6 +307,10 @@ mod notification_launch_queue_tests {
     }
 }
 
+/// Appended to a failed restore recovery error in its dialog.
+const RESTORE_FAILED_NOTE: &str =
+    "\n\n기존 파일은 보존했습니다. 오류 원인을 확인한 뒤 다시 실행해 주세요.";
+
 fn main() {
     let context = tauri::generate_context!();
     #[cfg(windows)]
@@ -381,7 +385,7 @@ fn main() {
                     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
                     let handle = app.handle().clone();
                     app.dialog()
-                        .message(format!("{error}\n\n기존 파일은 보존했습니다. 오류 원인을 확인한 뒤 다시 실행해 주세요."))
+                        .message(format!("{error}{RESTORE_FAILED_NOTE}"))
                         .title("백업 복원을 마무리하지 못했습니다")
                         .kind(MessageDialogKind::Error)
                         .show(move |_| handle.exit(1));
@@ -421,10 +425,18 @@ fn main() {
             let archive = archive::sync::Controller::new();
             let studium = studium::controller::Controller::new();
             let studium_notifications = studium::notification::Notifications::new(
-                store.clone(), Arc::downgrade(&studium), operation_gate.clone(), app.handle().clone(),
+                store.clone(),
+                Arc::downgrade(&studium),
+                operation_gate.clone(),
+                app.handle().clone(),
             );
             studium.attach_notifications(&studium_notifications);
-            let studium_views = studium::views::Views::new(store.clone(), Arc::downgrade(&studium), operation_gate.clone(), app.handle().clone());
+            let studium_views = studium::views::Views::new(
+                store.clone(),
+                Arc::downgrade(&studium),
+                operation_gate.clone(),
+                app.handle().clone(),
+            );
             studium.attach_views(&studium_views);
             let network = archive::client().map_err(std::io::Error::other)?;
             let proactive = proactive::Scheduler::new(
@@ -434,13 +446,20 @@ fn main() {
                 data_root.clone(),
                 app.handle().clone(),
                 operation_gate.clone(),
-            )
-            .map_err(std::io::Error::other)?;
+            );
             // Bundled llama.cpp builds; the private runtime directory holds the
             // embedding server's socket or per-launch access key.
-            let llama = app.path().resource_dir().map_err(std::io::Error::other)?.join("llama");
-            let mode = store.lock().map_err(|_| std::io::Error::other("설정 잠금 오류"))?
-                .ai_preferences().map_err(std::io::Error::other)?.execution_mode;
+            let llama = app
+                .path()
+                .resource_dir()
+                .map_err(std::io::Error::other)?
+                .join("llama");
+            let mode = store
+                .lock()
+                .map_err(|_| std::io::Error::other("설정 잠금 오류"))?
+                .ai_preferences()
+                .map_err(std::io::Error::other)?
+                .execution_mode;
             let classifier = Arc::new(intelligence::classification::Controller::new(
                 &llama,
                 &data_root.join("run").join("embedding"),
@@ -474,8 +493,15 @@ fn main() {
             if let Err(error) = studium_notifications.start() {
                 eprintln!("Studium: 알림 수신을 시작하지 못했습니다: {error}");
             }
-            if let Err(error) = studium_views.start() { eprintln!("Studium: 표시 수신 시작 실패: {error}"); }
-            dispatch_notification_arguments(app.handle(), &std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>());
+            if let Err(error) = studium_views.start() {
+                eprintln!("Studium: 표시 수신 시작 실패: {error}");
+            }
+            dispatch_notification_arguments(
+                app.handle(),
+                &std::env::args_os()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>(),
+            );
             #[cfg(windows)]
             notification_launches_ready(app.handle());
             tauri::async_runtime::spawn(updater::run_auto_check(

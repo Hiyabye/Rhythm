@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { callCount, mockDesktop, openSettings } from './fixture';
+import { callCount, mockDesktop, openSettings, permission } from './fixture';
 
 // The frontend chooses Windows-specific controls and instructions from the
 // WebView user agent; WebView2 reports "Windows NT". Only the IPC boundary is mocked.
@@ -10,9 +10,6 @@ test.use({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537
 async function openAiAdvanced(page: Page) {
   await openSettings(page, 'AI');
   await page.getByText('고급', { exact: true }).click();
-}
-function permission(page: Page) {
-  return page.locator('.settings-row').filter({ hasText: '운영체제 알림 권한' });
 }
 
 test('Windows build offers manual installer updates without invoking updater commands', async ({ page }) => {

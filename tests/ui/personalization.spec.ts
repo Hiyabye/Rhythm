@@ -1,12 +1,9 @@
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { callCount, mockDesktop, answerDialogs, openSettings } from './fixture';
+import { callCount, mockDesktop, answerDialogs, navigate, openSettings } from './fixture';
 
 interface FixtureCall { command: string; args: Record<string, unknown> }
 type FixtureWindow = Window & { __fixture: { calls: FixtureCall[] } };
-async function navigate(page: Page, name: string) {
-  await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name, exact: true }).click();
-}
 async function fixtureCalls(page: Page): Promise<FixtureCall[]> {
   return page.evaluate(() => (window as unknown as FixtureWindow).__fixture.calls);
 }

@@ -23,7 +23,7 @@ pub fn refresh_disk_space(mut hardware: Hardware, root: &Path) -> Hardware {
     hardware.disk_available_bytes = available_space(root).unwrap_or(0);
     hardware
 }
-// Main-process features cannot prove which backend the bundled worker uses;
+// Main-process features cannot prove which backend the bundled `llama-server` uses;
 // on Windows the runtime status separately confirms the device actually used.
 #[cfg(windows)]
 pub(super) const BACKEND_LABEL: &str =

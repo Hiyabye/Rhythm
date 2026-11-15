@@ -93,12 +93,12 @@ impl Scheduler {
         root: PathBuf,
         app: AppHandle,
         operation_gate: Arc<AdmissionGate>,
-    ) -> Result<Self, String> {
+    ) -> Self {
         let (sender, _) = watch::channel(false);
         let callback_gate = Arc::new(Mutex::new(()));
         let pending_activation = Arc::new(Mutex::new(None));
         let accepting_callbacks = Arc::new(AtomicBool::new(true));
-        Ok(Self {
+        Self {
             store,
             archive,
             network,
@@ -113,7 +113,7 @@ impl Scheduler {
             pending_activation,
             accepting_callbacks,
             callback_gate,
-        })
+        }
     }
 
     pub fn start(&self) -> Result<(), String> {
@@ -299,7 +299,9 @@ pub(super) fn resolved_interval(requested: u32, profile: &str) -> u32 {
     }
 }
 
-fn lock_store(store: &sync::SharedStore) -> Result<std::sync::MutexGuard<'_, Store>, String> {
+pub(super) fn lock_store(
+    store: &sync::SharedStore,
+) -> Result<std::sync::MutexGuard<'_, Store>, String> {
     store
         .lock()
         .map_err(|_| "로컬 저장소에 접근할 수 없습니다.".to_string())

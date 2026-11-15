@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import { archiveError, timeOptions } from './archive-format';
+  import { archiveError, isStaleObservation, studiumStateLabel, timeOptions } from './archive-format';
   import { clock as clockSetting } from './clock.svelte';
   import { fade } from './motion';
   import type { ClockFormat, Snapshot, StudiumMiniStatus, StudiumRoomState, StudiumSnapshot, Theme } from './types';
@@ -162,20 +162,13 @@
     finally { if (mounted) { busy = false; if (refreshPending && !closed) void refresh(); } }
   }
 
-  function stateLabel(value: StudiumRoomState | undefined) {
-    if (value?.status === 'ready') return value.result?.remaining === 0 ? '빈 좌석 없음' : `빈 좌석 ${value.result?.remaining ?? '—'}석`;
-    if (value?.status === 'count_only') return `빈 좌석 ${value.result?.remaining ?? '—'}석 · 번호 확인 불가`;
-    return ({ loading: '확인 중', failed: '확인 실패', cancelled: '확인 취소됨', not_checked: '아직 확인하지 않았습니다' })[value?.status ?? 'not_checked'];
-  }
-
   function clock(value: string | null | undefined) {
     if (!value || !Number.isFinite(Date.parse(value))) return '확인 불가';
     return new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', ...timeOptions(clockSetting.format, true) }).format(new Date(value));
   }
 
-  function stale(value: string) {
-    const age = now - Date.parse(value);
-    return !Number.isFinite(age) || age > 300_000 || age < -60_000;
+  function stale(value: string): boolean {
+    return isStaleObservation(value, now);
   }
 
   onMount(() => {
@@ -244,7 +237,7 @@
       <div class="view-picker"><label for="mini-room">표시할 열람실</label><select id="mini-room" value={viewRoom} disabled={busy} onchange={(event) => { viewRoom = event.currentTarget.value; void act('studium_set_view_room', { roomId: viewRoom }); }}>{#each selected as item (item.id)}<option value={item.id}>{item.label}</option>{/each}</select></div>
       <section class="detail" aria-label={`${room?.label ?? '열람실'} 좌석 정보`}>
         <h2>{room?.label}</h2>
-        <p class="current-state" role="status">{stateLabel(result)}</p>
+        <p class="current-state" role="status">{studiumStateLabel(result)}</p>
         {#if result?.result}
           {@const data = result.result}
           <p class="seat-count">빈 좌석 <strong>{data.remaining}석</strong><span> / 전체 {data.total}석</span></p>
@@ -253,7 +246,7 @@
         {/if}
         {#if result?.error}<p class="detail-error">{result.error}</p>{/if}
       </section>
-      <ul class="room-summary" aria-label="열람실별 확인 상태">{#each selected as item (item.id)}{@const value = snapshot.results.find((value) => value.room_id === item.id)}<li><span>{item.label}</span><div class="summary-values"><span>{stateLabel(value)}</span>{#if value?.result}<time datetime={value.result.source_time}>기준 {clock(value.result.source_time)} · 한국시간</time>{#if stale(value.result.source_time)}<span class="stale">오래됨 · 이전 조회 기준</span>{/if}{/if}</div></li>{/each}</ul>
+      <ul class="room-summary" aria-label="열람실별 확인 상태">{#each selected as item (item.id)}{@const value = snapshot.results.find((value) => value.room_id === item.id)}<li><span>{item.label}</span><div class="summary-values"><span>{studiumStateLabel(value)}</span>{#if value?.result}<time datetime={value.result.source_time}>기준 {clock(value.result.source_time)} · 한국시간</time>{#if stale(value.result.source_time)}<span class="stale">오래됨 · 이전 조회 기준</span>{/if}{/if}</div></li>{/each}</ul>
       <div class="lookup-actions"><button class="button primary" bind:this={startButton} disabled={busy || snapshot.running} onclick={() => runAction('studium_start')}>지금 확인</button>{#if snapshot.running}<button class="button secondary" bind:this={cancelButton} disabled={busy || snapshot.job_id === null} onclick={() => runAction('studium_cancel', { jobId: snapshot!.job_id })}>확인 취소</button>{/if}</div>
       <p class="automatic" role="status">{snapshot.automatic.active ? snapshot.running ? '자동 확인 켜짐 · 현재 확인 중' : snapshot.automatic.next_check_at ? `다음 자동 확인: ${clock(snapshot.automatic.next_check_at)}` : '자동 확인 켜짐 · 대기 중' : '자동 확인 꺼짐'}</p>
       {#if snapshot.automatic.error}<p class="detail-error">{snapshot.automatic.error}</p>{/if}

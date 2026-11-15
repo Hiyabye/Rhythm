@@ -135,8 +135,7 @@ mod tests {
 
     #[test]
     fn operational_extension_preserves_preferences_without_automatic_networking() {
-        let directory = tempfile::tempdir().unwrap();
-        let store = Store::open(&directory.path().join("rhythm.db")).unwrap();
+        let (_directory, store) = crate::storage::temp_store();
         let registry = Registry::new(
             crate::archive::sync::Controller::new(),
             crate::studium::controller::Controller::new(),
@@ -162,10 +161,13 @@ mod tests {
         registry.set(&store, NOTICES, true).unwrap();
         registry.set(&store, AI, true).unwrap();
         let enabled = registry.list(&store).unwrap();
-        assert!(enabled[0].enabled && enabled[7].enabled);
-        assert!(!enabled[1].enabled);
+        let on = |listing: &[ExtensionInfo], id: &str| {
+            listing.iter().find(|e| e.id == id).unwrap().enabled
+        };
+        assert!(on(&enabled, NOTICES) && on(&enabled, AI));
+        assert!(!on(&enabled, CYBERCAMPUS));
         registry.set(&store, NOTICES, false).unwrap();
-        assert!(!registry.list(&store).unwrap()[0].enabled);
+        assert!(!on(&registry.list(&store).unwrap(), NOTICES));
         assert_eq!(store.settings().unwrap().theme, "system");
         assert!(registry.set(&store, "unknown", true).is_err());
     }
@@ -178,8 +180,7 @@ mod tests {
 
     #[test]
     fn studium_can_toggle_without_changing_targets_or_starting_work() {
-        let directory = tempfile::tempdir().unwrap();
-        let store = Store::open(&directory.path().join("rhythm.db")).unwrap();
+        let (_directory, store) = crate::storage::temp_store();
         let registry = Registry::new(
             crate::archive::sync::Controller::new(),
             crate::studium::controller::Controller::new(),

@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import { archiveError, timeOptions, wallTime } from './archive-format';
+  import { archiveError, isStaleObservation, studiumStateLabel, timeOptions, wallTime } from './archive-format';
   import { clock as clockSetting } from './clock.svelte';
   import Hint from './Hint.svelte';
   import StudiumSeatMap from './StudiumSeatMap.svelte';
@@ -288,15 +288,6 @@
     return value.automatic.next_check_at ? `다음 자동 확인: ${clock(value.automatic.next_check_at)}` : '자동 확인을 준비하고 있습니다.';
   }
 
-  function stateLabel(value: StudiumRoomState | undefined): string {
-    if (value?.status === 'ready') return value.result?.remaining === 0 ? '빈 좌석 없음' : `빈 좌석 ${value.result?.remaining ?? '—'}석`;
-    if (value?.status === 'count_only') return `빈 좌석 ${value.result?.remaining ?? '—'}석 · 번호 확인 불가`;
-    if (value?.status === 'loading') return '확인 중';
-    if (value?.status === 'failed') return '확인 실패';
-    if (value?.status === 'cancelled') return '확인 취소됨';
-    return '아직 확인하지 않았습니다';
-  }
-
   function cycleStatus(value: StudiumSnapshot): string {
     if (value.running) return '선택한 열람실을 확인하고 있습니다.';
     if (notice) return notice;
@@ -318,8 +309,7 @@
   }
 
   function stale(value: string): boolean {
-    const age = now - Date.parse(value);
-    return !Number.isFinite(age) || age > 300_000 || age < -60_000;
+    return isStaleObservation(value, now);
   }
 
   $effect(() => {
@@ -430,7 +420,7 @@
         <p class="live-status" role="status" aria-live="polite" aria-atomic="true">{cycleStatus(snapshot)}</p>
         <ul class="room-summary" aria-label="열람실별 확인 상태">
           {#each selected as item (item.id)}
-            <li><span>{item.label}</span><span>{stateLabel(snapshot.results.find((value) => value.room_id === item.id))}</span></li>
+            <li><span>{item.label}</span><span>{studiumStateLabel(snapshot.results.find((value) => value.room_id === item.id))}</span></li>
           {/each}
         </ul>
         <div class="view-picker"><label for="studium-view-room">표시할 열람실</label><select id="studium-view-room" value={viewRoom} disabled={busy} onchange={(event) => { viewRoom = event.currentTarget.value; void act('studium_set_view_room', { roomId: viewRoom }); }}>{#each selected as item (item.id)}<option value={item.id}>{item.label}</option>{/each}</select></div>
@@ -482,7 +472,7 @@
             <StudiumSeatMap {data} identity={`${viewRoom}:${snapshot.job_id ?? 0}:${data.source_time}:${result.checked_at ?? ''}`} roomLabel={room?.label ?? '열람실'} favorites={savedFavorites} searchNumber={searchActive && !searchInvalid ? Number(searchDraft) : null} stale={stale(data.source_time)} onfocuslost={() => void restoreMapFocus()} />
             {#if result.error}<p class="detail-error">{result.error}</p>{/if}
             <dl class="times"><div><dt>원본 기준 시각 · 한국시간</dt><dd><time datetime={data.source_time}>{clock(data.source_time)}</time></dd></div><div><dt>조회 시각 · 한국시간</dt><dd>{#if result.checked_at}<time datetime={result.checked_at}>{clock(result.checked_at)}</time>{:else}확인 불가{/if}</dd></div></dl>
-          {:else}<p class="empty-result">{stateLabel(result)}</p>{#if searchActive}<p class="editor-help">좌석 번호를 확인한 뒤 검색할 수 있습니다.</p>{/if}{#if result?.error}<p class="detail-error">{result.error}</p>{/if}{/if}
+          {:else}<p class="empty-result">{studiumStateLabel(result)}</p>{#if searchActive}<p class="editor-help">좌석 번호를 확인한 뒤 검색할 수 있습니다.</p>{/if}{#if result?.error}<p class="detail-error">{result.error}</p>{/if}{/if}
         </section>
       </section>
     {/if}

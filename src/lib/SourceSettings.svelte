@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import type { SourceGroup, SourceInfo, SubscribeResult, SyncStatus } from './types';
-  import { archiveDate, archiveError, sourceStatus } from './archive-format';
+  import { archiveDate, archiveError, organizationLabel, sourceStatus } from './archive-format';
   import { clock } from './clock.svelte';
   import Icon from './Icon.svelte';
   import Hint from './Hint.svelte';
@@ -63,10 +63,6 @@
       const children = nodes(group.id);
       return { group, boards, children, total: [...boards, ...children.flatMap((child) => child.total)] };
     }).filter((node) => node.total.length);
-  }
-
-  function organizationLabel(organization: string): string {
-    return organization.replace(/^서강대학교\s*·\s*/, '') || organization;
   }
 
   async function refresh(showLoading = true) {

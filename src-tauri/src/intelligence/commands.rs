@@ -170,18 +170,14 @@ pub async fn ai_remove(
         }
         Ok(())
     })?;
-    if keep_files == Some(true) {
-        models::remove_with_policy(
-            state.store.clone(),
-            state.data_root.clone(),
-            id,
-            confirmed,
-            true,
-        )
-        .await
-    } else {
-        models::remove(state.store.clone(), state.data_root.clone(), id, confirmed).await
-    }
+    models::remove_with_policy(
+        state.store.clone(),
+        state.data_root.clone(),
+        id,
+        confirmed,
+        keep_files.unwrap_or(false),
+    )
+    .await
 }
 /// Changes the Windows execution mode. Model folder, model selection and the
 /// classification switch each have their own command.

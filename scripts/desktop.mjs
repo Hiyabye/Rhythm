@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { mkdirSync, copyFileSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { checksumLine, remapFlags } from './release-common.mjs';
 import { updaterSigningArgs } from './updater-signing.mjs';
 
 function run(command, args, env = process.env) {
@@ -37,16 +37,11 @@ if (target !== 'aarch64-apple-darwin') {
 // The last matching remap wins, so the more specific prefixes come later.
 function releaseEnv() {
   const home = homedir();
-  const remaps = [
+  return remapFlags(process.env, [
     [home, '/home'],
     [process.env.CARGO_HOME ?? join(home, '.cargo'), '/cargo'],
     [resolve('.'), '/rhythm'],
-  ].map(([from, to]) => `--remap-path-prefix=${from}=${to}`);
-  // Cargo prefers CARGO_ENCODED_RUSTFLAGS over RUSTFLAGS; keep either.
-  const existing = process.env.CARGO_ENCODED_RUSTFLAGS
-    ?? (process.env.RUSTFLAGS ?? '').split(/\s+/).filter(Boolean).join('\x1f');
-  const flags = [existing, ...remaps].filter(Boolean).join('\x1f');
-  return { ...process.env, CARGO_ENCODED_RUSTFLAGS: flags };
+  ]);
 }
 const env = release ? releaseEnv() : process.env;
 // A default release build produces the distributable DMG. Custom bundle
@@ -78,8 +73,8 @@ if (distribute) {
   rmSync(output, { recursive: true, force: true });
   mkdirSync(output, { recursive: true });
   copyFileSync(join(bundle, name), join(output, name));
-  const digest = createHash('sha256').update(readFileSync(join(output, name))).digest('hex');
-  writeFileSync(join(output, `${name}.sha256`), `${digest}  ${name}\n`);
+  const { digest, text } = checksumLine(name, readFileSync(join(output, name)));
+  writeFileSync(join(output, `${name}.sha256`), text);
   // The updater archive keeps Tauri's name: its signature binds the file name.
   const updater = signing ? ['Rhythm.app.tar.gz', 'Rhythm.app.tar.gz.sig'] : [];
   for (const file of updater) copyFileSync(join('target', 'release', 'bundle', 'macos', file), join(output, file));

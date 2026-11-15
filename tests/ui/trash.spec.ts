@@ -1,9 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
-import { mockDesktop, answerDialogs, dialogMessages, openSettings } from './fixture';
+import { mockDesktop, answerDialogs, dialogMessages, navigate, openSettings } from './fixture';
 
-async function navigate(page: Page, name: string) {
-  await page.getByRole('navigation', { name: '기본 탐색', exact: true }).getByRole('button', { name, exact: true }).click();
-}
 const list = (page: Page) => page.getByRole('list', { name: '공지 목록' });
 const trashCalls = (page: Page) => page.evaluate(() =>
   (window as Window & { __fixture: { trashCalls: { command: string; ids: number[] | null }[] } }).__fixture.trashCalls);

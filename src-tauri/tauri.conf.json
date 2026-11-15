@@ -43,6 +43,7 @@
       "../assets/licenses/tokio-native-tls-MIT.txt": "licenses/tokio-native-tls-MIT.txt",
       "../assets/licenses/mac-usernotifications-MIT.txt": "licenses/mac-usernotifications-MIT.txt",
       "../assets/licenses/mac-usernotifications-Apache-2.0.txt": "licenses/mac-usernotifications-Apache-2.0.txt",
+      "../assets/licenses/llama.cpp-MIT.txt": "licenses/llama.cpp-MIT.txt",
       "binaries/llama/": "llama/"
     },
     "icon": [

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mockDesktop, openSettings } from './fixture';
+import { cybercampusTask, mockDesktop, openSettings } from './fixture';
 import type { CybercampusTask } from '../../src/lib/types';
 
 const board = { id: 'cybercampus', name: '강의 공지', organization: '서강대학교 · 사이버캠퍼스', supported: true, family: 'cybercampus' };
@@ -8,10 +8,7 @@ const board = { id: 'cybercampus', name: '강의 공지', organization: '서강�
 function kst(days: number) {
   return new Date(Date.now() + days * 86_400_000 + 9 * 3_600_000).toISOString().slice(0, 16);
 }
-function task(overrides: Partial<CybercampusTask>): CybercampusTask {
-  return { course_key: 'A1', course_name: '자료구조실습', category: 'report', item_id: '1', label: '과제', title: '실습 과제', week: 9,
-    opens_at: null, due_at: null, late_due_at: null, status: null, submitted_at: null, pending: false, updated_at: '2026-11-06T00:00:00Z', ...overrides };
-}
+const task = cybercampusTask;
 
 test('the Cybercampus login is checked before it is saved and is never shown again', async ({ page }) => {
   await mockDesktop(page, { sourceList: [board] });

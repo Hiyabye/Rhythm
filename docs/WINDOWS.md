@@ -47,9 +47,8 @@ npm run desktop:build
 
 - Targets NVIDIA GTX 10/16 and RTX 20/30/40/50. GPU inference through the bundled `llama-server` was observed only on one GTX 1650; see [Windows validation](WINDOWS_VALIDATION.md#ai-on-windows).
 - Before loading, Rhythm runs `llama-server --list-devices` and uses only the first NVIDIA Vulkan device. A load counts as GPU only when the server log shows every layer offloaded; anything else is a GPU failure.
-- Context is 8192 tokens (input plus output) on Vulkan and 32768 on CPU. An input that does not fit is rejected with `토큰 한도를 넘습니다`.
 - The server listens on 127.0.0.1 on a port the OS chooses, and every request needs a random key written for that launch only; the key file is deleted once the server is ready.
-- **AI 실행 장치** (`auto`/`cpu`/`gpu`, schema 8) picks the build. `gpu` reports errors. `auto` switches to CPU for the session after a device, load or request failure; a context-overflow rejection retries only that request on CPU. Explicit CPU and GPU results have separate cache identities; `auto` accepts either, and every result records its `loaded_backend`.
+- **AI 실행 장치** (`auto`/`cpu`/`gpu`, schema 8) picks the build. `gpu` reports errors. `auto` switches to CPU for the session after a device, load or request failure.
 
 To check a real model on this PC, stage the builds and run the opt-in evaluation with a model in an isolated folder (see [AI evaluation](AI_EVALUATION.md#running-evaluations)); it never touches app data.
 

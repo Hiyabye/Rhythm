@@ -1,6 +1,6 @@
 //! Persistent AI model inventory, preferences, notice vectors and classifications.
 //! No filesystem or inference work.
-use super::Store;
+use super::{trash::NOT_TRASHED, Store};
 use rusqlite::{params, params_from_iter, types::Value as SqlValue, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
@@ -517,9 +517,8 @@ impl Store {
         self.connection.execute("INSERT INTO ai_models(id,catalog_id,name,ownership,path,sha256,expected_sha256,expected_bytes,bytes,source_revision,source_filename,status,downloaded_bytes,resume_etag,error,storage_directory,kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17) ON CONFLICT(id) DO UPDATE SET catalog_id=excluded.catalog_id,name=excluded.name,ownership=excluded.ownership,path=excluded.path,sha256=excluded.sha256,expected_sha256=excluded.expected_sha256,expected_bytes=excluded.expected_bytes,bytes=excluded.bytes,source_revision=excluded.source_revision,source_filename=excluded.source_filename,status=excluded.status,downloaded_bytes=excluded.downloaded_bytes,resume_etag=excluded.resume_etag,error=excluded.error,storage_directory=excluded.storage_directory,kind=excluded.kind,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')", params![model.id,model.catalog_id,model.name,model.ownership,model.path,model.sha256,model.expected_sha256,model.expected_bytes.map(|v|v as i64),model.bytes as i64,model.source_revision,model.source_filename,model.status,model.downloaded_bytes as i64,model.resume_etag,model.error,model.storage_directory,model.kind]).map_err(|e|e.to_string())?;
         Ok(())
     }
-    /// Removes inventory only. Never deletes files or historical analysis
-    /// results. Derived embedding vectors and classifications are removed with
-    /// the model identity they belong to.
+    /// Removes inventory only; never deletes files. Derived embedding vectors
+    /// and classifications are removed with the model identity they belong to.
     pub fn ai_remove_model(&self, id: &str) -> Result<(), String> {
         let sha: Option<String> = self
             .connection
@@ -693,7 +692,7 @@ impl Store {
             return Err("분류 모델 정보가 올바르지 않습니다.".into());
         }
         self.connection
-            .prepare(
+            .prepare(&format!(
                 "SELECT d.id,r.id FROM documents d
                  JOIN document_revisions r ON r.id=(
                      SELECT MAX(latest.id) FROM document_revisions latest WHERE latest.document_id=d.id
@@ -704,9 +703,9 @@ impl Store {
                        WHERE c.document_id=d.id AND c.revision_id=r.id
                          AND c.model_sha256=?1 AND c.config_hash=?2
                    )
-                   AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
-                 ORDER BY r.collected_at DESC,r.id DESC LIMIT ?3",
-            )
+                   AND {NOT_TRASHED}
+                 ORDER BY r.collected_at DESC,r.id DESC LIMIT ?3"
+            ))
             .map_err(|e| e.to_string())?
             .query_map(
                 params![model_sha256, config_hash, limit.min(MAX_LIST_LIMIT)],
@@ -900,16 +899,16 @@ impl Store {
         }
         let window = self
             .connection
-            .prepare(
+            .prepare(&format!(
                 "SELECT d.id,e.revision_id,d.source_id,s.name,d.title,d.published_at,e.dim,e.vector
                  FROM documents d
                  JOIN sources s ON s.id=d.source_id
                  JOIN notice_embeddings e ON e.document_id=d.id AND e.model_sha256=?1
                    AND e.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id)
-                 WHERE NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)
+                 WHERE {NOT_TRASHED}
                  ORDER BY d.published_at DESC,d.id DESC
-                 LIMIT ?2",
-            )
+                 LIMIT ?2"
+            ))
             .map_err(|e| e.to_string())?
             .query_map(params![model_sha256, SIMILARITY_WINDOW as i64], |row| {
                 Ok((

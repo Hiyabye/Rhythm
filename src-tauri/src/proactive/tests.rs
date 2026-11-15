@@ -7,6 +7,57 @@ use crate::storage::{
     proactive::{NotificationSensitivity, ProactiveEventKind, ProactiveSettings, QuietHours},
 };
 
+/// A store with notifications on for every sensitivity, one source (`one`) and
+/// one notice with a revision.
+fn seeded_store(
+    subscribed: bool,
+) -> (
+    tempfile::TempDir,
+    crate::storage::Store,
+    crate::storage::proactive::ProactiveSettings,
+) {
+    use rusqlite::Connection;
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("rhythm.db");
+    let store = crate::storage::Store::open(&path).unwrap();
+    store.set_enabled("proactive", true).unwrap();
+    let mut settings = store.proactive_settings().unwrap();
+    settings.notifications_enabled = true;
+    settings.notification_sensitivity = NotificationSensitivity::All;
+    store.proactive_save_settings(&settings).unwrap();
+
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO sources(id,name,organization,description,url,family,supported,subscribed)
+             VALUES('one','테스트 정보원','기관','설명','https://example.edu/','main',1,?1)",
+            [subscribed],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO documents(
+                 id,source_id,external_id,canonical_url,title,published_at,historical,
+                 body_html,body_text,content_hash
+             ) VALUES(1,'one','1','https://example.edu/1','공지','2026-01-01T00:00:00Z',
+                      0,'<p>본문</p>','본문','hash')",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO document_revisions(
+                 document_id,canonical_url,title,published_at,original,body_html,body_text,content_hash
+             ) VALUES(1,'https://example.edu/1','공지','2026-01-01T00:00:00Z',
+                      '{}','<p>본문</p>','본문','hash')",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    (directory, store, settings)
+}
+
 #[test]
 fn generic_settings_save_preserves_persisted_lifecycle_values() {
     let persisted = ProactiveSettings {
@@ -244,28 +295,13 @@ fn sensitivity_policies_suppress_cold_start_and_negative_signals() {
 
 #[test]
 fn inactive_sources_are_suppressed_before_any_notification_can_be_delivered() {
-    use crate::storage::{proactive::ProactiveEventState, Store};
+    use crate::storage::proactive::ProactiveEventState;
     use rusqlite::Connection;
 
     for disable_source in ["subscription", "extension"] {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("rhythm.db");
-        let store = Store::open(&path).unwrap();
-        store.set_enabled("proactive", true).unwrap();
-        let mut settings = store.proactive_settings().unwrap();
-        settings.notifications_enabled = true;
-        settings.notification_sensitivity = NotificationSensitivity::All;
-        store.proactive_save_settings(&settings).unwrap();
-
-        let connection = Connection::open(&path).unwrap();
-        connection
-            .execute(
-                "INSERT INTO sources(id,name,organization,description,url,family,supported,subscribed)
-                 VALUES('one','테스트 정보원','기관','설명','https://example.edu/','main',1,?1)",
-                [disable_source != "subscription"],
-            )
-            .unwrap();
+        let (directory, store, settings) = seeded_store(disable_source != "subscription");
         if disable_source == "extension" {
+            let connection = Connection::open(directory.path().join("rhythm.db")).unwrap();
             connection
                 .execute(
                     "INSERT INTO source_extensions(source_id,extension_id)
@@ -281,26 +317,6 @@ fn inactive_sources_are_suppressed_before_any_notification_can_be_delivered() {
                 )
                 .unwrap();
         }
-        connection
-            .execute(
-                "INSERT INTO documents(
-                     id,source_id,external_id,canonical_url,title,published_at,historical,
-                     body_html,body_text,content_hash
-                 ) VALUES(1,'one','1','https://example.edu/1','공지','2026-01-01T00:00:00Z',
-                          0,'<p>본문</p>','본문','hash')",
-                [],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO document_revisions(
-                     document_id,canonical_url,title,published_at,original,body_html,body_text,content_hash
-                 ) VALUES(1,'https://example.edu/1','공지','2026-01-01T00:00:00Z',
-                          '{}','<p>본문</p>','본문','hash')",
-                [],
-            )
-            .unwrap();
-        drop(connection);
 
         assert!(notification::consider_candidates(&store, &settings)
             .unwrap()
@@ -314,7 +330,7 @@ fn inactive_sources_are_suppressed_before_any_notification_can_be_delivered() {
 }
 
 #[test]
-fn notification_digest_uses_stable_revision_events_without_ai_dates() {
+fn notification_digest_text_uses_stable_revision_events() {
     let item = |event_id, revision_id, title: &str| DeliveryItem {
         event_id,
         document_id: 5,
@@ -341,46 +357,7 @@ fn notification_digest_uses_stable_revision_events_without_ai_dates() {
 
 #[test]
 fn candidate_preparation_does_not_claim_or_report_delivery() {
-    use crate::storage::Store;
-    use rusqlite::Connection;
-
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("rhythm.db");
-    let store = Store::open(&path).unwrap();
-    store.set_enabled("proactive", true).unwrap();
-    let mut settings = store.proactive_settings().unwrap();
-    settings.notifications_enabled = true;
-    settings.notification_sensitivity = NotificationSensitivity::All;
-    store.proactive_save_settings(&settings).unwrap();
-
-    let connection = Connection::open(&path).unwrap();
-    connection
-        .execute(
-            "INSERT INTO sources(id,name,organization,description,url,family,supported,subscribed)
-             VALUES('one','테스트 정보원','기관','설명','https://example.edu/','main',1,1)",
-            [],
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO documents(
-                 id,source_id,external_id,canonical_url,title,published_at,historical,
-                 body_html,body_text,content_hash
-             ) VALUES(1,'one','1','https://example.edu/1','공지','2026-01-01T00:00:00Z',
-                      0,'<p>본문</p>','본문','hash')",
-            [],
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO document_revisions(
-                 document_id,canonical_url,title,published_at,original,body_html,body_text,content_hash
-             ) VALUES(1,'https://example.edu/1','공지','2026-01-01T00:00:00Z',
-                      '{}','<p>본문</p>','본문','hash')",
-            [],
-        )
-        .unwrap();
-    drop(connection);
+    let (_directory, store, settings) = seeded_store(true);
 
     let candidates = notification::consider_candidates(&store, &settings).unwrap();
     assert_eq!(candidates.len(), 1);
@@ -497,50 +474,10 @@ fn claimed_delivery_fixture() -> (
     std::sync::Arc<std::sync::Mutex<crate::storage::Store>>,
     DeliveryItem,
 ) {
-    use crate::storage::{
-        proactive::{ProactiveClaim, ProactiveEventKey},
-        Store,
-    };
-    use rusqlite::Connection;
+    use crate::storage::proactive::{ProactiveClaim, ProactiveEventKey};
     use std::sync::{Arc, Mutex};
 
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("rhythm.db");
-    let store = Store::open(&path).unwrap();
-    store.set_enabled("proactive", true).unwrap();
-    let mut settings = store.proactive_settings().unwrap();
-    settings.notifications_enabled = true;
-    settings.notification_sensitivity = NotificationSensitivity::All;
-    store.proactive_save_settings(&settings).unwrap();
-
-    let connection = Connection::open(&path).unwrap();
-    connection
-        .execute(
-            "INSERT INTO sources(id,name,organization,description,url,family,supported,subscribed)
-             VALUES('one','테스트 정보원','기관','설명','https://example.edu/','main',1,1)",
-            [],
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO documents(
-                 id,source_id,external_id,canonical_url,title,published_at,historical,
-                 body_html,body_text,content_hash
-             ) VALUES(1,'one','1','https://example.edu/1','공지','2026-01-01T00:00:00Z',
-                      0,'<p>본문</p>','본문','hash')",
-            [],
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO document_revisions(
-                 document_id,canonical_url,title,published_at,original,body_html,body_text,content_hash
-             ) VALUES(1,'https://example.edu/1','공지','2026-01-01T00:00:00Z',
-                      '{}','<p>본문</p>','본문','hash')",
-            [],
-        )
-        .unwrap();
-    drop(connection);
+    let (directory, store, _settings) = seeded_store(true);
 
     let (event_id, _) = match store
         .proactive_claim_event(&ProactiveEventKey {
@@ -944,10 +881,9 @@ async fn scheduled_controller_imports_multiple_fixture_pages_and_runs_again() {
 
 #[test]
 fn scheduled_tasks_need_the_proactive_and_owning_extensions() {
-    use crate::{archive, storage::Store};
+    use crate::archive;
     use std::sync::{Arc, Mutex};
-    let directory = tempfile::tempdir().unwrap();
-    let store = Store::open(&directory.path().join("rhythm.sqlite3")).unwrap();
+    let (_directory, store) = crate::storage::temp_store();
     store.catalog(&archive::definitions()).unwrap();
     store.set_enabled("sogang_notices", true).unwrap();
     store.set_enabled("proactive", true).unwrap();

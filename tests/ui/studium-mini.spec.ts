@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { mockDesktop, callCount, syntheticStudiumLayout } from './fixture';
+import { mockDesktop, callCount, openStudium, syntheticStudiumLayout } from './fixture';
 import type { StudiumRoomState } from '../../src/lib/types';
 
 const preferences = { room_ids: ['5', '6'], view_room: '5' };
@@ -12,15 +12,10 @@ async function openMini(page: Page) {
   await page.goto('/?studium-mini=1');
   await expect(page.getByRole('heading', { name: 'Studium 미니 창', exact: true })).toBeVisible();
 }
-async function openMainStudium(page: Page) {
-  await page.goto('/');
-  await nav(page).getByRole('button', { name: '열람실', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '확인할 열람실', exact: true })).toBeVisible();
-}
 
 test('main opens the mini window explicitly and retains edits after a window error', async ({ page }) => {
   await mockDesktop(page, { extensions: { studium: true }, miniOpenError: true });
-  await openMainStudium(page);
+  await openStudium(page);
   await page.getByRole('textbox', { name: '선호 좌석 번호', exact: true }).fill('42');
   await page.getByRole('button', { name: '미니 창 열기', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('미니 창을 열지 못했습니다.');
@@ -204,7 +199,7 @@ test('mini stale status follows its clock in dark theme at 200% content zoom wit
 
 test('main idle state events preserve drafts and ignore a delayed snapshot after a view change', async ({ page }) => {
   await mockDesktop(page, { extensions: { studium: true }, studium: { preferences, results: [row('5', 1), row('6', 0)] } });
-  await openMainStudium(page);
+  await openStudium(page);
   const interval = page.getByRole('spinbutton', { name: '자동 확인 간격 (분)', exact: true });
   await interval.fill('7');
   await page.getByRole('textbox', { name: '선호 좌석 번호', exact: true }).fill('42');
@@ -268,7 +263,7 @@ test.describe('source clocks use Korean time independently of the device zone', 
     const fresh = row('5', 1);
     fresh.result!.source_time = '2026-11-10T01:02:03Z';
     await mockDesktop(page, { extensions: { studium: true }, studium: { results: [fresh] } });
-    await openMainStudium(page);
+    await openStudium(page);
     await expect(page.locator('.times')).toContainText('원본 기준 시각 · 한국시간');
     await expect(page.locator('.times time').first()).toContainText('오전 10:02:03');
     expect(await callCount(page, 'studium_start')).toBe(0);

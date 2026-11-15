@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { mockDesktop, callCount, openSettings, syntheticStudiumLayout } from './fixture';
+import { mockDesktop, callCount, openSettings, openStudium, syntheticStudiumLayout } from './fixture';
 import type { StudiumRoomState } from '../../src/lib/types';
 
 const preferences = { room_ids: ['5', '6'], view_room: '5' };
@@ -9,11 +9,6 @@ const row = (roomId: string, remaining: number, numbers: number[] | null, status
   error: status === 'count_only' ? '좌석 번호를 확인하지 못했습니다.' : null, checked_at: now(),
 });
 const nav = (page: Page) => page.getByRole('navigation', { name: '기본 탐색', exact: true });
-async function openStudium(page: Page) {
-  await page.goto('/');
-  await nav(page).getByRole('button', { name: '열람실', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '확인할 열람실', exact: true })).toBeVisible();
-}
 
 test('Studium is opt-in and opening or selecting rooms never starts a lookup', async ({ page }) => {
   await mockDesktop(page);
