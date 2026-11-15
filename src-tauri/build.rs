@@ -66,6 +66,7 @@ fn main() {
         "calendar_update_todo",
         "calendar_set_todo_done",
         "calendar_delete_todo",
+        "calendar_export",
         "ai_snapshot",
         "ai_choose_model_directory",
         "ai_reset_model_directory",

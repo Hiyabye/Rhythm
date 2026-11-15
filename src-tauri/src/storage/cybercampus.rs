@@ -249,6 +249,20 @@ impl Store {
             .map(|task| ((task.category.clone(), task.item_id.clone()), task))
             .collect())
     }
+    /// Whether the calendar shows eClass deadlines: stored tasks outlive the
+    /// subscription, so the connector must be on and subscribed, as in the UI.
+    pub(crate) fn cybercampus_deadlines_shown(&self) -> Result<bool, String> {
+        if !self.enabled(crate::extensions::CYBERCAMPUS)? {
+            return Ok(false);
+        }
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sources WHERE family='cybercampus' AND subscribed)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())
+    }
     /// Unfinished items with a deadline first (soonest first), then the rest.
     pub(crate) fn cybercampus_tasks(&self) -> Result<Vec<CybercampusTask>, String> {
         let mut statement = self
@@ -398,5 +412,23 @@ mod tests {
             .cybercampus_replace_tasks("K1", &[task("3", None), bad])
             .is_err());
         assert_eq!(store.cybercampus_tasks().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn deadlines_show_only_while_the_connector_is_on_and_subscribed() {
+        let (_directory, store) = crate::storage::temp_store();
+        store.catalog(&crate::archive::definitions()).unwrap();
+        assert!(!store.cybercampus_deadlines_shown().unwrap());
+        store
+            .set_enabled(crate::extensions::CYBERCAMPUS, true)
+            .unwrap();
+        store.subscribe("cybercampus", false).unwrap();
+        assert!(!store.cybercampus_deadlines_shown().unwrap());
+        store.subscribe("cybercampus", true).unwrap();
+        assert!(store.cybercampus_deadlines_shown().unwrap());
+        store
+            .set_enabled(crate::extensions::CYBERCAMPUS, false)
+            .unwrap();
+        assert!(!store.cybercampus_deadlines_shown().unwrap());
     }
 }
