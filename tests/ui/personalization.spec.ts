@@ -32,6 +32,8 @@ test('profile and structured interests persist through personalization IPC', asy
   await expect(personal(page).getByRole('list', { name: '관심', exact: true })).toContainText('인공지능');
   await expect(personal(page).getByLabel('관심 주제 추가', { exact: true })).toHaveValue('');
   await personal(page).getByRole('button', { name: '인공지능 관심 수정', exact: true }).click();
+  // Opening focuses the name field from the popover's toggle event; typing before then would land there.
+  await expect(editor(page, '인공지능').getByLabel('이름')).toBeFocused();
   await editor(page, '인공지능').getByLabel('별칭').fill('AI, machine learning');
   await editor(page, '인공지능').getByRole('button', { name: '저장', exact: true }).click();
   await expect(editor(page, '인공지능')).toBeHidden();
@@ -95,6 +97,7 @@ test('interest alias limit is explained before invalid input reaches the backend
   await mockDesktop(page, { initialInterests: [explicitInterest(1, '분산 시스템')] }); await page.goto('/'); await openSettings(page, '개인화');
   await personal(page).getByRole('button', { name: '분산 시스템 관심 수정', exact: true }).click();
   const edit = editor(page, '분산 시스템');
+  await expect(edit.getByLabel('이름')).toBeFocused();
   await edit.getByLabel('별칭').fill('one,two,three,four,five,six,seven,eight,nine,ten,eleven,twelve,thirteen');
   await expect(edit.getByRole('alert')).toContainText('최대 12개');
   await expect(edit.getByRole('button', { name: '저장', exact: true })).toBeDisabled();
