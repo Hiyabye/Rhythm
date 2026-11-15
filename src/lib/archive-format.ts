@@ -67,12 +67,32 @@ function todoTitle(text: string): string {
 }
 
 const noticeDateKinds: Record<NoticeDate['kind'], string> = { deadline: '마감', start: '시작', date: '일정' };
-/** The mark shown before a notice date, such as "마감 오후 6:00". */
+/** The mark shown before a notice date, such as "마감 오후 6:00". A multi-day date shows its times in its span instead. */
 export function noticeDateMark(date: NoticeDate, format: ClockFormat): string {
   const kind = noticeDateKinds[date.kind];
-  if (!date.time) return kind;
+  if (!date.time || date.end_day) return kind;
   // The end of the day ("밤 12시"); wallTime would read 24:00 as noon.
   return `${kind} ${date.time === '24:00' && format === '12h' ? '밤 12:00' : wallTime(date.time, format)}`;
+}
+
+/** "11월 15일 ~ 16일" for a multi-day notice date, with times when the notice gives them; empty for one day. */
+export function noticeDateSpan(date: NoticeDate, format: ClockFormat): string {
+  if (!date.end_day) return '';
+  const at = (time: string | null) => (time ? ` ${time === '24:00' && format === '12h' ? '밤 12:00' : wallTime(time, format)}` : '');
+  const [startYear, startMonth, startDay] = date.day.split('-').map(Number);
+  const [endYear, endMonth, endDay] = date.end_day.split('-').map(Number);
+  const end = endYear !== startYear ? `${endYear}년 ${endMonth}월 ${endDay}일` : endMonth !== startMonth ? `${endMonth}월 ${endDay}일` : `${endDay}일`;
+  return `${startMonth}월 ${startDay}일${at(date.time)} ~ ${end}${at(date.end_time)}`;
+}
+
+/** The line under a notice date in the calendar and week: its label and span, then a reminder to check the notice. */
+export function noticeDateMeta(date: NoticeDate, format: ClockFormat): string {
+  return [date.label, noticeDateSpan(date, format), '원문 확인'].filter(Boolean).join(' · ');
+}
+
+/** Whether a notice date falls on `day`, counting every day of a multi-day date. */
+export function noticeDateOn(date: NoticeDate, day: string): boolean {
+  return date.day <= day && day <= (date.end_day ?? date.day);
 }
 
 /** A todo form for a date found in a notice's text. Matching is lexical, so the user checks it first. */

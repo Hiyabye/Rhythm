@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import type { CalendarNoticeDates, CalendarTodo, CybercampusTask, NoticeDate, TodoInput, TodoPrefill } from './types';
-  import { archiveError, localDayKey, noticeDateMark, noticeDateTodo, taskTodo, wallTime } from './archive-format';
+  import { archiveError, localDayKey, noticeDateMark, noticeDateMeta, noticeDateOn, noticeDateTodo, taskTodo, wallTime } from './archive-format';
   import { confirmAction } from './confirm';
   import { clock } from './clock.svelte';
   import Icon from './Icon.svelte';
@@ -136,7 +136,7 @@
     return {
       todos: todos.filter((todo) => todo.day === day),
       tasks: tasks.filter((task) => task.due_at!.slice(0, 10) === day),
-      dates: dates.filter((entry) => entry.day === day),
+      dates: dates.filter((entry) => noticeDateOn(entry, day)),
     };
   }
   let selectedItems = $derived(itemsOf(selected));
@@ -298,7 +298,7 @@
             {@const entries = [
               ...items.tasks.map((task) => ({ kind: 'task', text: task.title, done: false })),
               ...items.todos.map((todo) => ({ kind: 'todo', text: todo.title, done: todo.done })),
-              ...items.dates.map((entry) => ({ kind: 'notice', text: entry.label || entry.title, done: false })),
+              ...items.dates.map((entry) => ({ kind: 'notice', text: entry.title, done: false })),
             ]}
             <div role="gridcell" aria-selected={day === selected}>
               <button class="calendar-day" class:outside={day.slice(0, 7) !== month} class:is-today={day === today} class:selected={day === selected}
@@ -353,9 +353,9 @@
         {@const target = `calendar-notice-${entry.document_id}-${entry.ordinal}`}
         <li class="calendar-source"><button class="event event-notice" id={target} onclick={() => onopen(entry.document_id, target)}>
           <span class="event-bar" aria-hidden="true"></span>
-          <span class="event-title"><span class="ai-mark notice-mark">{noticeDateMark(entry, clock.format)}</span> {entry.label || entry.title}</span>
-          <span class="event-meta">{entry.title} · 원문 확인</span>
-        </button>{#if desktop}<button class="text-button" disabled={busy || editing !== null} aria-label={`${entry.label || entry.title} 할 일로 추가`} onclick={() => void startPrefill(noticeDateTodo(entry))}>할 일로 추가</button>{/if}</li>
+          <span class="event-title"><span class="ai-mark notice-mark">{noticeDateMark(entry, clock.format)}</span> {entry.title}</span>
+          <span class="event-meta">{noticeDateMeta(entry, clock.format)}</span>
+        </button>{#if desktop}<button class="text-button" disabled={busy || editing !== null} aria-label={`${entry.title} ${entry.label || noticeDateMark(entry, clock.format)} 할 일로 추가`} onclick={() => void startPrefill(noticeDateTodo(entry))}>할 일로 추가</button>{/if}</li>
       {/each}
       {#if selectedEmpty && editing !== 0}<li class="day-empty">일정 없음</li>{/if}
     </ul>

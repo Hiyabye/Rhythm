@@ -28,6 +28,12 @@ struct Case {
     deadlines: Vec<String>,
     others: Vec<String>,
     labels: BTreeMap<String, String>,
+    /// Multi-day dates: first day to last day.
+    #[serde(default)]
+    spans: BTreeMap<String, String>,
+    /// Days that must not be found, neither as a day nor as a last day.
+    #[serde(default)]
+    absent: Vec<String>,
 }
 
 struct Outcome {
@@ -147,6 +153,26 @@ fn held_out_sogang_formats() {
                 .filter(|day| !dated.contains(day))
                 .cloned()
                 .collect();
+            outcome.other_missing.extend(
+                case.spans
+                    .iter()
+                    .filter(|(start, end)| {
+                        !found
+                            .iter()
+                            .any(|item| &item.day == *start && item.end_day.as_ref() == Some(*end))
+                    })
+                    .map(|(start, end)| format!("{start}~{end}")),
+            );
+            outcome.other_missing.extend(
+                case.absent
+                    .iter()
+                    .filter(|day| {
+                        found
+                            .iter()
+                            .any(|item| &item.day == *day || item.end_day.as_ref() == Some(*day))
+                    })
+                    .map(|day| format!("{day} found")),
+            );
             outcome.label_wrong = case
                 .labels
                 .iter()
@@ -177,6 +203,8 @@ fn times_and_weekdays() {
         vec![Found {
             day: "2026-04-30".into(),
             time: Some("17:30".into()),
+            end_day: None,
+            end_time: None,
             label: "신청 마감".into(),
             kind: Kind::Deadline,
         }]
@@ -213,10 +241,12 @@ fn bare_slash_dates_dotted_range_ends_and_extension_labels() {
         ["2026-11-20"]
     );
     assert!(extract("배점 1/2 반영", "2026-11-01").is_empty());
-    // A dotted day-only end with a weekday keeps the start's month.
+    // A dotted day-only end with a weekday keeps the start's month; an event
+    // range is one multi-day date.
     let found = extract("행사 일정: 11. 20.(금)~22.(일)", "2026-11-01");
-    assert_eq!(days(&found, Kind::Start), ["2026-11-20"]);
-    assert_eq!(days(&found, Kind::Date), ["2026-11-22"]);
+    assert_eq!(days(&found, Kind::Start), Vec::<String>::new());
+    assert_eq!(days(&found, Kind::Date), ["2026-11-20"]);
+    assert_eq!(found[0].end_day.as_deref(), Some("2026-11-22"));
     let found = extract("접수 마감 11. 20. → 연장 11. 27.", "2026-11-01");
     assert_eq!(days(&found, Kind::Deadline), ["2026-11-27"]);
     assert_eq!(found.last().unwrap().label, "연장");
@@ -254,7 +284,7 @@ fn archived_dates_evaluation() {
         with_any += usize::from(!found.is_empty());
         entries.push(serde_json::json!({
             "id": id, "source": source, "title": title, "published": published,
-            "found": found.iter().map(|f| serde_json::json!({"day": f.day, "time": f.time, "label": f.label, "kind": format!("{:?}", f.kind)})).collect::<Vec<_>>(),
+            "found": found.iter().map(|f| serde_json::json!({"day": f.day, "time": f.time, "end": f.end_day, "label": f.label, "kind": format!("{:?}", f.kind)})).collect::<Vec<_>>(),
         }));
     }
     let summary = serde_json::json!({

@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import type { AiClassification, DocumentDetail, NoticeDate, SimilarNotice, SyncStatus, TodoPrefill } from './types';
-  import { archiveDate, archiveError, archiveSize, noticeDateMark, noticeDateTodo, resourceStatus } from './archive-format';
+  import { archiveDate, archiveError, archiveSize, noticeDateMark, noticeDateSpan, noticeDateTodo, resourceStatus } from './archive-format';
   import { clock } from './clock.svelte';
   import { confirmAction } from './confirm';
   import Icon from './Icon.svelte';
@@ -418,7 +418,7 @@
         <p class="footnote">본문에서 날짜 표기를 그대로 찾았습니다. 연도가 없으면 게시일로 정하므로, 원문에서 날짜와 의미를 확인하세요.</p>
         {#each dates as date (date.ordinal)}
           <div class="resource-row">
-            <div><strong><span class="ai-mark notice-mark">{noticeDateMark(date, clock.format)}</span> {date.label || date.title}</strong><p>{archiveDate(date.day)}</p></div>
+            <div><strong><span class="ai-mark notice-mark">{noticeDateMark(date, clock.format)}</span> {date.label || date.title}</strong><p>{date.end_day ? noticeDateSpan(date, clock.format) : archiveDate(date.day)}</p></div>
             {#if oncalendar}<button class="text-button" aria-label={`${date.label || date.title} 할 일로 추가`} onclick={() => oncalendar(noticeDateTodo(date))}>할 일로 추가</button>{/if}
           </div>
         {/each}

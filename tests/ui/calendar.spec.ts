@@ -7,7 +7,7 @@ const board = { id: 'cybercampus', name: '강의 공지', organization: '서강�
 const deadline: CybercampusTask = { course_key: 'A1', course_name: '자료구조실습', category: 'report', item_id: '1', label: '과제', title: '실습 과제 2', week: 9,
   opens_at: null, due_at: '2026-10-26T23:59', late_due_at: null, status: null, submitted_at: null, pending: true, updated_at: '2026-10-20T00:00:00Z' };
 const noticeDate = (overrides: Partial<NoticeDate & { saved: boolean }>): NoticeDate & { saved?: boolean } => ({
-  document_id: 1, ordinal: 0, title: '한국어 공지 01', day: '2026-10-30', time: '18:00', label: '신청 마감', kind: 'deadline', ...overrides });
+  document_id: 1, ordinal: 0, title: '한국어 공지 01', day: '2026-10-30', time: '18:00', end_day: null, end_time: null, label: '신청 마감', kind: 'deadline', ...overrides });
 const todo = (overrides: Partial<CalendarTodo>): CalendarTodo => ({ id: 1, title: '장학금 서류', day: '2026-10-25', time: null, memo: '', done: false, document_id: null, ...overrides });
 
 async function openCalendar(page: Page) {
@@ -126,9 +126,33 @@ test('the calendar shows open eClass deadlines and saved notices\' dates', async
   await expect(deadlineDay).toContainText('마감 오후 11:59 실습 과제 2');
   await page.locator('[data-day="2026-10-30"]').click();
   const noticeDay = page.getByRole('region', { name: /10월 30일 금요일/ });
-  await expect(noticeDay).toContainText('마감 오후 6:00 신청 마감');
-  await expect(noticeDay).toContainText('한국어 공지 01 · 원문 확인');
+  // The notice title leads; the label found before the date explains it.
+  await expect(noticeDay).toContainText('마감 오후 6:00 한국어 공지 01');
+  await expect(noticeDay).toContainText('신청 마감 · 원문 확인');
   await expect(page.locator('[data-day="2026-10-30"]')).toHaveAccessibleName('10월 30일 금요일, 공지 날짜 1개');
+});
+
+test('a multi-day notice date appears on every day it covers', async ({ page }) => {
+  await mockDesktop(page, { noticeDates: [noticeDate({ day: '2026-10-27', time: '13:00', end_day: '2026-10-29', end_time: '17:00', label: '행사 일시', kind: 'date' })] });
+  await page.goto('/');
+  await openCalendar(page);
+  for (const day of ['2026-10-27', '2026-10-28', '2026-10-29']) await expect(page.locator(`[data-day="${day}"]`)).toHaveAccessibleName(/공지 날짜 1개/);
+  await expect(page.locator('[data-day="2026-10-26"]')).toHaveAccessibleName('10월 26일 월요일');
+  await expect(page.locator('[data-day="2026-10-30"]')).toHaveAccessibleName('10월 30일 금요일');
+  await page.locator('[data-day="2026-10-28"]').click();
+  const panel = page.getByRole('region', { name: /10월 28일 수요일/ });
+  await expect(panel).toContainText('일정 한국어 공지 01');
+  await expect(panel).toContainText('행사 일시 · 10월 27일 오후 1:00 ~ 29일 오후 5:00 · 원문 확인');
+});
+
+test('the week pane shows a multi-day notice date that started before today', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-10-28T10:00:00+09:00'));
+  await mockDesktop(page, { noticeDates: [noticeDate({ day: '2026-10-27', time: '13:00', end_day: '2026-10-29', end_time: '17:00', label: '행사 일시', kind: 'date' })] });
+  await page.goto('/');
+  const week = page.getByRole('complementary', { name: '앞으로 7일', exact: true });
+  await expect(week.locator('.week-day').nth(0).locator('.event-notice')).toContainText('일정 한국어 공지 01');
+  await expect(week.locator('.week-day').nth(1).locator('.event-notice')).toContainText('29일 오후 5:00');
+  await expect(week.locator('.week-day').nth(2).locator('.event-notice')).toHaveCount(0);
 });
 
 test('the calendar leaves out deadlines whose extension is off', async ({ page }) => {
@@ -154,7 +178,7 @@ test('every notice\'s deadlines are added only after the user turns them on', as
   // Only the unsaved notice's deadline appears, not its other dates.
   await expect(day).toHaveAccessibleName('10월 28일 수요일, 공지 날짜 1개');
   await day.click();
-  await expect(page.getByRole('region', { name: /10월 28일 수요일/ })).toContainText('마감 접수 마감');
+  await expect(page.getByRole('region', { name: /10월 28일 수요일/ })).toContainText('마감 한국어 공지 02');
   const calls = await page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'calendar_set_all_deadlines').map((call: any) => call.args));
   expect(calls).toEqual([{ enabled: true }]);
   // The choice is read back from the backend when the page mounts again.
@@ -192,7 +216,7 @@ test('a notice date becomes a linked todo after the user checks the prefilled fo
   await openCalendar(page);
   await page.locator('[data-day="2026-10-30"]').click();
   const panel = page.getByRole('region', { name: /10월 30일 금요일/ });
-  await panel.getByRole('button', { name: '신청 마감 할 일로 추가' }).click();
+  await panel.getByRole('button', { name: '한국어 공지 01 신청 마감 할 일로 추가' }).click();
   await expect(panel.getByRole('note')).toContainText('공지 본문에서 찾은 날짜입니다');
   const title = panel.getByRole('textbox', { name: '제목' });
   await expect(title).toBeFocused();

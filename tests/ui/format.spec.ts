@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { archiveError, archiveDate, archiveDay, localDayKey, noticeDateTodo, taskTodo, wallTime } from '../../src/lib/archive-format';
+import { archiveError, archiveDate, archiveDay, localDayKey, noticeDateMark, noticeDateOn, noticeDateSpan, noticeDateTodo, taskTodo, wallTime } from '../../src/lib/archive-format';
 
 test('storage failures have actionable Korean feedback rather than raw database diagnostics', () => {
   expect(archiveError('database or disk is full')).toContain('저장 공간이 부족');
@@ -45,8 +45,17 @@ test('times follow the 12/24-hour setting at midnight, noon and evening', () => 
   }
 });
 
+test('multi-day notice dates name their span and cover each day in it', () => {
+  const span = { document_id: 7, ordinal: 0, title: '학술대회', day: '2026-12-30', time: null, end_day: '2027-01-02', end_time: '24:00', label: '행사', kind: 'date' as const };
+  expect(noticeDateSpan(span, '12h')).toBe('12월 30일 ~ 2027년 1월 2일 밤 12:00');
+  expect(noticeDateSpan({ ...span, end_day: '2026-12-31', time: '09:00', end_time: null }, '24h')).toBe('12월 30일 09:00 ~ 31일');
+  expect(noticeDateSpan({ ...span, end_day: null }, '12h')).toBe('');
+  expect(noticeDateMark({ ...span, time: '09:00' }, '24h')).toBe('일정');
+  expect(['2026-12-29', '2026-12-30', '2027-01-01', '2027-01-02', '2027-01-03'].map((day) => noticeDateOn(span, day))).toEqual([false, true, true, true, false]);
+});
+
 test('todo prefills fit the stored title limit and keep only what the source supports', () => {
-  const date = { document_id: 7, ordinal: 0, title: '가'.repeat(300), day: '2026-10-30', time: '24:00', label: '신청 마감', kind: 'deadline' as const };
+  const date = { document_id: 7, ordinal: 0, title: '가'.repeat(300), day: '2026-10-30', time: '24:00', end_day: null, end_time: null, label: '신청 마감', kind: 'deadline' as const };
   const long = noticeDateTodo(date);
   expect([...long.todo.title]).toHaveLength(200);
   expect(long.todo.title.endsWith('…')).toBe(true);

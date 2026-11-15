@@ -23,10 +23,10 @@ mod proactive_tests;
 pub mod studium;
 pub(crate) mod studium_alerts;
 pub(crate) mod trash;
-pub(crate) const SCHEMA_VERSION: i64 = 33;
+pub(crate) const SCHEMA_VERSION: i64 = 34;
 
 /// Ordered schema migrations; index `n` upgrades `user_version` n to n+1.
-pub(super) const MIGRATIONS: [&str; 33] = [
+pub(super) const MIGRATIONS: [&str; 34] = [
     include_str!("../../migrations/001_foundation.sql"),
     include_str!("../../migrations/002_archive.sql"),
     include_str!("../../migrations/003_intelligence.sql"),
@@ -60,6 +60,7 @@ pub(super) const MIGRATIONS: [&str; 33] = [
     include_str!("../../migrations/031_calendar_todo_notice.sql"),
     include_str!("../../migrations/032_notice_dates.sql"),
     include_str!("../../migrations/033_retire_generation.sql"),
+    include_str!("../../migrations/034_notice_date_spans.sql"),
 ];
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {

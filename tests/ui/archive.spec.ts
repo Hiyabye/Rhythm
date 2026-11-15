@@ -539,7 +539,8 @@ test('today rolls seven days forward from today and labels notice dates', async 
   await expect(days.first().locator('.event:not(.event-notice)')).toHaveCount(5);
   await expect(days.first()).toContainText('외 2건');
   await expect(days.last()).toContainText('금');
-  await expect(days.last().locator('.event-notice')).toContainText('마감 장학금 신청');
+  await expect(days.last().locator('.event-notice')).toContainText('마감 한국어 공지 02');
+  await expect(days.last().locator('.event-notice')).toContainText('장학금 신청 · 원문 확인');
   await expect(week.getByRole('heading', { name: '이후 공지 날짜', exact: true })).toHaveCount(0);
   await expect(week).toContainText('저장한 공지의 본문에서 찾은 날짜입니다. 찾은 날짜는 틀릴 수 있으니');
   await week.locator('#week-3').click();
@@ -557,7 +558,7 @@ test('today lists past notices nowhere in the week and notice dates beyond it se
   // Notices published on 10월 24일 fall inside the rolling window.
   await expect(week.locator('.week-day').nth(4).locator('.event:not(.event-notice)')).toHaveCount(3);
   await expect(week.getByRole('heading', { name: '이후 공지 날짜', exact: true })).toBeVisible();
-  await expect(week.locator('.event-notice')).toContainText('10월 30일 · 마감 장학금 신청');
+  await expect(week.locator('.event-notice')).toContainText('10월 30일 · 마감 한국어 공지 02');
   await week.locator('#later-notice-2-0').click();
   await expect(page.locator('.reader-header h2')).toHaveText('한국어 공지 02');
 });

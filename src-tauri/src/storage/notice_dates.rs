@@ -4,12 +4,12 @@
 //! table existed or by an older extractor version. Dates are local derived data:
 //! they never leave this device and never feed ranking or notifications.
 use super::{calendar::day_number, trash::NOT_TRASHED, Store};
-use crate::archive::dates::{self, Kind};
+use crate::archive::dates::{self, Kind, MAX_SPAN_DAYS};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 /// Bump when extraction rules change so stored dates are recomputed.
-pub(crate) const EXTRACTOR_VERSION: i64 = 2;
+pub(crate) const EXTRACTOR_VERSION: i64 = 3;
 /// The calendar's month grid and the week pane's two months ahead.
 const MAX_RANGE_DAYS: i64 = 62;
 /// Bounds one calendar request even with every notice's deadlines shown.
@@ -22,6 +22,9 @@ pub struct NoticeDate {
     pub title: String,
     pub day: String,
     pub time: Option<String>,
+    /// The last day of a multi-day `date`.
+    pub end_day: Option<String>,
+    pub end_time: Option<String>,
     pub label: String,
     /// `deadline`, `start` or `date`.
     pub kind: String,
@@ -69,8 +72,8 @@ pub(super) fn extract(connection: &Connection, document_id: i64) -> Result<(), S
     {
         connection
             .execute(
-                "INSERT INTO notice_dates(document_id,ordinal,day,time,label,kind) VALUES(?1,?2,?3,?4,?5,?6)",
-                params![document_id, ordinal as i64, found.day, found.time, found.label, kind_name(found.kind)],
+                "INSERT INTO notice_dates(document_id,ordinal,day,time,end_day,end_time,label,kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+                params![document_id, ordinal as i64, found.day, found.time, found.end_day, found.end_time, found.label, kind_name(found.kind)],
             )
             .map_err(|e| e.to_string())?;
     }
@@ -84,11 +87,14 @@ fn notice_date(row: &rusqlite::Row) -> rusqlite::Result<NoticeDate> {
         title: row.get(2)?,
         day: row.get(3)?,
         time: row.get(4)?,
-        label: row.get(5)?,
-        kind: row.get(6)?,
+        end_day: row.get(5)?,
+        end_time: row.get(6)?,
+        label: row.get(7)?,
+        kind: row.get(8)?,
     })
 }
-const COLUMNS: &str = "n.document_id,n.ordinal,d.title,n.day,n.time,n.label,n.kind";
+const COLUMNS: &str =
+    "n.document_id,n.ordinal,d.title,n.day,n.time,n.end_day,n.end_time,n.label,n.kind";
 
 impl Store {
     /// Extracts dates for at most `limit` notices whose stored dates are missing
@@ -122,6 +128,8 @@ impl Store {
 
     /// Dates between `from` and `to` for the calendar and week pane: every date
     /// of a saved notice, plus every notice's deadlines when the user chose so.
+    /// A multi-day date that overlaps the range is included; it starts at most
+    /// `MAX_SPAN_DAYS` before `from`, which keeps the day index usable.
     pub(crate) fn calendar_notice_dates(
         &self,
         from: &str,
@@ -141,7 +149,8 @@ impl Store {
                 "SELECT {COLUMNS} FROM notice_dates n
                  JOIN documents d ON d.id=n.document_id
                  LEFT JOIN document_state u ON u.document_id=d.id
-                 WHERE n.day BETWEEN ?1 AND ?2 AND {NOT_TRASHED}
+                 WHERE n.day BETWEEN date(?1,'-{MAX_SPAN_DAYS} days') AND ?2
+                   AND COALESCE(n.end_day,n.day) >= ?1 AND {NOT_TRASHED}
                    AND (COALESCE(u.saved,0)=1 OR (?3 AND n.kind='deadline'))
                  ORDER BY n.day, n.time IS NOT NULL, n.time, d.published_at DESC, n.document_id, n.ordinal
                  LIMIT ?4"
