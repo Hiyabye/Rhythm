@@ -15,6 +15,7 @@ export interface FixtureOptions {
   studiumStartError?: boolean;
   studiumAlertSaveError?: boolean;
   pendingStudiumActivation?: string;
+  pendingReminderDay?: string;
   studiumActivationGate?: boolean;
   studiumSnapshotError?: boolean;
   mini?: Partial<StudiumMiniStatus>;
@@ -211,6 +212,8 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     let notificationHandler: number | null = null;
     let studiumNotificationHandler: number | null = null;
     let pendingStudiumActivation = options.pendingStudiumActivation ?? null;
+    let reminderHandler: number | null = null;
+    let pendingReminderDay = options.pendingReminderDay ?? null;
     const stateListeners = new Map<number, number>();
     const themeListeners = new Map<number, number>();
     const clockListeners = new Map<number, number>();
@@ -270,6 +273,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         if (keepPending) pendingStudiumActivation = roomId;
         if (studiumNotificationHandler !== null) callbacks.get(studiumNotificationHandler)?.({ event: 'studium://notification-clicked', id: ++eventId, payload: roomId });
       },
+      emitReminder: (day: string) => {
+        if (reminderHandler !== null) callbacks.get(reminderHandler)?.({ event: 'calendar://reminder-clicked', id: ++eventId, payload: day });
+      },
       completeSync: () => { sync = { ...sync, running: false, message: '가져오기를 마쳤습니다.', active: [] }; },
       syncMode: (mode: string, page = 1) => { sync = { ...sync, running: true, mode, active: [board(mode, page)] }; },
       syncBoards: (ids: string[]) => { sync = { ...sync, running: true, mode: 'refresh', active: ids.map((id) => board('historical', 1, id)) }; } };
@@ -285,6 +291,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         if (event === 'updater://available') availableHandler = null;
         if (event === 'proactive://notification-clicked') notificationHandler = null;
         if (event === 'studium://notification-clicked') studiumNotificationHandler = null;
+        if (event === 'calendar://reminder-clicked') reminderHandler = null;
         if (event === 'studium://state-changed') stateListeners.delete(id);
         if (event === 'rhythm://theme-changed') themeListeners.delete(id);
         if (event === 'rhythm://clock-format-changed') clockListeners.delete(id);
@@ -303,6 +310,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (args.event === 'updater://available') availableHandler = args.handler;
             if (args.event === 'proactive://notification-clicked') notificationHandler = args.handler;
             if (args.event === 'studium://notification-clicked') studiumNotificationHandler = args.handler;
+            if (args.event === 'calendar://reminder-clicked') reminderHandler = args.handler;
             if (args.event === 'studium://state-changed') stateListeners.set(eventId + 1, args.handler);
             if (args.event === 'rhythm://theme-changed') themeListeners.set(eventId + 1, args.handler);
             if (args.event === 'rhythm://clock-format-changed') clockListeners.set(eventId + 1, args.handler);
@@ -313,6 +321,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (args.event === 'updater://available') availableHandler = null;
             if (args.event === 'proactive://notification-clicked') notificationHandler = null;
             if (args.event === 'studium://notification-clicked') studiumNotificationHandler = null;
+            if (args.event === 'calendar://reminder-clicked') reminderHandler = null;
             if (args.event === 'studium://state-changed') stateListeners.delete(args.eventId);
             if (args.event === 'rhythm://theme-changed') themeListeners.delete(args.eventId);
             if (args.event === 'rhythm://clock-format-changed') clockListeners.delete(args.eventId);
@@ -436,6 +445,11 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             const value = copy(studium);
             if (fixture.studiumSnapshotGate) await new Promise<void>((resolve) => fixture.studiumSnapshotResolvers.push(resolve));
             return value;
+          }
+          case 'calendar_reminder_activation': {
+            const day = pendingReminderDay;
+            pendingReminderDay = null;
+            return day;
           }
           case 'studium_notification_activation': {
             const roomId = pendingStudiumActivation;
@@ -747,14 +761,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'notice_dates': return noticeDates.filter((date) => date.document_id === args.documentId).map(noticeDate);
           case 'calendar_create_todo': {
             if (!args.todo.title.trim()) throw '할 일 제목은 1자에서 200자 사이로 입력해 주세요.';
-            const todo = { id: ++calendarId, title: args.todo.title.trim(), day: args.todo.day, time: args.todo.time || null, memo: args.todo.memo.trim(), done: false, document_id: args.todo.document_id ?? null };
+            const todo = { id: ++calendarId, title: args.todo.title.trim(), day: args.todo.day, time: args.todo.time || null, memo: args.todo.memo.trim(), done: false, document_id: args.todo.document_id ?? null, reminder_minutes: args.todo.reminder_minutes ?? null };
             calendarTodos.push(todo);
             return copy(todo);
           }
           case 'calendar_update_todo': {
             const todo = calendarTodos.find((item) => item.id === args.id);
             if (!todo) throw '할 일을 찾을 수 없습니다. 이미 삭제되었을 수 있습니다.';
-            Object.assign(todo, { title: args.todo.title.trim(), day: args.todo.day, time: args.todo.time || null, memo: args.todo.memo.trim() });
+            Object.assign(todo, { title: args.todo.title.trim(), day: args.todo.day, time: args.todo.time || null, memo: args.todo.memo.trim(), reminder_minutes: args.todo.reminder_minutes ?? null });
             return copy(todo);
           }
           case 'calendar_set_todo_done': {

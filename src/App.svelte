@@ -53,6 +53,7 @@
   let proactiveActivation = $state<ProactiveActivation | null>(null);
   let studiumActivation = $state(0);
   let pendingStudiumRoom: string | null = null;
+  let pendingReminderDay: string | null = null;
   let studiumEventGeneration = 0;
   const handledActivations = new Set<string>();
   // The first-run setup flow replaces the shell until it is finished or skipped.
@@ -141,6 +142,7 @@
     let mounted = true;
     let unlistenNotification: (() => void) | undefined;
     let unlistenStudiumNotification: (() => void) | undefined;
+    let unlistenReminder: (() => void) | undefined;
     let unlistenUpdate: (() => void) | undefined;
     systemDark = media.matches;
     const update = () => { systemDark = media.matches; };
@@ -181,6 +183,13 @@
           if (mounted && generation === studiumEventGeneration && roomId) handleStudiumActivation(roomId);
         });
       }).catch(() => { /* Optional click recovery must not block the shell. */ });
+      void listen<string>('calendar://reminder-clicked', (event) => handleReminderActivation(event.payload)).then((unlisten) => {
+        if (!mounted) { unlisten(); return null; }
+        unlistenReminder = unlisten;
+        return invoke<string | null>('calendar_reminder_activation').then((day) => {
+          if (mounted && day) handleReminderActivation(day);
+        });
+      }).catch(() => { /* Optional click recovery must not block the shell. */ });
     } else loading = false;
     const healthTimer = window.setInterval(() => {
       dayKey = localDayKey(new Date());
@@ -190,6 +199,7 @@
       mounted = false;
       unlistenNotification?.();
       unlistenStudiumNotification?.();
+      unlistenReminder?.();
       unlistenUpdate?.();
       media.removeEventListener('change', update);
       window.clearInterval(healthTimer);
@@ -236,6 +246,14 @@
     return typeof roomId === 'string' && ['19', '5', '6', '11', '15', '16', '18'].includes(roomId);
   }
 
+  // A clicked todo reminder opens the calendar on the todo's day.
+  function handleReminderActivation(day: string) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return;
+    if (!snapshot || showSetup) { pendingReminderDay = day; return; }
+    pendingReminderDay = null;
+    if (enabled.has('calendar')) void openCalendar(day);
+  }
+
   function handleStudiumActivation(roomId: string) {
     if (!isStudiumRoom(roomId)) return;
     if (!snapshot || showSetup) { pendingStudiumRoom = roomId; return; }
@@ -263,6 +281,7 @@
       try { restoreOutcome = await invoke<RestoreOutcome | null>('backup_restore_outcome'); }
       catch { /* A missing report must not block the restored archive. */ }
       if (pendingStudiumRoom) handleStudiumActivation(pendingStudiumRoom);
+      if (pendingReminderDay) handleReminderActivation(pendingReminderDay);
     } catch (reason) {
       error = message(reason);
     } finally {
@@ -302,6 +321,7 @@
       showSetup = false;
       await navigate('today');
       if (pendingStudiumRoom) handleStudiumActivation(pendingStudiumRoom);
+      if (pendingReminderDay) handleReminderActivation(pendingReminderDay);
     } catch (reason) { error = message(reason); }
   }
 

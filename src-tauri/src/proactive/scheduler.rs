@@ -37,6 +37,8 @@ pub struct Scheduler {
     operation_gate: Arc<AdmissionGate>,
     control: Mutex<Control>,
     pending_activation: Arc<Mutex<Option<notification::NotificationActivation>>>,
+    /// The day of a clicked todo reminder, for a window that subscribes later.
+    pending_reminder: Arc<Mutex<Option<String>>>,
     accepting_callbacks: Arc<AtomicBool>,
     callback_gate: Arc<Mutex<()>>,
 }
@@ -73,16 +75,18 @@ impl ResponseTasks {
     }
 }
 
-struct NotificationState {
+pub(super) struct NotificationState {
     #[cfg(target_os = "macos")]
     pending_activation: Arc<Mutex<Option<notification::NotificationActivation>>>,
     #[cfg(target_os = "macos")]
-    accepting_callbacks: Arc<AtomicBool>,
+    pub(super) pending_reminder: Arc<Mutex<Option<String>>>,
     #[cfg(target_os = "macos")]
-    callback_gate: Arc<Mutex<()>>,
-    response_tasks: ResponseTasks,
+    pub(super) accepting_callbacks: Arc<AtomicBool>,
     #[cfg(target_os = "macos")]
-    operation_gate: Arc<AdmissionGate>,
+    pub(super) callback_gate: Arc<Mutex<()>>,
+    pub(super) response_tasks: ResponseTasks,
+    #[cfg(target_os = "macos")]
+    pub(super) operation_gate: Arc<AdmissionGate>,
 }
 
 impl Scheduler {
@@ -111,6 +115,7 @@ impl Scheduler {
                 task_done: None,
             }),
             pending_activation,
+            pending_reminder: Arc::new(Mutex::new(None)),
             accepting_callbacks,
             callback_gate,
         }
@@ -139,6 +144,8 @@ impl Scheduler {
         let mut notification_state = NotificationState {
             #[cfg(target_os = "macos")]
             pending_activation: self.pending_activation.clone(),
+            #[cfg(target_os = "macos")]
+            pending_reminder: self.pending_reminder.clone(),
             #[cfg(target_os = "macos")]
             accepting_callbacks: self.accepting_callbacks.clone(),
             #[cfg(target_os = "macos")]
@@ -231,6 +238,30 @@ impl Scheduler {
             .lock()
             .map(|mut activation| activation.take())
             .map_err(|_| "알림 이동 정보를 확인할 수 없습니다.".into())
+    }
+
+    pub fn take_reminder_activation(&self) -> Result<Option<String>, String> {
+        self.pending_reminder
+            .lock()
+            .map(|mut day| day.take())
+            .map_err(|_| "할 일 알림 이동 정보를 확인할 수 없습니다.".into())
+    }
+
+    /// A clicked Windows reminder toast, from startup or second-instance argv.
+    #[cfg(windows)]
+    pub async fn handle_windows_reminder(&self, uri: &str) -> Result<bool, String> {
+        let Some(token) = super::reminders::token_from_uri(uri) else {
+            return Ok(false);
+        };
+        let _lease = self.operation_gate.shared().await?;
+        let _callback_guard = self
+            .callback_gate
+            .lock()
+            .map_err(|_| "알림 처리 상태를 확인할 수 없습니다.")?;
+        if !self.accepting_callbacks.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        super::reminders::activate(&self.store, &self.app, &self.pending_reminder, token)
     }
 
     /// Consume a Windows protocol activation after the store is initialized.
@@ -586,6 +617,7 @@ async fn cycle(
         let (current, _) = settings(store)?;
         if should_discover_notifications(&current) {
             discover_and_deliver(store, &current, app, notifications, stop).await?;
+            super::reminders::deliver(store, app, notifications, stop).await?;
         }
     }
     Ok(())
@@ -615,6 +647,12 @@ where
                     Ok((prefs, _)) if should_discover_notifications(&prefs) => {
                         if let Err(error) =
                             discover_and_deliver(store, &prefs, app, notifications, stop).await
+                        {
+                            notification_error.get_or_insert(error);
+                        }
+                        // A long sync must not hold a reminder past its moment.
+                        if let Err(error) =
+                            super::reminders::deliver(store, app, notifications, stop).await
                         {
                             notification_error.get_or_insert(error);
                         }

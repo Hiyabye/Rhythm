@@ -328,7 +328,7 @@ mod tests {
     use super::*;
     use crate::storage::{
         UNDO_ALERTS, UNDO_AUTO_TRASH, UNDO_CLOCK, UNDO_DATES, UNDO_FAVORITES, UNDO_INTERVAL,
-        UNDO_MINI_GEOMETRY, UNDO_STUDIUM, UNDO_TODO_DOCUMENT, UNDO_TRASH,
+        UNDO_MINI_GEOMETRY, UNDO_REMINDERS, UNDO_STUDIUM, UNDO_TODO_DOCUMENT, UNDO_TRASH,
     };
     use rusqlite::Connection;
 
@@ -345,7 +345,7 @@ mod tests {
         store
             .connection
             .execute_batch(
-                &format!("{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
+                &format!("{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
              DELETE FROM extension_preferences WHERE extension_id='studium';
              PRAGMA user_version=22;"),
             )
@@ -506,7 +506,7 @@ mod tests {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY} PRAGMA user_version=29;"
+                "{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY} PRAGMA user_version=29;"
             ))
             .unwrap();
         drop(store);
@@ -531,7 +531,7 @@ mod tests {
         let path = directory.path().join("db");
         let store = opened(&path);
         store.connection.execute_batch(
-            &format!("{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY} CREATE TABLE studium_mini_geometry(sentinel TEXT);
+            &format!("{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY} CREATE TABLE studium_mini_geometry(sentinel TEXT);
              INSERT INTO studium_mini_geometry VALUES('keep'); PRAGMA user_version=29;"),
         ).unwrap();
         drop(store);
@@ -706,7 +706,7 @@ mod tests {
         store.studium_save_auto_interval(18).unwrap();
         store
             .connection
-            .execute_batch(&format!("{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES} PRAGMA user_version=27;"))
+            .execute_batch(&format!("{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES} PRAGMA user_version=27;"))
             .unwrap();
         drop(store);
         let upgraded = Store::open(&path).unwrap();
@@ -734,7 +734,7 @@ mod tests {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}
+                "{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}
              CREATE TABLE studium_favorite_seats(sentinel TEXT);
              INSERT INTO studium_favorite_seats VALUES('keep');
              PRAGMA user_version=27;"
@@ -841,7 +841,7 @@ mod tests {
             .connection
             .execute_batch(
                 &format!("UPDATE settings SET theme='dark',clock_format='24h',auto_trash_months=3;
-                 {UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_INTERVAL}
+                 {UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_INTERVAL}
                  PRAGMA user_version=26;"),
             )
             .unwrap();
@@ -867,7 +867,7 @@ mod tests {
         store.studium_save_auto_interval(17).unwrap();
         store
             .connection
-            .execute_batch(&format!("{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES} PRAGMA user_version=26;"))
+            .execute_batch(&format!("{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES} PRAGMA user_version=26;"))
             .unwrap();
         drop(store);
         // An unexpected pre-existing column makes 027 fail instead of silently

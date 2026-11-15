@@ -51,6 +51,7 @@
     "allow-calendar-create-todo",
     "allow-calendar-delete-todo",
     "allow-calendar-export",
+    "allow-calendar-reminder-activation",
     "allow-calendar-notice-dates",
     "allow-calendar-set-all-deadlines",
     "allow-calendar-set-todo-done",

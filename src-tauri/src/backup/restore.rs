@@ -673,7 +673,11 @@ pub(super) fn clear_restored_activation_tokens(stage: &Path) -> Result<(), Strin
     let database = stage.join("rhythm.sqlite3");
     let connection = rusqlite::Connection::open(&database)
         .map_err(|_| "복원 데이터베이스를 열지 못했습니다.")?;
-    for table in ["notification_activation_tokens", "studium_alert_tokens"] {
+    for table in [
+        "notification_activation_tokens",
+        "studium_alert_tokens",
+        "calendar_reminder_tokens",
+    ] {
         let exists: bool = connection
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",

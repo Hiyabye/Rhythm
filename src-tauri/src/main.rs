@@ -234,6 +234,8 @@ fn spawn_notification_activation(app: &tauri::AppHandle, uri: String) {
                     .studium_notifications
                     .handle_windows_activation(&uri)
                     .await
+            } else if uri.starts_with(proactive::REMINDER_PREFIX) {
+                state.proactive.handle_windows_reminder(&uri).await
             } else {
                 state.proactive.handle_windows_activation(&uri).await
             };
@@ -251,9 +253,11 @@ fn dispatch_notification_arguments(app: &tauri::AppHandle, arguments: &[String])
     if let Some(uri) = arguments.iter().find(|value| {
         value.starts_with("rhythm-win://notification/")
             || value.starts_with(studium::notification::TOKEN_PREFIX)
+            || value.starts_with(proactive::REMINDER_PREFIX)
     }) {
         if proactive::windows_notification::token_from_uri(uri).is_none()
             && studium::notification::token_from_uri(uri).is_none()
+            && proactive::reminder_token_from_uri(uri).is_none()
         {
             eprintln!("올바르지 않은 알림 연결을 거부했습니다.");
             return true;
@@ -591,6 +595,7 @@ fn main() {
             commands::calendar_set_todo_done,
             commands::calendar_delete_todo,
             calendar_export::calendar_export,
+            proactive::calendar_reminder_activation,
             intelligence::commands::ai_snapshot,
             intelligence::commands::ai_choose_model_directory,
             intelligence::commands::ai_reset_model_directory,
