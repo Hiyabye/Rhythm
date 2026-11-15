@@ -411,6 +411,11 @@ export interface CalendarTodo {
   done: boolean;
   document_id: number | null;
 }
+// calendar_export: what the exported `.ics` file holds.
+export interface CalendarExport {
+  todos: number;
+  deadlines: number;
+}
 export interface TodoInput {
   title: string;
   day: string;

@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { CalendarNoticeDates, CalendarTodo, CybercampusTask, NoticeDate, TodoInput, TodoPrefill } from './types';
+  import { save } from '@tauri-apps/plugin-dialog';
+  import type { CalendarExport, CalendarNoticeDates, CalendarTodo, CybercampusTask, NoticeDate, TodoInput, TodoPrefill } from './types';
   import { archiveError, localDayKey, noticeDateMark, noticeDateMeta, noticeDateOn, noticeDateTodo, taskTodo, wallTime } from './archive-format';
   import { confirmAction } from './confirm';
   import { clock } from './clock.svelte';
@@ -125,6 +126,35 @@
       await invoke('calendar_set_all_deadlines', { enabled });
       feedback = enabled ? '모든 공지의 마감을 표시합니다.' : '저장한 공지의 날짜만 표시합니다.';
       await load();
+    } catch (reason) {
+      error = archiveError(reason);
+    } finally {
+      busy = false;
+    }
+  }
+
+  // Every todo not done and the open eClass deadlines, whatever the shown month; the backend applies both rules.
+  async function exportCalendar() {
+    if (busy) return;
+    error = '';
+    feedback = '';
+    let destination: string | null;
+    try {
+      destination = await save({
+        title: '캘린더 파일 내보내기',
+        defaultPath: 'Rhythm-calendar.ics',
+        filters: [{ name: 'iCalendar', extensions: ['ics'] }],
+      });
+    } catch (reason) {
+      error = `${archiveError(reason)} 저장 대화상자를 열지 못했습니다.`;
+      return;
+    }
+    if (!destination) return;
+    busy = true;
+    try {
+      const result = await invoke<CalendarExport>('calendar_export', { destination });
+      const parts = [result.todos && `할 일 ${result.todos}개`, result.deadlines && `마감 ${result.deadlines}개`].filter(Boolean);
+      feedback = `${parts.join('와 ')}를 내보냈습니다. 내보낸 파일은 Rhythm이 관리하지 않으니, 바뀐 일정은 다시 내보내 주세요.`;
     } catch (reason) {
       error = archiveError(reason);
     } finally {
@@ -281,6 +311,7 @@
         <button class="icon-button" aria-label="이전 달" onclick={() => shiftMonth(-1)}><span class="flip"><Icon name="arrow" size={15} /></span></button>
         <button class="button secondary small" aria-label="오늘로 이동" onclick={() => void select(today, true)}>오늘</button>
         <button class="icon-button" aria-label="다음 달" onclick={() => shiftMonth(1)}><Icon name="arrow" size={15} /></button>
+        {#if desktop}<button class="button secondary small" disabled={busy} title="완료하지 않은 할 일과 남은 eClass 마감을 .ics 파일로 저장합니다." onclick={() => void exportCalendar()}>내보내기</button>{/if}
       </div>
     </div>
     <div class="calendar-options">

@@ -155,6 +155,28 @@ test('the week pane shows a multi-day notice date that started before today', as
   await expect(week.locator('.week-day').nth(2).locator('.event-notice')).toHaveCount(0);
 });
 
+test('export saves todos and open deadlines to a chosen .ics file', async ({ page }) => {
+  await mockDesktop(page, { sourceList: [board], cybercampusId: '20990001', cybercampusTasks: [deadline],
+    calendarTodos: [todo({}), todo({ id: 2, title: '끝낸 일', done: true })] });
+  await page.goto('/');
+  await openCalendar(page);
+  await page.getByRole('button', { name: '내보내기' }).click();
+  const panel = page.getByRole('region', { name: /10월 24일 토요일/ });
+  await expect(panel.getByRole('status')).toHaveText('할 일 1개와 마감 1개를 내보냈습니다. 내보낸 파일은 Rhythm이 관리하지 않으니, 바뀐 일정은 다시 내보내 주세요.');
+  const calls = await page.evaluate(() => (window as any).__fixture.calls
+    .filter((call: any) => call.command === 'plugin:dialog|save' || call.command === 'calendar_export').map((call: any) => call.args));
+  expect(calls[0].options).toMatchObject({ defaultPath: 'Rhythm-calendar.ics', filters: [{ name: 'iCalendar', extensions: ['ics'] }] });
+  expect(calls[1]).toEqual({ destination: '/fixtures/Rhythm-backup.rhythm-backup' });
+});
+
+test('export with nothing to save reports it', async ({ page }) => {
+  await mockDesktop(page);
+  await page.goto('/');
+  await openCalendar(page);
+  await page.getByRole('button', { name: '내보내기' }).click();
+  await expect(page.getByRole('alert')).toHaveText('내보낼 할 일이나 마감이 없습니다.');
+});
+
 test('the calendar leaves out deadlines whose extension is off', async ({ page }) => {
   await mockDesktop(page, { sourceList: [board], cybercampusId: '20990001', cybercampusTasks: [deadline],
     extensions: { cybercampus: false } });

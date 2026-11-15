@@ -146,6 +146,22 @@ impl Store {
             .map_err(|e| e.to_string());
         rows
     }
+    /// Every todo not done yet, whatever its day, for the ICS export.
+    pub fn calendar_open_todos(&self) -> Result<Vec<CalendarTodo>, String> {
+        let mut statement = self
+            .connection
+            .prepare(&format!(
+                "SELECT {COLUMNS} FROM calendar_todos WHERE NOT done
+                 ORDER BY day, time IS NOT NULL, time, id"
+            ))
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map([], todo)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string());
+        rows
+    }
     fn calendar_todo(&self, id: i64) -> Result<CalendarTodo, String> {
         self.connection
             .query_row(
@@ -295,6 +311,23 @@ mod tests {
         );
         let december = store.calendar_todos("2026-12-01", "2026-12-01").unwrap();
         assert_eq!(december[0].time, None, "an empty time is stored as untimed");
+    }
+
+    #[test]
+    fn open_todos_cover_every_day_and_leave_out_done_ones() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = open(&directory.path().join("rhythm.db"));
+        let later = store
+            .calendar_create_todo(&input("내년", "2027-03-02", None))
+            .unwrap();
+        let done = store
+            .calendar_create_todo(&input("끝남", "2026-11-10", None))
+            .unwrap();
+        store.calendar_set_todo_done(done.id, true).unwrap();
+        let past = store
+            .calendar_create_todo(&input("지난 일", "2025-01-05", Some("08:00")))
+            .unwrap();
+        assert_eq!(store.calendar_open_todos().unwrap(), [past, later]);
     }
 
     #[test]

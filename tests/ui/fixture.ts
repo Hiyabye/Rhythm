@@ -763,6 +763,13 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             return copy(todo);
           }
           case 'calendar_delete_todo': calendarTodos = calendarTodos.filter((item) => item.id !== args.id); return null;
+          // Mirrors calendar_export: todos not done and unsubmitted deadlines (the time rule stays in Rust tests).
+          case 'calendar_export': {
+            const todos = calendarTodos.filter((todo) => !todo.done).length;
+            const deadlines = (options.cybercampusTasks ?? []).filter((task) => task.due_at !== null && !task.submitted_at).length;
+            if (!todos && !deadlines) throw '내보낼 할 일이나 마감이 없습니다.';
+            return { todos, deadlines };
+          }
           default: throw `테스트에서 예상하지 않은 명령: ${command}`;
         }
       },

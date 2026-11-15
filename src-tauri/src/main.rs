@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod archive;
 mod backup;
+mod calendar_export;
 mod commands;
 pub(crate) use commands::storage_error;
 mod core;
@@ -589,6 +590,7 @@ fn main() {
             commands::calendar_update_todo,
             commands::calendar_set_todo_done,
             commands::calendar_delete_todo,
+            calendar_export::calendar_export,
             intelligence::commands::ai_snapshot,
             intelligence::commands::ai_choose_model_directory,
             intelligence::commands::ai_reset_model_directory,
