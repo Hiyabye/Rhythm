@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { win32 } from 'node:path';
 import { desktop } from '../scripts/desktop-windows.mjs';
 
@@ -149,4 +149,28 @@ test('a half-configured updater key fails before staging', () => {
     } }), /needs both/);
     assert.deepEqual(commands, ['rustc']);
   }
+});
+
+// Tauri applies tauri.windows.conf.json as an RFC 7396 merge patch (objects
+// merge key by key), so Windows inherits the base bundle resources.
+function mergePatch(target, patch) {
+  if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) return patch;
+  const result = target !== null && typeof target === 'object' && !Array.isArray(target) ? { ...target } : {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete result[key];
+    else result[key] = mergePatch(result[key], value);
+  }
+  return result;
+}
+
+test('both bundles ship every license notice; NSIS and VC runtime notices are Windows-only', () => {
+  const config = (name) => JSON.parse(readFileSync(new URL(`../src-tauri/${name}`, import.meta.url), 'utf8'));
+  const base = config('tauri.conf.json');
+  const windows = mergePatch(base, config('tauri.windows.conf.json'));
+  const licenses = readdirSync(new URL('../assets/licenses/', import.meta.url)).map((file) => `../assets/licenses/${file}`);
+  const windowsOnly = ['../assets/licenses/Tauri-template-MIT.txt', '../assets/licenses/Microsoft-VC-Runtime-NOTICE.txt'];
+  const bundled = (resources) => Object.keys(resources).filter((path) => path === '../LICENSE' || path.startsWith('../assets/licenses/')).sort();
+  assert.deepEqual(bundled(base.bundle.resources), ['../LICENSE', ...licenses.filter((path) => !windowsOnly.includes(path))].sort());
+  assert.deepEqual(bundled(windows.bundle.resources), ['../LICENSE', ...licenses].sort());
+  assert.equal(windows.bundle.resources['binaries/llama/'], 'llama/');
 });
