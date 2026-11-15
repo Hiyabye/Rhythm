@@ -104,7 +104,8 @@ export interface FixtureOptions {
   cybercampusTasks?: CybercampusTask[];
   calendarTodos?: CalendarTodo[];
   // Dates found in notice text; `saved: false` ones appear on the calendar only as deadlines with every notice's deadlines on.
-  noticeDates?: (NoticeDate & { saved?: boolean })[];
+  // A single-day date may leave out end_day/end_time.
+  noticeDates?: (Omit<NoticeDate, 'end_day' | 'end_time'> & Partial<NoticeDate> & { saved?: boolean })[];
   calendarAllDeadlines?: boolean;
   // Nested board groups; sources name theirs through `group`.
   sourceGroups?: { id: string; name: string; parent: string | null; enabled?: boolean }[];
@@ -287,7 +288,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     let calendarTodos = copy(options.calendarTodos ?? []);
     const noticeDates = copy(options.noticeDates ?? []);
     let calendarAllDeadlines = options.calendarAllDeadlines ?? false;
-    const noticeDate = ({ saved: _, ...date }: NoticeDate & { saved?: boolean }): NoticeDate => date;
+    const noticeDate = ({ saved: _, ...date }: NonNullable<FixtureOptions['noticeDates']>[number]): NoticeDate => ({ end_day: null, end_time: null, ...date });
     let calendarId = Math.max(0, ...calendarTodos.map((todo) => todo.id));
     const cybercampus = { id: options.cybercampusId ?? null, rejected: false, courses: options.cybercampusId ? [{ course_key: 'A1', name: '자료구조실습', year: 2026, term: '3' }] : [] };
     Object.assign(window, { isTauri: true, __fixture: fixture, __TAURI_EVENT_PLUGIN_INTERNALS__: {
@@ -753,7 +754,8 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             .sort((a, b) => a.day.localeCompare(b.day) || Number(a.time !== null) - Number(b.time !== null) || (a.time ?? '').localeCompare(b.time ?? '') || a.id - b.id));
           // Mirrors storage/notice_dates: saved notices' dates, plus every deadline when chosen.
           case 'calendar_notice_dates': return { all_deadlines: calendarAllDeadlines, dates: noticeDates
-            .filter((date) => date.day >= args.from && date.day <= args.to && (date.saved !== false || (calendarAllDeadlines && date.kind === 'deadline')))
+            // A multi-day date overlapping the range is included.
+            .filter((date) => date.day <= args.to && (date.end_day ?? date.day) >= args.from && (date.saved !== false || (calendarAllDeadlines && date.kind === 'deadline')))
             .sort((a, b) => a.day.localeCompare(b.day) || a.document_id - b.document_id || a.ordinal - b.ordinal).map(noticeDate) };
           case 'calendar_set_all_deadlines': calendarAllDeadlines = args.enabled; return null;
           case 'notice_dates': return noticeDates.filter((date) => date.document_id === args.documentId).map(noticeDate);

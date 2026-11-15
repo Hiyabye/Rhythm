@@ -2311,6 +2311,50 @@ fn notice_dates_follow_content_saved_state_toggle_and_trash() {
 }
 
 #[test]
+fn multi_day_notice_dates_overlap_the_range() {
+    let (_directory, store) = database();
+    let (id, _) = store
+        .upsert_article(
+            "one",
+            &article(
+                "1",
+                "학술대회 안내",
+                "행사 일시: 11/15(일)~11/16(월)\n참가 신청: 11/1~11/10",
+                "2026-10-20",
+            ),
+            false,
+        )
+        .unwrap();
+    store.set_document_state(id, None, Some(true)).unwrap();
+    let spans = |from: &str, to: &str| -> Vec<(String, Option<String>, String)> {
+        store
+            .calendar_notice_dates(from, to)
+            .unwrap()
+            .dates
+            .into_iter()
+            .map(|d| (d.day, d.end_day, d.kind))
+            .collect()
+    };
+    let event = (
+        "2026-11-15".to_string(),
+        Some("2026-11-16".to_string()),
+        "date".to_string(),
+    );
+    // An event range is one row; an application range stays start + deadline.
+    assert_eq!(
+        spans("2026-11-01", "2026-11-30"),
+        [
+            ("2026-11-01".into(), None, "start".into()),
+            ("2026-11-10".into(), None, "deadline".into()),
+            event.clone(),
+        ]
+    );
+    // A range starting before the requested days still shows on them.
+    assert_eq!(spans("2026-11-16", "2026-11-20"), [event]);
+    assert!(spans("2026-11-17", "2026-11-20").is_empty());
+}
+
+#[test]
 fn filled_pdf_body_gets_its_dates() {
     let (_directory, store) = database();
     store

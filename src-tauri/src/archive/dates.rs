@@ -3,7 +3,8 @@
 //! Every date is a literal match in the notice text. A missing year comes from the
 //! publication date; a written weekday only marks a bare `9.15`/`9/15` as a date.
 //! Classification is lexical: it decides deadline vs. other date from nearby
-//! Korean keywords, not from meaning.
+//! Korean keywords, not from meaning. A range that ends in a deadline is a start
+//! and a deadline; any other range is one multi-day date.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -19,6 +20,9 @@ pub enum Kind {
 pub struct Found {
     pub day: String,
     pub time: Option<String>,
+    /// The last day of a multi-day [`Kind::Date`], after `day`.
+    pub end_day: Option<String>,
+    pub end_time: Option<String>,
     pub label: String,
     pub kind: Kind,
 }
@@ -35,8 +39,8 @@ const SUPERSEDED: [&str; 6] = [
     "정정 전",
 ];
 const DUE: [&str; 2] = ["마감", "기한"];
-const ACTION: [&str; 9] = [
-    "신청", "접수", "모집", "제출", "지원", "등록", "납부", "응시", "취소",
+const ACTION: [&str; 10] = [
+    "신청", "접수", "모집", "제출", "지원", "등록", "납부", "응시", "취소", "정정",
 ];
 /// Periods and events: their `까지` ends an activity, not a submission.
 const PERIOD: [&str; 15] = [
@@ -57,20 +61,27 @@ const PERIOD: [&str; 15] = [
     "운영",
 ];
 /// Clause starts inside one-line bodies: bullets and markers notices use.
-const BULLETS: [char; 15] = [
-    '■', '□', '▶', '▷', '►', '○', '●', '◼', '◆', '◇', '※', '•', '📍', '🗓', '✅',
+const BULLETS: [char; 27] = [
+    '■', '□', '▶', '▷', '►', '○', '●', '◼', '◆', '◇', '※', '•', '📍', '🗓', '✅', '▪', '⦁', '◦',
+    '❍', '°', '👉', '☞', '📌', '📢', '📅', '📆', '📝',
 ];
+/// A multi-day date spans at most a year; a longer one is two separate dates.
+pub(crate) const MAX_SPAN_DAYS: i64 = 366;
+/// A dated line this close to the end of the text is a sign-off (`2026. 9. 11. 관리처장`).
+const SIGNATURE_TAIL: usize = 20;
 const RANGE: [&str; 6] = ["부터", "~", "∼", "〜", "–", "-"];
 const WEEKDAYS: [char; 7] = ['일', '월', '화', '수', '목', '금', '토'];
 
 pub fn extract(text: &str, published: &str) -> Vec<Found> {
     let published = published.get(..10).and_then(parse_iso);
     let mut found: Vec<Found> = Vec::new();
-    for clause in clauses(text) {
+    for (offset, clause) in clauses(text) {
         if SUPERSEDED.iter().any(|word| clause.contains(word)) {
             continue;
         }
         let first = found.len();
+        // Where the clause's first and last found dates start.
+        let (mut first_at, mut last_at) = (None, 0);
         let mut segment_start = 0;
         let mut index = 0;
         while index < clause.len() {
@@ -78,6 +89,7 @@ pub fn extract(text: &str, published: &str) -> Vec<Found> {
                 index += clause[index..].chars().next().map_or(1, char::len_utf8);
                 continue;
             };
+            let at = index;
             let before = &clause[segment_start..index];
             segment_start = expression.end;
             index = expression.end;
@@ -91,7 +103,16 @@ pub fn extract(text: &str, published: &str) -> Vec<Found> {
                 .take(12)
                 .take_while(|c| !matches!(c, '→' | '(' | ')' | ',' | '|') && !BULLETS.contains(c))
                 .collect();
-            let context = format!("{before}{after}");
+            let label = label(before);
+            // `교육기간` after an earlier `지원방법` is still a period: a label
+            // naming a period or an action outweighs the wider context.
+            let labelled = label.contains("기간")
+                || DUE.iter().chain(&ACTION).any(|word| label.contains(word));
+            let context = if labelled {
+                label.clone()
+            } else {
+                format!("{before}{after}")
+            };
             let action = ACTION.iter().any(|word| context.contains(word));
             let period = PERIOD.iter().any(|word| context.contains(word));
             let due_after = after.trim_start().starts_with("마감")
@@ -109,10 +130,15 @@ pub fn extract(text: &str, published: &str) -> Vec<Found> {
                         .trim_end()
                         .ends_with(|c: char| c.is_ascii_digit() || c == ')')
                 });
-            let label = label(before);
+            // `26.03.09 기준` dates a table, not an event.
+            if after.trim_start().starts_with("기준") {
+                continue;
+            }
             let Some(start) = resolve(&expression.start, None, published) else {
                 continue;
             };
+            first_at.get_or_insert(at);
+            last_at = at;
             // Nothing published after a date can still be due on it.
             let due_on = |date: (u32, u32, u32), deadline: bool| {
                 if deadline && published.is_none_or(|p| date >= p) {
@@ -123,30 +149,55 @@ pub fn extract(text: &str, published: &str) -> Vec<Found> {
             };
             let mut push = |date: (u32, u32, u32), time: &Option<String>, kind: Kind| {
                 found.push(Found {
-                    day: format!("{:04}-{:02}-{:02}", date.0, date.1, date.2),
+                    day: iso(date),
                     time: time.clone(),
+                    end_day: None,
+                    end_time: None,
                     label: label.clone(),
                     kind,
                 })
             };
             match &expression.end_date {
                 Some(end) => {
-                    push(start, &expression.start.time, Kind::Start);
                     let Some(end_date) = resolve(end, Some(start), published) else {
+                        push(start, &expression.start.time, Kind::Start);
                         continue;
                     };
                     let deadline = due || action || expression.until && !period;
-                    push(end_date, &end.time, due_on(end_date, deadline));
+                    let kind = due_on(end_date, deadline);
+                    let span = day_number(end_date) - day_number(start);
+                    if kind == Kind::Date && (1..=MAX_SPAN_DAYS).contains(&span) {
+                        push(start, &expression.start.time, Kind::Date);
+                        let item = found.last_mut().unwrap();
+                        item.end_day = Some(iso(end_date));
+                        item.end_time = end.time.clone();
+                    } else if kind == Kind::Date && span == 0 {
+                        push(start, &expression.start.time, Kind::Date);
+                    } else {
+                        push(start, &expression.start.time, Kind::Start);
+                        push(end_date, &end.time, kind);
+                    }
                 }
                 None => {
                     let until = expression.until || open_end;
                     let deadline = due || until && (action || !period);
-                    push(start, &expression.start.time, due_on(start, deadline));
+                    let kind = due_on(start, deadline);
+                    let tail = text[offset + expression.end..].trim().chars().count();
+                    if kind == Kind::Date
+                        && expression.start.time.is_none()
+                        && published.is_some_and(|p| start <= p)
+                        && tail <= SIGNATURE_TAIL
+                    {
+                        continue;
+                    }
+                    push(start, &expression.start.time, kind);
                 }
             }
         }
         // `마감 11. 20. → 연장 11. 27.`: only the last date of an extension is due.
-        if clause.contains("연장") && found.len() > first + 1 {
+        // `연장 거주` before or after them in the same clause is not about these dates.
+        let extended = first_at.is_some_and(|at| clause[at..last_at].contains("연장"));
+        if extended && found.len() > first + 1 {
             let last = found.len() - 1;
             if found[last].kind == Kind::Deadline
                 || found[first..last].iter().any(|f| f.kind == Kind::Deadline)
@@ -161,7 +212,12 @@ pub fn extract(text: &str, published: &str) -> Vec<Found> {
     deduplicate(found)
 }
 
-/// One entry per (day, kind); a day that is a deadline anywhere is only a deadline.
+fn iso(date: (u32, u32, u32)) -> String {
+    format!("{:04}-{:02}-{:02}", date.0, date.1, date.2)
+}
+
+/// One entry per (day, end, kind); a day that is a deadline anywhere is only a
+/// deadline, though a multi-day date starting on it stays.
 fn deduplicate(found: Vec<Found>) -> Vec<Found> {
     let deadlines: Vec<String> = found
         .iter()
@@ -170,13 +226,12 @@ fn deduplicate(found: Vec<Found>) -> Vec<Found> {
         .collect();
     let mut unique: Vec<Found> = Vec::new();
     for item in found {
-        if item.kind != Kind::Deadline && deadlines.contains(&item.day) {
+        if item.kind != Kind::Deadline && item.end_day.is_none() && deadlines.contains(&item.day) {
             continue;
         }
-        if !unique
-            .iter()
-            .any(|seen| seen.day == item.day && seen.kind == item.kind)
-        {
+        if !unique.iter().any(|seen| {
+            seen.day == item.day && seen.end_day == item.end_day && seen.kind == item.kind
+        }) {
             unique.push(item);
         }
     }
@@ -187,9 +242,13 @@ fn deduplicate(found: Vec<Found>) -> Vec<Found> {
 /// a sentence-final `다.`/`요.` a clause also ends before a bullet, a ` - ` item or
 /// a numbered item (`2. 공모분야`, `3) 일정`). A date such as `11. 14.` never
 /// ends in `다`/`요`, and its `11. ` is followed by a digit, so dates stay whole.
-fn clauses(text: &str) -> Vec<&str> {
+fn clauses(text: &str) -> Vec<(usize, &str)> {
     let mut result = Vec::new();
-    for line in text.lines() {
+    let mut line_start = 0;
+    for line in text.split_inclusive('\n') {
+        let offset = line_start;
+        line_start += line.len();
+        let line = line.trim_end_matches(['\n', '\r']);
         let chars: Vec<(usize, char)> = line.char_indices().collect();
         let next = |position: usize| chars.get(position).map(|&(_, c)| c);
         let mut cuts = vec![0];
@@ -227,7 +286,10 @@ fn clauses(text: &str) -> Vec<&str> {
             }
         }
         cuts.push(line.len());
-        result.extend(cuts.windows(2).map(|pair| &line[pair[0]..pair[1]]));
+        result.extend(
+            cuts.windows(2)
+                .map(|pair| (offset + pair[0], &line[pair[0]..pair[1]])),
+        );
     }
     result
 }
@@ -243,24 +305,99 @@ fn after_date_part(chars: &[(usize, char)], position: usize) -> bool {
     previous.next() == Some('.') && previous.next().is_some_and(|c| c.is_ascii_digit())
 }
 
-/// Text just before a date, trimmed to its nearest clause, without a trailing particle.
+/// The few words just before a date that name it (`접수 기간`, `합격 발표`).
+/// Parenthesized asides, numbering, residue of the previous date (`까지`, a
+/// weekday) and words without letters are dropped; at most three words remain.
 fn label(before: &str) -> String {
-    let clause = before
-        .rsplit(['|', ',', '，', '('])
-        .next()
-        .unwrap_or(before)
-        .trim_matches(|c: char| {
-            c.is_whitespace()
-                || matches!(c, ':' | '：' | '-' | '·' | '~' | '∼' | '〜' | '→')
-                || BULLETS.contains(&c)
-        });
-    let clause = ["에는", "은", "는", "이", "가", "을", "를", "에"]
+    let text = outside_groups(before);
+    let text = text.trim_end_matches(|c: char| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                ':' | '：' | '-' | '·' | '~' | '∼' | '〜' | '→' | '|' | '★'
+            )
+            || BULLETS.contains(&c)
+    });
+    // `▶1차 : 9월 7일`: the name may also stand before the last separator.
+    let clause = text
+        .rsplit(['|', ',', '，', ':', '：', '→', '>', '·'])
+        .find(|piece| piece.chars().any(is_letter))
+        .unwrap_or("");
+    let mut words: Vec<String> = Vec::new();
+    let mut spaced = false;
+    for word in clause
+        .split(|c: char| c.is_whitespace() || BULLETS.contains(&c))
+        .map(|word| word.trim_matches(|c: char| !is_letter(c) && !c.is_ascii_digit()))
+        .filter(|word| word.chars().any(is_letter))
+    {
+        // Table headers space out syllables: `일 시` is `일시`.
+        let syllable = word.chars().count() == 1 && word.chars().all(|c| c >= '가');
+        match words.last_mut() {
+            Some(last) if syllable && spaced => last.push_str(word),
+            _ => words.push(word.to_string()),
+        }
+        spaced = syllable;
+    }
+    words.retain(|word| !is_weekday(word) && !is_item_number(word));
+    while words
+        .first()
+        .is_some_and(|word| ["까지", "부터", "에서"].iter().any(|w| word.starts_with(w)))
+    {
+        words.remove(0);
+    }
+    let mut words = &words[words.len().saturating_sub(3)..];
+    while words.len() > 1 && words.iter().map(|w| w.chars().count() + 1).sum::<usize>() > 25 {
+        words = &words[1..];
+    }
+    let joined = words.join(" ");
+    let label = ["에는", "은", "는", "이", "가", "을", "를", "에"]
         .iter()
-        .find_map(|particle| clause.strip_suffix(particle))
-        .unwrap_or(clause)
+        .find_map(|particle| {
+            joined
+                .strip_suffix(particle)
+                .filter(|rest| !rest.is_empty())
+        })
+        .unwrap_or(&joined)
         .trim_end();
-    let skip = clause.chars().count().saturating_sub(40);
-    clause.chars().skip(skip).collect()
+    if label.chars().count() < 2 {
+        return String::new();
+    }
+    let skip = label.chars().count().saturating_sub(24);
+    label.chars().skip(skip).collect()
+}
+
+/// The text without `(…)` asides; an unmatched `)` drops everything before
+/// it, since that is the tail of an aside that began earlier. Brackets stay:
+/// `[모집기간]` is a name.
+fn outside_groups(text: &str) -> String {
+    let mut result = String::new();
+    let mut depth = 0usize;
+    for c in text.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' if depth > 0 => depth -= 1,
+            ')' => result.clear(),
+            _ if depth == 0 => result.push(c),
+            _ => {}
+        }
+    }
+    result
+}
+
+fn is_letter(c: char) -> bool {
+    ('가'..='힣').contains(&c) || c.is_ascii_alphabetic()
+}
+
+/// `금요일`, `금`: a weekday left over from the previous date.
+fn is_weekday(word: &str) -> bool {
+    let name = word.strip_suffix("요일").unwrap_or(word);
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| WEEKDAYS.contains(&c)) && chars.next().is_none()
+}
+
+/// `가.`, `나)`, `Step`: list markers, not names.
+fn is_item_number(word: &str) -> bool {
+    word.eq_ignore_ascii_case("step") || word.chars().count() == 1
 }
 
 /// A date as written: the year is optional; a day-only range end takes the
@@ -282,7 +419,12 @@ struct Expression {
 }
 
 fn expression_at(text: &str, index: usize) -> Option<Expression> {
-    if index > 0 && text.as_bytes()[index - 1].is_ascii_digit() {
+    // Nothing starts inside a number or right after `5.` of an unrecognized
+    // `5.22.`, which would otherwise read `22. 5.26.` as a two-digit year.
+    let bytes = text.as_bytes();
+    if index > 0 && bytes[index - 1].is_ascii_digit()
+        || index > 1 && bytes[index - 1] == b'.' && bytes[index - 2].is_ascii_digit()
+    {
         return None;
     }
     let (start, mut cursor) = date_at(text, index, false)?;
@@ -342,11 +484,11 @@ fn date_at(text: &str, index: usize, range_end: bool) -> Option<(Written, usize)
 }
 
 fn full_date(text: &str, year: u32, after_year: usize) -> Option<(Written, usize)> {
-    let (month, day, end) = if let Some(after_word) = expect(text, after_year, "년") {
+    let (month, day, end) = if let Some(after_word) = unit(text, after_year, "년") {
         let (month, after_month) = number_at(text, skip_space(text, after_word))?;
-        let after_month = expect(text, after_month, "월")?;
+        let after_month = unit(text, after_month, "월")?;
         let (day, after_day) = number_at(text, skip_space(text, after_month))?;
-        (month, day, expect(text, after_day, "일")?)
+        (month, day, unit(text, after_day, "일")?)
     } else {
         let separator = text[after_year..]
             .chars()
@@ -391,9 +533,9 @@ fn short_date(
             end,
         ))
     };
-    if let Some(after_month) = expect(text, after_first, "월") {
+    if let Some(after_month) = unit(text, after_first, "월") {
         let (day, after_day) = number_at(text, skip_space(text, after_month))?;
-        return month_day(first, day, expect(text, after_day, "일")?);
+        return month_day(first, day, unit(text, after_day, "일")?);
     }
     // `9.15`/`9/15` alone may be a number (`4.5`, `1/2`); a weekday, `~` or
     // `마감`/`기한` before, or `까지`/`마감` after marks it as a date.
@@ -410,6 +552,7 @@ fn short_date(
             })
             || rest.starts_with("까지")
             || rest.starts_with("마감")
+            || range_follows(text, end)
     };
     if let Some(after_dot) = expect(text, after_first, ".") {
         // A range end `~22.(일)` is a day of the start's month.
@@ -427,6 +570,25 @@ fn short_date(
         let spaced = text[after_dot..].starts_with(char::is_whitespace);
         let (day, after_day) = number_at(text, skip_space(text, after_dot))?;
         let end = expect(text, after_day, ".").unwrap_or(after_day);
+        // `26.08.11` or `'26. 7. 9.`: no month is 20 or more, so a two-digit
+        // year is the only reading.
+        if (20..=39).contains(&first) && end > after_day {
+            let next = skip_space(text, end);
+            if let Some((third, after_third)) =
+                number_at(text, next).filter(|&(_, after)| after - next <= 2)
+            {
+                let end = expect(text, after_third, ".").unwrap_or(after_third);
+                return Some((
+                    Written {
+                        year: Some(2000 + first),
+                        month: Some(day),
+                        day: third,
+                        time: None,
+                    },
+                    end,
+                ));
+            }
+        }
         // `11. 14.` with its space and closing dot is a date by itself.
         if !(spaced && end > after_day) && !marked(end) {
             return None;
@@ -439,8 +601,10 @@ fn short_date(
         return month_day(first, day, after_day);
     }
     if range_end {
-        // `~ 7일` or `~ 19(금)`; date_at reads the weekday itself.
+        // `~ 7일` or `~ 19(금)`; date_at reads the weekday itself. `부터 3일간`
+        // is a duration.
         let end = expect(text, after_first, "일")
+            .filter(|&end| !text[end..].starts_with('간'))
             .or_else(|| weekday_at(text, after_first).map(|_| after_first))?;
         return Some((
             Written {
@@ -455,15 +619,35 @@ fn short_date(
     None
 }
 
-/// `(목)` or `(목요일)`, optionally after one space; returns the end.
+/// `(목)`, `(목요일)`, `(목)요일` or `목요일`, optionally after one space;
+/// returns the end.
 fn weekday_at(text: &str, index: usize) -> Option<usize> {
     let index = expect(text, index, " ").unwrap_or(index);
-    let rest = text[index..].strip_prefix('(')?;
+    let (open, rest) = match text[index..].strip_prefix('(') {
+        Some(rest) => (true, rest),
+        None => (false, &text[index..]),
+    };
     let name = rest.chars().next()?;
     WEEKDAYS.contains(&name).then_some(())?;
-    let mut cursor = index + 1 + name.len_utf8();
+    let mut cursor = index + usize::from(open) + name.len_utf8();
+    if !open {
+        return expect(text, cursor, "요일");
+    }
     cursor = expect(text, cursor, "요일").unwrap_or(cursor);
-    expect(text, cursor, ")")
+    let cursor = expect(text, cursor, ")")?;
+    Some(expect(text, cursor, "요일").unwrap_or(cursor))
+}
+
+/// `~ 11/16` or `- 9.30` follows: a bare `M/D` or `M.D` starts a range.
+fn range_follows(text: &str, end: usize) -> bool {
+    range_marker(text, end).is_some_and(|after| {
+        let next = skip_space(text, after);
+        number_at(text, next).is_some_and(|(_, after_month)| {
+            (after_month - next) <= 2
+                && (expect(text, after_month, "/").or(expect(text, after_month, ".")))
+                    .is_some_and(|after| number_at(text, after).is_some())
+        })
+    })
 }
 
 /// `17:00`, `18시`, `오후 5시 30분`, `밤 12시`, normalized to 24-hour `HH:MM`.
@@ -571,6 +755,14 @@ fn expect(text: &str, index: usize, literal: &str) -> Option<usize> {
     text[index..]
         .starts_with(literal)
         .then(|| index + literal.len())
+}
+
+/// `년`, `월` or `일` after a number, which some notices space out
+/// (`2025 년 12 월 17 일`); `3 월요일` is a weekday, not a month.
+fn unit(text: &str, index: usize, word: &str) -> Option<usize> {
+    let end =
+        expect(text, index, word).or_else(|| expect(text, expect(text, index, " ")?, word))?;
+    (!text[end..].starts_with("요일")).then_some(end)
 }
 
 fn skip_space(text: &str, mut index: usize) -> usize {

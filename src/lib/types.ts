@@ -433,7 +433,10 @@ export interface NoticeDate {
   day: string;
   // HH:MM, up to 24:00 for "밤 12시".
   time: string | null;
-  // Text just before the date in the notice, such as "신청 마감"; may be empty.
+  // The last day and time of a multi-day `date` such as an event over two days.
+  end_day: string | null;
+  end_time: string | null;
+  // The few words before the date in the notice, such as "신청 마감"; may be empty.
   label: string;
   kind: 'deadline' | 'start' | 'date';
 }

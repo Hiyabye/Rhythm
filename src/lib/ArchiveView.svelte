@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import type { AiSnapshot, ArchivePage, ArchiveQuery, ArchiveSummary, AiClassification, CalendarNoticeDates, CalendarTodo, CybercampusTask, NoticeDate, TodoPrefill, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
-  import { archiveDate, archiveDay, archiveError, kstInstant, localDayKey, noticeDateMark, wallTime } from './archive-format';
+  import { archiveDate, archiveDay, archiveError, kstInstant, localDayKey, noticeDateMark, noticeDateMeta, noticeDateOn, wallTime } from './archive-format';
   import { clock } from './clock.svelte';
   import { confirmAction } from './confirm';
   import CalendarView from './CalendarView.svelte';
@@ -470,7 +470,7 @@
         tasks: openTasks.filter((task) => task.due_at!.slice(0, 10) === key),
         // Done todos need no planning, like submitted deadlines.
         todos: calendarOn ? weekTodos.filter((todo) => todo.day === key && !todo.done) : [],
-        dates: weekDates.filter((entry) => entry.day === key) };
+        dates: weekDates.filter((entry) => noticeDateOn(entry, key)) };
     });
   });
   // The window's first day is today, so the highlight and the range cannot disagree after midnight.
@@ -591,8 +591,8 @@
                     {@const target = `week-notice-${entry.document_id}-${entry.ordinal}`}
                     <li><button class="event event-notice" id={target} onclick={() => void openDocument(entry.document_id, target)}>
                       <span class="event-bar" aria-hidden="true"></span>
-                      <span class="event-title"><span class="ai-mark notice-mark">{noticeDateMark(entry, clock.format)}</span> {entry.label || entry.title}</span>
-                      <span class="event-meta">{entry.title} · 원문 확인</span>
+                      <span class="event-title"><span class="ai-mark notice-mark">{noticeDateMark(entry, clock.format)}</span> {entry.title}</span>
+                      <span class="event-meta">{noticeDateMeta(entry, clock.format)}</span>
                     </button></li>
                   {/each}
                   {#if !day.tasks.length && !day.todos.length && !day.notices.length && !day.dates.length}<li class="day-empty">일정 없음</li>{/if}
@@ -608,8 +608,8 @@
                 {@const target = `later-notice-${entry.document_id}-${entry.ordinal}`}
                 <li><button class="event event-notice" id={target} onclick={() => void openDocument(entry.document_id, target)}>
                   <span class="event-bar" aria-hidden="true"></span>
-                  <span class="event-title"><span class="ai-mark notice-mark">{shortDay(entry.day)} · {noticeDateMark(entry, clock.format)}</span> {entry.label || entry.title}</span>
-                  <span class="event-meta">{entry.title} · 원문 확인</span>
+                  <span class="event-title"><span class="ai-mark notice-mark">{shortDay(entry.day)} · {noticeDateMark(entry, clock.format)}</span> {entry.title}</span>
+                  <span class="event-meta">{noticeDateMeta(entry, clock.format)}</span>
                 </button></li>
               {/each}
             </ul>
