@@ -105,7 +105,7 @@
         <div class="settings-row"><span class="row-label">분류 모델을 제공하지 않는 빌드입니다.</span></div>
       {:else}
         <div class="settings-row stacked">
-          <span class="row-label">{embeddingModel?.name ?? embeddingEntry?.name}<Hint label="공지 분류">공지의 제목과 본문을 작은 임베딩 모델로 비교해 8개 분류 중 하나를 고릅니다. 설치한 뒤에는 새로 보관되는 공지와 아직 분류하지 않은 공지를 자동으로 분류하고, 비슷한 공지와 뜻으로 찾는 검색에도 씁니다. 결과가 불확실하면 기타로 표시합니다.</Hint><span class="row-detail">{embeddingModel?.status === 'installed' ? (data.preferences.classification_enabled ? classificationLabel[classificationState] ?? classificationState : '꺼짐') : embeddingModel ? (modelStatus[embeddingModel.status] ?? embeddingModel.status) : '설치하지 않음'}{#if data.classification.processed > 0}{' · 이번 실행에서 '}{data.classification.processed.toLocaleString('ko-KR')}{'건'}{/if}</span></span>
+          <span class="row-label">{embeddingModel?.name ?? embeddingEntry?.name}<Hint label="공지 분류">공지의 제목과 본문을 작은 임베딩 모델로 비교해 11개 분류 중 하나를 고릅니다. 설치한 뒤에는 새로 보관되는 공지와 아직 분류하지 않은 공지를 자동으로 분류하고, 비슷한 공지와 뜻으로 찾는 검색에도 씁니다. 결과가 불확실하면 기타로 표시합니다.</Hint><span class="row-detail">{embeddingModel?.status === 'installed' ? (data.preferences.classification_enabled ? classificationLabel[classificationState] ?? classificationState : '꺼짐') : embeddingModel ? (modelStatus[embeddingModel.status] ?? embeddingModel.status) : '설치하지 않음'}{#if data.classification.processed > 0}{' · 이번 실행에서 '}{data.classification.processed.toLocaleString('ko-KR')}{'건'}{/if}</span></span>
           {#if embeddingModel?.status === 'installed'}
             <p class="row-detail">모델 {archiveSize(embeddingModel.bytes || embeddingEntry?.bytes || 0)} · {embeddingEntry ? `${embeddingEntry.repository} · ${embeddingEntry.license}` : '목록에서 내려간 모델'}</p>
             <div class="settings-row no-separator">

@@ -5,7 +5,7 @@
 //! the pinned `llama-server` is staged. It uses the committed synthetic Korean
 //! fixtures only, never the production profile.
 use super::{
-    classification::{CATEGORIES, CATEGORY_PROTOTYPES},
+    classification::{CATEGORIES, CATEGORY_PROTOTYPES, INSTRUCTION},
     evaluation::{cases, Case},
     Worker,
 };
@@ -30,7 +30,7 @@ fn prototypes(category: &str) -> &'static [&'static str] {
 
 fn instruction(mode: &str) -> &'static str {
     match mode {
-        "qwen" => "Instruct: Classify the given Korean university notice into exactly one category: 학사, 장학, 수업·교육, 연구, 공모전·대회, 인턴·채용, 행사·활동, 기타.\nQuery: ",
+        "qwen" => INSTRUCTION,
         "e5" => "query: ",
         _ => "",
     }
@@ -38,6 +38,8 @@ fn instruction(mode: &str) -> &'static str {
 
 fn prototype_prefix(mode: &str) -> &'static str {
     match mode {
+        // Production embeds prototypes with the notice instruction.
+        "qwen" => INSTRUCTION,
         "e5" => "passage: ",
         _ => "",
     }

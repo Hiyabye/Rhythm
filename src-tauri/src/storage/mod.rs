@@ -31,11 +31,12 @@ pub(crate) fn temp_store() -> (tempfile::TempDir, Store) {
     (directory, store)
 }
 
-pub(crate) const SCHEMA_VERSION: i64 = 35;
+pub(crate) const SCHEMA_VERSION: i64 = 36;
 
 // Statements that roll a test profile back below the migration that added each
 // object, newest first; a rollback test joins the ones that migration needs
-// and keeps its own `PRAGMA user_version`. 036 and later add their fragment here.
+// and keeps its own `PRAGMA user_version`. 036 needs none: it rebuilds
+// `notice_classifications` and can run again. 037 and later add their fragment here.
 #[cfg(test)]
 pub(crate) const UNDO_REMINDERS: &str = "DROP TABLE calendar_reminder_tokens; DROP TABLE calendar_reminder_attempts; ALTER TABLE calendar_todos DROP COLUMN reminder_sent; ALTER TABLE calendar_todos DROP COLUMN reminder_minutes; ";
 #[cfg(test)]
@@ -67,7 +68,7 @@ pub(crate) const UNDO_STUDIUM: &str =
 pub(crate) const UNDO_GROUPS: &str = "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; ";
 
 /// Ordered schema migrations; index `n` upgrades `user_version` n to n+1.
-pub(super) const MIGRATIONS: [&str; 35] = [
+pub(super) const MIGRATIONS: [&str; 36] = [
     include_str!("../../migrations/001_foundation.sql"),
     include_str!("../../migrations/002_archive.sql"),
     include_str!("../../migrations/003_intelligence.sql"),
@@ -103,6 +104,7 @@ pub(super) const MIGRATIONS: [&str; 35] = [
     include_str!("../../migrations/033_retire_generation.sql"),
     include_str!("../../migrations/034_notice_date_spans.sql"),
     include_str!("../../migrations/035_calendar_reminders.sql"),
+    include_str!("../../migrations/036_classification_categories.sql"),
 ];
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
