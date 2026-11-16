@@ -24,9 +24,23 @@ The catalog memory value (2 GiB) is an estimate, not a measured peak. `verified`
 
 ## Embedding classification
 
-`intelligence/classification.rs` embeds the instruction, title and first 1000 body characters, then compares the unit vector against 35 authored Korean prototypes (five per non-`기타` category) using the best (max) cosine. The best match below `0.50` becomes `기타` with a low-confidence marker. The prototype set, input shape, scoring and threshold form the config hash stored with each classification; vectors are stored per revision and embedding-model SHA-256 so a prototype change reclassifies without re-embedding. The tracing/evaluation harness is the ignored `actual_embedding_classification_evaluation`, which uses the same 18 synthetic fixtures and never touches the production profile.
+`intelligence/classification.rs` embeds the instruction, title and first 1000 body characters, then compares the unit vector against 78 authored Korean prototypes for the ten non-`기타` categories using the best (max) cosine. Prototypes are embedded with the same instruction prefix as notices. The best match below `0.68` becomes `기타` with a low-confidence marker. The prototype set, input shape, scoring and threshold form the config hash stored with each classification; vectors are stored per revision and embedding-model SHA-256 so a prototype change reclassifies without re-embedding. The tracing/evaluation harness is the ignored `actual_embedding_classification_evaluation` (run it with `RHYTHM_EMBEDDING_EVAL_PREFIX=qwen` to match production), which uses the same 18 synthetic fixtures and never touches the production profile.
 
-The figures below were recorded with a private copy of the prototypes in the harness that differed from the production table in one character (`학생证` for `학생증` in one 학사 prototype). The harness now uses the production table (`classification::CATEGORY_PROTOTYPES`) and the numbers were not re-measured.
+### Archived notices
+
+Measured on 2026-11-16 on a read-only copy of one real profile: 1,073 latest-revision notices from the computing, main, dormitory and eClass boards, labeled by hand (an alternate label where two categories fit). The labels are personal data and are not committed. Scoring reused the stored vectors with the pinned Qwen3-Embedding 0.6B Q8_0 on Metal; re-embedding the notices with an instruction naming the new categories scored the same, so the instruction was kept.
+
+| Configuration | Correct |
+| --- | ---: |
+| Previous: 8 categories, 35 prototypes embedded without the prefix, cut-off 0.50 (new categories folded into the old ones) | 69.3% |
+| 8 categories, new prototypes embedded with the prefix | 86.7% |
+| **Shipped: 11 categories, 78 prototypes with the prefix, cut-off 0.68** | **91.6%** (983/1073) |
+
+Without the prefix, scores sat between 0.5 and 0.7 with margins near zero; every dormitory menu became 공모전·대회 or 연구 and dormitory admission notices became 연구. The previous prototypes were close paraphrases of the synthetic fixture titles, which is why the fixture table below reached 18/18. The prototypes were written while reading these same notices, so 91.6% is optimistic for unseen notices. Remaining errors are mostly boundary cases: job-linked training programs (교육·프로그램 vs 인턴·채용), external conferences (행사·활동 vs 공모전·대회) and 벨라르미노 학사 (the dormitory) notices drawn to 학사. Below 0.68, about half of the top matches were wrong. On the 18 fixtures the shipped configuration scores 15/18 (title + 1000 characters, max): `formatted_table` (공모전·대회 → 연구), `long` (교육·프로그램 → 수업) and `long_tail_correction` (교육·프로그램 → 학사).
+
+### Model comparison
+
+The figures below were recorded with the previous prototype table before the prefix change and were not re-measured.
 
 Measured on one Mac (macOS 27.2, M1 Pro, 16 GiB) with the staged `llama-server`, three candidate artifacts downloaded into a temporary directory and verified against their pinned size/SHA-256. Input variants grew from title only (0 body characters) to title + 1500 characters; the table reports the best variant per model.
 

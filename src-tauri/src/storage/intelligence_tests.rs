@@ -1300,3 +1300,68 @@ fn ranked_search_pages_cover_every_match_once_beyond_the_fused_head() {
     // The best semantic hit is fused near the top, not appended after the tail.
     assert!(seen.iter().position(|id| *id == meaning).unwrap() < 30);
 }
+
+#[test]
+fn schema_thirty_six_accepts_revised_categories_and_keeps_old_rows() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    populated_schema_two(&path);
+    let revision = Store::open(&path)
+        .unwrap()
+        .document(1, None)
+        .unwrap()
+        .revision_id;
+    let model = "a".repeat(64);
+    let old_config = "b".repeat(64);
+    // Schema 35: the table as 015 created it, with a row of the old set.
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(&format!(
+            "DROP TABLE notice_classifications;
+             CREATE TABLE notice_classifications (
+              document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+              revision_id INTEGER NOT NULL,
+              model_sha256 TEXT NOT NULL,
+              config_hash TEXT NOT NULL,
+              category TEXT NOT NULL CHECK(category IN ('학사','장학','수업·교육','연구','공모전·대회','인턴·채용','행사·활동','기타')),
+              score REAL NOT NULL CHECK(score>=-1.0 AND score<=1.0),
+              margin REAL NOT NULL CHECK(margin>=-2.0 AND margin<=2.0),
+              low_confidence INTEGER NOT NULL CHECK(low_confidence IN (0,1)),
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+              PRIMARY KEY(document_id,revision_id,model_sha256,config_hash),
+              FOREIGN KEY(revision_id,document_id) REFERENCES document_revisions(id,document_id) ON DELETE CASCADE
+             );
+             CREATE INDEX notice_classifications_revision ON notice_classifications(document_id,revision_id);
+             INSERT INTO notice_classifications(document_id,revision_id,model_sha256,config_hash,category,score,margin,low_confidence)
+               VALUES(1,{revision},'{model}','{old_config}','수업·교육',0.6,0.01,0);
+             PRAGMA user_version=35;"
+        ))
+        .unwrap();
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
+    let old = store
+        .ai_classification(1, revision, &model, &old_config)
+        .unwrap()
+        .unwrap();
+    assert_eq!(old.category, "수업·교육");
+    // Every category the classifier can write is accepted by the schema.
+    let write = |category: &str, config: &str| {
+        store.ai_save_classification(&ClassificationWrite {
+            document_id: 1,
+            revision_id: revision,
+            model_sha256: &model,
+            config_hash: config,
+            category,
+            score: 0.8,
+            margin: 0.1,
+            low_confidence: false,
+        })
+    };
+    for (index, category) in crate::intelligence::classification::CATEGORIES
+        .iter()
+        .enumerate()
+    {
+        write(category, &format!("{index:064}")).unwrap();
+    }
+    assert!(write("없는 분류", &"c".repeat(64)).is_err());
+}

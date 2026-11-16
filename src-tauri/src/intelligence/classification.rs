@@ -1,9 +1,10 @@
 //! Deterministic, local notice classification from embedding similarity.
 //!
 //! The pinned embedding model produces one unit-length vector per notice
-//! revision. Each category has authored Korean prototypes; the nearest
-//! prototype wins. A score below [`MIN_SCORE`] becomes `기타` with a
-//! low-confidence marker kept in SQLite. Prototype text, scoring and threshold
+//! revision. Each category has authored Korean prototypes, embedded with the
+//! same instruction prefix as the notices; the nearest prototype wins. A score
+//! below [`MIN_SCORE`] becomes `기타` with a low-confidence marker kept in
+//! SQLite. Prototype text, scoring and threshold
 //! are part of the config hash, so changing them reclassifies stored vectors
 //! without re-embedding and leaves old rows as history.
 
@@ -30,17 +31,21 @@ use tauri::Manager;
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 
 /// Bumped only for a contract change the literal hash below cannot express.
-const CONFIG_VERSION: &str = "notice-classification-v1";
+const CONFIG_VERSION: &str = "notice-classification-v2";
 const BODY_CHARS: usize = 1000;
 const MAX_INPUT_BYTES: usize = 7 * 1024;
-/// Calibrated on the 18 committed synthetic fixtures: the lowest correct score
-/// was 0.565. Below this the top match is only a weak hint.
-pub const MIN_SCORE: f32 = 0.50;
+/// Calibrated on 1,073 hand-labeled archived notices: below this about half of
+/// the top matches were wrong, so the match is only a weak hint
+/// (docs/AI_EVALUATION.md).
+pub const MIN_SCORE: f32 = 0.68;
 const BATCH: u32 = 8;
 /// Release the embedding process after this much idle time. Classification is
 /// cheap, but the process still reserves model memory.
 const IDLE_UNLOAD: Duration = Duration::from_secs(60);
 
+/// Stored notice vectors carry this exact prefix and search compares against
+/// them, so it keeps the original category list: changing it would require
+/// re-embedding every notice, and the newer list measured no better.
 pub(super) const INSTRUCTION: &str = "Instruct: Classify the given Korean university notice into exactly one category: 학사, 장학, 수업·교육, 연구, 공모전·대회, 인턴·채용, 행사·활동, 기타.\nQuery: ";
 /// Search queries are compared with the stored classifier vectors above. Of
 /// the instructions tried on the synthetic search fixtures, Qwen3's own web
@@ -50,68 +55,122 @@ pub(super) const SEARCH_INSTRUCTION: &str =
 
 /// The closed category set. `기타` has no prototypes: it is the fallback for
 /// a best score below [`MIN_SCORE`].
-pub const CATEGORIES: [&str; 8] = [
+pub const CATEGORIES: [&str; 11] = [
     "학사",
+    "수업",
     "장학",
-    "수업·교육",
     "연구",
+    "학과 소식",
     "공모전·대회",
     "인턴·채용",
+    "교육·프로그램",
     "행사·활동",
+    "생활·시설",
     "기타",
 ];
 
 /// Authored Korean prototypes, deliberately separate from the evaluation
-/// fixtures in `evaluation.json`.
-pub(super) const CATEGORY_PROTOTYPES: [(&str, &[&str]); 7] = [
+/// fixtures in `evaluation.json`. The first entry of each category names its
+/// scope; the rest are typical notice titles. 벨라르미노 학사 is the dormitory,
+/// so its notices need their own 생활·시설 prototypes to stay out of 학사.
+pub(super) const CATEGORY_PROTOTYPES: [(&str, &[&str]); 10] = [
     ("학사", &[
-        "학사 운영 안내: 휴학, 복학, 졸업, 학적 변경, 성적 정정, 수강신청, 등록금 납부, 학위 수여",
-        "2026학년도 학사일정과 수강신청 기간을 안내합니다.",
-        "졸업 요건 확인 및 학위 논문 제출 안내",
-        "전과, 다전공, 부전공 신청 안내",
-        "학생증 재발급과 재학증명서 발급 안내",
+        "학사 행정 안내: 휴학, 복학, 재입학, 졸업, 학적, 전공 신청, 등록금 납부, 학위 수여",
+        "2026학년도 2학기 휴학 및 복학 신청 안내",
+        "졸업예정 처리와 조기졸업 신청 안내",
+        "전공 신청 및 변경, 다전공과 마이크로전공 신청 안내",
+        "학부 등록금 납부 기간과 분할 납부 안내",
+        "학칙 개정 공고와 시행세칙 변경 안내",
+        "신입생 학번 안내와 학생증 발급 안내",
+        "성적증명서와 졸업증명서 발급 일정 안내",
+        "대학원 신입생 모집 요강과 입학 설명회 안내",
+        "학과 요람 변경과 졸업 요건 안내",
+    ]),
+    ("수업", &[
+        "수업과 수강신청 안내: 개설 교과목, 수강정원, 폐강, 휴강, 보강, 시험, 성적, 강의평가",
+        "2026학년도 1학기 수강신청 일정과 개설 교과목 안내",
+        "중간고사 일정과 시험 장소 안내",
+        "이번 주 수업 휴강 및 보강 안내",
+        "과제 제출 마감일과 실습 채점 결과 안내",
+        "출석과 좌석표, 강의실 변경 안내",
+        "하계 계절수업 개설 과목과 타 대학 학점교류 수강 안내",
+        "강의평가 실시 안내",
+        "강의계획서와 수업 운영 방식 안내",
+        "교과목 증원과 강의 언어 변경 안내",
     ]),
     ("장학", &[
-        "장학금 신청 안내: 성적우수 장학금, 국가장학금, 교내외 장학금, 등록금과 생활비 지원",
-        "희망장학금 신청 자격과 제출 서류를 안내합니다.",
-        "복수 조건 장학금 지원 자격 안내",
-        "중복 지원 제한이 있는 장학금 안내",
-        "생활비 지원 장학생 선발 공고",
-    ]),
-    ("수업·교육", &[
-        "교육 과정과 강좌 수강생 모집 안내: 교과목, 비교과 프로그램, 학습 지원",
-        "도서관 이용 교육 및 학술정보 검색 방법 안내",
-        "교육 프로그램 신청 일정 정정 안내",
-        "영어 강좌, 소프트웨어 교육, 자격증 과정 수강 안내",
-        "교수학습센터 학습법 특강과 튜터링 프로그램 안내",
+        "장학금 안내: 교내외 장학금, 국가장학금, 장학생 선발, 학자금 대출, 생활비 지원",
+        "2026년 장학생 모집 공고와 지원 자격",
+        "기업 장학생 선발 안내",
+        "성적우수 장학금 선발 결과 안내",
+        "학자금 대출 신청 안내",
+        "재단 장학생 모집과 제출 서류 안내",
     ]),
     ("연구", &[
-        "학부생 연구 참여자 모집: 연구실 인턴, 학부 연구 프로그램, 공동 연구 과제",
-        "하계 연구 체험 프로그램 사전 안내",
-        "연구비 신청과 논문 작성 지원 안내",
-        "학술 연구 과제 공모와 연구실 소개",
-        "연구 참여 학생 모집 및 연구 주제 안내",
+        "연구 참여 안내: 학부 연구생 모집, 연구실 인턴, 연구 과제, 연구비 지원 사업",
+        "학부생 연구 참여 프로그램 모집",
+        "연구실 안전교육 이수 안내",
+        "연구 지원 사업 공모와 연구비 신청 안내",
+        "박사학위 논문심사 공개 발표 안내",
+        "학술대회 논문 모집과 투고 안내",
+    ]),
+    ("학과 소식", &[
+        "학과 소식: 교수 연구팀 논문 채택, 수상 소식, 졸업생 임용, 언론 보도, 소식지",
+        "교수 연구팀 최우수 국제학술대회 정규 논문 채택",
+        "우리 학과 학생 논문상 수상을 축하합니다",
+        "연구실 졸업생 대학 교수 임용 소식",
+        "학과 언론 보도 기사",
+        "대학 소식지 발간",
     ]),
     ("공모전·대회", &[
-        "공모전과 경진대회 참가자 모집 안내: 아이디어 공모, 데이터 분석 대회, 해커톤",
-        "대학생 연구 아이디어 공모 일정표",
-        "창업 경진대회와 캡스톤 디자인 대회 안내",
-        "프로그래밍 대회와 알고리즘 경진대회 참가 신청",
-        "작품 공모전 수상작 발표",
+        "공모전과 경진대회 참가자 모집: 아이디어 공모, 영상 공모전, 데이터 분석 대회, 해커톤",
+        "AI 영상 콘텐츠 공모전 참가 안내",
+        "공공데이터 활용 아이디어 경진대회",
+        "해커톤 참가팀 모집",
+        "프로그래밍 대회와 해킹방어대회 참가 신청",
+        "창업 경진대회 참가 모집",
     ]),
     ("인턴·채용", &[
-        "인턴 모집과 채용 공고 안내: 하계 인턴, 현장실습, 신입 채용, 커리어 프로그램",
-        "하계 인턴 접수 마감 및 면접 시간 안내",
-        "기업 채용 설명회와 직무 체험 안내",
-        "현장실습생 모집과 채용 연계 프로그램",
-        "취업 준비 특강과 채용 정보 안내",
+        "채용과 인턴 모집 공고: 신입사원 공개채용, 채용연계형 인턴, 체험형 인턴, 현장실습",
+        "2026년 하반기 신입사원 공개채용 안내",
+        "채용연계형 인턴십 모집",
+        "기업 채용설명회와 잡페어 안내",
+        "학과사무실 근로학생과 조교 모집",
+        "교과목 실습 멘토 모집",
+        "전문연구요원 채용 공고",
+        "교수 초빙 공고",
+    ]),
+    ("교육·프로그램", &[
+        "외부 교육 프로그램 교육생 모집: 부트캠프, 아카데미, 국비지원 교육과정, 인재 양성 과정",
+        "K-디지털 트레이닝 국비지원 부트캠프 교육생 모집",
+        "AI 개발자 양성과정 수강생 모집, 교육비 전액 무료",
+        "기업 아카데미 기수 교육생 선발",
+        "자격증 취득 과정과 자격 시험 접수 안내",
+        "해외 대학 AI 연수 프로그램 참가자 모집",
+        "필수 법정 교육 이수 안내",
+        "청년취업사관학교 캠퍼스 교육생 모집",
+        "보안 아카데미 직무 트랙 교육생 모집",
     ]),
     ("행사·활동", &[
-        "행사와 활동 안내: 특강, 세미나, 축제, 동아리, 진로 프로그램, 독서 모임",
-        "오픈소스 기술 세미나 개최 안내",
-        "진로 특강 사전 신청 및 행사 일정",
-        "독서 모임 참가 신청 안내",
-        "교내 축제와 학생 활동 프로그램 안내",
+        "행사와 활동 안내: 세미나, 콜로퀴엄, 특강, 컨퍼런스, 포럼, 설명회, 동아리, 대외활동",
+        "학과 콜로퀴엄 초청 강연 안내",
+        "기술 세미나와 컨퍼런스 사전 등록 안내",
+        "포럼 개최 안내",
+        "동아리 신입 회원 모집",
+        "대학생 대외활동과 서포터즈 모집",
+        "축제와 입학식, 오리엔테이션 행사 안내",
+        "기관 견학 투어 참가자 모집",
+        "기술 엑스포와 서밋, 네트워킹 행사 참가 안내",
+    ]),
+    ("생활·시설", &[
+        "생활과 시설 안내: 기숙사(벨라르미노 학사) 생활, 식당 식단, 시설 공사, 건물과 공간 이용, 정전, 서버 점검",
+        "벨라르미노 학사 기숙사 사생 모집과 입사 안내",
+        "기숙사 입사자 발표와 기숙사비 납부 안내",
+        "주간 식단표",
+        "아침 점심 저녁 메뉴: 밥, 국, 반찬, 김치",
+        "건물 보수공사로 인한 시설 이용 제한 안내",
+        "실습실 사용 불가와 새 공간 조성 안내",
+        "기숙사 택배 수령과 생활 수칙, 운영 시간 안내",
     ]),
 ];
 
@@ -159,6 +218,20 @@ pub fn input(title: &str, body: &str) -> String {
         end -= 1;
     }
     text[..end].to_owned()
+}
+
+/// Each prototype with its category, embedded like a notice: without the
+/// shared instruction prefix every notice scored in a narrow band and the
+/// nearest prototype was close to arbitrary.
+fn prototype_inputs() -> Vec<(&'static str, String)> {
+    CATEGORY_PROTOTYPES
+        .iter()
+        .flat_map(|(category, entries)| {
+            entries
+                .iter()
+                .map(move |entry| (*category, format!("{INSTRUCTION}{entry}")))
+        })
+        .collect()
 }
 
 /// Classifies against already-embedded prototypes. Both sides are unit length,
@@ -504,14 +577,7 @@ impl Controller {
             match slot.as_ref() {
                 Some(prototypes) => prototypes.clone(),
                 None => {
-                    let mut texts = Vec::new();
-                    let mut owners = Vec::new();
-                    for (category, entries) in CATEGORY_PROTOTYPES {
-                        for entry in entries {
-                            texts.push((*entry).to_owned());
-                            owners.push(category);
-                        }
-                    }
+                    let (owners, texts): (Vec<_>, Vec<_>) = prototype_inputs().into_iter().unzip();
                     let mut vectors = Vec::new();
                     for chunk in texts.chunks(crate::intelligence::MAX_EMBED_BATCH) {
                         match worker.embed(&path, chunk).await {
@@ -906,6 +972,22 @@ mod tests {
             .await
             .is_none());
         assert!(!controller.is_failed(&identity));
+    }
+
+    #[test]
+    fn every_category_but_other_has_prototypes_embedded_like_notices() {
+        let inputs = prototype_inputs();
+        for category in CATEGORIES {
+            let count = inputs
+                .iter()
+                .filter(|(owner, _)| *owner == category)
+                .count();
+            assert_eq!(count == 0, category == "기타", "{category}: {count}");
+        }
+        assert!(inputs.iter().all(|(owner, _)| CATEGORIES.contains(owner)));
+        assert!(inputs
+            .iter()
+            .all(|(_, text)| text.starts_with(INSTRUCTION) && text.len() > INSTRUCTION.len()));
     }
 
     #[test]
