@@ -4,19 +4,25 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.90"
 license = "GPL-3.0-or-later"
-description = "Rhythm's v2 server collector: crawl state, the public-board crawl and its run binary"
+description = "Rhythm's v2 server collector: crawl state, the public-board crawl, the R2 state round-trip and its run binary"
 publish = false
 
 [dependencies]
 # Without the `studium` feature: the collector never reaches the seat server
 # and its transport stays Rustls-only.
 rhythm-sources = { path = "../sources" }
+# The R2 S3 API is signed by hand (SigV4, `r2.rs`); `hmac` 0.13 pairs with `sha2` 0.11.
+hmac = "0.13"
+# Rustls only, like every school client in `rhythm-sources`.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 rusqlite = { version = "0.38", default-features = false, features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 tokio = { version = "1", features = ["rt", "time", "macros"] }
 url = "2"
+# State compression (#174 decision; the only new dependency).
+zstd = "0.13"
 
 [dev-dependencies]
 tempfile = "3"

@@ -6,4 +6,17 @@
 //! decision, #174): the app keeps its own copy until its board crawler is
 //! removed (#178), so a crawl-rule fix in the meantime belongs in both.
 pub mod crawl;
+pub mod r2;
+pub mod remote;
 pub mod state;
+
+use sha2::{Digest, Sha256};
+
+/// Lowercase hex SHA-256, the form every stored and signed hash takes.
+pub fn sha256_hex(bytes: impl AsRef<[u8]>) -> String {
+    hex(&Sha256::digest(bytes))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}

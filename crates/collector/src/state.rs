@@ -4,7 +4,6 @@
 use rhythm_sources::model::{ArticleInput, ListingEntry};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::{path::Path, sync::Mutex};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
@@ -69,6 +68,22 @@ impl State {
             .lock()
             .map_err(|_| "collector state is unavailable".to_string())?;
         operation(&connection).map_err(|e| e.to_string())
+    }
+
+    /// Writes a compact, consistent copy of the state to a new file and checks
+    /// it, so a damaged copy never becomes the next authoritative version.
+    pub fn vacuum_into(&self, path: &Path) -> Result<(), String> {
+        let target = path.to_str().ok_or("state snapshot path is not UTF-8")?;
+        self.with(|c| c.execute("VACUUM INTO ?1", [target]))?;
+        let check: String = Connection::open(path)
+            .and_then(|copy| copy.query_row("PRAGMA quick_check", [], |row| row.get(0)))
+            .map_err(|e| e.to_string())?;
+        if check != "ok" {
+            return Err(format!(
+                "state snapshot failed its integrity check: {check}"
+            ));
+        }
+        Ok(())
     }
 
     /// The board's row, created on first use.
@@ -454,7 +469,7 @@ fn revision_hash(article: &ArticleInput) -> Result<String, String> {
         resources,
     ))
     .map_err(|e| e.to_string())?;
-    Ok(format!("{:x}", Sha256::digest(encoded)))
+    Ok(crate::sha256_hex(encoded))
 }
 
 #[cfg(test)]
