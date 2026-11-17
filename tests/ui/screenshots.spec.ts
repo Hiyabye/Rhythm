@@ -27,11 +27,25 @@ const tasks = [
   task({ item_id: '4', course_key: 'D4', course_name: '데이터베이스', title: 'ER 다이어그램 설계', due_at: kst(8), status: '미제출' }),
   task({ item_id: '5', course_key: 'A1', title: '이진 트리 실습', due_at: kst(-2), status: '제출 완료', submitted_at: kst(-3, 14) }),
 ];
-const board = { id: 'computing-updates', name: '소식', organization: '소프트웨어융합대학', supported: true, subscribed: true };
+// The sidebar shows one row per settings group, so the boards sit in the catalog's groups.
+const groups = [
+  { id: 'sogang', name: '서강대학교', parent: null },
+  { id: 'sogang-eng', name: '공과대학', parent: 'sogang' },
+  { id: 'sogang-computing', name: '소프트웨어융합대학', parent: 'sogang' },
+];
+const board = (id: string, name: string, group: string, family: string, organization: string) => ({ id, name, organization, supported: true, subscribed: true, group, family });
+const boards = [
+  board('sogang-academic', '학부 학사공지', 'sogang', 'main', '서강대학교'),
+  board('eng-general', '일반공지', 'sogang-eng', 'engineering', '서강대학교 · 공과대학'),
+  ...([['computing-academic', '학사 공지'], ['computing-graduate', '대학원 공지'], ['computing-updates', '소식'], ['computing-career', '취업·인턴십']] as const)
+    .map(([id, name]) => board(id, name, 'sogang-computing', 'computing', '서강대학교 · 소프트웨어융합대학')),
+];
 const cyber = { id: 'cybercampus', name: '강의 공지', organization: '서강대학교 · 사이버캠퍼스', supported: true, subscribed: true, family: 'cybercampus' };
+// One board per notice in `titles`.
+const noticeSources = ['sogang-academic', 'sogang-academic', 'computing-career', 'sogang-academic', 'computing-updates', 'eng-general'];
 
 async function open(page: Page, options: FixtureOptions = {}) {
-  await mockDesktop(page, { count: titles.length, sourceList: [board, cyber], aiEmbeddingInstalled: true, aiSemanticSearch: true,
+  await mockDesktop(page, { count: titles.length, sourceList: [...boards, cyber], sourceGroups: groups, noticeSources, aiEmbeddingInstalled: true, aiSemanticSearch: true,
     initialInterests: [{ id: 1, name: '장학금', aliases: ['장학'], priority: 3, polarity: 'positive', origin: 'explicit', evidence_count: 0, evidence_summary: null, updated_at: '2026-10-27' }],
     cybercampusId: '20990001', cybercampusTasks: tasks, ...options });
   // Runs after the fixture's own init script and edits its entries in place.
