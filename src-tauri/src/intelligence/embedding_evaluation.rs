@@ -5,10 +5,10 @@
 //! the pinned `llama-server` is staged. It uses the committed synthetic Korean
 //! fixtures only, never the production profile.
 use super::{
-    classification::{CATEGORIES, CATEGORY_PROTOTYPES, INSTRUCTION},
     evaluation::{cases, Case},
     Worker,
 };
+use rhythm_embed::{CATEGORIES, CATEGORY_PROTOTYPES, INSTRUCTION, SEARCH_INSTRUCTION};
 use serde_json::{json, Value};
 use std::{
     path::{Path, PathBuf},
@@ -320,7 +320,7 @@ async fn actual_semantic_search_evaluation() {
     // Notices are embedded exactly as the production classifier stores them.
     let notices = cases
         .iter()
-        .map(|case| super::classification::input(&case.title, &case.body()))
+        .map(|case| rhythm_embed::input(&case.title, &case.body()))
         .collect::<Vec<_>>();
     let notice_vectors = embed_batch(&worker, &model, &notices)
         .await
@@ -328,8 +328,8 @@ async fn actual_semantic_search_evaluation() {
     let instructions = [
         ("retrieval", "Instruct: Given a Korean search query, retrieve relevant Korean university notices\nQuery: "),
         // The shipped instruction; the others are the alternatives it was chosen over.
-        ("production", super::classification::SEARCH_INSTRUCTION),
-        ("classify", super::classification::INSTRUCTION),
+        ("production", SEARCH_INSTRUCTION),
+        ("classify", INSTRUCTION),
         ("plain", ""),
     ];
     let mut variants = Vec::new();
@@ -416,7 +416,7 @@ async fn actual_semantic_search_evaluation() {
     }
     let inputs = SEARCH_QUERIES
         .iter()
-        .map(|(query, _)| format!("{}{query}", super::classification::SEARCH_INSTRUCTION))
+        .map(|(query, _)| format!("{}{query}", SEARCH_INSTRUCTION))
         .collect::<Vec<_>>();
     let query_vectors = embed_batch(&worker, &model, &inputs)
         .await

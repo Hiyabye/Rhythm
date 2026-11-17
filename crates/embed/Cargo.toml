@@ -1,0 +1,11 @@
+[package]
+name = "rhythm-embed"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.90"
+license = "GPL-3.0-or-later"
+description = "Notice embedding inputs, category prototypes and scoring shared by Rhythm's app and collector"
+publish = false
+
+[dependencies]
+sha2 = "0.10"

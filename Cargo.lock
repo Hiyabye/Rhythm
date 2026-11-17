@@ -3926,6 +3926,7 @@ dependencies = [
  "objc2-user-notifications",
  "pdf-extract",
  "reqwest 0.12.28",
+ "rhythm-embed",
  "rhythm-sources",
  "rusqlite",
  "scraper",
@@ -3944,6 +3945,13 @@ dependencies = [
  "url",
  "windows 0.61.3",
  "zip",
+]
+
+[[package]]
+name = "rhythm-embed"
+version = "0.0.0"
+dependencies = [
+ "sha2 0.10.9",
 ]
 
 [[package]]
