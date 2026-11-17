@@ -78,8 +78,10 @@ impl Fake {
             .collect()
     }
     fn detail(&self, id: u64) -> String {
-        let mut value: Value =
-            serde_json::from_str(include_str!("../fixtures/main-detail.json")).unwrap();
+        let mut value: Value = serde_json::from_str(include_str!(
+            "../../../../crates/sources/src/fixtures/main-detail.json"
+        ))
+        .unwrap();
         let data = &mut value["data"];
         data["pkId"] = json!(id);
         data["title"] = json!(format!("장학금 AI 연구 공지 {id}"));
@@ -160,8 +162,10 @@ impl Transport for Fake {
                 .unwrap();
             let pages = self.pages.lock().unwrap();
             let ids = pages.get(page - 1).ok_or("없는 목록 페이지")?;
-            let mut value: Value =
-                serde_json::from_str(include_str!("../fixtures/main-list-exact.json")).unwrap();
+            let mut value: Value = serde_json::from_str(include_str!(
+                "../../../../crates/sources/src/fixtures/main-list-exact.json"
+            ))
+            .unwrap();
             let template = value["data"]["list"][0].clone();
             let rows: Vec<_> = ids
                 .iter()
@@ -228,14 +232,20 @@ impl Transport for Fake {
         }
         if url.host_str() == Some("computing.sogang.ac.kr") && url.path().ends_with("/list") {
             return body(
-                include_bytes!("../fixtures/computing-academic-list.html").to_vec(),
+                include_bytes!(
+                    "../../../../crates/sources/src/fixtures/computing-academic-list.html"
+                )
+                .to_vec(),
                 "text/html",
                 None,
             );
         }
         if url.host_str() == Some("computing.sogang.ac.kr") && url.path().ends_with("/detail/969") {
             return body(
-                include_bytes!("../fixtures/computing-academic-detail.html").to_vec(),
+                include_bytes!(
+                    "../../../../crates/sources/src/fixtures/computing-academic-detail.html"
+                )
+                .to_vec(),
                 "text/html",
                 None,
             );
@@ -460,9 +470,12 @@ async fn sitemap_listing_skips_an_unchanged_article_until_its_change_time_moves(
     .unwrap());
 }
 
-const SE_NOTICE_LIST_1: &str = include_str!("../fixtures/semiconductor-notice-list.html");
-const SE_NOTICE_LIST_2: &str = include_str!("../fixtures/semiconductor-notice-page2.html");
-const SE_NOTICE_LIST_3: &str = include_str!("../fixtures/semiconductor-notice-last.html");
+const SE_NOTICE_LIST_1: &str =
+    include_str!("../../../../crates/sources/src/fixtures/semiconductor-notice-list.html");
+const SE_NOTICE_LIST_2: &str =
+    include_str!("../../../../crates/sources/src/fixtures/semiconductor-notice-page2.html");
+const SE_NOTICE_LIST_3: &str =
+    include_str!("../../../../crates/sources/src/fixtures/semiconductor-notice-last.html");
 const SE_IMAGE: &str = "https://se.sogang.ac.kr/smart_editor/upload/1-2.png";
 const SE_ATTACHMENT: &str =
     "https://se.sogang.ac.kr/board/filedown.php?filepath=abc&filename=%EC%95%88%EB%82%B4.pdf";
@@ -2894,12 +2907,14 @@ async fn community_board_syncs_text_and_robots_allowed_attachment_then_reopens_o
     fake.extra.lock().unwrap().insert(
         detail.into(),
         Some((
-            include_str!("../fixtures/community-ee-general-detail-2867.html")
-                .replace(
-                    "/kor/community/notice02.php?pNo=2&amp;code=general",
-                    "/kor/community/notice02.php?pNo=1&amp;code=general",
-                )
-                .into_bytes(),
+            include_str!(
+                "../../../../crates/sources/src/fixtures/community-ee-general-detail-2867.html"
+            )
+            .replace(
+                "/kor/community/notice02.php?pNo=2&amp;code=general",
+                "/kor/community/notice02.php?pNo=1&amp;code=general",
+            )
+            .into_bytes(),
             "text/html".into(),
         )),
     );
@@ -3082,7 +3097,7 @@ fn viewer_fake(ids: &[(u64, &str)]) -> Fake {
     extra.insert(
         VIEWER_PDF.into(),
         Some((
-            include_bytes!("../fixtures/main-pdf-551680.pdf").to_vec(),
+            include_bytes!("../../../../crates/sources/src/fixtures/main-pdf-551680.pdf").to_vec(),
             "application/octet-stream".into(),
         )),
     );

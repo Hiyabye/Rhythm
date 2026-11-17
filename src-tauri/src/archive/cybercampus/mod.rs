@@ -22,8 +22,9 @@ use std::{
 };
 use url::Url;
 
-pub const SOURCE_ID: &str = "cybercampus";
-pub const FAMILY: &str = "cybercampus";
+pub use rhythm_sources::catalog::{
+    CYBERCAMPUS_FAMILY as FAMILY, CYBERCAMPUS_SOURCE_ID as SOURCE_ID,
+};
 /// eClass shows 20 notices per list page; a course rarely has more than a few
 /// pages, so this bounds a malformed total, not a real board.
 const NOTICE_PAGES: u32 = 25;

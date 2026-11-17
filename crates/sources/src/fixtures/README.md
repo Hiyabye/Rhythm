@@ -190,4 +190,4 @@ chrome outside `#inner_wrap` was removed, and line endings are LF.
   original response stay archived.
 
 `dates/notices.json` is synthetic: short Korean notice texts written for the #226
-date-extractor prototype (`archive/dates.rs`), not captured from any site.
+date-extractor prototype (`crates/sources/src/dates.rs`), not captured from any site.

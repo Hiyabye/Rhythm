@@ -15,11 +15,11 @@ test('documentation-only changes run no jobs', () => {
 });
 
 test('markdown never runs the Rust or packaging jobs', () => {
-  assert.deepEqual(classify(['src-tauri/src/archive/certificates/README.md', 'src-tauri/src/archive/fixtures/README.md']), none);
+  assert.deepEqual(classify(['src-tauri/src/archive/certificates/README.md', 'crates/sources/src/fixtures/README.md']), none);
   // Still a frontend change: tests/ and scripts/ hold Node test inputs.
   assert.deepEqual(classify(['scripts/NOTES.md']), { ...none, frontend: true });
   // A real Rust change in the same diff still runs Rust.
-  assert.deepEqual(classify(['src-tauri/src/archive/fixtures/README.md', 'src-tauri/src/main.rs']), { ...none, frontend: true, rust: true });
+  assert.deepEqual(classify(['crates/sources/src/fixtures/README.md', 'src-tauri/src/main.rs']), { ...none, frontend: true, rust: true });
 });
 
 test('each area selects only its own jobs', () => {
@@ -28,6 +28,9 @@ test('each area selects only its own jobs', () => {
   assert.deepEqual(classify(['src-tauri/src/main.rs']), { ...none, frontend: true, rust: true });
   assert.deepEqual(classify(['src-tauri/vendor/mac-usernotifications/src/lib.rs']), { ...none, rust: true });
   assert.deepEqual(classify(['src-tauri/vendor/mac-usernotifications/Cargo.toml']), { ...none, rust: true });
+  assert.deepEqual(classify(['crates/sources/src/parser.rs']), { ...none, rust: true });
+  assert.deepEqual(classify(['crates/sources/src/fixtures/main-detail.json']), { ...none, rust: true });
+  assert.deepEqual(classify(['crates/sources/Cargo.toml']), { ...none, rust: true, packaging: true });
   assert.deepEqual(classify(['Cargo.lock']), { ...none, rust: true, packaging: true });
   assert.deepEqual(classify(['scripts/desktop.mjs']), { ...none, frontend: true, packaging: true });
   assert.deepEqual(classify(['src-tauri/tauri.windows.conf.json']), { ...none, rust: true, packaging: true });

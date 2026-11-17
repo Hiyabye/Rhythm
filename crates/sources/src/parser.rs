@@ -104,7 +104,7 @@ fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String>
         .filter(|v| !v.trim().is_empty())
         .ok_or_else(|| PARSER_ERROR.into())
 }
-pub(super) fn main_canonical(external: &str) -> Url {
+pub fn main_canonical(external: &str) -> Url {
     let mut url = Url::parse(&format!("https://www.sogang.ac.kr/ko/detail/{external}")).unwrap();
     url.query_pairs_mut().extend_pairs([
         ("bbsConfigFk", "2"),
@@ -620,7 +620,7 @@ fn viewer_pdfs(content: &str) -> Vec<ResourceInput> {
             }
             let mut files = viewer.query_pairs().filter(|(key, _)| key == "file");
             let file = Url::parse(&files.next()?.1).ok()?;
-            if files.next().is_some() || super::network::validate_url(&file).is_err() {
+            if files.next().is_some() || crate::policy::validate_url(&file).is_err() {
                 return None;
             }
             let filename = file
@@ -703,10 +703,7 @@ fn iframe_only(content: &str) -> bool {
     only_iframes(fragment.root_element(), 0, &mut found) && found
 }
 
-pub(super) fn sanitize(
-    content: &str,
-    base: &str,
-) -> Result<(String, String, Vec<ResourceInput>), String> {
+pub fn sanitize(content: &str, base: &str) -> Result<(String, String, Vec<ResourceInput>), String> {
     let fragment = Html::parse_fragment(content);
     let mut html = String::new();
     let mut plain = String::new();

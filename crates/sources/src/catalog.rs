@@ -1,5 +1,10 @@
 use super::model::{SourceDefinition, SourceGroup};
 
+/// The authenticated eClass connector. The app fetches it with the user's own
+/// session; it is listed here so every consumer sees one catalog.
+pub const CYBERCAMPUS_SOURCE_ID: &str = "cybercampus";
+pub const CYBERCAMPUS_FAMILY: &str = "cybercampus";
+
 /// Settings groups, parents before children, in display order. Every board in
 /// `definitions` except Cybercampus belongs to exactly one of them.
 pub fn groups() -> Vec<SourceGroup> {
@@ -180,12 +185,12 @@ pub fn definitions() -> Vec<SourceDefinition> {
     // The logged-in user's own course notices, read through the eClass session
     // (#86); not a public board, so it has its own description.
     sources.push(SourceDefinition {
-        id: super::cybercampus::SOURCE_ID.into(),
+        id: CYBERCAMPUS_SOURCE_ID.into(),
         name: "강의 공지".into(),
         organization: "서강대학교 · 사이버캠퍼스".into(),
         description: "로그인한 계정의 이번 학기 수강 강좌 공지와 첨부 파일을 보관하고, 과제와 마감을 함께 가져옵니다.".into(),
         url: "https://eclass.sogang.ac.kr/ilos/main/main_form.acl".into(),
-        family: super::cybercampus::FAMILY.into(),
+        family: CYBERCAMPUS_FAMILY.into(),
         supported: true,
         group: None,
     });

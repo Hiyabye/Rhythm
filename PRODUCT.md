@@ -64,7 +64,7 @@ Voice that stays: all user-facing UI, feedback and errors are in natural Korean.
 
 ## Evidence on Hand
 
-- Real archived Sogang notices exist only in the user's local profile. Fixtures in `src-tauri/src/archive/fixtures/` hold official notice content that keeps its original rights.
+- Real archived Sogang notices exist only in the user's local profile. Fixtures in `crates/sources/src/fixtures/` hold official notice content that keeps its original rights.
 - No testimonials, user counts, benchmarks or press exist. Do not invent any.
 - Measured on one machine (M1 Pro, 16 GiB): about 73 ms of Metal inference per synthetic notice with the Qwen3-Embedding model (237 ms on CPU), plus the one-time model integrity check. This is not a performance promise.
 - Mocked-IPC Playwright UI tests (`npm run test:ui`) build and serve the real frontend for visual checks. They do not verify native behavior.

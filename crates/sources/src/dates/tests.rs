@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// The synthetic evaluation notices shared with the embedding evaluation
-/// (`intelligence/evaluation.json`); published 2026-01-01 like that harness.
+/// (`src-tauri/src/intelligence/evaluation.json`); published 2026-01-01 like that harness.
 #[derive(Deserialize)]
 struct AiCase {
     id: String,
@@ -99,8 +99,10 @@ fn report(name: &str, outcomes: &[Outcome]) {
 
 #[test]
 fn synthetic_ai_evaluation_deadlines() {
-    let cases: Vec<AiCase> =
-        serde_json::from_str(include_str!("../../intelligence/evaluation.json")).unwrap();
+    let cases: Vec<AiCase> = serde_json::from_str(include_str!(
+        "../../../../src-tauri/src/intelligence/evaluation.json"
+    ))
+    .unwrap();
     let started = std::time::Instant::now();
     let mut characters = 0;
     let outcomes: Vec<Outcome> = cases
