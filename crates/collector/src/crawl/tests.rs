@@ -636,3 +636,75 @@ async fn a_page_of_only_pins_is_not_a_known_frontier() {
     assert!(fake.paths().iter().any(|url| url.contains("pageNum=4")));
     assert_eq!(notices(&state).len(), 32);
 }
+
+/// Answers every request slowly with a failure, recording how many requests
+/// are in flight per host and in total.
+#[derive(Default)]
+struct Slow {
+    inflight: Mutex<HashMap<String, usize>>,
+    host_peak: AtomicU64,
+    total_peak: AtomicU64,
+    requests: AtomicU64,
+}
+impl Transport for Slow {
+    async fn fetch(
+        &self,
+        url: &Url,
+        _validators: Validators,
+        _limit: usize,
+        _cancel: &AtomicBool,
+        _access: Access,
+    ) -> Result<Fetch, FetchError> {
+        let host = url.host_str().unwrap().to_owned();
+        {
+            let mut inflight = self.inflight.lock().unwrap();
+            let count = inflight.entry(host.clone()).or_default();
+            *count += 1;
+            self.host_peak.fetch_max(*count as u64, Ordering::AcqRel);
+            let total: usize = inflight.values().sum();
+            self.total_peak.fetch_max(total as u64, Ordering::AcqRel);
+        }
+        self.requests.fetch_add(1, Ordering::AcqRel);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        *self.inflight.lock().unwrap().get_mut(&host).unwrap() -= 1;
+        Err("모의 학교 서버 연결 실패".into())
+    }
+}
+
+#[tokio::test]
+async fn boards_run_three_hosts_at_once_and_one_board_per_host() {
+    let state = State::open_in_memory().unwrap();
+    let slow = Slow::default();
+    let boards = public_boards();
+    let outcomes = run_boards(
+        &state,
+        &slow,
+        &boards,
+        Budget::default(),
+        &AtomicBool::new(false),
+    )
+    .await;
+    let ids: Vec<_> = outcomes.iter().map(|(id, _)| id.as_str()).collect();
+    let expected: Vec<_> = boards.iter().map(|board| board.id.as_str()).collect();
+    assert_eq!(ids, expected);
+    assert!(outcomes.iter().all(|(_, outcome)| outcome.is_err()));
+    assert_eq!(slow.host_peak.load(Ordering::Acquire), 1);
+    assert_eq!(slow.total_peak.load(Ordering::Acquire), 3);
+    assert_eq!(state.board(MAIN).unwrap().status, "failed");
+}
+
+#[tokio::test]
+async fn a_cancelled_run_starts_no_further_board() {
+    let state = State::open_in_memory().unwrap();
+    let slow = Slow::default();
+    let outcomes = run_boards(
+        &state,
+        &slow,
+        &public_boards(),
+        Budget::default(),
+        &AtomicBool::new(true),
+    )
+    .await;
+    assert!(outcomes.is_empty());
+    assert_eq!(slow.requests.load(Ordering::Acquire), 0);
+}
