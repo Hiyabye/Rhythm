@@ -139,6 +139,10 @@ pub struct ArchiveQuery {
     #[serde(default)]
     pub query: String,
     pub source_id: Option<String>,
+    /// The boards placed directly in this settings group, not its nested groups.
+    /// Exclusive with `source_id`.
+    #[serde(default)]
+    pub group_id: Option<String>,
     pub category: Option<String>,
     #[serde(default)]
     pub saved_only: bool,

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { AiSnapshot, ArchivePage, ArchiveQuery, ArchiveSummary, AiClassification, CalendarNoticeDates, CalendarTodo, CybercampusTask, NoticeDate, TodoPrefill, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceInfo, SyncStatus } from './types';
-  import { archiveDate, archiveDay, archiveError, kstInstant, localDayKey, noticeDateMark, noticeDateMeta, noticeDateOn, wallTime } from './archive-format';
+  import type { AiSnapshot, ArchivePage, ArchiveQuery, ArchiveSummary, AiClassification, CalendarNoticeDates, CalendarTodo, CybercampusTask, NoticeDate, TodoPrefill, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceGroup, SourceInfo, SyncStatus } from './types';
+  import { archiveDate, archiveDay, archiveError, groupScope, kstInstant, localDayKey, noticeDateMark, noticeDateMeta, noticeDateOn, scopeGroup, wallTime } from './archive-format';
   import { clock } from './clock.svelte';
   import { confirmAction } from './confirm';
   import CalendarView from './CalendarView.svelte';
@@ -15,7 +15,7 @@
     page: string; desktop: boolean; enabled: Set<string>; sourceRequest: { id: string; token: number };
     activation: { document_id: number; revision_id: number; event_id: number } | null;
     onactivationhandled: () => void; onsettings: (pane?: 'boards' | 'personalization') => void; onsetup: () => void; onextensions: () => void; onsourcechange: (id: string) => void;
-    oncontext: (context: { summary: ArchiveSummary | null; sources: SourceInfo[] | null; status: SyncStatus | null }) => void;
+    oncontext: (context: { summary: ArchiveSummary | null; sources: SourceInfo[] | null; groups: SourceGroup[] | null; status: SyncStatus | null }) => void;
     onweekpane: (visible: boolean) => void;
     ontasks: () => void;
     calendarRequest: { day: string; token: number; prefill: TodoPrefill | null };
@@ -30,6 +30,7 @@
   let result = $state<ArchivePage>({ items: [], total: 0, categories: [] });
   let summary = $state<ArchiveSummary | null>(null);
   let sources = $state<SourceInfo[]>([]);
+  let groups = $state<SourceGroup[]>([]);
   let classifications = $state<Record<number, AiClassification>>({});
   let duplicates = $state<Record<number, SimilarNotice[]>>({});
   let expandedDuplicates = $state<Record<number, boolean>>({});
@@ -117,7 +118,8 @@
     onactivationhandled();
   });
   $effect(() => {
-    const filters = { query, source_id: source || null, category: category || null,
+    const scopedGroup = scopeGroup(source);
+    const filters = { query, source_id: scopedGroup ? null : source || null, group_id: scopedGroup, category: category || null,
       saved_only: page === 'bookmark', unread_only: unread, trashed: page === 'trash', ascending: sort === 'oldest', offset, limit: pageSize };
     const ranked = page === 'search' && sort === 'relevance' && query !== '';
     void revision;
@@ -166,7 +168,7 @@
       void invoke<SyncStatus>('archive_status').then((value) => {
         if (!active) return;
         status = value;
-        oncontext({ summary: null, sources: null, status: value });
+        oncontext({ summary: null, sources: null, groups: null, status: value });
         if (wasRunning && !value.running) { revision++; void refreshContext(); }
         wasRunning = value.running;
       }).catch((reason) => { if (active) error = archiveError(reason); });
@@ -177,11 +179,11 @@
   async function refreshContext() {
     const request = ++contextRequest;
     try {
-      const [counts, catalog, sync] = await Promise.all([
-        invoke<ArchiveSummary>('archive_summary'), invoke<SourceInfo[]>('archive_sources'), invoke<SyncStatus>('archive_status'),
+      const [counts, catalog, tree, sync] = await Promise.all([
+        invoke<ArchiveSummary>('archive_summary'), invoke<SourceInfo[]>('archive_sources'), invoke<SourceGroup[]>('archive_source_groups'), invoke<SyncStatus>('archive_status'),
       ]);
       // Saving, closing the reader and sync completion each refresh; an older answer must not overwrite a newer one.
-      if (active && request === contextRequest) { summary = counts; sources = catalog; status = sync; oncontext({ summary: counts, sources: catalog, status: sync }); }
+      if (active && request === contextRequest) { summary = counts; sources = catalog; groups = tree; status = sync; oncontext({ summary: counts, sources: catalog, groups: tree, status: sync }); }
     } catch (reason) { if (active) error = archiveError(reason); }
     try {
       const snapshot = await invoke<AiSnapshot>('ai_snapshot');
@@ -451,6 +453,18 @@
     return sources.find((item) => item.id === sourceId)?.family ?? 'other';
   }
   // Stored tasks outlive an unsubscribed board; the week follows the 과제·마감 navigation and shows them only while subscribed.
+  // The 정보원 select lists each group's own boards under it; ungrouped boards follow.
+  let scopeOptions = $derived(groups.map((group) => ({ group, boards: sources.filter((item) => item.group === group.id) })).filter((entry) => entry.boards.length));
+  let ungroupedSources = $derived(sources.filter((item) => !item.group || !groups.some((group) => group.id === item.group)));
+  // A group feed, or one of its boards, offers chips for the group's subscribed boards.
+  let chipGroup = $derived(groups.find((group) => group.id === (scopeGroup(source) ?? sources.find((item) => item.id === source)?.group)) ?? null);
+  let chipBoards = $derived(chipGroup ? sources.filter((item) => item.group === chipGroup.id && ((item.supported && item.subscribed) || item.id === source)) : []);
+  function chooseScope(scope: string) {
+    source = scope;
+    category = '';
+    offset = 0;
+    onsourcechange(scope);
+  }
   let showTasks = $derived(enabled.has('cybercampus') && sources.some((item) => item.family === 'cybercampus' && item.subscribed));
   // Open deadlines only: a submitted task or one whose deadline (and late window) has passed is no longer something to plan for.
   let openTasks = $derived.by(() => {
@@ -627,10 +641,16 @@
     {/if}
     <div class="archive-toolbar">
       <div class="archive-filters">
-        <label>정보원<select bind:value={source} onchange={() => { category = ''; offset = 0; onsourcechange(source); }} disabled={!desktop}><option value="">모든 정보원</option>{#each sources as item}<option value={item.id}>{item.organization} · {item.name}</option>{/each}</select></label>
+        <label>정보원<select value={source} onchange={(event) => chooseScope(event.currentTarget.value)} disabled={!desktop}><option value="">모든 정보원</option>{#each scopeOptions as { group, boards } (group.id)}<optgroup label={group.name}><option value={groupScope(group.id)}>{group.name} 전체</option>{#each boards as item (item.id)}<option value={item.id}>{item.name}</option>{/each}</optgroup>{/each}{#each ungroupedSources as item (item.id)}<option value={item.id}>{item.organization} · {item.name}</option>{/each}</select></label>
         <label>분류<select bind:value={category} onchange={() => offset = 0} disabled={!desktop}><option value="">모든 분류</option>{#each result.categories as value}<option value={value}>{value}</option>{/each}</select></label>
         <label>정렬<select bind:value={sort} onchange={() => offset = 0} disabled={!desktop}>{#if page === 'search'}<option value="relevance">관련도순</option>{/if}<option value="newest">게시일 최신순</option><option value="oldest">게시일 오래된순</option></select></label>
       </div>
+      {#if page === 'inbox' && chipGroup && chipBoards.length > 1}
+        <div class="board-chips" role="group" aria-label={`${chipGroup.name} 게시판`}>
+          <button class="chip" aria-pressed={source === groupScope(chipGroup.id)} disabled={!desktop} onclick={() => chooseScope(groupScope(chipGroup.id))}>전체</button>
+          {#each chipBoards as item (item.id)}<button class="chip" aria-pressed={source === item.id} disabled={!desktop} onclick={() => chooseScope(item.id)}>{item.name}</button>{/each}
+        </div>
+      {/if}
       {#if page === 'inbox'}<label class="archive-checkbox"><input type="checkbox" bind:checked={unread} onchange={() => offset = 0} disabled={!desktop} /> 읽지 않은 공지만</label>{/if}
     </div>
     <div class="collection-heading archive-list-heading"><h2 bind:this={listHeading} tabindex="-1">{page === 'trash' ? '휴지통' : page === 'bookmark' ? '저장한 공지' : query ? '검색 결과' : '보관된 공지'} <span class="muted">{result.total.toLocaleString('ko-KR')}</span></h2><div class="heading-actions">{#if result.items.length}<button class="text-button" aria-pressed={selecting} disabled={!desktop} onclick={() => selecting ? stopSelecting() : selecting = true}>{selecting ? '선택 끝내기' : '선택'}</button>{/if}{#if page === 'trash' && result.total}<button class="text-button danger" disabled={!desktop || trashBusy} onclick={() => void deletePermanently(null)}>휴지통 비우기</button>{/if}<button class="text-button" disabled={!desktop || loading} onclick={() => { revision++; void refreshContext(); }}>목록 새로고침</button></div></div>

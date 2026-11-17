@@ -600,6 +600,66 @@ test('sidebar boards scope the inbox and badges describe their counts', async ({
   await expect(sidebar.getByRole('button', { name: '소프트웨어융합대학 소식', exact: true })).not.toHaveAttribute('aria-current');
 });
 
+test('a sidebar group feed lists its own boards, and chips narrow it to one', async ({ page }) => {
+  const board = (id: string, name: string, group: string, subscribed: boolean) => ({ id, name, organization: '서강대학교 · 소프트웨어융합대학', supported: true, subscribed, group });
+  await mockDesktop(page, {
+    count: 4,
+    sourceGroups: [
+      { id: 'sogang', name: '서강대학교', parent: null },
+      { id: 'sogang-computing', name: '소프트웨어융합대학', parent: 'sogang' },
+    ],
+    sourceList: [
+      { ...board('sogang-academic', '학부 학사공지', 'sogang', true), organization: '서강대학교' },
+      board('computing-academic', '학사 공지', 'sogang-computing', true),
+      board('computing-graduate', '대학원 공지', 'sogang-computing', true),
+      board('computing-updates', '소식', 'sogang-computing', false),
+    ],
+    noticeSources: ['computing-academic', 'computing-graduate', 'computing-updates', 'sogang-academic'],
+  });
+  await page.goto('/');
+  const sidebar = page.getByRole('navigation', { name: '기본 탐색', exact: true });
+  const feed = sidebar.getByRole('button', { name: '소프트웨어융합대학', exact: true });
+  const notices = page.getByRole('list', { name: '공지 목록' }).getByRole('listitem');
+  const chips = page.getByRole('group', { name: '소프트웨어융합대학 게시판' });
+  const source = page.getByRole('combobox', { name: '정보원', exact: true });
+
+  // One entry per group instead of one per board; the count covers every board in it.
+  await expect(sidebar.getByRole('button', { name: '서강대학교', exact: true })).toBeVisible();
+  await expect(sidebar.getByRole('button', { name: '대학원 공지' })).toHaveCount(0);
+  await expect(feed).toHaveAccessibleDescription('읽지 않은 공지 3개');
+  await feed.click();
+  await expect(page.getByRole('heading', { level: 1, name: '소프트웨어융합대학', exact: true })).toBeVisible();
+  await expect(page.locator('.page-header p')).toHaveText('게시판 2개 · 받은 소식');
+  await expect(feed).toHaveAttribute('aria-current', 'page');
+  await expect(source).toHaveValue('group:sogang-computing');
+  await expect(notices).toHaveCount(3);
+  const lastQuery = () => page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'archive_query').at(-1).args.query);
+  expect(await lastQuery()).toMatchObject({ source_id: null, group_id: 'sogang-computing' });
+
+  // Chips list the subscribed boards; choosing one keeps the group current in the sidebar.
+  await expect(chips.getByRole('button')).toHaveText(['전체', '학사 공지', '대학원 공지']);
+  await expect(chips.getByRole('button', { name: '전체' })).toHaveAttribute('aria-pressed', 'true');
+  await chips.getByRole('button', { name: '대학원 공지' }).click();
+  await expect(notices).toHaveCount(1);
+  await expect(notices.first()).toContainText('한국어 공지 02');
+  await expect(source).toHaveValue('computing-graduate');
+  await expect(page.getByRole('heading', { level: 1, name: '대학원 공지', exact: true })).toBeVisible();
+  await expect(feed).toHaveAttribute('aria-current', 'page');
+  await chips.getByRole('button', { name: '전체' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(notices).toHaveCount(3);
+
+  // A parent group's feed leaves out its nested groups, and one board needs no chips.
+  await source.selectOption({ label: '서강대학교 전체' });
+  await expect(notices).toHaveCount(1);
+  await expect(notices.first()).toContainText('한국어 공지 04');
+  await expect(sidebar.getByRole('button', { name: '서강대학교', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('group', { name: '서강대학교 게시판' })).toHaveCount(0);
+  await source.selectOption('');
+  await expect(notices).toHaveCount(4);
+  await expect(feed).not.toHaveAttribute('aria-current');
+});
+
 test('board groups nest by level, and a group off hides and stops its subtree but keeps each pick', async ({ page }) => {
   const board = (id: string, name: string, group: string, subscribed = false) => ({ id, name, organization: '서강대학교', supported: true, subscribed, group });
   await mockDesktop(page, {
@@ -623,9 +683,19 @@ test('board groups nest by level, and a group off hides and stops its subtree bu
   const toggle = (name: string) => page.getByRole('switch', { name: `${name} 전체`, exact: true });
   const pick = (name: string) => page.getByRole('switch', { name: `${name} 구독`, exact: true });
 
-  // Each level sits inside its parent, with its own boards as small switches.
+  const picker = (name: string) => group(name).getByRole('button', { name: /^게시판 (고르기|접기)/ }).first();
+  // Each level sits inside its parent. A group's own boards fold behind their count
+  // while one is picked; a group with none picked starts open.
   await expect(group('서강대학교').getByRole('heading', { name: '공과대학', level: 4 })).toBeVisible();
   await expect(group('공과대학').getByRole('heading', { name: '기계공학과', level: 5 })).toBeVisible();
+  await expect(picker('공과대학')).toHaveAccessibleName('게시판 고르기 1/2');
+  await expect(picker('공과대학')).toHaveAttribute('aria-expanded', 'false');
+  await expect(pick('공과대학 연구공지')).toHaveCount(0);
+  await expect(picker('소프트웨어융합대학')).toHaveAttribute('aria-expanded', 'true');
+  await expect(pick('소프트웨어융합대학 소식')).toBeVisible();
+  await picker('공과대학').press('Enter');
+  await expect(picker('공과대학')).toHaveAttribute('aria-expanded', 'true');
+  await expect(picker('공과대학')).toBeFocused();
   await expect(group('공과대학').getByRole('list', { name: '공과대학 게시판' }).getByRole('switch')).toHaveCount(2);
   await expect(group('서강대학교').locator('.board-group-count').first()).toHaveText('구독 3/5');
 
@@ -651,6 +721,7 @@ test('board groups nest by level, and a group off hides and stops its subtree bu
   await toggle('공과대학').click();
   await expect(pick('공과대학 연구공지')).toHaveAttribute('aria-checked', 'true');
   await expect(pick('공과대학 일반공지')).toHaveAttribute('aria-checked', 'false');
+  await picker('기계공학과').click();
   await expect(pick('기계공학과 기계 일반공지')).toHaveAttribute('aria-checked', 'true');
   await expect(page.locator('.collect-status')).toHaveText('구독 3개');
   expect(await callCount(page, 'archive_set_group')).toBe(4);

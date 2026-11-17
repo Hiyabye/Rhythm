@@ -303,6 +303,8 @@ export interface AiSnapshot {
 export interface ArchiveQuery {
   query: string;
   source_id: string | null;
+  /** The boards placed directly in this settings group; exclusive with `source_id`. */
+  group_id: string | null;
   category: string | null;
   saved_only: boolean;
   unread_only: boolean;

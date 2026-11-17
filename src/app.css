@@ -1011,6 +1011,9 @@ button svg {
 .board-group .board-group + .board-group {
   margin-top: 2px;
 }
+.board-picker {
+  justify-self: start;
+}
 .board-group.off .board-group-name {
   color: var(--secondary);
 }
@@ -1704,6 +1707,14 @@ select:focus-visible {
   min-width: 120px;
   max-width: 260px;
   font-size: 12px;
+}
+/* A group feed's boards, on their own row above the filters. */
+.board-chips {
+  order: -1;
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 .archive-checkbox {
   display: inline-flex;

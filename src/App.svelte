@@ -17,9 +17,9 @@
   import { contributed, enabledExtensions, navigation, settingsPanes, sourceExtensions, type SettingsPane } from './lib/extensions';
   import Hint from './lib/Hint.svelte';
   import { fade, fly, slide } from './lib/motion';
-  import { archiveError as message, archiveDay, localDayKey, openTask, organizationLabel, timeOptions } from './lib/archive-format';
+  import { archiveError as message, archiveDay, groupScope, localDayKey, openTask, organizationLabel, scopeGroup, timeOptions } from './lib/archive-format';
   import { clock } from './lib/clock.svelte';
-  import type { ArchiveSummary, AutoTrashMonths, ClockFormat, EnergyProfile, Settings, Snapshot, SourceInfo, SyncStatus, Theme, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusTask, TodoPrefill } from './lib/types';
+  import type { ArchiveSummary, AutoTrashMonths, ClockFormat, EnergyProfile, Settings, Snapshot, SourceGroup, SourceInfo, SyncStatus, Theme, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusTask, TodoPrefill } from './lib/types';
 
   const themes: { id: Theme; label: string; icon: string }[] = [
     { id: 'light', label: '라이트', icon: 'today' },
@@ -79,8 +79,9 @@
   // Archive context reported by ArchiveView; the sidebar reads it but never fetches it separately.
   let summary = $state<ArchiveSummary | null>(null);
   let sources = $state<SourceInfo[]>([]);
+  let sourceGroups = $state<SourceGroup[]>([]);
   let syncStatus = $state<SyncStatus | null>(null);
-  // A new token asks ArchiveView to reset its filters, optionally scoped to one board.
+  // A new token asks ArchiveView to reset its filters, optionally scoped to one board or group (`groupScope`).
   let sourceRequest = $state({ id: '', token: 0 });
   let activeSource = $state('');
   let weekPane = $state(false);
@@ -90,24 +91,33 @@
   // 휴지통 belongs to the notice sources, but stays reachable while it still holds notices.
   let primaryNavigation = $derived(contributed(navigation, enabled).filter((item) => item.id !== 'trash'
     || sourceExtensions.some((owner) => enabled.has(owner.id)) || Boolean(summary?.trashed)));
-  // Each enabled source extension gets a sidebar group of its subscribed boards.
-  // Board names repeat across institutions ("학사 공지" / "학사공지"), so a group lists them by organization.
+  // Each enabled source extension gets a sidebar section: one feed per settings group holding a
+  // subscribed board, then ungrouped boards by organization ("학사 공지" / "학사공지" repeat across them).
+  // A group feed lists every board placed directly in it, so its count covers them all.
   let sidebarGroups = $derived(sourceExtensions.filter((owner) => enabled.has(owner.id)).map((owner) => {
-    const groups = new Map<string, SourceInfo[]>();
-    for (const board of boards.filter((item) => item.extension === owner.id)) {
+    const owned = boards.filter((item) => item.extension === owner.id);
+    const feeds = sourceGroups.filter((group) => owned.some((board) => board.group === group.id)).map((group) => {
+      const members = sources.filter((item) => item.group === group.id);
+      return { group, family: members[0].family, unread: members.reduce((sum, item) => sum + item.unread, 0) };
+    });
+    const organizations = new Map<string, SourceInfo[]>();
+    for (const board of owned.filter((item) => !sourceGroups.some((group) => group.id === item.group))) {
       const label = organizationLabel(board.organization);
-      groups.set(label, [...(groups.get(label) ?? []), board]);
+      organizations.set(label, [...(organizations.get(label) ?? []), board]);
     }
-    return { ...owner, name: snapshot?.extensions.find((extension) => extension.id === owner.id)?.display_name ?? owner.id, organizations: [...groups] };
+    return { ...owner, name: snapshot?.extensions.find((extension) => extension.id === owner.id)?.display_name ?? owner.id, feeds, organizations: [...organizations] };
   }));
   // A page or pane whose extension was just turned off falls back to the core shell.
   // A board scope keeps the inbox open: its owner may be Cybercampus alone.
   $effect(() => {
     if (!snapshot) return;
-    if (page !== 'settings' && !primaryNavigation.some((item) => item.id === page) && !(page === 'inbox' && boards.some((board) => board.id === activeSource))) page = 'today';
+    if (page !== 'settings' && !primaryNavigation.some((item) => item.id === page) && !(page === 'inbox' && boards.some((board) => board.id === activeSource || groupScope(board.group ?? '') === activeSource))) page = 'today';
     if (!panes.some((item) => item.id === settingsPane)) settingsPane = 'extensions';
   });
   let scopedBoard = $derived(page === 'inbox' && activeSource ? sources.find((item) => item.id === activeSource) ?? null : null);
+  let scopedGroup = $derived(page === 'inbox' ? sourceGroups.find((group) => group.id === scopeGroup(activeSource)) ?? null : null);
+  // A board chosen inside a group feed keeps the group's sidebar entry current.
+  let currentFeed = $derived(page === 'inbox' ? scopeGroup(activeSource) ?? scopedBoard?.group ?? null : null);
   // Only the open-task count is shown; the 과제·마감 page loads its own list.
   let tasks = $state<CybercampusTask[]>([]);
   let now = $state(Date.now());
@@ -399,6 +409,12 @@
       {#each sidebarGroups as group (group.id)}
         <p class="source-group-heading" id={`group-${group.id}`}>{group.name}</p>
         <ul class="source-list" aria-labelledby={`group-${group.id}`}>
+          {#each group.feeds as feed (feed.group.id)}
+            <li><button class="source-item board" class:active={currentFeed === feed.group.id} aria-current={currentFeed === feed.group.id ? 'page' : undefined} aria-label={feed.group.name} aria-describedby={feed.unread ? `feed-count-${feed.group.id}` : undefined} onclick={() => navigate('inbox', groupScope(feed.group.id))}>
+              <span class={`board-swatch family-${feed.family}`} aria-hidden="true"></span><span class="source-label">{feed.group.name}</span>
+              {#if feed.unread}<span class="count" aria-hidden="true">{feed.unread.toLocaleString('ko-KR')}</span><span class="sr-only" id={`feed-count-${feed.group.id}`}>읽지 않은 공지 {feed.unread}개</span>{/if}
+            </button></li>
+          {/each}
           {#each group.organizations as [organization, members] (organization)}
             <li class="board-organization" aria-hidden="true">{organization}</li>
             {#each members as board (board.id)}
@@ -408,7 +424,7 @@
               </button></li>
             {/each}
           {:else}
-            <li><button class="source-item quiet" onclick={() => openSettings(group.pane)}><span class="source-label">구독한 게시판 없음 · 설정</span></button></li>
+            {#if !group.feeds.length}<li><button class="source-item quiet" onclick={() => openSettings(group.pane)}><span class="source-label">구독한 게시판 없음 · 설정</span></button></li>{/if}
           {/each}
         </ul>
       {/each}
@@ -424,7 +440,7 @@
   </aside>
 
   <main id="main" tabindex="-1" class:with-week-pane={weekPane}>
-    <header class="page-header"><h1>{scopedBoard?.name ?? heading}</h1>{#if scopedBoard}<p>{organizationLabel(scopedBoard.organization)} · 받은 소식</p>{/if}{#if page === 'today'}<p>{date}{#if summary}{' · '}읽지 않은 공지 {summary.unread.toLocaleString('ko-KR')}{#if summary.new_since_sync}{' · '}최근 동기화로 새 공지 {summary.new_since_sync.toLocaleString('ko-KR')}{/if}{/if}</p>{/if}</header>
+    <header class="page-header"><h1>{scopedGroup?.name ?? scopedBoard?.name ?? heading}</h1>{#if scopedGroup}<p>게시판 {boards.filter((board) => board.group === scopedGroup.id).length}개 · 받은 소식</p>{:else if scopedBoard}<p>{organizationLabel(scopedBoard.organization)} · 받은 소식</p>{/if}{#if page === 'today'}<p>{date}{#if summary}{' · '}읽지 않은 공지 {summary.unread.toLocaleString('ko-KR')}{#if summary.new_since_sync}{' · '}최근 동기화로 새 공지 {summary.new_since_sync.toLocaleString('ko-KR')}{/if}{/if}</p>{/if}</header>
     {#if !desktop && !loading}<div class="banner browser-notice" role="status"><Icon name="info" /><div><strong>데스크톱 앱에서 시작해 주세요</strong><p>브라우저에서는 화면만 둘러볼 수 있습니다. 설정 저장과 로컬 데이터 접근은 Rhythm 앱에서 사용할 수 있습니다.</p></div></div>{/if}
     {#if error}<div class="banner error" role="alert" transition:slide><Icon name="info" /><div><strong>작업을 완료하지 못했습니다</strong><p>{error}</p></div>{#if !snapshot && desktop}<button class="text-button" onclick={load}>다시 시도</button>{/if}</div>{/if}
     {#if restoreOutcome}<div class="banner" role="status" transition:slide><Icon name="info" /><div><strong>백업 복원을 마쳤습니다</strong><p>공지 {restoreOutcome.documents.toLocaleString('ko-KR')}건과 첨부 자료 {restoreOutcome.resources.toLocaleString('ko-KR')}개를 복원하고 무결성을 확인했습니다.{#if restoreOutcome.unavailable_resources} 백업 당시 내려받지 못한 첨부 자료 {restoreOutcome.unavailable_resources.toLocaleString('ko-KR')}개는 포함되지 않았습니다.{/if}{#if restoreOutcome.models_needing_reinstall} 사용할 수 없는 AI 모델 {restoreOutcome.models_needing_reinstall.toLocaleString('ko-KR')}개는 다시 설치해 주세요.{/if} 이전 데이터는 데이터 폴더에 복구용으로 보관되어 있습니다.</p></div><button class="text-button" onclick={() => restoreOutcome = null}>닫기</button></div>{/if}
@@ -492,7 +508,7 @@
         ontasks={() => void navigate('tasks')}
         {calendarRequest}
         oncalendar={(day, prefill) => void openCalendar(day, prefill)}
-        oncontext={(context) => { if (context.summary) summary = context.summary; if (context.sources) sources = context.sources; syncStatus = context.status; }} />
+        oncontext={(context) => { if (context.summary) summary = context.summary; if (context.sources) sources = context.sources; if (context.groups) sourceGroups = context.groups; syncStatus = context.status; }} />
     {/if}
   </main>
 </div>

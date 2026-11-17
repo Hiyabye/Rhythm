@@ -339,6 +339,11 @@ impl Store {
         transaction.commit().map_err(|e| e.to_string())?;
         changed.iter().map(|id| self.source(id)).collect()
     }
+    fn source_group(&self, id: &str) -> Result<(), String> {
+        self.connection
+            .query_row("SELECT 1 FROM source_groups WHERE id=?1", [id], |_| Ok(()))
+            .map_err(|_| "게시판 그룹을 찾을 수 없습니다.".into())
+    }
     pub(crate) fn sources(&self) -> Result<Vec<SourceInfo>, String> {
         let mut statement = self
             .connection
@@ -935,10 +940,21 @@ impl Store {
             NOT_TRASHED.to_string()
         }];
         let mut values: Vec<Value> = Vec::new();
-        if let Some(source) = &query.source_id {
-            self.source(source)?;
-            filters.push("d.source_id=?".into());
-            values.push(source.clone().into());
+        match (&query.source_id, &query.group_id) {
+            (Some(_), Some(_)) => {
+                return Err("정보원과 게시판 그룹을 함께 고를 수 없습니다.".into())
+            }
+            (Some(source), None) => {
+                self.source(source)?;
+                filters.push("d.source_id=?".into());
+                values.push(source.clone().into());
+            }
+            (None, Some(group)) => {
+                self.source_group(group)?;
+                filters.push("d.source_id IN (SELECT id FROM sources WHERE group_id=?)".into());
+                values.push(group.clone().into());
+            }
+            (None, None) => {}
         }
         if let Some(category) = &query.category {
             filters.push("d.category=?".into());
@@ -993,15 +1009,16 @@ impl Store {
         Ok(ArchivePage {
             items,
             total,
-            categories: self.archive_categories(query.source_id.as_deref())?,
+            categories: self.archive_categories(query)?,
             meaning_only: Vec::new(),
             semantic: false,
         })
     }
-    fn archive_categories(&self, source_id: Option<&str>) -> Result<Vec<String>, String> {
-        let mut categories_statement=self.connection.prepare(&format!("SELECT DISTINCT d.category FROM documents d WHERE d.category IS NOT NULL AND d.category<>'' AND (?1 IS NULL OR d.source_id=?1) AND {NOT_TRASHED} ORDER BY d.category")).map_err(|e|e.to_string())?;
+    /// Categories within the query's source or group; the other filters are left out.
+    fn archive_categories(&self, query: &ArchiveQuery) -> Result<Vec<String>, String> {
+        let mut categories_statement=self.connection.prepare(&format!("SELECT DISTINCT d.category FROM documents d WHERE d.category IS NOT NULL AND d.category<>'' AND (?1 IS NULL OR d.source_id=?1) AND (?2 IS NULL OR d.source_id IN (SELECT id FROM sources WHERE group_id=?2)) AND {NOT_TRASHED} ORDER BY d.category")).map_err(|e|e.to_string())?;
         let categories = categories_statement
-            .query_map([source_id], |r| r.get(0))
+            .query_map(params![query.source_id, query.group_id], |r| r.get(0))
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
@@ -1228,7 +1245,7 @@ impl Store {
         Ok(ArchivePage {
             items,
             total,
-            categories: self.archive_categories(query.source_id.as_deref())?,
+            categories: self.archive_categories(query)?,
             meaning_only: semantic_hits
                 .into_iter()
                 .filter(|id| !semantic_text.contains(id))
