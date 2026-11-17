@@ -1716,6 +1716,25 @@ select:focus-visible {
   flex-wrap: wrap;
   gap: 4px;
 }
+/* AI categories, on their own row below the filters. */
+.ai-category-chips {
+  order: 1;
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.ai-category-label {
+  margin-right: 6px;
+  font-size: 12px;
+  color: var(--secondary);
+}
+.chip-count {
+  margin-left: 2px;
+  font-variant-numeric: tabular-nums;
+  opacity: .72;
+}
 .archive-checkbox {
   display: inline-flex;
   align-items: center;

@@ -244,15 +244,7 @@ pub async fn ai_classification_preferences(
 /// SHA-256 of the selected, installed embedding model. Turning automatic
 /// classification off keeps existing rows visible, so the switch is not checked.
 fn embedding_model_sha(state: &AppState) -> Result<Option<String>, String> {
-    with_store(state, |store| {
-        let Some(id) = store.ai_preferences()?.embedding_model_id else {
-            return Ok(None);
-        };
-        Ok(store
-            .ai_model(&id)?
-            .filter(|model| model.kind == "embedding" && model.status == "installed")
-            .and_then(|model| model.sha256))
-    })
+    with_store(state, |store| store.ai_embedding_model_sha())
 }
 
 /// Latest-revision classifications for the visible page. Returns nothing when

@@ -144,6 +144,10 @@ pub struct ArchiveQuery {
     #[serde(default)]
     pub group_id: Option<String>,
     pub category: Option<String>,
+    /// A local AI category. Only notices whose latest revision was classified
+    /// under the installed embedding model and the current config match.
+    #[serde(default)]
+    pub ai_category: Option<String>,
     #[serde(default)]
     pub saved_only: bool,
     #[serde(default)]
@@ -168,6 +172,22 @@ pub struct ArchivePage {
     /// Relevance search only: whether a query vector took part in the ranking.
     #[serde(default)]
     pub semantic: bool,
+    /// AI category counts under every other filter, while the AI extension is
+    /// on and an embedding model is installed.
+    #[serde(default)]
+    pub ai_categories: Option<AiCategoryCounts>,
+}
+/// `counts` follows the classifier's category order and includes zeros.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AiCategoryCounts {
+    pub counts: Vec<AiCategoryCount>,
+    /// Notices whose latest revision has no classification in this scope.
+    pub unclassified: u64,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AiCategoryCount {
+    pub category: String,
+    pub count: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ArchiveSummary {

@@ -42,6 +42,8 @@ export interface FixtureOptions {
   aiInstalled?: boolean;
   aiEmbeddingInstalled?: boolean;
   aiClassificationLow?: boolean;
+  // Per-notice AI category overrides (default 장학); null leaves a notice unclassified.
+  aiCategoryOf?: Record<number, string | null>;
   // Notice 2 is a cross-post of notice 1 and notice 3 is only similar; needs count >= 3.
   aiSimilar?: boolean;
   // With aiEmbeddingInstalled, relevance search adds one meaning-only notice.
@@ -203,10 +205,13 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     const model = (id = 'qwen35-4b', kind: 'generation' | 'embedding' = 'generation') => ({ id, catalog_id: id, name: modelNames[id] ?? id, ownership: 'managed', kind, path: `models/${id}.gguf`, storage_directory: null as string | null, sha256: 'a'.repeat(64), expected_sha256: 'a'.repeat(64), expected_bytes: kind === 'embedding' ? 639150592 : 2740937888, bytes: kind === 'embedding' ? 639150592 : 2740937888, source_revision: 'pinned-revision', source_filename: `${id}.gguf`, status: 'installed', downloaded_bytes: kind === 'embedding' ? 639150592 : 2740937888, resume_etag: null, error: null as string | null, created_at: '2026-10-24 12:00:00', updated_at: '2026-10-24 12:00:00' });
     const embeddingCatalog = { id: 'qwen3-embedding-0-6b', kind: 'embedding', name: 'Qwen3-Embedding 0.6B', parameters: '0.6B', quantization: 'Q8_0', bytes: 639150592, memory_bytes: 2147483648, description: '공지 분류용 임베딩 모델', use_case: '공지 주제 분류', repository: 'Qwen/Qwen3-Embedding-0.6B-GGUF', revision: 'pinned-revision', filename: 'Qwen3-Embedding-0.6B-Q8_0.gguf', sha256: 'd'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null, pooling: 'last', embedding_dim: 1024 };
     const ai = { model_storage: modelStorage, catalog: [embeddingCatalog], models: [...(options.aiInstalled ? [model()] : []), ...(options.aiRetiredModel ? [model('qwen35-9b')] : []), ...(options.aiEmbeddingInstalled ? [model('qwen3-embedding-0-6b', 'embedding')] : [])], preferences: { execution_mode: options.aiExecutionMode ?? 'auto', model_directory: options.aiModelDirectory ?? null as string | null, embedding_model_id: options.aiEmbeddingInstalled ? 'qwen3-embedding-0-6b' : null as string | null, classification_enabled: true }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: 17179869184, disk_available_bytes: 27000000000, backend: 'cpu' }, busy: false, classification: { state: options.aiEmbeddingInstalled ? 'idle' : 'disabled', processed: 0 } };
-    const classifications = entries.map((item) => ({
-      document_id: item.id, revision_id: 1, category: '장학',
+    const classifications = entries.filter((item) => options.aiCategoryOf?.[item.id] !== null).map((item) => ({
+      document_id: item.id, revision_id: 1, category: options.aiCategoryOf?.[item.id] ?? '장학',
       low_confidence: Boolean(options.aiClassificationLow), created_at: '2026-10-24 12:00:00',
     }));
+    // As the store: AI categories exist only for the installed embedding model.
+    const aiCategoryOf = (entry: DocumentItem) => ai.preferences.embedding_model_id ? classifications.find((row) => row.document_id === entry.id)?.category ?? null : null;
+    const aiCategoryNames = ['학사', '수업', '장학', '연구', '학과 소식', '공모전·대회', '인턴·채용', '교육·프로그램', '행사·활동', '생활·시설', '기타'];
     const similarNotice = (id: number, duplicate: boolean) => ({ document_id: id, source_id: entries[id - 1].source_id, source_name: id === 2 ? '공과대학 공지' : entries[id - 1].source_name, title: entries[id - 1].title, published_at: entries[id - 1].published_at, duplicate });
     const similar: Record<number, ReturnType<typeof similarNotice>[]> = options.aiSimilar && options.aiEmbeddingInstalled ? { 1: [similarNotice(2, true), similarNotice(3, false)], 2: [similarNotice(1, true)], 3: [similarNotice(1, false)] } : {};
     let personalization = { profile: { university: '', department: '', study_level: '' }, interests: copy(options.initialInterests ?? []), learning_enabled: true };
@@ -674,12 +679,18 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             const passes = (entry: DocumentItem) => entry.trashed === Boolean(query.trashed) && (!query.saved_only || entry.saved) && (!query.unread_only || !entry.is_read)
               && (!query.source_id || entry.source_id === query.source_id)
               && (!query.group_id || sources.find((source) => source.id === entry.source_id)?.group === query.group_id) && (!query.category || entry.category === query.category);
-            const filtered = copy(entries.filter((entry) => passes(entry)
-              && terms.every((term: string) => `${entry.title} ${entry.snippet}`.toLowerCase().includes(term.toLowerCase()))));
+            const matchesText = (entry: DocumentItem) => terms.every((term: string) => `${entry.title} ${entry.snippet}`.toLowerCase().includes(term.toLowerCase()));
+            if (query.ai_category && !aiCategoryNames.includes(query.ai_category)) throw 'AI 분류를 확인해 주세요.';
+            // Counts follow every filter except the AI category itself.
+            const counted = entries.filter((entry) => passes(entry) && matchesText(entry));
+            const aiOn = snapshot.extensions.some((extension) => extension.id === 'ai' && extension.enabled) && Boolean(ai.preferences.embedding_model_id);
+            const ai_categories = aiOn ? { counts: aiCategoryNames.map((category) => ({ category, count: counted.filter((entry) => aiCategoryOf(entry) === category).length })),
+              unclassified: counted.filter((entry) => aiCategoryOf(entry) === null).length } : null;
+            const filtered = copy(entries.filter((entry) => passes(entry) && (!query.ai_category || aiCategoryOf(entry) === query.ai_category) && matchesText(entry)));
             // The ranked query adds the first notice without the terms as a
             // meaning-only hit when the embedding model can embed the query.
             const semantic = command === 'archive_ranked_query' && Boolean(options.aiSemanticSearch && options.aiEmbeddingInstalled);
-            const meaning = semantic ? copy(entries.filter((entry) => passes(entry) && !filtered.some((item) => item.id === entry.id)).slice(0, 1)) : [];
+            const meaning = semantic ? copy(entries.filter((entry) => passes(entry) && (!query.ai_category || aiCategoryOf(entry) === query.ai_category) && !filtered.some((item) => item.id === entry.id)).slice(0, 1)) : [];
             const ranked = [...meaning, ...filtered];
             if (options.queryGate) {
               const { promise, resolve } = Promise.withResolvers<void>();
@@ -687,7 +698,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
               await promise;
             } else await wait(options.queryDelay ?? 0);
             return { items: ranked.slice(query.offset, query.offset + query.limit), total: ranked.length, categories: ['장학', '학사'],
-              meaning_only: meaning.map((item) => item.id), semantic };
+              meaning_only: meaning.map((item) => item.id), semantic, ai_categories };
           }
           case 'archive_document': {
             const item = entries.find((entry) => entry.id === args.id);

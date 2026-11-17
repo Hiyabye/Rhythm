@@ -1381,3 +1381,127 @@ fn schema_thirty_six_accepts_revised_categories_and_keeps_old_rows() {
     }
     assert!(write("없는 분류", &"c".repeat(64)).is_err());
 }
+
+#[test]
+fn ai_category_filter_and_counts_use_latest_revision_under_the_installed_model() {
+    let (_directory, store) = database();
+    store.set_enabled(crate::extensions::AI, true).unwrap();
+    let model = "a".repeat(64);
+    let other_model = "b".repeat(64);
+    let config = crate::intelligence::classification::config_hash();
+    let mut embedding = super::intelligence_tests::model("embedding-test", "external");
+    embedding.kind = "embedding".into();
+    embedding.sha256 = Some(model.clone());
+    store.ai_upsert_model(&embedding).unwrap();
+    let mut preferences = store.ai_preferences().unwrap();
+    preferences.embedding_model_id = Some(embedding.id.clone());
+    store.ai_save_preferences(&preferences).unwrap();
+    let classify = |id: i64, revision: i64, model_sha256: &str, category: &str| {
+        store
+            .ai_save_classification(&ClassificationWrite {
+                document_id: id,
+                revision_id: revision,
+                model_sha256,
+                config_hash: config,
+                category,
+                score: 0.8,
+                margin: 0.1,
+                low_confidence: false,
+            })
+            .unwrap();
+    };
+    let notice = |external_id: &str, title: &str, body: &str| {
+        let mut article = notice_article(external_id, "2026-03-01", body);
+        article.title = title.into();
+        let (id, _) = store.upsert_article("test", &article, true).unwrap();
+        (id, store.document(id, None).unwrap().revision_id)
+    };
+    let (scholarship, revision) = notice("a", "장학금 신청", "장학 안내");
+    classify(scholarship, revision, &model, "장학");
+    let (academic, revision) = notice("b", "수강 정정", "학사 안내");
+    classify(academic, revision, &model, "학사");
+    // Classified only under another model.
+    let (other, revision) = notice("c", "장학 설명회", "장학 안내");
+    classify(other, revision, &other_model, "장학");
+    // Its classified revision was replaced and the new one is not classified yet.
+    let (revised, revision) = notice("d", "장학 공지", "첫 본문");
+    classify(revised, revision, &model, "장학");
+    let (_, newer) = notice("d", "장학 공지", "바뀐 본문");
+    assert_ne!(newer, revision);
+
+    let query = |ai_category: Option<&str>, text: &str| {
+        store.archive_query(&crate::archive::model::ArchiveQuery {
+            query: text.into(),
+            ai_category: ai_category.map(str::to_owned),
+            limit: Some(30),
+            ..Default::default()
+        })
+    };
+    let ids = |page: &crate::archive::model::ArchivePage| {
+        page.items.iter().map(|item| item.id).collect::<Vec<_>>()
+    };
+    let page = query(Some("장학"), "").unwrap();
+    assert_eq!(ids(&page), vec![scholarship]);
+    assert_eq!(page.total, 1);
+    let count = |page: &crate::archive::model::ArchivePage, category: &str| {
+        let counts = page.ai_categories.as_ref().unwrap();
+        counts
+            .counts
+            .iter()
+            .find(|row| row.category == category)
+            .unwrap()
+            .count
+    };
+    // Counts ignore the chosen AI category and follow the other filters.
+    let counts = page.ai_categories.as_ref().unwrap();
+    assert_eq!(
+        counts
+            .counts
+            .iter()
+            .map(|row| row.category.as_str())
+            .collect::<Vec<_>>(),
+        crate::intelligence::classification::CATEGORIES
+    );
+    assert_eq!(
+        (
+            count(&page, "장학"),
+            count(&page, "학사"),
+            count(&page, "기타")
+        ),
+        (1, 1, 0)
+    );
+    let documents = query(None, "").unwrap().total;
+    assert_eq!(counts.unclassified, documents - 2);
+    let text = query(None, "장학").unwrap();
+    assert_eq!((count(&text, "장학"), count(&text, "학사")), (1, 0));
+    assert_eq!(
+        text.ai_categories.as_ref().unwrap().unclassified,
+        text.total - 1
+    );
+    assert!(ids(&query(Some("학사"), "장학").unwrap()).is_empty());
+    assert_eq!(
+        ids(&store
+            .archive_ranked_query(
+                &crate::archive::model::ArchiveQuery {
+                    ai_category: Some("장학".into()),
+                    ..ranked("장학")
+                },
+                None
+            )
+            .unwrap()),
+        vec![scholarship]
+    );
+    assert!(query(Some("없는 분류"), "").is_err());
+    assert!(query(Some("수업·교육"), "").is_err());
+
+    // With the AI extension off the counts are left out, not the stored rows.
+    store.set_enabled(crate::extensions::AI, false).unwrap();
+    assert!(query(None, "").unwrap().ai_categories.is_none());
+    store.set_enabled(crate::extensions::AI, true).unwrap();
+    // Without an installed model nothing is classified in scope.
+    preferences.embedding_model_id = None;
+    store.ai_save_preferences(&preferences).unwrap();
+    let page = query(Some("장학"), "").unwrap();
+    assert_eq!(page.total, 0);
+    assert!(page.ai_categories.is_none());
+}

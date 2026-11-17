@@ -306,6 +306,8 @@ export interface ArchiveQuery {
   /** The boards placed directly in this settings group; exclusive with `source_id`. */
   group_id: string | null;
   category: string | null;
+  /** A local AI category; unclassified notices never match. */
+  ai_category: string | null;
   saved_only: boolean;
   unread_only: boolean;
   /** Lists 휴지통 instead of the notices outside it. */
@@ -322,6 +324,13 @@ export interface ArchivePage {
   meaning_only?: number[];
   /** Relevance search only: whether the local embedding model took part. */
   semantic?: boolean;
+  /** AI category counts under the other filters; absent without the AI extension or an installed model. */
+  ai_categories?: AiCategoryCounts | null;
+}
+/** `counts` follows the classifier's category order and includes zeros. */
+export interface AiCategoryCounts {
+  counts: { category: string; count: number }[];
+  unclassified: number;
 }
 export interface ArchiveSummary {
   documents: number;

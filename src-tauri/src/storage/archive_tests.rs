@@ -689,6 +689,7 @@ fn list_preview_marks_only_bodies_longer_than_the_excerpt() {
             source_id: None,
             group_id: None,
             category: None,
+            ai_category: None,
             saved_only: false,
             unread_only: false,
             trashed: false,
