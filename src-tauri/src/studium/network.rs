@@ -11,27 +11,7 @@ use url::Url;
 
 pub(crate) const RESPONSE_LIMIT: usize = parser::MAX_PAGE_BYTES;
 
-pub(crate) fn validate_url(url: &Url) -> Result<(), String> {
-    let denied = || "허용된 열람실 조회 주소가 아닙니다.".to_string();
-    if url.scheme() != "https"
-        || url.host_str() != Some("libseat.sogang.ac.kr")
-        || url.port_or_known_default() != Some(444)
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(denied());
-    }
-    match url.path() {
-        "/robots.txt" | "/SEAT/domian5.asp" if url.query().is_none() => Ok(()),
-        "/SEAT/roomview5.asp" => {
-            let query = url.query().ok_or_else(denied)?;
-            let id = query.strip_prefix("room_no=").ok_or_else(denied)?;
-            rooms::get(id).map(|_| ()).map_err(|_| denied())
-        }
-        _ => Err(denied()),
-    }
-}
+pub(crate) use rhythm_sources::studium::validate_url;
 
 /// One check cycle (manual or automatic) shares its policy. Transport keeps cross-cycle pacing.
 pub(crate) struct Session<'a, T> {
@@ -92,6 +72,11 @@ impl<'a, T: Transport> Session<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn transport_room_ids_match_the_room_catalog() {
+        let catalog: Vec<_> = rooms::ROOMS.iter().map(|room| room.id).collect();
+        assert_eq!(catalog, rhythm_sources::studium::ROOM_IDS);
+    }
     #[test]
     fn seat_access_does_not_expand_existing_archive_access() {
         for value in [

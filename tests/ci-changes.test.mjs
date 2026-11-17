@@ -15,7 +15,7 @@ test('documentation-only changes run no jobs', () => {
 });
 
 test('markdown never runs the Rust or packaging jobs', () => {
-  assert.deepEqual(classify(['src-tauri/src/archive/certificates/README.md', 'crates/sources/src/fixtures/README.md']), none);
+  assert.deepEqual(classify(['crates/sources/src/certificates/README.md', 'crates/sources/src/fixtures/README.md']), none);
   // Still a frontend change: tests/ and scripts/ hold Node test inputs.
   assert.deepEqual(classify(['scripts/NOTES.md']), { ...none, frontend: true });
   // A real Rust change in the same diff still runs Rust.

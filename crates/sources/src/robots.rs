@@ -1,24 +1,26 @@
 //! robots.txt parsing and the policy every automatic fetch consults.
-use super::*;
+use crate::transport::{Access, Fetch, FetchError, Transport};
+use std::sync::atomic::AtomicBool;
+use url::Url;
 
 /// Serves its robots.txt as unrendered ASP source (see `without_asp`).
 const ASP_SOURCE_HOST: &str = "scc.sogang.ac.kr";
 /// Agents, rules and crawl delay; `None` is a delay that cannot be honored,
 /// which fails the policy only when the group applies to Rhythm.
-pub(super) type RobotGroup = (Vec<String>, Vec<(String, bool)>, Option<f64>);
+type RobotGroup = (Vec<String>, Vec<(String, bool)>, Option<f64>);
 #[derive(Debug)]
-pub(crate) struct Robots {
-    pub(crate) origin: String,
-    pub(crate) rules: Vec<(String, bool)>,
-    pub(crate) delay: f64,
+pub struct Robots {
+    pub origin: String,
+    pub rules: Vec<(String, bool)>,
+    pub delay: f64,
 }
 impl Robots {
-    pub(crate) async fn load<T: Transport>(
+    pub async fn load<T: Transport>(
         transport: &T,
         url: &Url,
         cancel: &AtomicBool,
-        access: network::Access,
-    ) -> Result<Self, network::FetchError> {
+        access: Access,
+    ) -> Result<Self, FetchError> {
         let robots = url
             .join("/robots.txt")
             .map_err(|_| "정보원 주소를 확인해 주세요.")?;
@@ -26,7 +28,7 @@ impl Robots {
             .fetch(&robots, None, 64 * 1024, cancel, access)
             .await?
         {
-            network::Fetch::Body { bytes, mime, .. } => {
+            Fetch::Body { bytes, mime, .. } => {
                 if matches!(mime.as_deref(), Some("text/html" | "application/xhtml+xml")) {
                     return Err("학교의 수집 정책 대신 HTML 오류 페이지를 받았습니다.".into());
                 }
@@ -41,7 +43,7 @@ impl Robots {
             _ => Err("학교의 수집 정책을 확인하지 못했습니다.".into()),
         }
     }
-    pub(crate) fn parse(url: &Url, body: &str) -> Result<Self, String> {
+    pub fn parse(url: &Url, body: &str) -> Result<Self, String> {
         // An HTTP-200 error page is not an empty allow-all robots policy.
         let start = body.trim_start_matches('\u{feff}').trim_start();
         if start.starts_with('<') || start.contains('\0') {
@@ -112,7 +114,7 @@ impl Robots {
         }
         Ok(policy)
     }
-    pub(crate) fn permits(&self, url: &Url) -> bool {
+    pub fn permits(&self, url: &Url) -> bool {
         // Automatic cross-origin resource fetching is not needed for verified boards.
         if url.origin().ascii_serialization() != self.origin {
             return false;
@@ -134,7 +136,7 @@ impl Robots {
 /// chooses between per-host rule branches in code, so dropping the code keeps
 /// the rules of every branch: the policy can only become stricter. An unclosed
 /// block fails instead of silently dropping the rules after it.
-pub(super) fn without_asp(body: &str) -> Result<String, String> {
+fn without_asp(body: &str) -> Result<String, String> {
     let mut rest = body;
     let mut rules = String::new();
     while let Some(start) = rest.find("<%") {
@@ -149,7 +151,7 @@ pub(super) fn without_asp(body: &str) -> Result<String, String> {
 }
 // Iterative glob matching with a single remembered wildcard; no recursion or
 // regex backtracking. Unanchored robots rules match any suffix of the URL path.
-pub(super) fn wildcard_prefix(pattern: &[u8], text: &[u8], anchored: bool) -> bool {
+fn wildcard_prefix(pattern: &[u8], text: &[u8], anchored: bool) -> bool {
     let (mut p, mut t) = (0, 0);
     let (mut star, mut retry) = (None, 0);
     while t < text.len() {
@@ -175,4 +177,29 @@ pub(super) fn wildcard_prefix(pattern: &[u8], text: &[u8], anchored: bool) -> bo
         p += 1;
     }
     p == pattern.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `https://scc.sogang.ac.kr/robots.txt` as served (text/plain) on 2026-11-08:
+    /// unrendered ASP source choosing rules per host name.
+    const SCC_ROBOTS: &str = "<%\r\nResponse.ContentType=\"text/plain\";\r\nif(Request.ServerVariables(\"HTTP_HOST\") == \"nbsm.sogang.ac.kr\"){\r\n%>\r\nUser-agent: *\r\nallow:/\r\n<%\r\n}else{\r\n%>\r\n\r\nUser-agent: *\r\nDisallow:/cgsi/\r\n\r\n<%\r\n<%\r\n}\r\n%>\r\n";
+
+    #[test]
+    fn asp_source_robots_keeps_the_rules_of_every_branch() {
+        let url = Url::parse(
+            "https://scc.sogang.ac.kr/Download3?pathStr=MTAx&fileName=a.pdf&gubun=cmsfile",
+        )
+        .unwrap();
+        let policy = Robots::parse(&url, &without_asp(SCC_ROBOTS).unwrap()).unwrap();
+        assert!(policy.permits(&url));
+        assert!(!policy.permits(&url.join("/cgsi/a").unwrap()));
+        assert!(without_asp("User-agent: *\n<% if(x){ \nDisallow: /").is_err());
+        assert!(
+            Robots::parse(&url, SCC_ROBOTS).is_err(),
+            "other hosts stay strict"
+        );
+    }
 }

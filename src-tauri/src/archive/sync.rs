@@ -3,7 +3,6 @@ use crate::storage::Store;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    future::Future,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -20,28 +19,7 @@ const ARTICLE_LIMIT: usize = 4 * 1024 * 1024;
 const FILE_LIMIT: usize = 20 * 1024 * 1024;
 const IMPORT_RESOURCES: u64 = 256 * 1024 * 1024;
 
-pub trait Transport: Send + Sync {
-    fn fetch<'a>(
-        &'a self,
-        url: &'a Url,
-        validators: Option<(Option<String>, Option<String>)>,
-        limit: usize,
-        cancel: &'a AtomicBool,
-        access: network::Access,
-    ) -> impl Future<Output = Result<network::Fetch, network::FetchError>> + Send + 'a;
-}
-impl Transport for network::Client {
-    async fn fetch(
-        &self,
-        url: &Url,
-        validators: Option<(Option<String>, Option<String>)>,
-        limit: usize,
-        cancel: &AtomicBool,
-        access: network::Access,
-    ) -> Result<network::Fetch, network::FetchError> {
-        self.get(url, validators, limit, cancel, access).await
-    }
-}
+pub use network::Transport;
 pub fn with_store<T>(
     store: &SharedStore,
     operation: impl FnOnce(&Store) -> Result<T, String>,
@@ -853,10 +831,10 @@ mod articles;
 mod listing;
 mod pdf;
 mod resources;
-pub(crate) mod robots;
 use articles::*;
 use pdf::*;
 pub use resources::*;
+pub(crate) use rhythm_sources::robots;
 use robots::*;
 
 #[cfg(test)]

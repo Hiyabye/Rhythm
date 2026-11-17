@@ -1,6 +1,7 @@
 //! Sogang notice sources shared by the desktop app and the collector: the board
-//! catalog, page parsers, the URL policy for automatic fetches, PDF text and
-//! notice date extraction. Nothing here performs I/O or touches storage.
+//! catalog, page parsers, the URL policy for automatic fetches, the constrained
+//! HTTPS transport with its TLS chain completion and robots.txt policy, PDF text
+//! and notice date extraction. Nothing here touches storage or the filesystem.
 use std::{
     collections::HashMap,
     sync::{LazyLock, Mutex},
@@ -12,6 +13,11 @@ pub mod model;
 pub mod parser;
 pub mod pdf;
 pub mod policy;
+pub mod robots;
+#[cfg(feature = "studium")]
+pub mod studium;
+pub mod tls;
+pub mod transport;
 
 /// Parses each distinct CSS selector once. Callers pass literals or values built
 /// from a small fixed set, so the cache stays small and its entries live for the

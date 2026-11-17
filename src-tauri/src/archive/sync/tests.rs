@@ -1171,7 +1171,7 @@ async fn disabling_extension_during_fetch_prevents_commit() {
         .start(
             store.clone(),
             dir.path().into(),
-            network::Client::new().unwrap(),
+            crate::archive::client().unwrap(),
             None,
             "historical".into()
         )
@@ -1981,7 +1981,7 @@ async fn bounded_live_import_and_offline_reopen() {
         .into_iter()
         .filter(|s| s.subscribed && s.definition.supported)
         .collect();
-    let client = network::Client::new().unwrap();
+    let client = crate::archive::client().unwrap();
     Controller::new()
         .execute(
             &store,
@@ -3040,18 +3040,6 @@ fn viewer_iframe(file: &str) -> String {
 /// unrendered ASP source choosing rules per host name.
 const SCC_ROBOTS: &str = "<%\r\nResponse.ContentType=\"text/plain\";\r\nif(Request.ServerVariables(\"HTTP_HOST\") == \"nbsm.sogang.ac.kr\"){\r\n%>\r\nUser-agent: *\r\nallow:/\r\n<%\r\n}else{\r\n%>\r\n\r\nUser-agent: *\r\nDisallow:/cgsi/\r\n\r\n<%\r\n<%\r\n}\r\n%>\r\n";
 
-#[test]
-fn asp_source_robots_keeps_the_rules_of_every_branch() {
-    let url = Url::parse(VIEWER_PDF).unwrap();
-    let policy = Robots::parse(&url, &without_asp(SCC_ROBOTS).unwrap()).unwrap();
-    assert!(policy.permits(&url));
-    assert!(!policy.permits(&url.join("/cgsi/a").unwrap()));
-    assert!(without_asp("User-agent: *\n<% if(x){ \nDisallow: /").is_err());
-    assert!(
-        Robots::parse(&url, SCC_ROBOTS).is_err(),
-        "other hosts stay strict"
-    );
-}
 #[tokio::test]
 async fn asp_source_robots_applies_only_to_its_host_and_html_still_fails() {
     for (host, body, mime, ok) in [

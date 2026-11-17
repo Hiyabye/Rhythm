@@ -1,9 +1,7 @@
 pub mod cybercampus;
 pub mod model;
-pub(crate) mod network;
 pub mod sync;
-mod tls;
-pub(crate) use rhythm_sources::{catalog, dates, parser, pdf, selector};
+pub(crate) use rhythm_sources::{catalog, dates, parser, pdf, selector, tls, transport as network};
 #[cfg(windows)]
 mod windows_reveal;
 
@@ -26,7 +24,11 @@ pub fn groups() -> Vec<SourceGroup> {
     catalog::groups()
 }
 pub fn client() -> Result<Client, String> {
-    network::Client::new()
+    network::Client::new(concat!(
+        "Rhythm/",
+        env!("CARGO_PKG_VERSION"),
+        " (local university notice archive)"
+    ))
 }
 
 #[tauri::command]

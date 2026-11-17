@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2021"
 rust-version = "1.90"
 license = "GPL-3.0-or-later"
-description = "Sogang notice catalog, parsers and fetch policy shared by Rhythm's app and collector"
+description = "Sogang notice catalog, parsers, fetch policy and transport shared by Rhythm's app and collector"
 publish = false
 
 [dependencies]
@@ -13,6 +13,21 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"
 pdf-extract = "0.12"
+base64 = "0.22"
+# Rustls is the backend of every client; only the `studium` feature adds OS TLS.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio = { version = "1", features = ["macros", "net", "sync", "time"] }
+webpki-roots = "1"
+
+[features]
+# The reading-room seat server (`Access::Studium`). Its CBC-only TLS 1.2 suites
+# need OS TLS, so this feature alone enables reqwest's native-tls backend. Only
+# the desktop app enables it; the collector stays Rustls-only.
+studium = ["reqwest/native-tls"]
 
 [dev-dependencies]
+http = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "test-util"] }
 rusqlite = { version = "0.38", default-features = false, features = ["bundled"] }

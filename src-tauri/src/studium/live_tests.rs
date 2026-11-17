@@ -1,12 +1,13 @@
 //! Explicit opt-in checks only. No captured HTML or results are persisted.
 use super::{network::Session, parser, rooms};
 use crate::archive::Client;
+
 use std::sync::atomic::AtomicBool;
 
 #[tokio::test]
 #[ignore = "explicit school-server validation: robots + common + one detail, no retries"]
 async fn live_default_room_uses_production_tls_transport_and_parser() {
-    let client = Client::new().unwrap();
+    let client = crate::archive::client().unwrap();
     let cancel = AtomicBool::new(false);
     let mut session = Session::new(&client, &cancel).await.expect("robots policy");
     let common = session
@@ -67,7 +68,7 @@ async fn live_all_room_layouts_use_the_same_validated_detail_response() {
         }
     }
     let transport = BoundedClient {
-        client: Client::new().unwrap(),
+        client: crate::archive::client().unwrap(),
         requests: AtomicUsize::new(0),
     };
     let cancel = AtomicBool::new(false);

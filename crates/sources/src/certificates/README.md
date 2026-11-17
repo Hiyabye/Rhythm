@@ -38,7 +38,7 @@ replacement; do not repair connectivity by promoting intermediates to trust anch
 
 `libseat.sogang.ac.kr:444` offers only TLS 1.2 CBC suites (`ECDHE-RSA-AES128-SHA`,
 `AES128-SHA`, `AES256-SHA`, observed 2026-11-09), which Rustls does not implement, so
-that origin alone uses OS TLS (`archive/network.rs`, `Access::Studium`). It sends its
+that origin alone uses OS TLS (`transport.rs`, `Access::Studium`, behind the crate's `studium` feature). It sends its
 complete chain: the `*.sogang.ac.kr` leaf and the same Sectigo OV R36 intermediate as
 above. Its OS root store is replaced by `sectigo-r46-root.pem`, so a root that a user,
 employer or other software installed cannot vouch for the seat server:
