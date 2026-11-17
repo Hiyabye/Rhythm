@@ -10,7 +10,6 @@ use rhythm_sources::{
     robots::Robots,
     transport::{self as network, Access, Fetch, Transport},
 };
-use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     sync::{
@@ -377,7 +376,7 @@ impl<T: Transport> Crawl<'_, T> {
                 check_document_mime(definition, mime.as_deref(), false)?;
                 let permanent = |reason: &str| ArticleError::Permanent {
                     reason: reason.into(),
-                    response_sha256: format!("{:x}", Sha256::digest(&bytes)),
+                    response_sha256: crate::sha256_hex(&bytes),
                 };
                 let text = std::str::from_utf8(&bytes)
                     .map_err(|_| permanent("공지 본문 문자 인코딩을 지원하지 않습니다."))?;
