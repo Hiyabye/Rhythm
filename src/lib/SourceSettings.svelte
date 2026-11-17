@@ -14,6 +14,9 @@
   let catalog = $state<SourceInfo[]>([]);
   let sources = $derived(catalog.filter((source) => source.extension === extension));
   let groupList = $state<SourceGroup[]>([]);
+  // Each group's own boards start folded behind their count; a group with none picked
+  // starts open so the choice is visible. Kept only while the pane is open.
+  let expanded = $state<Record<string, boolean>>({});
   let status = $state<SyncStatus | null>(null);
   let loading = $state(true);
   let busy = $state(false);
@@ -74,6 +77,9 @@
       catalog = nextSources;
       groupList = nextGroups;
       status = nextStatus;
+      for (const group of nextGroups) {
+        if (!(group.id in expanded)) expanded[group.id] = !nextSources.some((source) => source.group === group.id && source.selected);
+      }
     } catch (reason) { if (active && request === refreshGeneration) error = archiveError(reason); }
     finally { if (active && request === refreshGeneration) loading = false; }
   }
@@ -217,7 +223,11 @@
         <button class="switch" class:on={node.group.enabled} role="switch" aria-checked={node.group.enabled} aria-label={`${node.group.name} 전체`} disabled={switchesLocked} onclick={() => setGroup(node)}><span></span></button>
       </div>
       {#if node.group.enabled}
-        {#if node.boards.length}<ul class="board-grid" aria-label={`${node.group.name} 게시판`}>{#each node.boards as source (source.id)}{@render tile(source, node.group.name)}{/each}</ul>{/if}
+        {#if node.boards.length}
+          {@const own = node.boards.filter((source) => source.subscribed).length}
+          <button class="text-button board-picker" aria-expanded={expanded[node.group.id] ?? false} aria-controls={`board-picker-${node.group.id}`} onclick={() => expanded[node.group.id] = !expanded[node.group.id]}>{expanded[node.group.id] ? '게시판 접기' : '게시판 고르기'} <span class="muted">{own}/{node.boards.length}</span></button>
+          {#if expanded[node.group.id]}<ul class="board-grid" id={`board-picker-${node.group.id}`} aria-label={`${node.group.name} 게시판`}>{#each node.boards as source (source.id)}{@render tile(source, node.group.name)}{/each}</ul>{/if}
+        {/if}
         {#each node.children as child (child.group.id)}{@render group(child, level + 1)}{/each}
       {/if}
     </section>

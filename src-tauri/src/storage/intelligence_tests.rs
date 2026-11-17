@@ -1239,6 +1239,22 @@ fn ranked_search_fuses_text_and_meaning_and_respects_filters_and_model() {
     assert!(filtered.items.iter().all(|item| item.source_id == "test"));
     assert_eq!(filtered.meaning_only, vec![meaning]);
 
+    // A group scope ranks only its own boards, by text and by meaning.
+    store
+        .connection
+        .execute_batch(
+            "INSERT INTO source_groups(id,name,position) VALUES('eng','공과대학',0);
+             UPDATE sources SET group_id='eng' WHERE id='test2'",
+        )
+        .unwrap();
+    let mut group = ranked("세미나");
+    group.group_id = Some("eng".into());
+    let grouped = store
+        .archive_ranked_query(&group, Some((&model, &query_vector)))
+        .unwrap();
+    assert_eq!(grouped.items.len(), 1);
+    assert_eq!(grouped.meaning_only, vec![other_board]);
+
     // A vector of another dimension matches nothing instead of failing.
     let mismatched = store
         .archive_ranked_query(&ranked("세미나"), Some((&model, &[1.0, 0.0])))

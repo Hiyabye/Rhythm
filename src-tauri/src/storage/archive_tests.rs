@@ -687,6 +687,7 @@ fn list_preview_marks_only_bodies_longer_than_the_excerpt() {
         .archive_query(&ArchiveQuery {
             query: String::new(),
             source_id: None,
+            group_id: None,
             category: None,
             saved_only: false,
             unread_only: false,
@@ -1732,6 +1733,99 @@ fn subscribed_ids(store: &Store) -> Vec<String> {
         .collect();
     ids.sort();
     ids
+}
+#[test]
+fn group_scope_lists_only_its_own_boards() {
+    let (_directory, store) = {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(&directory.path().join("db")).unwrap();
+        store.catalog(&crate::archive::definitions()).unwrap();
+        (directory, store)
+    };
+    // 공과대학 holds eng-* directly and me-* through 기계공학과.
+    let mut ids = std::collections::HashMap::new();
+    for (source, external, category) in [
+        ("sogang-academic", "1", "학사"),
+        ("eng-general", "2", "일반"),
+        ("eng-research", "3", "연구"),
+        ("me-general", "4", "학과"),
+    ] {
+        let mut notice = article(external, &format!("{source} 공지"), "본문", "2026-10-01");
+        notice.category = Some(category.into());
+        ids.insert(
+            source,
+            store.upsert_article(source, &notice, false).unwrap().0,
+        );
+    }
+    // Subscribing is not required: an unsubscribed board's archive stays in its group.
+    store.subscribe("eng-research", true).unwrap();
+    let scoped = |group: &str| {
+        let page = store
+            .archive_query(&ArchiveQuery {
+                group_id: Some(group.into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut sources: Vec<_> = page.items.into_iter().map(|item| item.source_id).collect();
+        sources.sort();
+        (sources, page.total, page.categories)
+    };
+    assert_eq!(
+        scoped("sogang-eng"),
+        (
+            vec!["eng-general".into(), "eng-research".into()],
+            2,
+            vec!["연구".into(), "일반".into()]
+        )
+    );
+    // Nested groups are not part of the parent's scope.
+    assert_eq!(scoped("sogang").0, ["sogang-academic"]);
+    assert_eq!(scoped("sogang-me").0, ["me-general"]);
+    assert_eq!(scoped("sogang-dorm").1, 0);
+
+    // The other filters and 휴지통 still apply inside a group.
+    store.trash_documents(&[ids["eng-general"]]).unwrap();
+    assert_eq!(
+        scoped("sogang-eng"),
+        (vec!["eng-research".into()], 1, vec!["연구".into()])
+    );
+    let trashed = store
+        .archive_query(&ArchiveQuery {
+            group_id: Some("sogang-eng".into()),
+            trashed: true,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(trashed.items[0].id, ids["eng-general"]);
+    let ranked = store
+        .archive_ranked_query(
+            &ArchiveQuery {
+                query: "공지".into(),
+                group_id: Some("sogang-me".into()),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(ranked.total, 1);
+    assert_eq!(ranked.items[0].id, ids["me-general"]);
+
+    assert_eq!(
+        store
+            .archive_query(&ArchiveQuery {
+                group_id: Some("missing".into()),
+                ..Default::default()
+            })
+            .unwrap_err(),
+        "게시판 그룹을 찾을 수 없습니다."
+    );
+    assert!(store
+        .archive_query(&ArchiveQuery {
+            source_id: Some("eng-research".into()),
+            group_id: Some("sogang-eng".into()),
+            ..Default::default()
+        })
+        .is_err());
 }
 #[test]
 fn source_groups_stop_their_subtree_and_restore_each_pick() {

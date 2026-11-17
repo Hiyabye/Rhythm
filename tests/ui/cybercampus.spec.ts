@@ -45,6 +45,10 @@ test('deadlines list what is due first and fold submitted or past items', async 
   ] });
   await page.goto('/');
   const navigation = page.getByRole('navigation', { name: '기본 탐색', exact: true });
+  // The board sits right under its section heading: an organization label of the same name would only repeat it.
+  await expect(navigation.locator('.source-group-heading')).toContainText(['사이버캠퍼스']);
+  await expect(navigation.getByRole('button', { name: '사이버캠퍼스 강의 공지', exact: true })).toBeVisible();
+  await expect(navigation.locator('.board-organization')).toHaveCount(0);
   // The sidebar counts what is still to do, matching the page's list below.
   await expect(navigation.getByRole('button', { name: '과제·마감' })).toHaveAccessibleDescription('남은 과제 2개');
   await navigation.getByRole('button', { name: '과제·마감' }).click();

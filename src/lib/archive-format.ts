@@ -134,6 +134,16 @@ export function resourceStatus(status: string): string {
     too_large: '용량 제한 초과', unsupported: '다운로드 미지원' } as Record<string, string>)[status] ?? '확인 필요';
 }
 
+// A list scope is '' (every source), one board ID, or `group:<id>` for the
+// boards placed directly in that settings group. Board IDs never contain ':'.
+const groupPrefix = 'group:';
+export function groupScope(id: string): string {
+  return groupPrefix + id;
+}
+export function scopeGroup(scope: string): string | null {
+  return scope.startsWith(groupPrefix) ? scope.slice(groupPrefix.length) : null;
+}
+
 export function organizationLabel(organization: string): string {
   return organization.replace(/^서강대학교\s*·\s*/, '') || organization;
 }

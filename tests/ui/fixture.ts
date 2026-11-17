@@ -103,6 +103,8 @@ export interface FixtureOptions {
   calendarAllDeadlines?: boolean;
   // Nested board groups; sources name theirs through `group`.
   sourceGroups?: { id: string; name: string; parent: string | null; enabled?: boolean }[];
+  // Board IDs the notices cycle through, instead of all coming from 'computing-updates'.
+  noticeSources?: string[];
 }
 
 // Only the IPC boundary is faked: tests exercise the production Svelte build,
@@ -127,6 +129,13 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       last_error: null, next_page: 1, history_complete: false, status: 'idle', discovered: 0, archived: 0, failed: 0, skipped_count: 0, skipped: [] as unknown[] }];
     if (options.sourceList) {
       sources = options.sourceList.map((source) => ({ ...sources[0], family: 'computing', subscribed: false, last_error: null, ...source }));
+    }
+    if (options.noticeSources?.length) {
+      const boards = options.noticeSources;
+      entries.forEach((entry, index) => {
+        entry.source_id = boards[index % boards.length];
+        entry.source_name = sources.find((source) => source.id === entry.source_id)?.name ?? entry.source_name;
+      });
     }
     for (const source of sources) Object.assign(source, { extension: source.family === 'cybercampus' ? 'cybercampus' : 'sogang_notices', group: (source as { group?: string | null }).group ?? null, selected: source.subscribed });
     let sourceGroups = (options.sourceGroups ?? []).map((group) => ({ enabled: true, ...group }));
@@ -229,7 +238,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       snapshot.settings.clock_format = value;
       for (const [id, handler] of clockListeners) callbacks.get(handler)?.({ event: 'rhythm://clock-format-changed', id, payload: value });
     };
-    const fixture = { ai, options, entries, studium, mini, emitStudiumState, emitTheme, emitClockFormat, studiumStateListenerCount: () => stateListeners.size, themeListenerCount: () => themeListeners.size, clockListenerCount: () => clockListeners.size, miniSettingsResolvers: [] as Array<() => void>, releaseMiniSettings() { this.miniSettingsResolvers.splice(0).forEach((release) => release()); }, studiumSnapshotGate: false, studiumSnapshotResolvers: [] as Array<() => void>, releaseStudiumSnapshots() { this.studiumSnapshotResolvers.splice(0).forEach((release) => release()); }, studiumStatusDelay: 0, studiumSaveError: options.studiumSaveError ?? false, studiumAlertSaveError: options.studiumAlertSaveError ?? false, studiumCancelRequested: null as number | null, studiumJobAutomatic: studium.automatic.active && studium.running, calls: [] as { command: string; args: any }[],
+    const fixture = { ai, options, entries, classifications, studium, mini, emitStudiumState, emitTheme, emitClockFormat, studiumStateListenerCount: () => stateListeners.size, themeListenerCount: () => themeListeners.size, clockListenerCount: () => clockListeners.size, miniSettingsResolvers: [] as Array<() => void>, releaseMiniSettings() { this.miniSettingsResolvers.splice(0).forEach((release) => release()); }, studiumSnapshotGate: false, studiumSnapshotResolvers: [] as Array<() => void>, releaseStudiumSnapshots() { this.studiumSnapshotResolvers.splice(0).forEach((release) => release()); }, studiumStatusDelay: 0, studiumSaveError: options.studiumSaveError ?? false, studiumAlertSaveError: options.studiumAlertSaveError ?? false, studiumCancelRequested: null as number | null, studiumJobAutomatic: studium.automatic.active && studium.running, calls: [] as { command: string; args: any }[],
       finishStudiumCancel() {
         if (this.studiumCancelRequested !== studium.job_id || !studium.running) return;
         studium.running = false;
@@ -663,7 +672,8 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (options.queryError) throw '로컬 검색을 완료하지 못했습니다.';
             const terms = query.query.trim().split(/\s+/).filter(Boolean);
             const passes = (entry: DocumentItem) => entry.trashed === Boolean(query.trashed) && (!query.saved_only || entry.saved) && (!query.unread_only || !entry.is_read)
-              && (!query.source_id || entry.source_id === query.source_id) && (!query.category || entry.category === query.category);
+              && (!query.source_id || entry.source_id === query.source_id)
+              && (!query.group_id || sources.find((source) => source.id === entry.source_id)?.group === query.group_id) && (!query.category || entry.category === query.category);
             const filtered = copy(entries.filter((entry) => passes(entry)
               && terms.every((term: string) => `${entry.title} ${entry.snippet}`.toLowerCase().includes(term.toLowerCase()))));
             // The ranked query adds the first notice without the terms as a
