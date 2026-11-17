@@ -1,5 +1,5 @@
 use super::*;
-use crate::archive::catalog;
+use crate::catalog;
 fn source(id: &str) -> SourceDefinition {
     catalog::definitions()
         .into_iter()

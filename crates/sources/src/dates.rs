@@ -66,7 +66,7 @@ const BULLETS: [char; 27] = [
     '❍', '°', '👉', '☞', '📌', '📢', '📅', '📆', '📝',
 ];
 /// A multi-day date spans at most a year; a longer one is two separate dates.
-pub(crate) const MAX_SPAN_DAYS: i64 = 366;
+pub const MAX_SPAN_DAYS: i64 = 366;
 /// A dated line this close to the end of the text is a sign-off (`2026. 9. 11. 관리처장`).
 const SIGNATURE_TAIL: usize = 20;
 const RANGE: [&str; 6] = ["부터", "~", "∼", "〜", "–", "-"];

@@ -1,0 +1,18 @@
+[package]
+name = "rhythm-sources"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.90"
+license = "GPL-3.0-or-later"
+description = "Sogang notice catalog, parsers and fetch policy shared by Rhythm's app and collector"
+publish = false
+
+[dependencies]
+scraper = { version = "0.24", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+pdf-extract = "0.12"
+
+[dev-dependencies]
+rusqlite = { version = "0.38", default-features = false, features = ["bundled"] }

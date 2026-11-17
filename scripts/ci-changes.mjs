@@ -11,7 +11,7 @@ const rules = {
     /^vite\.config\.ts$/, /^tsconfig\.json$/, /^playwright(\.screenshots)?\.config\.ts$/,
     // tests/capabilities.test.mjs compares these Rust-side files with src/.
     /^src-tauri\/(build\.rs|src\/main\.rs|capabilities\/)/],
-  rust: [/^src-tauri\//, /^Cargo\.(toml|lock)$/, /^\.cargo\//, /^rust-toolchain/,
+  rust: [/^src-tauri\//, /^crates\//, /^Cargo\.(toml|lock)$/, /^\.cargo\//, /^rust-toolchain/,
     /^(rustfmt|clippy)\.toml$/,
     // Windows CI runs these PowerShell scripts before its Rust tests.
     /^scripts\/[^/]+\.ps1$/,
@@ -23,13 +23,14 @@ const rules = {
     /^assets\/licenses\//],
   // Release builds run on main only; a pull request never builds packages.
   packaging: [/^scripts\//, /^src-tauri\/(tauri[^/]*\.conf\.json|build\.rs|Cargo\.toml)$/,
+    /^crates\/[^/]+\/Cargo\.toml$/,
     /^src-tauri\/(icons|capabilities)\//, /^Cargo\.(toml|lock)$/,
     /^package(-lock)?\.json$/,
     // Bundled as app resources.
     /^LICENSE$/, /^assets\/licenses\//],
 };
 
-// Markdown under src-tauri/ or scripts/ is documentation; no Rust
+// Markdown under src-tauri/, crates/ or scripts/ is documentation; no Rust
 // build or test reads it.
 const markdown = /\.md$/i;
 const ignoresMarkdown = new Set(['rust', 'packaging']);

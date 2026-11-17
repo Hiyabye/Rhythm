@@ -1,12 +1,9 @@
-mod catalog;
 pub mod cybercampus;
-pub(crate) mod dates;
 pub mod model;
 pub(crate) mod network;
-mod parser;
-mod pdf;
 pub mod sync;
 mod tls;
+pub(crate) use rhythm_sources::{catalog, dates, parser, pdf, selector};
 #[cfg(windows)]
 mod windows_reveal;
 
@@ -14,35 +11,13 @@ use crate::AppState;
 use base64::Engine;
 use model::*;
 pub use network::Client;
-use std::{
-    collections::HashMap,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, LazyLock, Mutex,
-    },
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
 use sync::with_store;
 use tauri::{Manager, State};
 use url::Url;
-
-/// Parses each distinct CSS selector once. Callers pass literals or values built
-/// from a small fixed set, so the cache stays small and its entries live for the
-/// whole process.
-fn selector(value: &str) -> &'static scraper::Selector {
-    static CACHE: LazyLock<Mutex<HashMap<String, &'static scraper::Selector>>> =
-        LazyLock::new(Default::default);
-    let mut cache = CACHE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(found) = cache.get(value) {
-        return found;
-    }
-    let parsed: &'static scraper::Selector = Box::leak(Box::new(
-        scraper::Selector::parse(value).expect("static CSS selector"),
-    ));
-    cache.insert(value.to_owned(), parsed);
-    parsed
-}
 
 pub fn definitions() -> Vec<SourceDefinition> {
     catalog::definitions()
@@ -365,19 +340,5 @@ mod image_tests {
         assert!(image_data_uri(b"%PDF-document").is_err());
         assert!(image_data_uri(b"<svg onload=\"alert(1)\"></svg>").is_err());
         assert!(image_data_uri(&vec![0; 10 * 1024 * 1024 + 1]).is_err());
-    }
-}
-
-#[cfg(test)]
-mod selector_tests {
-    use super::selector;
-
-    #[test]
-    fn a_selector_is_parsed_once_and_shared() {
-        let first = selector(".board-list-title a");
-        assert!(std::ptr::eq(first, selector(".board-list-title a")));
-        assert!(!std::ptr::eq(first, selector(".board-list-date")));
-        let built = format!("input[name={}]", "idx");
-        assert!(std::ptr::eq(selector(&built), selector("input[name=idx]")));
     }
 }

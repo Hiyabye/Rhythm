@@ -708,9 +708,10 @@ impl crate::archive::sync::Transport for SchedulerTransport {
                 .parse::<u32>()
                 .map_err(|error| error.to_string())?;
             self.pages.lock().unwrap().push(page);
-            let mut list: serde_json::Value =
-                serde_json::from_str(include_str!("../archive/fixtures/main-list-exact.json"))
-                    .unwrap();
+            let mut list: serde_json::Value = serde_json::from_str(include_str!(
+                "../../../crates/sources/src/fixtures/main-list-exact.json"
+            ))
+            .unwrap();
             let mut row = list["data"]["list"][0].clone();
             row["pkId"] = serde_json::json!(900_000 + page);
             row["title"] = serde_json::json!(format!("통합 검증 공지 {page}"));
@@ -731,8 +732,10 @@ impl crate::archive::sync::Transport for SchedulerTransport {
                 .1
                 .parse::<u64>()
                 .map_err(|error| error.to_string())?;
-            let mut detail: serde_json::Value =
-                serde_json::from_str(include_str!("../archive/fixtures/main-detail.json")).unwrap();
+            let mut detail: serde_json::Value = serde_json::from_str(include_str!(
+                "../../../crates/sources/src/fixtures/main-detail.json"
+            ))
+            .unwrap();
             detail["data"]["pkId"] = serde_json::json!(id);
             detail["data"]["title"] = serde_json::json!(format!("통합 검증 공지 {id}"));
             detail["data"]["content"] = serde_json::json!(format!("<p>장학금 연구 안내 {id}</p>"));

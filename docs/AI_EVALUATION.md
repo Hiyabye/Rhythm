@@ -2,7 +2,7 @@
 
 What local AI has been verified to do, the pinned artifact and how to run the opt-in evaluations. Installation integrity, runtime embedding, classification accuracy and native behavior are separate claims.
 
-AI summaries (Qwen3.5 2B/4B and Gemma 4 E2B/E4B generation, optional vision projectors) and the OpenAI-compatible remote engine were retired (#226); their evaluation evidence is in git history before that change. Calendar dates come from the deterministic extractor (`archive/dates.rs`), measured in [the roadmap](ROADMAP.md#current-state).
+AI summaries (Qwen3.5 2B/4B and Gemma 4 E2B/E4B generation, optional vision projectors) and the OpenAI-compatible remote engine were retired (#226); their evaluation evidence is in git history before that change. Calendar dates come from the deterministic extractor (`crates/sources/src/dates.rs`), measured in [the roadmap](ROADMAP.md#current-state).
 
 ## Runtime
 
