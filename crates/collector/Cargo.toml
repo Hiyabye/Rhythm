@@ -11,6 +11,8 @@ publish = false
 # Without the `studium` feature: the collector never reaches the seat server
 # and its transport stays Rustls-only.
 rhythm-sources = { path = "../sources" }
+# The notice input contract the app classifies and searches with (#166 D26).
+rhythm-embed = { path = "../embed" }
 # The R2 S3 API is signed by hand (SigV4, `r2.rs`); `hmac` 0.13 pairs with `sha2` 0.11.
 hmac = "0.13"
 # Rustls only, like every school client in `rhythm-sources`.

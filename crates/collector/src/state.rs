@@ -11,10 +11,11 @@ use std::{collections::HashSet, path::Path, sync::Mutex};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 /// Ordered schema migrations; index `n` upgrades `user_version` n to n+1.
-const MIGRATIONS: [&str; 3] = [
+const MIGRATIONS: [&str; 4] = [
     include_str!("../migrations/001_initial.sql"),
     include_str!("../migrations/002_notice_dates.sql"),
     include_str!("../migrations/003_deletions.sql"),
+    include_str!("../migrations/004_embeddings.sql"),
 ];
 /// A second "not found" removes a notice only this long after the first.
 const MISSING_CONFIRM: &str = "-1 day";
@@ -517,6 +518,190 @@ impl State {
     }
 }
 
+/// A notice whose current revision needs a vector.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unembedded {
+    pub id: i64,
+    pub revision_hash: String,
+    pub title: String,
+    pub body_text: String,
+}
+
+impl State {
+    /// Notices without a vector of their current revision in `scope`.
+    /// `fresh` selects those embedded every run: new notices (not found by the
+    /// history import) and revisions of notices already embedded in this
+    /// scope. Otherwise the backfill order: never-embedded notices newest
+    /// first, then vectors of another scope (#166 D15). Removed notices are
+    /// never embedded.
+    pub fn unembedded(
+        &self,
+        scope: &str,
+        fresh: bool,
+        limit: usize,
+    ) -> Result<Vec<Unembedded>, String> {
+        let (filter, order) = if fresh {
+            (
+                "(e.notice_id IS NULL AND n.historical=0)
+                 OR (e.scope=?1 AND e.revision_hash<>n.revision_hash)",
+                "n.id",
+            )
+        } else {
+            (
+                "e.notice_id IS NULL OR e.scope<>?1 OR e.revision_hash<>n.revision_hash",
+                "e.notice_id IS NOT NULL, n.published_at DESC, n.id DESC",
+            )
+        };
+        self.with(|c| {
+            c.prepare(&format!(
+                "SELECT n.id,n.revision_hash,n.title,n.body_text FROM notices n
+                 LEFT JOIN embeddings e ON e.notice_id=n.id
+                 WHERE n.removed_at IS NULL AND ({filter}) ORDER BY {order} LIMIT ?2"
+            ))?
+            .query_map(params![scope, limit as i64], |row| {
+                Ok(Unembedded {
+                    id: row.get(0)?,
+                    revision_hash: row.get(1)?,
+                    title: row.get(2)?,
+                    body_text: row.get(3)?,
+                })
+            })?
+            .collect()
+        })
+    }
+
+    /// Stores one batch of vectors with the Neurons it used, in one transaction.
+    pub fn store_embeddings(
+        &self,
+        scope: &str,
+        day: &str,
+        vectors: &[(&Unembedded, Vec<u8>)],
+        neurons: f64,
+    ) -> Result<(), String> {
+        self.with(|c| {
+            let transaction = c.unchecked_transaction()?;
+            for (notice, vector) in vectors {
+                transaction.execute(
+                    &format!(
+                        "INSERT INTO embeddings(notice_id,revision_hash,scope,vector,embedded_at)
+                         VALUES(?1,?2,?3,?4,{NOW})
+                         ON CONFLICT(notice_id) DO UPDATE SET revision_hash=excluded.revision_hash,
+                           scope=excluded.scope,vector=excluded.vector,embedded_at=excluded.embedded_at"
+                    ),
+                    params![notice.id, notice.revision_hash, scope, vector],
+                )?;
+            }
+            add_neurons(&transaction, day, neurons)?;
+            transaction.commit()
+        })
+    }
+
+    pub fn add_neurons(&self, day: &str, neurons: f64) -> Result<(), String> {
+        self.with(|c| add_neurons(c, day, neurons))
+    }
+    /// Neurons used on the UTC day.
+    pub fn neurons(&self, day: &str) -> Result<f64, String> {
+        self.with(|c| {
+            c.query_row("SELECT neurons FROM ai_usage WHERE day=?1", [day], |row| {
+                row.get(0)
+            })
+            .optional()
+        })
+        .map(Option::unwrap_or_default)
+    }
+    pub fn record_ai_error(&self, day: &str, error: &str) -> Result<(), String> {
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO ai_usage(day,last_error) VALUES(?1,?2)
+                 ON CONFLICT(day) DO UPDATE SET last_error=excluded.last_error",
+                params![day, error],
+            )
+        })
+        .map(drop)
+    }
+
+    /// The canary reference: each text's SHA-256 and f16 vector, by ordinal.
+    pub fn canary_reference(&self) -> Result<Vec<(String, Vec<u8>)>, String> {
+        self.with(|c| {
+            c.prepare("SELECT text_sha256,vector FROM canary ORDER BY ordinal")?
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect()
+        })
+    }
+    /// The state of the day's canary check, if one ran.
+    pub fn canary_check(&self, day: &str) -> Result<Option<String>, String> {
+        self.with(|c| {
+            c.query_row(
+                "SELECT state FROM canary_checks WHERE day=?1",
+                [day],
+                |row| row.get(0),
+            )
+            .optional()
+        })
+    }
+    /// Whether the latest check stopped new vectors. It stays so, since no
+    /// later check runs, until `reset_canary`.
+    pub fn canary_stopped(&self) -> Result<bool, String> {
+        self.with(|c| {
+            c.query_row(
+                "SELECT state='stopped' FROM canary_checks ORDER BY day DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+        })
+        .map(|stopped| stopped.unwrap_or(false))
+    }
+    /// Records the day's check; `reference` replaces the stored vectors.
+    pub fn record_canary(
+        &self,
+        day: &str,
+        state: &str,
+        min_cosine: Option<f64>,
+        reference: Option<&[(String, Vec<u8>)]>,
+    ) -> Result<(), String> {
+        self.with(|c| {
+            let transaction = c.unchecked_transaction()?;
+            if let Some(reference) = reference {
+                transaction.execute("DELETE FROM canary", [])?;
+                for (ordinal, (sha256, vector)) in reference.iter().enumerate() {
+                    transaction.execute(
+                        &format!(
+                            "INSERT INTO canary(ordinal,text_sha256,vector,recorded_at)
+                             VALUES(?1,?2,?3,{NOW})"
+                        ),
+                        params![ordinal as i64, sha256, vector],
+                    )?;
+                }
+            }
+            transaction.execute(
+                &format!(
+                    "INSERT INTO canary_checks(day,state,min_cosine,checked_at) VALUES(?1,?2,?3,{NOW})
+                     ON CONFLICT(day) DO UPDATE SET state=excluded.state,
+                       min_cosine=excluded.min_cosine,checked_at=excluded.checked_at"
+                ),
+                params![day, state, min_cosine],
+            )?;
+            transaction.commit()
+        })
+    }
+    /// The maintainer's decision after a drift stop: forget the reference and
+    /// the checks, so the next run records a new reference.
+    pub fn reset_canary(&self) -> Result<(), String> {
+        self.with(|c| c.execute_batch("DELETE FROM canary; DELETE FROM canary_checks;"))
+    }
+}
+
+fn add_neurons(connection: &Connection, day: &str, neurons: f64) -> rusqlite::Result<()> {
+    connection
+        .execute(
+            "INSERT INTO ai_usage(day,neurons) VALUES(?1,?2)
+             ON CONFLICT(day) DO UPDATE SET neurons=neurons+excluded.neurons",
+            params![day, neurons],
+        )
+        .map(drop)
+}
+
 fn entry(external_id: String, url: String) -> ListingEntry {
     ListingEntry {
         external_id,
@@ -684,10 +869,10 @@ mod tests {
         assert_eq!((board.next_page, board.history_complete), (4, true));
         assert!(state.seed_complete("sogang-academic").unwrap());
         state
-            .with(|c| c.execute_batch("PRAGMA user_version=4;"))
+            .with(|c| c.execute_batch("PRAGMA user_version=5;"))
             .unwrap();
         drop(state);
-        assert!(State::open(&path).err().unwrap().contains("version 4"));
+        assert!(State::open(&path).err().unwrap().contains("version 5"));
     }
 
     #[test]

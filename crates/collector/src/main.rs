@@ -1,6 +1,6 @@
 //! One bounded collector run: crawls every public board into the state file.
 //!
-//! Usage: `rhythm-collector <state.sqlite3> [--r2 <prefix> [--init]] [--pages N] [--articles N]`
+//! Usage: `rhythm-collector <state.sqlite3> [--r2 <prefix> [--init]] [--embed [--reset-canary]] [--pages N] [--articles N]`
 //!
 //! The budgets bound each pass of each board; history resumes from its
 //! checkpoint on the next run. A failed board is recorded in its health row and
@@ -12,19 +12,27 @@
 //! environment, see `R2::from_env`); after the crawl it is uploaded as the next
 //! version and old versions are pruned. `--init` starts the history of an
 //! empty prefix.
+//!
+//! With `--embed`, notices get Workers AI vectors after the crawl
+//! (`embedding::run`; credentials from the environment, see
+//! `WorkersAi::from_env`). A Workers AI failure only stops embedding.
+//! `--reset-canary` is the maintainer's decision after a drift stop: the run
+//! records a new canary reference.
 use rhythm_collector::{
     crawl::{self, Budget},
-    r2::R2,
+    embedding::{self, Limits},
+    r2::{self, R2},
     remote,
     state::State,
+    workers_ai::WorkersAi,
 };
 use rhythm_sources::transport::Client;
 use std::{
     ffi::OsString, path::PathBuf, process::ExitCode, sync::atomic::AtomicBool, time::SystemTime,
 };
 
-const USAGE: &str =
-    "usage: rhythm-collector <state.sqlite3> [--r2 <prefix> [--init]] [--pages N] [--articles N]";
+const USAGE: &str = "usage: rhythm-collector <state.sqlite3> [--r2 <prefix> [--init]] \
+     [--embed [--reset-canary]] [--pages N] [--articles N]";
 
 /// The v1 client's user agent (#166 O16): Sogang sees one identity for
 /// Rhythm, with the same robots and per-host pacing.
@@ -39,6 +47,8 @@ struct Args {
     budget: Budget,
     r2: Option<String>,
     init: bool,
+    embed: bool,
+    reset_canary: bool,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
@@ -46,6 +56,8 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut budget = Budget::default();
     let mut r2 = None;
     let mut init = false;
+    let mut embed = false;
+    let mut reset_canary = false;
     while let Some(arg) = args.next() {
         let limit = match arg.as_str() {
             "--pages" => &mut budget.pages,
@@ -58,6 +70,14 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             }
             "--init" => {
                 init = true;
+                continue;
+            }
+            "--embed" => {
+                embed = true;
+                continue;
+            }
+            "--reset-canary" => {
+                reset_canary = true;
                 continue;
             }
             _ if !arg.starts_with('-') && state.is_none() => {
@@ -76,12 +96,50 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     if init && r2.is_none() {
         return Err("--init needs --r2".into());
     }
+    if reset_canary && !embed {
+        return Err("--reset-canary needs --embed".into());
+    }
     Ok(Args {
         state: state.ok_or("missing state file")?,
         budget,
         r2,
         init,
+        embed,
+        reset_canary,
     })
+}
+
+/// The crawl, then the embeddings when enabled.
+async fn work(state: &State, args: &Args, ai: Option<&WorkersAi>) -> Result<(), String> {
+    crawl(state, args.budget).await?;
+    let Some(ai) = ai else {
+        return Ok(());
+    };
+    if args.reset_canary {
+        state.reset_canary()?;
+        println!("canary reset: this run records a new reference");
+    }
+    // Workers AI's free allowance resets at 00:00 UTC.
+    let stamp = r2::amz_date(SystemTime::now());
+    let day = format!("{}-{}-{}", &stamp[..4], &stamp[4..6], &stamp[6..8]);
+    let report = embedding::run(state, ai, &day, Limits::default()).await?;
+    if let Some((check, min)) = &report.canary {
+        match min {
+            Some(min) => println!("canary: {check} (min cosine {min:.6})"),
+            None => println!("canary: {check}"),
+        }
+    }
+    println!(
+        "embedded {} new or changed and {} backfill notices, {:.1} Neurons this run, {:.1} today",
+        report.fresh,
+        report.backfill,
+        report.neurons,
+        state.neurons(&day)?
+    );
+    if let Some(reason) = report.stopped {
+        println!("embedding stopped: {reason}");
+    }
+    Ok(())
 }
 
 async fn crawl(state: &State, budget: Budget) -> Result<(), String> {
@@ -109,14 +167,16 @@ async fn crawl(state: &State, budget: Budget) -> Result<(), String> {
 }
 
 async fn run(args: Args) -> Result<(), String> {
+    // Missing credentials fail before anything is downloaded or crawled.
+    let ai = args.embed.then(WorkersAi::from_env).transpose()?;
     let Some(prefix) = &args.r2 else {
-        return crawl(&State::open(&args.state)?, args.budget).await;
+        return work(&State::open(&args.state)?, &args, ai.as_ref()).await;
     };
     let store = R2::from_env(remote::BUCKET)?;
     let base = remote::download(&store, prefix, &args.state, args.init).await?;
     println!("state: {}", base.as_deref().unwrap_or("new"));
     let state = State::open(&args.state)?;
-    crawl(&state, args.budget).await?;
+    work(&state, &args, ai.as_ref()).await?;
     let mut snapshot = OsString::from(args.state.as_os_str());
     snapshot.push(".upload");
     let key = remote::upload(
@@ -177,6 +237,9 @@ mod tests {
         let remote = args(&["work.sqlite3", "--r2", "state/", "--init"]).unwrap();
         assert_eq!(remote.r2.as_deref(), Some("state/"));
         assert!(remote.init);
+        let embed = args(&["work.sqlite3", "--embed", "--reset-canary"]).unwrap();
+        assert!(embed.embed && embed.reset_canary);
+        assert!(!unbounded.embed);
     }
 
     #[test]
@@ -188,6 +251,7 @@ mod tests {
         assert!(args(&["a.sqlite3", "b.sqlite3"]).is_err());
         assert!(args(&["state.sqlite3", "--deadline", "1"]).is_err());
         assert!(args(&["state.sqlite3", "--init"]).is_err());
+        assert!(args(&["state.sqlite3", "--reset-canary"]).is_err());
         assert!(args(&["state.sqlite3", "--r2"]).is_err());
         assert!(args(&["state.sqlite3", "--r2", "state"]).is_err());
         assert!(args(&["state.sqlite3", "--r2", "a/", "--r2", "b/"]).is_err());

@@ -3965,6 +3965,7 @@ version = "0.1.0"
 dependencies = [
  "hmac",
  "reqwest 0.12.28",
+ "rhythm-embed",
  "rhythm-sources",
  "rusqlite",
  "serde",
