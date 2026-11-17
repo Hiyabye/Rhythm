@@ -3948,6 +3948,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rhythm-collector"
+version = "0.0.0"
+dependencies = [
+ "rhythm-sources",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "rhythm-embed"
 version = "0.0.0"
 dependencies = [

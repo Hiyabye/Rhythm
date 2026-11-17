@@ -1,0 +1,23 @@
+[package]
+name = "rhythm-collector"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.90"
+license = "GPL-3.0-or-later"
+description = "Rhythm's v2 server collector: crawl state and the public-board crawl"
+publish = false
+
+[dependencies]
+# Without the `studium` feature: the collector never reaches the seat server
+# and its transport stays Rustls-only.
+rhythm-sources = { path = "../sources" }
+rusqlite = { version = "0.38", default-features = false, features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["time", "macros"] }
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread"] }
