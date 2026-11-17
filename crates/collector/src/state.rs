@@ -7,14 +7,29 @@ use rhythm_sources::{
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use std::{path::Path, sync::Mutex};
+use std::{collections::HashSet, path::Path, sync::Mutex};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 /// Ordered schema migrations; index `n` upgrades `user_version` n to n+1.
-const MIGRATIONS: [&str; 2] = [
+const MIGRATIONS: [&str; 3] = [
     include_str!("../migrations/001_initial.sql"),
     include_str!("../migrations/002_notice_dates.sql"),
+    include_str!("../migrations/003_deletions.sql"),
 ];
+/// A second "not found" removes a notice only this long after the first.
+const MISSING_CONFIRM: &str = "-1 day";
+/// The audit re-fetches a notice about this often (user decision).
+const AUDIT_INTERVAL: &str = "-7 days";
+/// Notices published this recently are audited on boards without a complete listing.
+const AUDIT_WINDOW: &str = "-90 days";
+/// A skipped notice is retried at most once a day, this many times per collector version.
+const SKIPPED_INTERVAL: &str = "-1 day";
+pub const SKIPPED_ATTEMPTS: i64 = 7;
+
+/// A UTC time in the stored form, `modifier` from now (`-1 day`).
+fn ago(modifier: &str) -> String {
+    format!("strftime('%Y-%m-%dT%H:%M:%fZ','now','{modifier}')")
+}
 
 /// One board's checkpoint and the counters of the current attempt.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -216,7 +231,9 @@ impl State {
     ) -> Result<bool, String> {
         self.with(|c| {
             c.query_row(
-                "SELECT modified_at FROM notices WHERE source_id=?1 AND external_id=?2",
+                // A removed notice listed again is fetched, which restores it.
+                "SELECT modified_at FROM notices
+                 WHERE source_id=?1 AND external_id=?2 AND removed_at IS NULL",
                 params![source_id, external_id],
                 |row| row.get::<_, Option<String>>(0),
             )
@@ -228,7 +245,8 @@ impl State {
         self.with(|c| {
             c.execute(
                 &format!(
-                    "UPDATE notices SET checked_at={NOW} WHERE source_id=?1 AND external_id=?2"
+                    "UPDATE notices SET checked_at={NOW},missing_since=NULL,removed_at=NULL
+                     WHERE source_id=?1 AND external_id=?2"
                 ),
                 params![source_id, external_id],
             )
@@ -272,7 +290,8 @@ impl State {
                 Some((id, old)) if old == hash => {
                     transaction.execute(
                         &format!(
-                            "UPDATE notices SET checked_at={NOW},etag=?2,last_modified=?3,modified_at=?4
+                            "UPDATE notices SET checked_at={NOW},etag=?2,last_modified=?3,modified_at=?4,
+                               missing_since=NULL,removed_at=NULL
                              WHERE id=?1"
                         ),
                         params![id, article.etag, article.last_modified, article.modified_at],
@@ -285,7 +304,7 @@ impl State {
                             "UPDATE notices SET canonical_url=?2,title=?3,author=?4,category=?5,
                                published_at=?6,modified_at=?7,body_state=?8,body_text=?9,
                                resources=?10,revision_hash=?11,etag=?12,last_modified=?13,
-                               revised_at={NOW},checked_at={NOW}
+                               revised_at={NOW},checked_at={NOW},missing_since=NULL,removed_at=NULL
                              WHERE id=?1"
                         ),
                         params![
@@ -378,13 +397,25 @@ impl State {
         self.with(|c| {
             c.execute(
                 &format!(
-                    "INSERT INTO skipped(source_id,external_id,url,historical,reason,response_sha256,recorded_at)
-                     VALUES(?1,?2,?3,?4,?5,?6,{NOW})
+                    "INSERT INTO skipped(source_id,external_id,url,historical,reason,response_sha256,
+                       recorded_at,attempts,collector_version)
+                     VALUES(?1,?2,?3,?4,?5,?6,{NOW},1,?7)
                      ON CONFLICT(source_id,external_id) DO UPDATE SET
                        url=excluded.url,reason=excluded.reason,
-                       response_sha256=excluded.response_sha256,recorded_at=excluded.recorded_at"
+                       response_sha256=excluded.response_sha256,recorded_at=excluded.recorded_at,
+                       attempts=CASE WHEN collector_version=excluded.collector_version
+                         THEN attempts+1 ELSE 1 END,
+                       collector_version=excluded.collector_version"
                 ),
-                params![source_id, entry.external_id, entry.url, historical, reason, response_sha256],
+                params![
+                    source_id,
+                    entry.external_id,
+                    entry.url,
+                    historical,
+                    reason,
+                    response_sha256,
+                    crate::VERSION
+                ],
             )
         })
         .map(drop)
@@ -397,6 +428,101 @@ impl State {
             )
         })
         .map(drop)
+    }
+
+    /// Skipped notices due for a retry: last tried a day ago or more, with
+    /// attempts left in this collector version. Returns each listing entry and
+    /// whether it was found by the history import.
+    pub fn skipped_due(
+        &self,
+        source_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(ListingEntry, bool)>, String> {
+        self.with(|c| {
+            c.prepare(&format!(
+                "SELECT external_id,url,historical FROM skipped
+                 WHERE source_id=?1 AND recorded_at<={}
+                   AND (attempts<?2 OR collector_version<>?3)
+                 ORDER BY recorded_at LIMIT ?4",
+                ago(SKIPPED_INTERVAL)
+            ))?
+            .query_map(
+                params![source_id, SKIPPED_ATTEMPTS, crate::VERSION, limit as i64],
+                |row| Ok((entry(row.get(0)?, row.get(1)?), row.get(2)?)),
+            )?
+            .collect()
+        })
+    }
+
+    /// Notices for the deletion audit, at most `limit`. A notice reported
+    /// missing is re-checked once a day has passed; others about weekly, the
+    /// longest unchecked first. `listed` is the board's complete current
+    /// listing (the mechanical sitemap): then only notices absent from it are
+    /// audited, at any age. Otherwise notices published within 90 days are.
+    pub fn audit_candidates(
+        &self,
+        source_id: &str,
+        listed: Option<&HashSet<String>>,
+        limit: usize,
+    ) -> Result<Vec<ListingEntry>, String> {
+        let rows: Vec<(ListingEntry, bool)> = self.with(|c| {
+            c.prepare(&format!(
+                "SELECT external_id,canonical_url,missing_since IS NOT NULL FROM notices
+                 WHERE source_id=?1 AND removed_at IS NULL
+                   AND (missing_since<={confirm}
+                     OR (missing_since IS NULL AND checked_at<={interval}
+                       AND (?2 OR published_at>=date('now','{window}'))))
+                 ORDER BY missing_since IS NULL, missing_since, checked_at",
+                confirm = ago(MISSING_CONFIRM),
+                interval = ago(AUDIT_INTERVAL),
+                window = AUDIT_WINDOW,
+            ))?
+            .query_map(params![source_id, listed.is_some()], |row| {
+                Ok((entry(row.get(0)?, row.get(1)?), row.get(2)?))
+            })?
+            .collect()
+        })?;
+        Ok(rows
+            .into_iter()
+            // A listed notice is present; one reported missing is re-checked
+            // anyway so its report is cleared or confirmed.
+            .filter(|(entry, missing)| {
+                *missing || listed.is_none_or(|listed| !listed.contains(&entry.external_id))
+            })
+            .map(|(entry, _)| entry)
+            .take(limit)
+            .collect())
+    }
+
+    /// Records a definitive "not found" from the source. The first since the
+    /// notice was last fetched marks it missing; one at least a day later
+    /// removes it. Returns whether this answer removed it.
+    pub fn mark_missing(&self, source_id: &str, external_id: &str) -> Result<bool, String> {
+        self.with(|c| {
+            c.query_row(
+                &format!(
+                    "UPDATE notices SET
+                       removed_at=CASE WHEN missing_since<={} THEN {NOW} END,
+                       missing_since=COALESCE(missing_since,{NOW})
+                     WHERE source_id=?1 AND external_id=?2 AND removed_at IS NULL
+                     RETURNING removed_at IS NOT NULL",
+                    ago(MISSING_CONFIRM)
+                ),
+                params![source_id, external_id],
+                |row| row.get(0),
+            )
+            .optional()
+        })
+        .map(|removed| removed.unwrap_or(false))
+    }
+}
+
+fn entry(external_id: String, url: String) -> ListingEntry {
+    ListingEntry {
+        external_id,
+        url,
+        pinned: false,
+        modified_at: None,
     }
 }
 
@@ -558,10 +684,10 @@ mod tests {
         assert_eq!((board.next_page, board.history_complete), (4, true));
         assert!(state.seed_complete("sogang-academic").unwrap());
         state
-            .with(|c| c.execute_batch("PRAGMA user_version=3;"))
+            .with(|c| c.execute_batch("PRAGMA user_version=4;"))
             .unwrap();
         drop(state);
-        assert!(State::open(&path).err().unwrap().contains("version 3"));
+        assert!(State::open(&path).err().unwrap().contains("version 4"));
     }
 
     #[test]

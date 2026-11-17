@@ -184,6 +184,28 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
         Url::parse(&expected).map_err(|_| PARSER_ERROR.into())
     }
 }
+/// Whether a detail response says the notice no longer exists, for the
+/// collector's deletion detection (#166). Only answers specific to a missing
+/// notice count (user decision, 2026-11-17): HTTP 404/410 where the site sends
+/// them, or the site's own missing-post page. Community and semiconductor
+/// boards answer a missing notice with a generic redirect or an empty template
+/// that an error page could also produce, so nothing from them counts.
+/// `body` is the response text for a 200 answer and empty otherwise.
+pub fn missing(source: &SourceDefinition, status: u16, body: &str) -> bool {
+    match source.family.as_str() {
+        "main" | "engineering" | "mechanical" => matches!(status, 404 | 410),
+        "dormitory" => status == 200 && dormitory::missing(body),
+        // The phrase also sits in the site's script bundle on every page, so
+        // only the rendered empty-detail block counts.
+        "computing" => {
+            status == 200
+                && Html::parse_document(body)
+                    .select(selector("section.board-content .board-detail-empty p"))
+                    .any(|p| text(p) == "등록된 게시물이 없습니다.")
+        }
+        _ => false,
+    }
+}
 pub fn listing(source: &SourceDefinition, page: u32, body: &str) -> Result<ListingPage, String> {
     if body.len() > 4 * 1024 * 1024 || page == 0 || !source.supported {
         return invalid();

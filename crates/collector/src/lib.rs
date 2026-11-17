@@ -12,6 +12,9 @@ pub mod state;
 
 use sha2::{Digest, Sha256};
 
+/// The collector's version; skipped notices get fresh attempts when it changes.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Lowercase hex SHA-256, the form every stored and signed hash takes.
 pub fn sha256_hex(bytes: impl AsRef<[u8]>) -> String {
     hex(&Sha256::digest(bytes))

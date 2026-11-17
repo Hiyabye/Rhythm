@@ -557,3 +557,93 @@ fn pdf_viewer_body_references_its_pdf_and_takes_the_pdf_text() {
     let mixed = article(&source, &entry, &value.to_string()).unwrap();
     assert!(!mixed.unsupported_body && mixed.resources.is_empty());
 }
+#[test]
+fn only_a_family_specific_answer_reports_a_missing_notice() {
+    let board = |id: &str| {
+        crate::catalog::definitions()
+            .into_iter()
+            .find(|source| source.id == id)
+            .unwrap()
+    };
+    // Synthetic pages with the structure each site sends for a missing notice
+    // (observed 2026-11-17 with a nonexistent ID; no captured page is committed).
+    let computing = r#"<html><script>window.__t={noBoardList:"등록된 게시물이 없습니다."}</script><body><section class="board-content"><header class="board-content-header"><h2>학사 공지</h2></header><div class="board-detail-empty"><p>등록된 게시물이 없습니다.</p> <a href="/ko/community/academicNotice/list">목록</a></div></section></body></html>"#;
+    let dormitory = r#"<html><head><title>알림메세지</title></head><body><form id="messageForm" action="/bbs/sgdormitory/2231/artclList.do"><div id="errorMessege" class="outLog"><div class="cont"><p class="txt"> <strong>게시물이(가) 없습니다.</strong> </p></div></div></form></body></html>"#;
+    assert!(missing(&board("computing-academic"), 200, computing));
+    assert!(missing(&board("dorm-general"), 200, dormitory));
+    for id in ["sogang-academic", "eng-general", "me-general"] {
+        assert!(missing(&board(id), 404, ""), "{id}");
+        assert!(missing(&board(id), 410, ""), "{id}");
+        for status in [200, 401, 403, 429, 500, 503] {
+            assert!(!missing(&board(id), status, ""), "{id} {status}");
+        }
+    }
+    // The phrase in a script bundle alone, a status other than 200, or the
+    // message of another board family is not proof.
+    let script_only = computing.replace(
+        r#"<div class="board-detail-empty"><p>등록된 게시물이 없습니다.</p>"#,
+        "<div>",
+    );
+    assert!(!missing(&board("computing-academic"), 200, &script_only));
+    assert!(!missing(&board("computing-academic"), 404, computing));
+    assert!(!missing(&board("dorm-general"), 404, dormitory));
+    assert!(!missing(
+        &board("dorm-general"),
+        200,
+        &dormitory.replace("게시물이(가) 없습니다.", "권한이 없습니다.")
+    ));
+    assert!(!missing(&board("dorm-general"), 200, computing));
+    // Generic answers never count on community and semiconductor boards.
+    let invalid_access =
+        "<script>alert('올바른 접근이 아닙니다.'); location.replace('/');</script>";
+    for id in ["ee-general", "sse-notices", "se-notices"] {
+        assert!(!missing(&board(id), 404, ""), "{id}");
+        assert!(!missing(&board(id), 200, invalid_access), "{id}");
+        assert!(!missing(&board(id), 200, dormitory), "{id}");
+    }
+    // Every archived notice page of these families reads as present.
+    for (id, page) in [
+        (
+            "computing-academic",
+            include_str!("computing-academic-detail.html"),
+        ),
+        (
+            "computing-career",
+            include_str!("computing-career-detail.html"),
+        ),
+        (
+            "computing-external",
+            include_str!("computing-external-detail.html"),
+        ),
+        (
+            "computing-graduate",
+            include_str!("computing-graduate-detail.html"),
+        ),
+        (
+            "computing-updates",
+            include_str!("computing-updates-detail.html"),
+        ),
+        (
+            "computing-updates",
+            include_str!("computing-news-detail-282.html"),
+        ),
+        (
+            "dorm-general",
+            include_str!("dormitory-general-detail-313348.html"),
+        ),
+        (
+            "dorm-admission",
+            include_str!("dormitory-admission-detail-283602.html"),
+        ),
+        (
+            "dorm-admission",
+            include_str!("dormitory-admission-detail-283698.html"),
+        ),
+        (
+            "dorm-menu",
+            include_str!("dormitory-menu-detail-374772.html"),
+        ),
+    ] {
+        assert!(!missing(&board(id), 200, page), "{id}");
+    }
+}

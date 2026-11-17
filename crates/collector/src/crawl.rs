@@ -8,7 +8,7 @@ use rhythm_sources::model::{ListingEntry, SourceDefinition};
 use rhythm_sources::{
     catalog, parser,
     robots::Robots,
-    transport::{self as network, Access, Fetch, Transport},
+    transport::{self as network, Access, Fetch, FetchError, Transport},
 };
 use std::{
     collections::HashSet,
@@ -21,6 +21,10 @@ use std::{
 use url::Url;
 
 const ARTICLE_LIMIT: usize = 4 * 1024 * 1024;
+/// Deletion-audit fetches per board and run (user decision).
+const AUDIT_PER_RUN: usize = 3;
+/// Skipped-notice retries per board and run (user decision).
+const RETRIES_PER_RUN: usize = 3;
 
 /// Limits for one bounded run; history continues from the checkpoint next run.
 #[derive(Clone, Copy, Default)]
@@ -119,10 +123,28 @@ pub async fn run_board<T: Transport>(
         cancel,
         budget,
     };
-    let mut outcome = crawl.pass(definition, &mut board, Pass::Incremental).await;
+    let mut listed = None;
+    let mut outcome = crawl
+        .pass(definition, &mut board, Pass::Incremental)
+        .await
+        .map(|complete| listed = complete);
     if outcome.is_ok() && !board.history_complete {
         outcome = match active(cancel) {
-            Ok(()) => crawl.pass(definition, &mut board, Pass::Historical).await,
+            Ok(()) => crawl
+                .pass(definition, &mut board, Pass::Historical)
+                .await
+                .map(drop),
+            Err(error) => Err(error),
+        };
+    }
+    // The mechanical sitemap lists every current notice, so the audit there is
+    // the set difference; other boards audit their recent notices.
+    if definition.family != "mechanical" {
+        listed = None;
+    }
+    if outcome.is_ok() {
+        outcome = match active(cancel) {
+            Ok(()) => crawl.upkeep(definition, listed.as_ref()).await,
             Err(error) => Err(error),
         };
     }
@@ -152,12 +174,14 @@ struct Crawl<'a, T> {
 }
 
 impl<T: Transport> Crawl<'_, T> {
+    /// One pass over the listing. Returns every listed ID when the pass read
+    /// the board's complete current listing in one go.
     async fn pass(
         &self,
         definition: &SourceDefinition,
         board: &mut Board,
         pass: Pass,
-    ) -> Result<(), String> {
+    ) -> Result<Option<HashSet<String>>, String> {
         let state = self.state;
         let historical = pass == Pass::Historical;
         // The durable flag, not the current notice count, decides whether the
@@ -167,7 +191,7 @@ impl<T: Transport> Crawl<'_, T> {
         let seed = !historical && !state.seed_complete(&definition.id)?;
         if historical && board.history_complete {
             state.progress(board, "completed", None, true)?;
-            return Ok(());
+            return Ok(None);
         }
         let first_page = if historical { board.next_page } else { 1 };
         let initial = parser::list_url(definition, first_page)?;
@@ -187,7 +211,7 @@ impl<T: Transport> Crawl<'_, T> {
                     ),
                     false,
                 )?;
-                return Ok(());
+                return Ok(None);
             }
             let url = parser::list_url(definition, page)?;
             let response = fetch(
@@ -251,7 +275,7 @@ impl<T: Transport> Crawl<'_, T> {
                         return Err(page_failure(&errors));
                     }
                     state.progress(board, "limited", Some("실행 제한으로 일부만 가져왔습니다. 전체 이력은 아직 완료되지 않았습니다."), false)?;
-                    return Ok(());
+                    return Ok(None);
                 }
                 if !exists {
                     board.discovered += 1;
@@ -276,6 +300,14 @@ impl<T: Transport> Crawl<'_, T> {
                             &reason,
                             &response_sha256,
                         )?;
+                    }
+                    // Gone between listing and fetch: a known notice is reported
+                    // missing; neither case is a failure or a skip.
+                    Err(ArticleError::Missing) => {
+                        ensure_active(self.cancel)?;
+                        if exists {
+                            state.mark_missing(&definition.id, &entry.external_id)?;
+                        }
                     }
                     Err(ArticleError::Transient(error)) => {
                         active(self.cancel)?;
@@ -307,7 +339,7 @@ impl<T: Transport> Crawl<'_, T> {
                     state.mark_seed_complete(&definition.id)?;
                 }
                 state.progress(board, "completed", None, true)?;
-                return Ok(());
+                return Ok((first_page == 1).then_some(seen));
             }
             // The three-page edit window must not truncate discovery of a larger
             // burst. Only regular records (never repeated pins) establish a frontier.
@@ -316,7 +348,7 @@ impl<T: Transport> Crawl<'_, T> {
                     state.mark_seed_complete(&definition.id)?;
                 }
                 state.progress(board, "completed", None, true)?;
-                return Ok(());
+                return Ok(None);
             }
             if self
                 .budget
@@ -329,11 +361,72 @@ impl<T: Transport> Crawl<'_, T> {
                     Some("실행 페이지 제한으로 중단했습니다. 이력은 이어서 가져올 수 있습니다."),
                     false,
                 )?;
-                return Ok(());
+                return Ok(None);
             }
             state.progress(board, "running", None, false)?;
             page += 1;
         }
+    }
+
+    /// Deletion audit and skipped retries, after the passes. Neither changes the
+    /// board's status, counters or checkpoints; only a rate limit, cancellation
+    /// or a state error fails the board.
+    async fn upkeep(
+        &self,
+        definition: &SourceDefinition,
+        listed: Option<&HashSet<String>>,
+    ) -> Result<(), String> {
+        let state = self.state;
+        let audits = state.audit_candidates(&definition.id, listed, AUDIT_PER_RUN)?;
+        let retries = state.skipped_due(&definition.id, RETRIES_PER_RUN)?;
+        if audits.is_empty() && retries.is_empty() {
+            return Ok(());
+        }
+        let initial = parser::list_url(definition, 1)?;
+        let policy = Robots::load(self.transport, &initial, self.cancel, Access::Source).await?;
+        let work = audits
+            .into_iter()
+            .map(|entry| (entry, false))
+            .chain(retries);
+        for (entry, historical) in work {
+            active(self.cancel)?;
+            let existing_id = state.notice_id(&definition.id, &entry.external_id)?;
+            match self
+                .article(definition, &entry, existing_id, historical, &policy)
+                .await
+            {
+                Ok(_) => {}
+                Err(ArticleError::Missing) => {
+                    ensure_active(self.cancel)?;
+                    if existing_id.is_some() {
+                        state.mark_missing(&definition.id, &entry.external_id)?;
+                    }
+                    // Nothing is left to archive.
+                    state.clear_skipped(&definition.id, &entry.external_id)?;
+                }
+                Err(ArticleError::Permanent {
+                    reason,
+                    response_sha256,
+                }) => {
+                    ensure_active(self.cancel)?;
+                    state.record_skipped(
+                        &definition.id,
+                        &entry,
+                        historical,
+                        &reason,
+                        &response_sha256,
+                    )?;
+                }
+                Err(ArticleError::Transient(error)) => {
+                    active(self.cancel)?;
+                    // Tried again in a later run.
+                    if error == network::RATE_LIMITED {
+                        return Err(error);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Fetches and stores one notice. Returns whether a new notice was created.
@@ -348,7 +441,7 @@ impl<T: Transport> Crawl<'_, T> {
         let state = self.state;
         let validators = state.validators(&definition.id, &entry.external_id)?;
         let url = parser::detail_url(definition, entry)?;
-        let response = fetch(
+        let response = match fetch(
             self.transport,
             &url,
             validators,
@@ -356,7 +449,17 @@ impl<T: Transport> Crawl<'_, T> {
             self.cancel,
             policy,
         )
-        .await?;
+        .await
+        {
+            Err(error)
+                if error
+                    .status
+                    .is_some_and(|status| parser::missing(definition, status, "")) =>
+            {
+                return Err(ArticleError::Missing)
+            }
+            response => response.map_err(String::from)?,
+        };
         let inserted = match response {
             Fetch::NotModified => {
                 existing_id.ok_or("보관되지 않은 원문의 변경 없음 응답을 받았습니다.")?;
@@ -380,6 +483,9 @@ impl<T: Transport> Crawl<'_, T> {
                 };
                 let text = std::str::from_utf8(&bytes)
                     .map_err(|_| permanent("공지 본문 문자 인코딩을 지원하지 않습니다."))?;
+                if parser::missing(definition, 200, text) {
+                    return Err(ArticleError::Missing);
+                }
                 let mut article =
                     parser::article(definition, entry, text).map_err(|e| permanent(&e))?;
                 // An unsupported body (main-board iframe) never replaces readable
@@ -411,6 +517,8 @@ impl<T: Transport> Crawl<'_, T> {
 /// A permanent failure belongs to the fetched response and is recorded instead.
 enum ArticleError {
     Transient(String),
+    /// The source answered that the notice no longer exists (`parser::missing`).
+    Missing,
     Permanent {
         reason: String,
         response_sha256: String,
@@ -477,7 +585,7 @@ async fn fetch<T: Transport>(
     limit: usize,
     cancel: &AtomicBool,
     policy: &Robots,
-) -> Result<Fetch, String> {
+) -> Result<Fetch, FetchError> {
     let mut target = url.clone();
     for redirects in 0..=3 {
         // Apply robots to every hop before any request, not only the original URL.

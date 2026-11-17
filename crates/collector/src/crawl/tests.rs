@@ -26,6 +26,8 @@ struct Fake {
     robots: Mutex<String>,
     /// Extra responses by exact URL: body and MIME type.
     extra: Mutex<HashMap<String, (String, String)>>,
+    /// URLs answered with HTTP 404.
+    not_found: Mutex<HashSet<String>>,
     calls: Mutex<Vec<(String, Validators)>>,
 }
 impl Fake {
@@ -40,6 +42,7 @@ impl Fake {
             views: AtomicU64::new(1),
             robots: Mutex::new("User-agent: *\nAllow: /\n".into()),
             extra: Mutex::default(),
+            not_found: Mutex::default(),
             calls: Mutex::default(),
         }
     }
@@ -126,6 +129,9 @@ impl Transport for Fake {
                 last_modified: None,
             })
         };
+        if self.not_found.lock().unwrap().contains(url.as_str()) {
+            return Err(FetchError::http(404, "없는 공지".into()));
+        }
         if let Some((text, mime)) = self.extra.lock().unwrap().get(url.as_str()).cloned() {
             return body(text, &mime, None);
         }
@@ -707,4 +713,224 @@ async fn a_cancelled_run_starts_no_further_board() {
     .await;
     assert!(outcomes.is_empty());
     assert_eq!(slow.requests.load(Ordering::Acquire), 0);
+}
+
+fn main_detail(id: u64) -> String {
+    format!("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData?pkId={id}")
+}
+fn requests(fake: &Fake, url: &str) -> usize {
+    fake.paths().iter().filter(|path| *path == url).count()
+}
+fn exec(state: &State, sql: &str) {
+    state.with(|c| c.execute_batch(sql)).unwrap();
+}
+/// `missing_since` and `removed_at` of a notice.
+fn deletion(state: &State, external_id: &str) -> (Option<String>, Option<String>) {
+    state
+        .with(|c| {
+            c.query_row(
+                "SELECT missing_since,removed_at FROM notices WHERE external_id=?1",
+                [external_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+        })
+        .unwrap()
+}
+const DAY_AGO: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now','-25 hours')";
+
+#[tokio::test]
+async fn a_notice_is_removed_only_after_two_not_found_answers_a_day_apart() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![vec![4, 3, 2]]);
+    historical(&state, &fake, Budget::default()).await;
+    // The board now lists only a new notice. 2 and 3 are recent and due for
+    // their weekly audit; 4 is older than the 90-day window.
+    *fake.pages.lock().unwrap() = vec![vec![5]];
+    exec(
+        &state,
+        "UPDATE notices SET checked_at='2026-01-01T00:00:00.000Z',published_at=date('now');
+         UPDATE notices SET published_at=date('now','-91 days') WHERE external_id='4';",
+    );
+    fake.not_found.lock().unwrap().insert(main_detail(2));
+    fake.failed.lock().unwrap().insert(3);
+
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    let first = deletion(&state, "2");
+    assert!(first.0.is_some() && first.1.is_none(), "{first:?}");
+    // A connection failure is not an answer.
+    assert_eq!(deletion(&state, "3"), (None, None));
+    assert_eq!(requests(&fake, &main_detail(4)), 1, "outside the window");
+    let board = state.board(MAIN).unwrap();
+    assert_eq!((board.status.as_str(), board.failed), ("completed", 0));
+
+    // Within a day the notice is not asked again and stays.
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert_eq!(requests(&fake, &main_detail(2)), 2);
+    assert_eq!(deletion(&state, "2"), first);
+
+    exec(
+        &state,
+        &format!("UPDATE notices SET missing_since={DAY_AGO} WHERE external_id='2'"),
+    );
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert!(
+        deletion(&state, "2").1.is_some(),
+        "second answer a day later"
+    );
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert_eq!(
+        requests(&fake, &main_detail(2)),
+        3,
+        "a removed notice is not audited"
+    );
+
+    // Listed and answered again, it is restored.
+    fake.not_found.lock().unwrap().clear();
+    *fake.pages.lock().unwrap() = vec![vec![5, 2]];
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert_eq!(deletion(&state, "2"), (None, None));
+}
+
+#[tokio::test]
+async fn the_mechanical_audit_checks_only_notices_missing_from_the_sitemap() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![]);
+    let url = |id: u32| format!("https://me.sogang.ac.kr/ko/board/notice/{id}");
+    let sitemap = |ids: &[u32]| {
+        let urls: String = ids
+            .iter()
+            .map(|id| {
+                format!(
+                    "<url><loc>{}</loc><lastmod>2026-09-28T15:31:48.462Z</lastmod></url>",
+                    url(*id)
+                )
+            })
+            .collect();
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+             <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">{urls}</urlset>"
+        )
+    };
+    let detail = |id: u32| {
+        format!(
+            "<!doctype html><html><head><link rel=\"canonical\" href=\"{}\"/></head>\
+             <body><article class=\"container-site py-14 max-w-4xl\">\
+             <header class=\"border-b-2 border-sg-ink pb-7\">\
+             <span class=\"eyebrow\">일반공지</span><h1 class=\"mt-3\">기계공학과 공지 {id}</h1>\
+             <div class=\"mt-5 flex\"><span>작성자 · 기계공학과</span>\
+             <span>날짜 · 2026.09.28</span><span>조회 · 1</span></div></header>\
+             <div class=\"prose-sg mt-8 min-h-[120px]\"><p>본문입니다.</p></div>\
+             </article></body></html>",
+            url(id)
+        )
+    };
+    let serve = |ids: &[u32]| {
+        fake.extra.lock().unwrap().insert(
+            MECHANICAL_SITEMAP.into(),
+            (sitemap(ids), "application/xml".into()),
+        );
+    };
+    for id in [1, 2] {
+        fake.extra
+            .lock()
+            .unwrap()
+            .insert(url(id), (detail(id), "text/html".into()));
+    }
+    serve(&[1, 2]);
+    run(&state, &fake, MECHANICAL, Budget::default())
+        .await
+        .unwrap();
+    assert_eq!(notices(&state).len(), 2);
+
+    // 2 leaves the sitemap; both are due for the weekly audit, at any age.
+    serve(&[1]);
+    fake.not_found.lock().unwrap().insert(url(2));
+    exec(
+        &state,
+        "UPDATE notices SET checked_at='2026-01-01T00:00:00.000Z',published_at='2020-01-01'",
+    );
+    run(&state, &fake, MECHANICAL, Budget::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        requests(&fake, &url(1)),
+        1,
+        "a listed notice is not audited"
+    );
+    assert!(deletion(&state, "2").0.is_some());
+    exec(
+        &state,
+        &format!("UPDATE notices SET missing_since={DAY_AGO} WHERE external_id='2'"),
+    );
+    run(&state, &fake, MECHANICAL, Budget::default())
+        .await
+        .unwrap();
+    assert!(deletion(&state, "2").1.is_some());
+    assert_eq!(deletion(&state, "1"), (None, None));
+}
+
+#[tokio::test]
+async fn skipped_notices_are_retried_daily_within_bounded_attempts() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![vec![6, 3, 2]]);
+    fake.bad.lock().unwrap().extend([2, 6]);
+    historical(&state, &fake, Budget::default()).await;
+    assert_eq!(skipped(&state), ["2", "6"]);
+    // Both fall off the listing, so only the retry reaches them.
+    *fake.pages.lock().unwrap() = vec![vec![3]];
+    let attempts = |state: &State| -> (i64, String) {
+        state
+            .with(|c| {
+                c.query_row(
+                    "SELECT attempts,collector_version FROM skipped WHERE external_id='2'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+            })
+            .unwrap()
+    };
+    assert_eq!(attempts(&state), (1, crate::VERSION.to_string()));
+    let due = |state: &State| {
+        exec(
+            state,
+            &format!("UPDATE skipped SET recorded_at={DAY_AGO} WHERE external_id='2'"),
+        )
+    };
+
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert_eq!(requests(&fake, &main_detail(2)), 1, "not before a day");
+
+    due(&state);
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert_eq!(attempts(&state).0, 2);
+
+    exec(
+        &state,
+        "UPDATE skipped SET attempts=7 WHERE external_id='2'",
+    );
+    due(&state);
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert_eq!(requests(&fake, &main_detail(2)), 2, "attempts used up");
+
+    // A new collector version gets fresh attempts.
+    exec(
+        &state,
+        "UPDATE skipped SET collector_version='0.0.1' WHERE external_id='2'",
+    );
+    due(&state);
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert_eq!(attempts(&state), (1, crate::VERSION.to_string()));
+
+    // Parsed at last, it is archived; answered "not found", it is dropped.
+    fake.bad.lock().unwrap().remove(&2);
+    fake.not_found.lock().unwrap().insert(main_detail(6));
+    due(&state);
+    exec(
+        &state,
+        &format!("UPDATE skipped SET recorded_at={DAY_AGO} WHERE external_id='6'"),
+    );
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert!(skipped(&state).is_empty());
+    assert_eq!(notice(&state, "2").title, "장학금 AI 연구 공지 2");
+    assert!(notices(&state).iter().all(|n| n.external_id != "6"));
 }

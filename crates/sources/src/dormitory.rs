@@ -58,6 +58,13 @@ pub(super) fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Res
     }
     Url::parse(&expected).map_err(|_| PARSER_ERROR.into())
 }
+/// The CMS answers a missing article with its message page: a lone form
+/// whose text is exactly this notice.
+pub(super) fn missing(body: &str) -> bool {
+    Html::parse_document(body)
+        .select(selector("#errorMessege p.txt strong"))
+        .any(|strong| text(strong) == "게시물이(가) 없습니다.")
+}
 /// The list page's search form binds the menu to its board id, and the hidden
 /// `layout` value is the site@@menu@@fnct token. Both must agree with the catalog.
 fn layout_token(menu: u32) -> String {
