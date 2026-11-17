@@ -22,7 +22,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 encoding_rs = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "native-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 scraper = { version = "0.24", default-features = false }
 sha2 = "0.10"
 url = "2"
@@ -32,10 +32,8 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-webpki-roots = "1"
 pdf-extract = "0.12"
-rhythm-sources = { path = "../crates/sources" }
+rhythm-sources = { path = "../crates/sources", features = ["studium"] }
 
 # sha2 0.10 otherwise uses its software compressor on ARM. Retain full-file
 # verification; enable the reviewed accelerator only on the tested Apple target.

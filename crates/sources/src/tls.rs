@@ -113,7 +113,7 @@ pub fn config() -> Result<ClientConfig, String> {
         .with_no_client_auth())
 }
 
-pub(super) fn decode_pem(pem: &str) -> Result<Vec<CertificateDer<'static>>, String> {
+pub(crate) fn decode_pem(pem: &str) -> Result<Vec<CertificateDer<'static>>, String> {
     if pem.len() > 32 * 1024 {
         return Err("중간 인증서 파일이 너무 큽니다.".into());
     }
@@ -236,18 +236,18 @@ mod tests {
     #[tokio::test]
     #[ignore = "bounded live check; requires university network access"]
     async fn live_main_api_uses_verified_completed_chain() {
-        use super::super::network::{Client, Fetch};
+        use crate::transport::{Access, Client, Fetch};
         use std::sync::atomic::AtomicBool;
         let url = url::Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData?pkId=551637")
             .unwrap();
-        let response = Client::new()
+        let response = Client::new("Rhythm-test")
             .unwrap()
             .get(
                 &url,
                 None,
                 1024 * 1024,
                 &AtomicBool::new(false),
-                crate::archive::network::Access::Source,
+                Access::Source,
             )
             .await
             .unwrap();

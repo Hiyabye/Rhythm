@@ -25,7 +25,7 @@ impl Script {
             requests: StdMutex::new(Vec::new()),
             replies: StdMutex::new(replies.into()),
         });
-        let mut client = Client::new().unwrap();
+        let mut client = Client::new(TEST_AGENT).unwrap();
         client.test_io = Some(script.clone());
         (client, script)
     }
@@ -76,7 +76,7 @@ fn public_addresses() -> Vec<SocketAddr> {
 }
 
 fn status_url() -> Url {
-    Url::parse(crate::studium::rooms::STATUS_URL).unwrap()
+    Url::parse(crate::studium::STATUS_URL).unwrap()
 }
 
 async fn get(client: &Client, url: &Url) -> Result<Fetch, FetchError> {

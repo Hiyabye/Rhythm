@@ -1,6 +1,10 @@
+//! Constrained HTTPS transport for automatic fetches: exact approved routes,
+//! pinned public DNS answers, per-host pacing, bounded retries and sizes, and
+//! redirects returned to the caller instead of followed.
 use reqwest::{header, StatusCode};
 use std::{
     collections::HashMap,
+    future::Future,
     net::SocketAddr,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -11,8 +15,8 @@ use std::{
 use tokio::sync::{Mutex, Semaphore};
 use url::Url;
 
-pub use rhythm_sources::policy::{public_ip, validate_url};
-use rhythm_sources::policy::{third_party_image, BLOCKED};
+pub use crate::policy::{public_ip, validate_url};
+use crate::policy::{third_party_image, BLOCKED};
 
 /// What an automatic request may reach.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,6 +28,7 @@ pub enum Access {
     /// to their verified routes.
     EmbeddedImage,
     /// Manual reading-room lookup, exact host/port/routes only. No retries.
+    #[cfg(feature = "studium")]
     Studium,
 }
 /// Hosts a job collects from at once, and so requests one client has in flight.
@@ -33,11 +38,12 @@ pub const MAX_HOSTS: usize = 3;
 type Gates = std::sync::Mutex<HashMap<String, Arc<Mutex<Instant>>>>;
 #[derive(Clone)]
 pub struct Client {
+    user_agent: &'static str,
     gates: Arc<Gates>,
     inflight: Arc<Semaphore>,
     // Tests replace only DNS and the wire response. URL validation, TLS client
     // construction, pacing, deadlines and response handling stay on this path.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "studium"))]
     test_io: Option<Arc<client_tests::Script>>,
 }
 /// A failed request. `status` is the HTTP status when the server answered
@@ -98,11 +104,12 @@ pub enum Fetch {
     },
 }
 impl Client {
-    pub fn new() -> Result<Self, String> {
+    pub fn new(user_agent: &'static str) -> Result<Self, String> {
         Ok(Self {
+            user_agent,
             gates: Arc::default(),
             inflight: Arc::new(Semaphore::new(MAX_HOSTS)),
-            #[cfg(test)]
+            #[cfg(all(test, feature = "studium"))]
             test_io: None,
         })
     }
@@ -119,7 +126,7 @@ impl Client {
             return Err("허용된 다운로드 크기를 초과했습니다.".into());
         }
         let _permit = tokio::select! {value=self.inflight.acquire()=>value.map_err(|_|"다운로드 작업이 종료되었습니다.")?, _=cancelled(cancel)=>return Err("사용자가 동기화를 중단했습니다.".into())};
-        let attempts = if access == Access::Studium { 1 } else { 3 };
+        let attempts = if is_studium(access) { 1 } else { 3 };
         for attempt in 0..attempts {
             if cancel.load(Ordering::Acquire) {
                 return Err("사용자가 동기화를 중단했습니다.".into());
@@ -155,7 +162,7 @@ impl Client {
         Ok(())
     }
     async fn resolve(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, Failure> {
-        #[cfg(test)]
+        #[cfg(all(test, feature = "studium"))]
         if let Some(script) = &self.test_io {
             return script.resolve(host, port);
         }
@@ -169,7 +176,7 @@ impl Client {
             })
     }
     async fn send(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response, Failure> {
-        #[cfg(test)]
+        #[cfg(all(test, feature = "studium"))]
         if let Some(script) = &self.test_io {
             return script.send(request).await;
         }
@@ -210,6 +217,7 @@ impl Client {
         // hostname/chain verification, TLS 1.2 as the minimum and the OS root
         // store replaced by the one root that issues the school's chain.
         let builder = reqwest::Client::builder();
+        #[cfg(feature = "studium")]
         let builder = if access == Access::Studium {
             builder
                 .use_native_tls()
@@ -218,9 +226,13 @@ impl Client {
                 .add_root_certificate(studium_root().map_err(|error| Failure::Fatal(error.into()))?)
         } else {
             builder.use_preconfigured_tls(
-                super::tls::config().map_err(|error| Failure::Fatal(error.into()))?,
+                crate::tls::config().map_err(|error| Failure::Fatal(error.into()))?,
             )
         };
+        #[cfg(not(feature = "studium"))]
+        let builder = builder.use_preconfigured_tls(
+            crate::tls::config().map_err(|error| Failure::Fatal(error.into()))?,
+        );
         let client = builder
             .https_only(true)
             .no_proxy()
@@ -229,11 +241,7 @@ impl Client {
             .connect_timeout(Duration::from_secs(8))
             .timeout(Duration::from_secs(20))
             .pool_max_idle_per_host(0)
-            .user_agent(concat!(
-                "Rhythm/",
-                env!("CARGO_PKG_VERSION"),
-                " (local university notice archive)"
-            ))
+            .user_agent(self.user_agent)
             .build()
             .map_err(|_| Failure::Fatal("안전한 HTTPS 연결을 준비하지 못했습니다.".into()))?;
         self.pace(host, cancel).await?;
@@ -247,7 +255,7 @@ impl Client {
                 "text/html,application/pdf,image/*,application/octet-stream;q=0.8"
             },
         );
-        if access == Access::Studium {
+        if is_studium(access) {
             request = request.header(header::CACHE_CONTROL, "no-cache");
         }
         // Conditional headers are tied to the original document, never forwarded
@@ -265,7 +273,7 @@ impl Client {
         let mut response = self.send(request).await?;
         let status = response.status();
         if [301, 302, 307, 308].contains(&status.as_u16()) || status.as_u16() == 303 {
-            if access == Access::Studium {
+            if is_studium(access) {
                 return Err(Failure::Fatal(
                     "좌석 서버의 이동 응답을 거부했습니다.".into(),
                 ));
@@ -306,9 +314,7 @@ impl Client {
         }
         // Only an absent policy means no restrictions for this exact origin.
         // Authentication failures and rate limits must never become allow-all.
-        if access == Access::Studium
-            && url.path() == "/robots.txt"
-            && matches!(status.as_u16(), 404 | 410)
+        if is_studium(access) && url.path() == "/robots.txt" && matches!(status.as_u16(), 404 | 410)
         {
             return Ok(Fetch::Body {
                 bytes: Vec::new(),
@@ -395,9 +401,19 @@ async fn cancelled(cancel: &AtomicBool) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
+#[cfg(feature = "studium")]
+fn is_studium(access: Access) -> bool {
+    access == Access::Studium
+}
+#[cfg(not(feature = "studium"))]
+fn is_studium(_: Access) -> bool {
+    false
+}
 /// Sectigo Public Server Authentication Root R46, the root of the
 /// `libseat.sogang.ac.kr` chain (provenance in `certificates/README.md`).
+#[cfg(feature = "studium")]
 const STUDIUM_ROOT: &[u8] = include_bytes!("certificates/sectigo-r46-root.pem");
+#[cfg(feature = "studium")]
 fn studium_root() -> Result<reqwest::Certificate, String> {
     reqwest::Certificate::from_pem(STUDIUM_ROOT)
         .map_err(|_| "좌석 서버 인증서 정보를 준비하지 못했습니다.".into())
@@ -413,8 +429,9 @@ pub fn http_refused(status: u16) -> String {
 const CONNECTION_FAILED: &str =
     "학교 서버에 안전하게 연결하지 못했습니다. 연결 상태나 인증서 구성을 확인해 주세요.";
 pub fn validate(url: &Url, access: Access) -> Result<(), String> {
+    #[cfg(feature = "studium")]
     if access == Access::Studium {
-        return crate::studium::network::validate_url(url);
+        return crate::studium::validate_url(url);
     }
     if validate_url(url).is_ok() || (access == Access::EmbeddedImage && third_party_image(url)) {
         Ok(())
@@ -422,18 +439,45 @@ pub fn validate(url: &Url, access: Access) -> Result<(), String> {
         Err(BLOCKED.into())
     }
 }
+/// The request boundary the sync and seat checks use; tests replace it with
+/// scripted responses.
+pub trait Transport: Send + Sync {
+    fn fetch<'a>(
+        &'a self,
+        url: &'a Url,
+        validators: Option<(Option<String>, Option<String>)>,
+        limit: usize,
+        cancel: &'a AtomicBool,
+        access: Access,
+    ) -> impl Future<Output = Result<Fetch, FetchError>> + Send + 'a;
+}
+impl Transport for Client {
+    async fn fetch(
+        &self,
+        url: &Url,
+        validators: Option<(Option<String>, Option<String>)>,
+        limit: usize,
+        cancel: &AtomicBool,
+        access: Access,
+    ) -> Result<Fetch, FetchError> {
+        self.get(url, validators, limit, cancel, access).await
+    }
+}
 #[cfg(test)]
-#[path = "network_client_tests.rs"]
+const TEST_AGENT: &str = "Rhythm-test";
+#[cfg(all(test, feature = "studium"))]
+#[path = "transport/client_tests.rs"]
 mod client_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "studium")]
     #[test]
     fn studium_pins_exactly_the_sectigo_r46_root() {
         use sha2::{Digest, Sha256};
         let certificates =
-            super::super::tls::decode_pem(std::str::from_utf8(STUDIUM_ROOT).unwrap()).unwrap();
+            crate::tls::decode_pem(std::str::from_utf8(STUDIUM_ROOT).unwrap()).unwrap();
         assert_eq!(certificates.len(), 1);
         assert_eq!(
             format!("{:x}", Sha256::digest(certificates[0].as_ref())),
@@ -675,7 +719,7 @@ mod tests {
 
     #[tokio::test]
     async fn requests_are_paced_per_host() {
-        let client = Client::new().unwrap();
+        let client = Client::new(TEST_AGENT).unwrap();
         let cancel = AtomicBool::new(false);
         let start = Instant::now();
         assert!(client.pace("www.sogang.ac.kr", &cancel).await.is_ok());
@@ -692,7 +736,7 @@ mod tests {
     }
     #[tokio::test]
     async fn cancelled_request_never_starts_network_work() {
-        let client = Client::new().unwrap();
+        let client = Client::new(TEST_AGENT).unwrap();
         let cancel = AtomicBool::new(true);
         let url = Url::parse("https://computing.sogang.ac.kr/ko/community/news/list").unwrap();
         assert!(client

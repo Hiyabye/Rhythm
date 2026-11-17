@@ -1,6 +1,6 @@
 use super::model::Room;
 
-pub const STATUS_URL: &str = "https://libseat.sogang.ac.kr:444/SEAT/domian5.asp";
+pub use rhythm_sources::studium::STATUS_URL;
 
 // Library room identities/capacities observed in the Studium handoff. A changed
 // school capacity must fail validation rather than silently renumbering seats.
