@@ -820,6 +820,17 @@ impl Store {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
+    /// SHA-256 of the selected embedding model while it is installed; stored
+    /// vectors and classifications are scoped by it.
+    pub fn ai_embedding_model_sha(&self) -> Result<Option<String>, String> {
+        let Some(id) = self.ai_preferences()?.embedding_model_id else {
+            return Ok(None);
+        };
+        Ok(self
+            .ai_model(&id)?
+            .filter(|model| model.kind == "embedding" && model.status == "installed")
+            .and_then(|model| model.sha256))
+    }
     /// Latest-revision classifications for a visible page. Only the current
     /// model and config are returned; stale rows stay as history.
     pub fn ai_classifications_for_documents(

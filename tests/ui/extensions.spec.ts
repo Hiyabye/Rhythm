@@ -57,6 +57,7 @@ test('without the AI extension the list and reader hide stored classifications a
   await page.getByRole('button', { name: '받은 소식', exact: true }).click();
   await expect(page.locator('#notice-1')).toBeVisible();
   await expect(page.locator('#notice-1')).not.toContainText('분류 · 장학');
+  await expect(page.getByRole('group', { name: 'AI 분류' })).toHaveCount(0);
   await page.locator('#notice-1').click();
   await expect(page.locator('.reader-body')).toBeVisible();
   await expect(page.getByRole('region', { name: /비슷한 공지/ })).toHaveCount(0);

@@ -52,6 +52,8 @@
   let query = $state('');
   let source = $state('');
   let category = $state('');
+  // Local AI category; the chips show only with the AI extension and an installed model.
+  let aiCategory = $state('');
   let unread = $state(false);
   // Relevance is offered only on the search page; it needs a query.
   let sort = $state<'newest' | 'oldest' | 'relevance'>('newest');
@@ -91,6 +93,7 @@
     query = '';
     source = request.id;
     category = '';
+    aiCategory = '';
     unread = false;
     selecting = false;
     chosen = new Set();
@@ -120,7 +123,7 @@
   $effect(() => {
     const scopedGroup = scopeGroup(source);
     const filters = { query, source_id: scopedGroup ? null : source || null, group_id: scopedGroup, category: category || null,
-      saved_only: page === 'bookmark', unread_only: unread, trashed: page === 'trash', ascending: sort === 'oldest', offset, limit: pageSize };
+      ai_category: ai ? aiCategory || null : null, saved_only: page === 'bookmark', unread_only: unread, trashed: page === 'trash', ascending: sort === 'oldest', offset, limit: pageSize };
     const ranked = page === 'search' && sort === 'relevance' && query !== '';
     void revision;
     // The calendar shows no notice list; it uses only deadlines and AI dates.
@@ -323,6 +326,8 @@
       const visible = new Set(next.items.map((item) => item.id));
       if ([...chosen].some((id) => !visible.has(id))) chosen = new Set([...chosen].filter((id) => visible.has(id)));
       if (category && !next.categories.includes(category)) category = '';
+      // Removing the model takes the chips away; a chosen category would leave no way back.
+      if (aiCategory && !next.ai_categories) aiCategory = '';
       await loadEmbeddingLabels(next.items.map((item) => item.id));
     } catch (reason) { if (active && current === requestId) error = archiveError(reason); }
     finally {
@@ -459,6 +464,13 @@
   // A group feed, or one of its boards, offers chips for the group's subscribed boards.
   let chipGroup = $derived(groups.find((group) => group.id === (scopeGroup(source) ?? sources.find((item) => item.id === source)?.group)) ?? null);
   let chipBoards = $derived(chipGroup ? sources.filter((item) => item.group === chipGroup.id && ((item.supported && item.subscribed) || item.id === source)) : []);
+  let aiCounts = $derived(ai ? result.ai_categories ?? null : null);
+  // Empty categories are left out, except the one chosen.
+  let aiChips = $derived(aiCounts ? aiCounts.counts.filter((row) => row.count > 0 || row.category === aiCategory) : []);
+  function chooseAiCategory(value: string) {
+    aiCategory = value;
+    offset = 0;
+  }
   function chooseScope(scope: string) {
     source = scope;
     category = '';
@@ -642,7 +654,7 @@
     <div class="archive-toolbar">
       <div class="archive-filters">
         <label>정보원<select value={source} onchange={(event) => chooseScope(event.currentTarget.value)} disabled={!desktop}><option value="">모든 정보원</option>{#each scopeOptions as { group, boards } (group.id)}<optgroup label={group.name}><option value={groupScope(group.id)}>{group.name} 전체</option>{#each boards as item (item.id)}<option value={item.id}>{item.name}</option>{/each}</optgroup>{/each}{#each ungroupedSources as item (item.id)}<option value={item.id}>{item.organization} · {item.name}</option>{/each}</select></label>
-        <label>분류<select bind:value={category} onchange={() => offset = 0} disabled={!desktop}><option value="">모든 분류</option>{#each result.categories as value}<option value={value}>{value}</option>{/each}</select></label>
+        <label>게시판 분류<select bind:value={category} onchange={() => offset = 0} disabled={!desktop}><option value="">모든 분류</option>{#each result.categories as value}<option value={value}>{value}</option>{/each}</select></label>
         <label>정렬<select bind:value={sort} onchange={() => offset = 0} disabled={!desktop}>{#if page === 'search'}<option value="relevance">관련도순</option>{/if}<option value="newest">게시일 최신순</option><option value="oldest">게시일 오래된순</option></select></label>
       </div>
       {#if page === 'inbox' && chipGroup && chipBoards.length > 1}
@@ -651,9 +663,17 @@
           {#each chipBoards as item (item.id)}<button class="chip" aria-pressed={source === item.id} disabled={!desktop} onclick={() => chooseScope(item.id)}>{item.name}</button>{/each}
         </div>
       {/if}
+      {#if aiCounts && (aiChips.length || aiCategory)}
+        <div class="ai-category-chips" role="group" aria-label="AI 분류">
+          <span class="ai-category-label" aria-hidden="true">AI 분류</span>
+          <button class="chip" aria-pressed={!aiCategory} disabled={!desktop} onclick={() => chooseAiCategory('')}>전체</button>
+          {#each aiChips as row (row.category)}<button class="chip" aria-pressed={aiCategory === row.category} disabled={!desktop} onclick={() => chooseAiCategory(row.category)}>{row.category} <span class="chip-count">{row.count.toLocaleString('ko-KR')}</span></button>{/each}
+        </div>
+      {/if}
       {#if page === 'inbox'}<label class="archive-checkbox"><input type="checkbox" bind:checked={unread} onchange={() => offset = 0} disabled={!desktop} /> 읽지 않은 공지만</label>{/if}
     </div>
     <div class="collection-heading archive-list-heading"><h2 bind:this={listHeading} tabindex="-1">{page === 'trash' ? '휴지통' : page === 'bookmark' ? '저장한 공지' : query ? '검색 결과' : '보관된 공지'} <span class="muted">{result.total.toLocaleString('ko-KR')}</span></h2><div class="heading-actions">{#if result.items.length}<button class="text-button" aria-pressed={selecting} disabled={!desktop} onclick={() => selecting ? stopSelecting() : selecting = true}>{selecting ? '선택 끝내기' : '선택'}</button>{/if}{#if page === 'trash' && result.total}<button class="text-button danger" disabled={!desktop || trashBusy} onclick={() => void deletePermanently(null)}>휴지통 비우기</button>{/if}<button class="text-button" disabled={!desktop || loading} onclick={() => { revision++; void refreshContext(); }}>목록 새로고침</button></div></div>
+    {#if aiCounts && aiCategory && aiCounts.unclassified}<p class="footnote">아직 분류되지 않은 공지 {aiCounts.unclassified.toLocaleString('ko-KR')}건은 이 목록에 없습니다.</p>{/if}
     {#if page === 'trash'}<p class="footnote">휴지통의 공지는 직접 비우기 전까지 이 기기에 보관되며 목록, 검색, 추천과 알림에는 나타나지 않습니다. 영구 삭제한 공지는 학교 사이트에 남아 있어도 다시 가져오지 않습니다.</p>{/if}
     {#if selecting && result.items.length}
       <div class="bulk-bar" role="group" aria-label="선택한 공지 작업">
@@ -698,7 +718,7 @@
       </ul>
       <nav class="archive-pagination" aria-label="공지 목록 페이지"><button class="button secondary small" disabled={offset === 0 || loading} onclick={() => paginate(-1)}>이전</button><span aria-live="polite">{offset + 1}–{Math.min(offset + pageSize, result.total)} / {result.total}</span><button class="button secondary small" disabled={offset + pageSize >= result.total || loading} onclick={() => paginate(1)}>다음</button></nav>
     {:else if !loading && !error}
-      <div class="empty-state archive-empty"><span class="empty-icon"><Icon name={page === 'trash' ? 'trash' : page === 'bookmark' ? 'bookmark' : page === 'search' ? 'search' : 'inbox'} size={30} /></span><h2>{query || source || category || unread ? '조건에 맞는 공지가 없습니다' : page === 'trash' ? '휴지통이 비어 있습니다' : page === 'bookmark' ? '아직 저장한 공지가 없습니다' : '아직 보관된 공지가 없습니다'}</h2><p>{query || source || category || unread ? '검색어 또는 필터를 바꿔 보세요. 이미 보관한 내용만 검색하며 인터넷 연결은 필요하지 않습니다.' : page === 'trash' ? '공지 옆의 휴지통 버튼이나 선택 기능으로 필요 없는 공지를 옮기면 여기에 모입니다. 비우기 전까지 언제든 복원할 수 있습니다.' : page === 'bookmark' ? '공지 옆의 저장 버튼으로 중요한 정보를 모아 보세요. 확장 기능을 꺼도 보관함은 유지됩니다.' : '설정에서 정보원을 구독하고 공개된 공지를 가져오세요. 한 번 보관한 본문은 오프라인에서도 읽을 수 있습니다.'}</p>{#if page !== 'bookmark' && page !== 'trash' && !query}<button class="button secondary" onclick={() => onsettings()}>정보원 설정하기 <Icon name="arrow" size={16} /></button>{/if}</div>
+      <div class="empty-state archive-empty"><span class="empty-icon"><Icon name={page === 'trash' ? 'trash' : page === 'bookmark' ? 'bookmark' : page === 'search' ? 'search' : 'inbox'} size={30} /></span><h2>{query || source || category || (ai && aiCategory) || unread ? '조건에 맞는 공지가 없습니다' : page === 'trash' ? '휴지통이 비어 있습니다' : page === 'bookmark' ? '아직 저장한 공지가 없습니다' : '아직 보관된 공지가 없습니다'}</h2><p>{query || source || category || (ai && aiCategory) || unread ? '검색어 또는 필터를 바꿔 보세요. 이미 보관한 내용만 검색하며 인터넷 연결은 필요하지 않습니다.' : page === 'trash' ? '공지 옆의 휴지통 버튼이나 선택 기능으로 필요 없는 공지를 옮기면 여기에 모입니다. 비우기 전까지 언제든 복원할 수 있습니다.' : page === 'bookmark' ? '공지 옆의 저장 버튼으로 중요한 정보를 모아 보세요. 확장 기능을 꺼도 보관함은 유지됩니다.' : '설정에서 정보원을 구독하고 공개된 공지를 가져오세요. 한 번 보관한 본문은 오프라인에서도 읽을 수 있습니다.'}</p>{#if page !== 'bookmark' && page !== 'trash' && !query}<button class="button secondary" onclick={() => onsettings()}>정보원 설정하기 <Icon name="arrow" size={16} /></button>{/if}</div>
     {/if}
     {/if}
   </section>

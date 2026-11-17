@@ -1,6 +1,7 @@
 use super::trash::NOT_TRASHED;
 use super::Store;
 use crate::archive::model::*;
+use crate::intelligence::classification::{config_hash, CATEGORIES};
 use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, Row};
 use sha2::{Digest, Sha256};
 
@@ -17,6 +18,9 @@ const ITEM_COLUMNS: &str = item_columns!("d.body_text");
 /// more is enough to tell whether it was cut. Avoids loading every full body.
 const ITEM_PREVIEW_COLUMNS: &str = item_columns!("substr(d.body_text,1,241)");
 const ITEM_FROM: &str = "documents d JOIN sources s ON s.id=d.source_id LEFT JOIN document_state u ON u.document_id=d.id";
+/// Matches `c` to the latest revision of `d` under the model SHA-256 and config
+/// hash bound next, in that order.
+const LATEST_CLASSIFICATION: &str = "c.document_id=d.id AND c.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id) AND c.model_sha256=? AND c.config_hash=?";
 const RESOURCE_COLUMNS: &str = "id,url,filename,kind,status,mime,bytes,local_path,sha256,error";
 
 type Validators = (Option<String>, Option<String>);
@@ -208,6 +212,16 @@ fn like_pattern(term: &str) -> String {
             .replace('%', "\\%")
             .replace('_', "\\_")
     )
+}
+/// Text conditions of an unranked query: indexed terms through FTS, every term
+/// as a literal match.
+fn push_text_filters(terms: &[&str], filters: &mut Vec<String>, values: &mut Vec<Value>) {
+    if let Some(expression) = fts_expression(terms) {
+        filters
+            .push("d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH ?)".into());
+        values.push(expression.into());
+    }
+    push_like_filters(terms, filters, values);
 }
 /// LIKE is an exact literal-substring check and handles one/two-character Korean queries.
 fn push_like_filters(terms: &[&str], filters: &mut Vec<String>, values: &mut Vec<Value>) {
@@ -960,6 +974,23 @@ impl Store {
             filters.push("d.category=?".into());
             values.push(category.clone().into());
         }
+        if let Some(category) = &query.ai_category {
+            if !CATEGORIES.contains(&category.as_str()) {
+                return Err("AI 분류를 확인해 주세요.".into());
+            }
+            match self.ai_embedding_model_sha()? {
+                Some(model_sha256) => {
+                    filters.push(format!("EXISTS(SELECT 1 FROM notice_classifications c WHERE {LATEST_CLASSIFICATION} AND c.category=?)"));
+                    values.extend([
+                        model_sha256.into(),
+                        config_hash().to_owned().into(),
+                        category.clone().into(),
+                    ]);
+                }
+                // Without an installed model nothing is classified in scope.
+                None => filters.push("0".into()),
+            }
+        }
         if query.saved_only {
             filters.push("COALESCE(u.saved,0)=1".into());
         }
@@ -971,13 +1002,7 @@ impl Store {
     pub(crate) fn archive_query(&self, query: &ArchiveQuery) -> Result<ArchivePage, String> {
         let terms = search_terms(&query.query)?;
         let (mut filters, mut values) = self.archive_filters(query)?;
-        if let Some(expression) = fts_expression(&terms) {
-            filters.push(
-                "d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH ?)".into(),
-            );
-            values.push(expression.into());
-        }
-        push_like_filters(&terms, &mut filters, &mut values);
+        push_text_filters(&terms, &mut filters, &mut values);
         let condition = filters.join(" AND ");
         let total: u64 = self
             .connection
@@ -1012,7 +1037,60 @@ impl Store {
             categories: self.archive_categories(query)?,
             meaning_only: Vec::new(),
             semantic: false,
+            ai_categories: self.ai_category_counts(query, &terms)?,
         })
+    }
+    /// Notices per AI category under the query's other filters and text terms.
+    /// Relevance search may add notices found by meaning; they are not counted.
+    fn ai_category_counts(
+        &self,
+        query: &ArchiveQuery,
+        terms: &[&str],
+    ) -> Result<Option<AiCategoryCounts>, String> {
+        if !self.enabled(crate::extensions::AI)? {
+            return Ok(None);
+        }
+        let Some(model_sha256) = self.ai_embedding_model_sha()? else {
+            return Ok(None);
+        };
+        let unfiltered = ArchiveQuery {
+            ai_category: None,
+            ..query.clone()
+        };
+        let (mut filters, filter_values) = self.archive_filters(&unfiltered)?;
+        let mut values: Vec<Value> = vec![model_sha256.into(), config_hash().to_owned().into()];
+        values.extend(filter_values);
+        push_text_filters(terms, &mut filters, &mut values);
+        let mut counts = std::collections::HashMap::<Option<String>, u64>::new();
+        let mut statement = self
+            .connection
+            .prepare(&format!(
+                "SELECT c.category,COUNT(*) FROM {ITEM_FROM} LEFT JOIN notice_classifications c ON {LATEST_CLASSIFICATION} WHERE {} GROUP BY c.category",
+                filters.join(" AND ")
+            ))
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map(params_from_iter(values.iter()), |row| {
+                Ok((row.get(0)?, row.get::<_, i64>(1)? as u64))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let (category, count) = row.map_err(|e| e.to_string())?;
+            counts.insert(category, count);
+        }
+        Ok(Some(AiCategoryCounts {
+            counts: CATEGORIES
+                .iter()
+                .map(|category| AiCategoryCount {
+                    category: (*category).to_owned(),
+                    count: counts
+                        .get(&Some((*category).to_owned()))
+                        .copied()
+                        .unwrap_or(0),
+                })
+                .collect(),
+            unclassified: counts.get(&None).copied().unwrap_or(0),
+        }))
     }
     /// Categories within the query's source or group; the other filters are left out.
     fn archive_categories(&self, query: &ArchiveQuery) -> Result<Vec<String>, String> {
@@ -1251,6 +1329,7 @@ impl Store {
                 .filter(|id| !semantic_text.contains(id))
                 .collect(),
             semantic: semantic.is_some(),
+            ai_categories: self.ai_category_counts(query, &terms)?,
         })
     }
     pub(crate) fn archive_summary(&self) -> Result<ArchiveSummary, String> {

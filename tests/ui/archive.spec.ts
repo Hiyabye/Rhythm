@@ -121,7 +121,7 @@ test('navigation, local searches, filters, safe highlighting and empty-result an
   await page.getByRole('button', { name: '검색', exact: true }).click();
   await expect(page.locator('.notice-list > li')).toHaveCount(2);
   await expect(page.locator('.notice-snippet mark').first()).toBeVisible();
-  await page.getByRole('combobox', { name: '분류', exact: true }).selectOption('장학');
+  await page.getByRole('combobox', { name: '게시판 분류', exact: true }).selectOption('장학');
   await expect(page.locator('.notice-list > li')).toHaveCount(1);
   await page.getByLabel('보관된 공지 검색').fill('<script> & " % _');
   await page.getByRole('button', { name: '검색', exact: true }).click();
@@ -458,7 +458,7 @@ test('obsolete searches cannot overwrite newer filters or clamp their page', asy
   await page.getByRole('button', { name: '검색', exact: true }).click();
   await expect(page.locator('.archive-view .loading')).toBeVisible();
   await page.evaluate(() => { (window as any).__fixture.options.queryDelay = 0; });
-  await page.getByRole('combobox', { name: '분류', exact: true }).selectOption('장학');
+  await page.getByRole('combobox', { name: '게시판 분류', exact: true }).selectOption('장학');
   await expect(page.getByText('조건에 맞는 공지가 없습니다', { exact: true })).toBeVisible();
   await page.getByLabel('보관된 공지 검색').fill('Computer');
   await page.getByRole('button', { name: '검색', exact: true }).click();

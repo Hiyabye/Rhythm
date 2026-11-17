@@ -71,6 +71,44 @@ test('low-confidence classification is marked without leaking the raw score', as
   await expect(page.locator('#notice-1')).not.toContainText('0.');
 });
 
+test('AI category chips filter the list, count each category and note unclassified notices', async ({ page }) => {
+  await mockDesktop(page, { count: 4, aiEmbeddingInstalled: true, aiCategoryOf: { 2: '학사', 4: null } }); await page.goto('/');
+  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
+  await expect(page.getByLabel('게시판 분류')).toBeVisible();
+  const chips = page.getByRole('group', { name: 'AI 분류' });
+  // Only categories with notices are offered, in the classifier's order.
+  await expect(chips.getByRole('button')).toHaveText(['전체', '학사 1', '장학 2']);
+  await expect(chips.getByRole('button', { name: '전체' })).toHaveAttribute('aria-pressed', 'true');
+  await chips.getByRole('button', { name: '장학 2' }).click();
+  await expect(chips.getByRole('button', { name: '장학 2' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.notice-list #notice-1')).toBeVisible();
+  await expect(page.locator('.notice-list #notice-3')).toBeVisible();
+  await expect(page.locator('.notice-list #notice-2')).toHaveCount(0);
+  await expect(page.locator('.notice-list #notice-4')).toHaveCount(0);
+  await expect(page.getByText('아직 분류되지 않은 공지 1건은 이 목록에 없습니다.')).toBeVisible();
+  const lastQuery = () => page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'archive_query').at(-1).args.query);
+  expect(await lastQuery()).toMatchObject({ ai_category: '장학', offset: 0 });
+  await chips.getByRole('button', { name: '전체' }).click();
+  await expect(page.locator('.notice-list #notice-4')).toBeVisible();
+  await expect(page.getByText(/아직 분류되지 않은 공지/)).toHaveCount(0);
+  expect(await lastQuery()).toMatchObject({ ai_category: null });
+  // Removing the model while a category is chosen brings the whole list back.
+  await chips.getByRole('button', { name: '학사 1' }).click();
+  await expect(page.locator('.notice-list #notice-1')).toHaveCount(0);
+  await page.evaluate(() => { (window as any).__fixture.ai.preferences.embedding_model_id = null; });
+  await page.getByRole('button', { name: '목록 새로고침' }).click();
+  await expect(chips).toHaveCount(0);
+  await expect(page.locator('.notice-list #notice-1')).toBeVisible();
+  await expect.poll(lastQuery).toMatchObject({ ai_category: null });
+});
+
+test('AI category chips stay hidden without an installed embedding model', async ({ page }) => {
+  await mockDesktop(page, { count: 2 }); await page.goto('/');
+  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
+  await expect(page.locator('#notice-1')).toBeVisible();
+  await expect(page.getByRole('group', { name: 'AI 분류' })).toHaveCount(0);
+});
+
 test('reader lists similar notices and opens one', async ({ page }) => {
   await mockDesktop(page, { count: 3, aiEmbeddingInstalled: true, aiSimilar: true }); await page.goto('/');
   await page.getByRole('button', { name: '받은 소식', exact: true }).click();
