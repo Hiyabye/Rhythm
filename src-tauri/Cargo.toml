@@ -33,6 +33,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 pdf-extract = "0.12"
+rhythm-embed = { path = "../crates/embed" }
 rhythm-sources = { path = "../crates/sources", features = ["studium"] }
 
 # sha2 0.10 otherwise uses its software compressor on ARM. Retain full-file
