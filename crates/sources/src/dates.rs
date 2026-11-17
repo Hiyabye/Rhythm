@@ -72,6 +72,17 @@ const SIGNATURE_TAIL: usize = 20;
 const RANGE: [&str; 6] = ["부터", "~", "∼", "〜", "–", "-"];
 const WEEKDAYS: [char; 7] = ['일', '월', '화', '수', '목', '금', '토'];
 
+/// Bump when the extraction rules change: the app and the collector store it
+/// with their dates and re-extract notices extracted by another version.
+pub const EXTRACTOR_VERSION: i64 = 3;
+
+/// The dates of one notice: its title and body as one text, since titles often
+/// carry the deadline (`채용 (~9/29(화)까지)`). The app and the collector both
+/// extract through this, so a notice gets the same dates on either side.
+pub fn extract_notice(title: &str, body: &str, published: &str) -> Vec<Found> {
+    extract(&format!("{title}\n{body}"), published)
+}
+
 pub fn extract(text: &str, published: &str) -> Vec<Found> {
     let published = published.get(..10).and_then(parse_iso);
     let mut found: Vec<Found> = Vec::new();
