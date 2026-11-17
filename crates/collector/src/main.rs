@@ -100,6 +100,11 @@ async fn crawl(state: &State, budget: Budget) -> Result<(), String> {
         }
     }
     println!("{} boards, {failed} failed", boards.len());
+    // Notices stored before the current extractor version get their dates now.
+    println!(
+        "dates extracted for {} older notices",
+        state.refresh_dates()?
+    );
     Ok(())
 }
 

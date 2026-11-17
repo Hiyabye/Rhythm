@@ -1,14 +1,20 @@
 //! The collector's SQLite state: board checkpoints, the current revision of
 //! each notice and skipped notices. Every method takes the connection lock for
 //! one statement or transaction only, so no lock is held across network work.
-use rhythm_sources::model::{ArticleInput, ListingEntry};
+use rhythm_sources::{
+    dates::{self, Kind, EXTRACTOR_VERSION},
+    model::{ArticleInput, ListingEntry},
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::{path::Path, sync::Mutex};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 /// Ordered schema migrations; index `n` upgrades `user_version` n to n+1.
-const MIGRATIONS: [&str; 1] = [include_str!("../migrations/001_initial.sql")];
+const MIGRATIONS: [&str; 2] = [
+    include_str!("../migrations/001_initial.sql"),
+    include_str!("../migrations/002_notice_dates.sql"),
+];
 
 /// One board's checkpoint and the counters of the current attempt.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -298,6 +304,7 @@ impl State {
                             article.last_modified
                         ],
                     )?;
+                    replace_dates(&transaction, id)?;
                     id
                 }
                 None => {
@@ -327,11 +334,30 @@ impl State {
                             historical
                         ],
                     )?;
-                    transaction.last_insert_rowid()
+                    let id = transaction.last_insert_rowid();
+                    replace_dates(&transaction, id)?;
+                    id
                 }
             };
             transaction.commit()?;
             Ok((id, inserted))
+        })
+    }
+    /// Extracts the dates of every notice not yet extracted by the current
+    /// extractor version (notices stored before migration 002 or before a
+    /// version bump) and returns how many it extracted.
+    pub fn refresh_dates(&self) -> Result<usize, String> {
+        self.with(|c| {
+            let transaction = c.unchecked_transaction()?;
+            let stale: Vec<i64> = transaction
+                .prepare("SELECT id FROM notices WHERE dates_version IS NOT ?1")?
+                .query_map([EXTRACTOR_VERSION], |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            for id in &stale {
+                replace_dates(&transaction, *id)?;
+            }
+            transaction.commit()?;
+            Ok(stale.len())
         })
     }
     pub fn record_skipped(
@@ -372,6 +398,45 @@ impl State {
         })
         .map(drop)
     }
+}
+
+/// Replaces a notice's dates with those of its current title and body.
+fn replace_dates(connection: &Connection, id: i64) -> rusqlite::Result<()> {
+    let (title, body, published): (String, String, String) = connection.query_row(
+        "SELECT title,body_text,published_at FROM notices WHERE id=?1",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    connection.execute("DELETE FROM notice_dates WHERE notice_id=?1", [id])?;
+    for (ordinal, found) in dates::extract_notice(&title, &body, &published)
+        .iter()
+        .enumerate()
+    {
+        let kind = match found.kind {
+            Kind::Deadline => "deadline",
+            Kind::Start => "start",
+            Kind::Date => "date",
+        };
+        connection.execute(
+            "INSERT INTO notice_dates(notice_id,ordinal,day,time,end_day,end_time,label,kind)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                id,
+                ordinal as i64,
+                found.day,
+                found.time,
+                found.end_day,
+                found.end_time,
+                found.label,
+                kind
+            ],
+        )?;
+    }
+    connection.execute(
+        "UPDATE notices SET dates_version=?2 WHERE id=?1",
+        params![id, EXTRACTOR_VERSION],
+    )?;
+    Ok(())
 }
 
 fn valid_id(id: &str) -> bool {
@@ -493,10 +558,10 @@ mod tests {
         assert_eq!((board.next_page, board.history_complete), (4, true));
         assert!(state.seed_complete("sogang-academic").unwrap());
         state
-            .with(|c| c.execute_batch("PRAGMA user_version=2;"))
+            .with(|c| c.execute_batch("PRAGMA user_version=3;"))
             .unwrap();
         drop(state);
-        assert!(State::open(&path).err().unwrap().contains("version 2"));
+        assert!(State::open(&path).err().unwrap().contains("version 3"));
     }
 
     #[test]
@@ -520,5 +585,123 @@ mod tests {
                 .consecutive_failures,
             0
         );
+    }
+
+    fn article(title: &str, body: &str) -> ArticleInput {
+        ArticleInput {
+            external_id: "100".into(),
+            canonical_url: "https://www.sogang.ac.kr/ko/detail/100".into(),
+            title: title.into(),
+            author: None,
+            category: None,
+            published_at: "2026-11-17".into(),
+            modified_at: None,
+            original: String::new(),
+            unsupported_body: false,
+            body_html: format!("<p>{body}</p>"),
+            body_text: body.into(),
+            resources: Vec::new(),
+            etag: None,
+            last_modified: None,
+        }
+    }
+
+    type Row = (String, Option<String>, String);
+    fn dates(state: &State, id: i64) -> (Option<i64>, Vec<Row>) {
+        state
+            .with(|c| {
+                let version = c.query_row(
+                    "SELECT dates_version FROM notices WHERE id=?1",
+                    [id],
+                    |row| row.get(0),
+                )?;
+                let rows = c
+                    .prepare("SELECT day,time,kind FROM notice_dates WHERE notice_id=?1 ORDER BY ordinal")?
+                    .query_map([id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                    .collect::<rusqlite::Result<_>>()?;
+                Ok((version, rows))
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn dates_follow_the_current_revision_of_title_and_body() {
+        let state = State::open_in_memory().unwrap();
+        state.board("sogang-academic").unwrap();
+        let first = article("장학생 선발 안내", "신청 마감: 2026. 11. 27.(금) 18:00");
+        let (id, _) = state.upsert("sogang-academic", &first, false).unwrap();
+        let deadline = (
+            "2026-11-27".to_string(),
+            Some("18:00".to_string()),
+            "deadline".to_string(),
+        );
+        assert_eq!(
+            dates(&state, id),
+            (Some(EXTRACTOR_VERSION), vec![deadline.clone()])
+        );
+
+        // An unchanged revision keeps its dates.
+        let checked = ArticleInput {
+            etag: Some("\"v2\"".into()),
+            ..first.clone()
+        };
+        state.upsert("sogang-academic", &checked, false).unwrap();
+        assert_eq!(dates(&state, id).1, vec![deadline]);
+
+        // A revised body replaces them, and the title alone still counts.
+        let revised = article(
+            "장학생 선발 안내 (~12/4(금)까지)",
+            "선발 결과는 추후 안내합니다.",
+        );
+        state.upsert("sogang-academic", &revised, false).unwrap();
+        assert_eq!(
+            dates(&state, id).1,
+            vec![("2026-12-04".to_string(), None, "deadline".to_string())]
+        );
+
+        // A notice without dates still records the extraction.
+        let plain = ArticleInput {
+            external_id: "101".into(),
+            ..article("도서관 이용 안내", "열람실 좌석을 예약해 주세요.")
+        };
+        let (id, _) = state.upsert("sogang-academic", &plain, false).unwrap();
+        assert_eq!(dates(&state, id), (Some(EXTRACTOR_VERSION), Vec::new()));
+    }
+
+    #[test]
+    fn an_upgraded_state_backfills_dates_once_per_extractor_version() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.sqlite3");
+        let old = Connection::open(&path).unwrap();
+        old.execute_batch(MIGRATIONS[0]).unwrap();
+        old.execute_batch(
+            "INSERT INTO boards(source_id) VALUES('sogang-academic');
+             INSERT INTO notices(source_id,external_id,canonical_url,title,published_at,
+               body_state,body_text,resources,revision_hash,historical,first_seen_at,
+               revised_at,checked_at)
+             VALUES('sogang-academic','100','https://www.sogang.ac.kr/ko/detail/100',
+               '장학생 선발 안내','2026-11-17','normal','신청 마감: 2026. 11. 27.(금) 18:00',
+               '[]','x',1,'t','t','t');",
+        )
+        .unwrap();
+        drop(old);
+
+        let state = State::open(&path).unwrap();
+        let id = state.notice_id("sogang-academic", "100").unwrap().unwrap();
+        assert_eq!(dates(&state, id), (None, Vec::new()));
+        assert_eq!(state.refresh_dates().unwrap(), 1);
+        assert_eq!(dates(&state, id).1.len(), 1);
+        assert_eq!(state.refresh_dates().unwrap(), 0);
+        // Rows from another extractor version are extracted again.
+        state
+            .with(|c| {
+                c.execute(
+                    "UPDATE notices SET dates_version=?1",
+                    [EXTRACTOR_VERSION - 1],
+                )
+            })
+            .unwrap();
+        assert_eq!(state.refresh_dates().unwrap(), 1);
+        assert_eq!(dates(&state, id).0, Some(EXTRACTOR_VERSION));
     }
 }

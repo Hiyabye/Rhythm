@@ -4,12 +4,10 @@
 //! table existed or by an older extractor version. Dates are local derived data:
 //! they never leave this device and never feed ranking or notifications.
 use super::{calendar::day_number, trash::NOT_TRASHED, Store};
-use crate::archive::dates::{self, Kind, MAX_SPAN_DAYS};
+use crate::archive::dates::{self, Kind, EXTRACTOR_VERSION, MAX_SPAN_DAYS};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
-/// Bump when extraction rules change so stored dates are recomputed.
-pub(crate) const EXTRACTOR_VERSION: i64 = 3;
 /// The calendar's month grid and the week pane's two months ahead.
 const MAX_RANGE_DAYS: i64 = 62;
 /// Bounds one calendar request even with every notice's deadlines shown.
@@ -65,8 +63,7 @@ pub(super) fn extract(connection: &Connection, document_id: i64) -> Result<(), S
             params![document_id, hash, EXTRACTOR_VERSION],
         )
         .map_err(|e| e.to_string())?;
-    // Titles often carry the deadline (`채용 (~9/29(화)까지)`).
-    for (ordinal, found) in dates::extract(&format!("{title}\n{body}"), &published)
+    for (ordinal, found) in dates::extract_notice(&title, &body, &published)
         .iter()
         .enumerate()
     {
