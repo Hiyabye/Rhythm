@@ -1,10 +1,10 @@
 [package]
 name = "rhythm-collector"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.90"
 license = "GPL-3.0-or-later"
-description = "Rhythm's v2 server collector: crawl state and the public-board crawl"
+description = "Rhythm's v2 server collector: crawl state, the public-board crawl and its run binary"
 publish = false
 
 [dependencies]
@@ -15,7 +15,7 @@ rusqlite = { version = "0.38", default-features = false, features = ["bundled"] 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tokio = { version = "1", features = ["time", "macros"] }
+tokio = { version = "1", features = ["rt", "time", "macros"] }
 url = "2"
 
 [dev-dependencies]

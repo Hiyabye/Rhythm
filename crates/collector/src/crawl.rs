@@ -13,7 +13,10 @@ use rhythm_sources::{
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     time::Duration,
 };
 use url::Url;
@@ -33,6 +36,64 @@ pub fn public_boards() -> Vec<SourceDefinition> {
     catalog::definitions()
         .into_iter()
         .filter(|source| source.supported && source.family != catalog::CYBERCAMPUS_FAMILY)
+        .collect()
+}
+
+/// Crawls the boards with at most `network::MAX_HOSTS` hosts at once and one
+/// board per host, so each host keeps its own pacing, as in the app's
+/// Controller. Each worker takes every board of one host in turn, the host
+/// with the most boards first. Returns each board's outcome in input order;
+/// after cancellation, boards not yet started have none.
+pub async fn run_boards<T: Transport>(
+    state: &State,
+    transport: &T,
+    boards: &[SourceDefinition],
+    budget: Budget,
+    cancel: &AtomicBool,
+) -> Vec<(String, Result<(), String>)> {
+    let mut hosts: Vec<Vec<usize>> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    for (index, board) in boards.iter().enumerate() {
+        let host = Url::parse(&board.url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .unwrap_or_else(|| board.id.clone());
+        match names.iter().position(|name| *name == host) {
+            Some(group) => hosts[group].push(index),
+            None => {
+                names.push(host);
+                hosts.push(vec![index]);
+            }
+        }
+    }
+    // Popped from the end: the longest groups go first.
+    hosts.sort_by_key(Vec::len);
+    let queue = Mutex::new(hosts);
+    let outcomes = Mutex::new(Vec::new());
+    let worker = || async {
+        loop {
+            let Some(group) = queue.lock().ok().and_then(|mut queue| queue.pop()) else {
+                return;
+            };
+            for index in group {
+                if cancel.load(Ordering::Acquire) {
+                    return;
+                }
+                let board = &boards[index];
+                let outcome = run_board(state, transport, board, budget, cancel).await;
+                if let Ok(mut outcomes) = outcomes.lock() {
+                    outcomes.push((index, board.id.clone(), outcome));
+                }
+            }
+        }
+    };
+    tokio::join!(worker(), worker(), worker());
+    const _: () = assert!(network::MAX_HOSTS == 3, "one worker per crawling host");
+    let mut outcomes = outcomes.into_inner().unwrap_or_default();
+    outcomes.sort_by_key(|(index, ..)| *index);
+    outcomes
+        .into_iter()
+        .map(|(_, id, outcome)| (id, outcome))
         .collect()
 }
 
