@@ -9,13 +9,14 @@ test.skip(({ browserName }) => browserName !== 'chromium', 'screenshots use Chro
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1, colorScheme: 'light', reducedMotion: 'reduce' });
 
 const OUT = 'docs/screenshots';
-const titles: [string, string, string][] = [
-  ['2026학년도 2학기 교내 장학금 신청 안내', '장학', '장학금 신청 기간과 제출 서류를 안내합니다. 장학 신청서를 제출하세요.'],
-  ['졸업 요건 사전 점검 신청 안내', '학사', '졸업 예정자는 졸업 요건 사전 점검을 신청하세요.'],
-  ['소프트웨어융합대학 현장실습 참여 학생 모집', '취업', '현장 실습 참여 학생을 모집합니다.'],
-  ['2026학년도 겨울 계절학기 수강신청 일정', '학사', '계절학기 수강신청 일정을 안내합니다.'],
-  ['교내 AI 해커톤 참가팀 모집', '행사', '해커톤 참가팀을 모집합니다. 장학 혜택이 있습니다.'],
-  ['학생증 재발급 및 모바일 학생증 이용 안내', '일반', '학생증 재발급 절차를 안내합니다.'],
+// Title, the board's own category, body, and the AI category the classifier would give.
+const titles: [string, string, string, string][] = [
+  ['2026학년도 2학기 교내 장학금 신청 안내', '장학', '장학금 신청 기간과 제출 서류를 안내합니다. 장학 신청서를 제출하세요.', '장학'],
+  ['졸업 요건 사전 점검 신청 안내', '학사', '졸업 예정자는 졸업 요건 사전 점검을 신청하세요.', '학사'],
+  ['소프트웨어융합대학 현장실습 참여 학생 모집', '취업', '현장 실습 참여 학생을 모집합니다.', '인턴·채용'],
+  ['2026학년도 겨울 계절학기 수강신청 일정', '학사', '계절학기 수강신청 일정을 안내합니다.', '수업'],
+  ['교내 AI 해커톤 참가팀 모집', '행사', '해커톤 참가팀을 모집합니다. 장학 혜택이 있습니다.', '공모전·대회'],
+  ['학생증 재발급 및 모바일 학생증 이용 안내', '일반', '학생증 재발급 절차를 안내합니다.', '생활·시설'],
 ];
 const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
 const kst = (days: number, hour = 23) => new Date(Date.now() + days * 86_400_000 + 9 * 3_600_000).toISOString().slice(0, 11) + String(hour).padStart(2, '0') + ':59';
@@ -52,8 +53,9 @@ async function open(page: Page, options: FixtureOptions = {}) {
   await page.addInitScript(({ titles, dates }) => {
     const fixture = (window as any).__fixture;
     fixture.entries.forEach((entry: any, index: number) => {
-      const [title, category, snippet] = titles[index];
+      const [title, category, snippet, label] = titles[index];
       Object.assign(entry, { title, category, snippet, published_at: dates[index], collected_at: `${dates[index]} 09:00:00`, historical: false, is_read: index > 3, saved: index === 0 });
+      fixture.classifications[index].category = label;
     });
   }, { titles, dates: titles.map((_, index) => day(-index)) });
   await page.goto('/');

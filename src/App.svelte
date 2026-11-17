@@ -416,7 +416,8 @@
             </button></li>
           {/each}
           {#each group.organizations as [organization, members] (organization)}
-            <li class="board-organization" aria-hidden="true">{organization}</li>
+            <!-- An organization named like its section (사이버캠퍼스) would only repeat the heading. -->
+            {#if organization !== group.name}<li class="board-organization" aria-hidden="true">{organization}</li>{/if}
             {#each members as board (board.id)}
               <li><button class="source-item board" class:active={page === 'inbox' && activeSource === board.id} aria-current={page === 'inbox' && activeSource === board.id ? 'page' : undefined} aria-label={`${organizationLabel(board.organization)} ${board.name}`} aria-describedby={board.unread ? `board-count-${board.id}` : undefined} onclick={() => navigate('inbox', board.id)}>
                 <span class={`board-swatch family-${board.family}`} aria-hidden="true"></span><span class="source-label">{board.name}</span>
