@@ -177,15 +177,16 @@ impl Client {
         assert!(manifest.generated_at > self.generated_at, "no rollback");
         self.generated_at = manifest.generated_at.clone();
         self.applied = 0;
+        let newest = manifest
+            .segments
+            .last()
+            .map_or(manifest.snapshot.through_seq, |s| s.to_seq);
         let resume = self.cursor.filter(|cursor| {
             manifest
                 .segments
                 .iter()
                 .any(|s| s.from_seq <= cursor + 1 && *cursor < s.to_seq)
-                || manifest
-                    .segments
-                    .last()
-                    .is_some_and(|s| s.to_seq == *cursor)
+                || *cursor == newest
         });
         self.from_snapshot = resume.is_none();
         if resume.is_none() {
@@ -205,6 +206,9 @@ impl Client {
                     self.drop_notice(&key);
                 }
             }
+            // The snapshot carries every current vector and category.
+            self.embeddings.clear();
+            self.classifications.clear();
             self.apply(&entries, vectors.as_deref());
             self.cursor = Some(snapshot.through_seq);
         }
@@ -563,20 +567,31 @@ async fn a_lost_state_upload_reuses_only_seqs_no_client_saw() {
 }
 
 #[tokio::test]
-async fn a_reset_republishes_a_rolled_back_state_from_seq_one() {
+async fn a_restart_brings_every_client_to_the_rolled_back_state() {
     let directory = tempfile::tempdir().unwrap();
     let bucket = Bucket::default();
     let signer = signer();
     let key = signer.public_key();
     let state = State::open(&directory.path().join("state.sqlite3")).unwrap();
     add(&state, 1, "공지");
+    add(&state, 4, "지울 공지");
     run(&state, &bucket, &signer, "2026-11-18T03:00:00.000Z").await;
+    let mut early = Client::default();
+    early.sync(&bucket, key);
     let saved = directory.path().join("saved.sqlite3");
     state.vacuum_into(&saved).unwrap();
+
+    // Published after the saved state: a vector of the same revision, a new
+    // notice and a removal.
+    embed(&state, 1, 1, Some("학사"));
     add(&state, 2, "되돌릴 공지");
     embed(&state, 2, 2, Some("학사"));
+    remove(&state, 4, true);
     run(&state, &bucket, &signer, "2026-11-18T04:00:00.000Z").await;
-    let before = bucket.keys();
+    let mut late = Client::default();
+    late.sync(&bucket, key);
+    let old = manifest_of(&bucket, key);
+    assert_eq!(late.cursor, Some(8));
     drop(state);
 
     // The rolled-back state, after a crawl of its own.
@@ -603,28 +618,79 @@ async fn a_reset_republishes_a_rolled_back_state_from_seq_one() {
     )
     .await
     .unwrap();
-    // Notices 1 and 3 again, with a snapshot of them.
-    assert_eq!(report.seqs, Some((1, 2)));
-    assert!(report.snapshot);
-    // Until the new manifest is up, the old one still lists every old file.
-    for key in &before {
-        assert!(bucket.keys().contains(key), "{key}");
-    }
+    // No segment, only a snapshot of notices 1, 3 and 4 after seq 8.
+    assert_eq!((report.seqs, report.snapshot), (None, true));
     finish(&state, &bucket, PREFIX, &signer, "2026-11-18T05:00:00.000Z")
         .await
         .unwrap();
-    let mut client = Client::default();
-    client.sync(&bucket, key);
-    assert!(client.from_snapshot);
-    client.assert_mirrors(&state);
+    let manifest = manifest_of(&bucket, key);
+    assert!(manifest.segments.is_empty());
+    assert_eq!(manifest.snapshot.through_seq, 11);
 
-    // The next ordinary run deletes the files only the old feed listed.
+    // A client from either side of the rollback, and a new one, each reach
+    // the rolled-back state in one sync.
+    for client in [&mut early, &mut late, &mut Client::default()] {
+        client.sync(&bucket, key);
+        assert!(client.from_snapshot);
+        client.assert_mirrors(&state);
+    }
+
+    // The next run continues the seqs; the old files stay a day.
+    add(&state, 5, "재시작 뒤 공지");
     let report = run(&state, &bucket, &signer, "2026-11-18T06:00:00.000Z").await;
-    assert_eq!(report.seqs, None);
-    assert_eq!(bucket.keys(), listed_keys(&manifest_of(&bucket, key)));
-    let mut fresh = Client::default();
-    fresh.sync(&bucket, key);
-    fresh.assert_mirrors(&state);
+    assert_eq!(report.seqs, Some((12, 12)));
+    let old_keys = listed_keys(&old);
+    let old_files: Vec<&String> = old_keys
+        .iter()
+        .filter(|k| !k.ends_with("manifest.json") && !k.ends_with(".sig"))
+        .collect();
+    for key in &old_files {
+        assert!(bucket.keys().contains(key), "{key}");
+    }
+    late.sync(&bucket, key);
+    assert!(!late.from_snapshot);
+    assert_eq!(late.applied, 1);
+    late.assert_mirrors(&state);
+    let report = run(&state, &bucket, &signer, "2026-11-19T06:00:00.000Z").await;
+    assert!(report.deleted >= old_files.len());
+    for key in &old_files {
+        assert!(!bucket.keys().contains(key), "{key}");
+    }
+    late.sync(&bucket, key);
+    late.assert_mirrors(&state);
+}
+
+#[tokio::test]
+async fn a_restart_needs_a_published_feed_and_a_notice() {
+    let bucket = Bucket::default();
+    let signer = signer();
+    let state = State::open_in_memory().unwrap();
+    add(&state, 1, "공지");
+    let error = prepare(
+        &state,
+        &bucket,
+        PREFIX,
+        &signer,
+        "2026-11-18T03:00:00.000Z",
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("needs a published feed"), "{error}");
+    run(&state, &bucket, &signer, "2026-11-18T03:00:00.000Z").await;
+    // A snapshot of nothing would leave a client at the old cursor as it is.
+    let empty = State::open_in_memory().unwrap();
+    let error = prepare(
+        &empty,
+        &bucket,
+        PREFIX,
+        &signer,
+        "2026-11-18T04:00:00.000Z",
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("no notice"), "{error}");
 }
 
 #[test]

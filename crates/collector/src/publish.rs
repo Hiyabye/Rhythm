@@ -6,10 +6,11 @@
 //!    a seq this state has not assigned (a rolled-back state would reuse it)
 //!    or is not older than this run's clock. It deletes files retired at least
 //!    a day ago and objects no state row names (left by a run whose state
-//!    upload failed). With `restart` it first forgets what the state
-//!    published, so the feed starts again at seq 1 (`--reset-feed`, for a
-//!    rolled-back state); the old files stay while the live manifest lists
-//!    them and the next run deletes them. On the first run of a UTC day it
+//!    upload failed). With `restart` (`--reset-feed`, for a rolled-back
+//!    state) it first forgets what the state published and retires the live
+//!    manifest's files for a day; the feed continues after the live seqs
+//!    with only a snapshot, so a client holding any old cursor applies it
+//!    (docs/FEED.md). On the first run of a UTC day it
 //!    compacts earlier days' run segments into daily segments and writes a
 //!    snapshot. The records
 //!    that changed become one run segment. Files are uploaded before the
@@ -66,17 +67,28 @@ pub async fn prepare<S: ObjectStore>(
 ) -> Result<Report, String> {
     let keys = store.list(prefix).await?;
     let live = live_manifest(store, prefix, signer, &keys).await?;
-    if restart {
-        state.feed_reset()?;
-    }
-    let next_seq = state.feed_next_seq()?;
-    if let Some(live) = &live {
-        let last = live
-            .segments
+    let last_seq = |live: &Manifest| {
+        live.segments
             .last()
             .map_or(0, |s| s.to_seq)
-            .max(live.snapshot.through_seq);
-        if last >= next_seq && !restart {
+            .max(live.snapshot.through_seq)
+    };
+    // A restart continues after every seq a client can hold, and lists only
+    // a snapshot, so every old cursor falls before it.
+    let restarted_after = if restart {
+        let live = live.as_ref().ok_or("--reset-feed needs a published feed")?;
+        let listed = listed_files(live)
+            .map(|(records, vectors)| (records.path.clone(), vectors.map(|v| v.path.clone())))
+            .collect::<Vec<_>>();
+        state.feed_restart(last_seq(live) + 1, &listed, now)?;
+        Some(last_seq(live))
+    } else {
+        None
+    };
+    let next_seq = state.feed_next_seq()?;
+    if let Some(live) = &live {
+        let last = last_seq(live);
+        if last >= next_seq {
             return Err(format!(
                 "the published feed reaches seq {last} but this state only {}: refusing to reuse seqs",
                 next_seq - 1
@@ -123,8 +135,14 @@ pub async fn prepare<S: ObjectStore>(
     }
     report.compacted_days = days.len();
 
+    // A restart's changes reach clients only through its snapshot.
+    let changes = if restarted_after.is_some() {
+        &[][..]
+    } else {
+        &changes[..]
+    };
     if let (Some(first), Some(last)) = (changes.first(), changes.last()) {
-        let lines = quantized(&changes)?;
+        let lines = quantized(changes)?;
         let (row, files) = build("run", day, first.0, last.0, &lines)?;
         commit.files.push(row);
         uploads.extend(files);
@@ -142,6 +160,9 @@ pub async fn prepare<S: ObjectStore>(
     let snapshot = listed.iter().find(|f| f.role == "snapshot");
     if snapshot.is_none_or(|s| s.day.as_str() < day) {
         let through = commit.next_seq - 1;
+        if restarted_after.is_some_and(|last| through <= last) {
+            return Err("the state has no notice to restart the feed with".into());
+        }
         let (row, files) = build("snapshot", day, through, through, &quantized(&current)?)?;
         match snapshot {
             // Nothing changed since: the same file serves the new day.
@@ -250,6 +271,15 @@ async fn live_manifest<S: ObjectStore>(
         .map_err(|e| format!("the published manifest does not verify with this key: {e}"))
 }
 
+/// The records and vectors files a manifest lists.
+fn listed_files(live: &Manifest) -> impl Iterator<Item = (&FileRef, Option<&FileRef>)> {
+    std::iter::once((&live.snapshot.records, live.snapshot.vectors.as_ref())).chain(
+        live.segments
+            .iter()
+            .map(|s| (&s.records, s.vectors.as_ref())),
+    )
+}
+
 /// Deletes files retired a day ago that no live manifest lists, and objects
 /// no state row names. Returns how many objects went.
 async fn clean<S: ObjectStore>(
@@ -261,13 +291,9 @@ async fn clean<S: ObjectStore>(
     now: &str,
 ) -> Result<usize, String> {
     let mut listed = HashSet::new();
-    if let Some(live) = live {
-        let pairs = std::iter::once((&live.snapshot.records, &live.snapshot.vectors))
-            .chain(live.segments.iter().map(|s| (&s.records, &s.vectors)));
-        for (records, vectors) in pairs {
-            listed.insert(records.path.clone());
-            listed.extend(vectors.iter().map(|v| v.path.clone()));
-        }
+    for (records, vectors) in live.into_iter().flat_map(listed_files) {
+        listed.insert(records.path.clone());
+        listed.extend(vectors.map(|v| v.path.clone()));
     }
     let paths = |file: &FileRow| {
         std::iter::once(file.records_path.clone())

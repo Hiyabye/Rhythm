@@ -125,7 +125,7 @@ A vectors file holds whole vectors and nothing else (#166 O19a). Each vector is 
   - The manifest then lists the daily segment in place of the run segments. The run segment files are deleted a day later, so a client that read the previous manifest can still download them.
 - **Retention:** daily segments stay listed for 30 days. A replaced snapshot, like a compacted run segment, is deleted a day after it leaves the manifest (user decision, 2026-11-18), so the manifest lists only the newest snapshot. A day without changes keeps the same snapshot file.
 - **Publish order** (user decision, 2026-11-18): a run uploads its new files, records their seqs in its state, uploads the state, and only then uploads the manifest and its signature. A failed state upload therefore leaves only unlisted files, which the next run deletes before it assigns the same seqs again. A run refuses to publish when the live manifest lists a seq its state has not assigned (a rolled-back state), when the live manifest is not older than its clock, or when the live manifest does not verify with its key.
-- **Restart** (user decision, 2026-11-18): after a state rollback the maintainer runs the collector once with `--reset-feed`. The state forgets what it published and the feed starts again at seq 1 with a new snapshot; the old files stay while the old manifest lists them, and the next run deletes them. A client holding a cursor from the old feed has no rule for this, so a restart is allowed only while no v2 client reads the feed; a restart clients survive needs its own design before the v2 client ships.
+- **Restart** (user decisions, 2026-11-18): after a state rollback the maintainer runs the collector once with `--reset-feed`. The state forgets what it published, and the run assigns every current record a new seq after the last seq the live manifest lists. It publishes no segment: the new manifest lists only a snapshot of those records, whose `through_seq` lies beyond every seq of the old feed, so any cursor a client holds falls before it and the client applies the snapshot (step 4 below), which brings it to the rolled-back state. Later runs continue the seqs as usual, so a seq never names two records. The old feed's files are retired as the restart publishes and deleted a day later. A restart needs a live manifest that verifies and at least one notice to snapshot.
 
 ## Applying the feed
 
@@ -134,7 +134,8 @@ A vectors file holds whole vectors and nothing else (#166 O19a). Each vector is 
 3. Follow `moved_to`, if set.
 4. Choose where to start:
    - **A cursor `c` with `c + 1` inside the listed segments:** apply the segments from the one that holds `c + 1`.
-   - **No cursor, or one older than the first listed segment:** apply the snapshot. Notices the client holds but the snapshot lacks were removed meanwhile; delete them as for `notice.remove`. Then apply the segments after `through_seq`.
+   - **A cursor equal to the newest listed seq** (the last segment's `to_seq`, or `through_seq` when no segment is listed): nothing to apply.
+   - **Any other cursor, or none:** apply the snapshot. Notices the client holds but the snapshot lacks were removed meanwhile; delete them as for `notice.remove`. Embeddings and classifications the snapshot lacks are dropped too, since it carries every current one. Then apply the segments after `through_seq`.
 5. Check each downloaded file's size and SHA-256 against the manifest (`FileRef::check`) before decoding it.
 6. Apply a file's records in one transaction, then store its last seq as the cursor.
 
