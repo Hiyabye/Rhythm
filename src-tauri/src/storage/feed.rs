@@ -10,9 +10,10 @@
 //! so a bad record is a publisher bug, and refusing the file would stall the
 //! mirror for good.
 use super::{
-    archive::{public_url, valid_id, web_url},
+    archive::{check_article, meaningful_hash, public_url, valid_id, web_url},
     notice_dates, proactive, Store,
 };
+use crate::archive::model::{ArticleInput, ListingEntry};
 use rhythm_embed::CATEGORIES;
 use rhythm_feed::{
     record::{BodyState, Classification, Embedding, Entry, Notice, Record, ResourceKind},
@@ -148,21 +149,7 @@ impl Store {
                 [cursor as i64],
             )
             .map_err(|e| e.to_string())?;
-        // Files are content-addressed, so another notice may still use one.
-        let mut orphaned = Vec::new();
-        for path in std::mem::take(&mut applied.orphaned) {
-            let used: bool = transaction
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM resources WHERE local_path=?1)",
-                    [&path],
-                    |row| row.get(0),
-                )
-                .map_err(|e| e.to_string())?;
-            if !used && !orphaned.contains(&path) {
-                orphaned.push(path);
-            }
-        }
-        applied.orphaned = orphaned;
+        applied.orphaned = unused(&transaction, std::mem::take(&mut applied.orphaned))?;
         transaction.commit().map_err(|e| e.to_string())?;
         if applied.removed > 0 {
             self.recompute_learned()?;
@@ -415,21 +402,14 @@ fn upsert(connection: &Connection, notice: &Notice, applied: &mut Applied) -> Re
         .map_err(|e| e.to_string())?;
     let revision_id = connection.last_insert_rowid();
     for resource in &notice.resources {
-        let kind = kind_name(resource.kind);
-        connection
-            .execute(
-                "INSERT OR IGNORE INTO resources(document_id,revision_id,url,filename,kind) VALUES(?1,?2,?3,?4,?5)",
-                params![id, revision_id, resource.url, resource.filename, kind],
-            )
-            .map_err(|e| e.to_string())?;
-        // As `upsert_article`: bytes already downloaded for the same URL and
-        // role are reused; local access still verifies their integrity.
-        connection
-            .execute(
-                "UPDATE resources SET (status,mime,bytes,local_path,sha256,error)=(SELECT status,mime,bytes,local_path,sha256,NULL FROM resources prior WHERE prior.document_id=?1 AND prior.url=?3 AND prior.kind=?4 AND prior.status='downloaded' AND prior.revision_id<>?2 ORDER BY prior.id DESC LIMIT 1) WHERE document_id=?1 AND revision_id=?2 AND url=?3 AND EXISTS(SELECT 1 FROM resources prior WHERE prior.document_id=?1 AND prior.url=?3 AND prior.kind=?4 AND prior.status='downloaded' AND prior.revision_id<>?2)",
-                params![id, revision_id, resource.url, kind],
-            )
-            .map_err(|e| e.to_string())?;
+        insert_resource(
+            connection,
+            id,
+            revision_id,
+            &resource.url,
+            &resource.filename,
+            kind_name(resource.kind),
+        )?;
     }
     notice_dates::store_feed(
         connection,
@@ -481,6 +461,252 @@ pub(super) fn adopt_crawled(
         )
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Adds a reference to a revision. As `upsert_article`: bytes already
+/// downloaded for the same URL and role are reused; local access still
+/// verifies their integrity.
+fn insert_resource(
+    connection: &Connection,
+    document_id: i64,
+    revision_id: i64,
+    url: &str,
+    filename: &str,
+    kind: &str,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT OR IGNORE INTO resources(document_id,revision_id,url,filename,kind) VALUES(?1,?2,?3,?4,?5)",
+            params![document_id, revision_id, url, filename, kind],
+        )
+        .map_err(|e| e.to_string())?;
+    connection
+        .execute(
+            "UPDATE resources SET (status,mime,bytes,local_path,sha256,error)=(SELECT status,mime,bytes,local_path,sha256,NULL FROM resources prior WHERE prior.document_id=?1 AND prior.url=?3 AND prior.kind=?4 AND prior.status='downloaded' AND prior.revision_id<>?2 ORDER BY prior.id DESC LIMIT 1) WHERE document_id=?1 AND revision_id=?2 AND url=?3 AND status<>'downloaded' AND EXISTS(SELECT 1 FROM resources prior WHERE prior.document_id=?1 AND prior.url=?3 AND prior.kind=?4 AND prior.status='downloaded' AND prior.revision_id<>?2)",
+            params![document_id, revision_id, url, kind],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// The given resource files that no remaining row uses. Files are
+/// content-addressed, so another notice may still use one.
+fn unused(connection: &Connection, paths: Vec<String>) -> Result<Vec<String>, String> {
+    let mut orphaned = Vec::new();
+    for path in paths {
+        let used: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM resources WHERE local_path=?1)",
+                [&path],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if !used && !orphaned.contains(&path) {
+            orphaned.push(path);
+        }
+    }
+    Ok(orphaned)
+}
+
+/// The feed's `revision_hash` of a fetched article, as the collector computes it.
+pub(crate) fn article_revision_hash(article: &ArticleInput) -> String {
+    let resources: Vec<(&str, &str, &str)> = article
+        .resources
+        .iter()
+        .map(|r| (r.url.as_str(), r.filename.as_str(), r.kind.as_str()))
+        .collect();
+    rhythm_feed::revision_hash(&Revision {
+        canonical_url: &article.canonical_url,
+        title: &article.title,
+        author: article.author.as_deref(),
+        category: article.category.as_deref(),
+        published_at: &article.published_at,
+        body_text: &article.body_text,
+        resources: &resources,
+    })
+}
+
+/// What filling an opened notice's body changed.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct Filled {
+    /// The school's text is not the revision the feed described.
+    pub revised: bool,
+    /// Resource files no remaining notice uses, as in `Applied`.
+    pub orphaned: Vec<String>,
+}
+
+impl Store {
+    /// The source and listing identity of a notice whose body has not been
+    /// fetched yet, or `None` when there is nothing to fetch: the body is
+    /// here, or the source deleted the notice.
+    pub(crate) fn pending_body(
+        &self,
+        document_id: i64,
+    ) -> Result<Option<(String, ListingEntry)>, String> {
+        let pending: Option<bool> = self
+            .connection
+            .query_row(
+                "SELECT body_pending=1 AND removed_at IS NULL FROM documents WHERE id=?1",
+                [document_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        match pending {
+            None => Err("보관된 공지를 찾을 수 없습니다.".into()),
+            Some(false) => Ok(None),
+            Some(true) => self.document_entry(document_id).map(Some),
+        }
+    }
+
+    /// Fills the latest revision of an opened feed notice in place with the
+    /// article fetched from the school (#177). It stays the same revision,
+    /// so freshness and notifications are unchanged. With `compare` the
+    /// article's `revision_hash` decides whether the school's text is the
+    /// revision the feed described; without it (a PDF-viewer notice, whose
+    /// body is the PDF's text) the feed's hash is kept. A revised text takes its own hash, so the feed's later record
+    /// of that revision keeps this body. Nothing changes when the body arrived
+    /// meanwhile (another open, the crawler) or the notice left the feed.
+    pub(crate) fn fill_feed_body(
+        &self,
+        document_id: i64,
+        article: &ArticleInput,
+        compare: bool,
+    ) -> Result<Filled, String> {
+        let (source_id, entry) = self.document_entry(document_id)?;
+        check_article(&source_id, article)?;
+        if article.external_id != entry.external_id {
+            return Err("공지의 식별자, 본문 또는 크기를 확인해 주세요.".into());
+        }
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let current: Option<String> = transaction
+            .query_row(
+                "SELECT revision_hash FROM documents WHERE id=?1 AND body_pending=1 AND removed_at IS NULL",
+                [document_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some(current) = current else {
+            return Ok(Filled::default());
+        };
+        let fetched = article_revision_hash(article);
+        let revised = compare && fetched != current;
+        let revision_hash = if revised { fetched } else { current };
+        let content_hash = meaningful_hash(article)?;
+        let revision: i64 = transaction
+            .query_row(
+                "SELECT MAX(id) FROM document_revisions WHERE document_id=?1",
+                [document_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        transaction
+            .execute(
+                "UPDATE document_revisions SET canonical_url=?2,title=?3,author=?4,category=?5,
+                   published_at=?6,modified_at=?7,original=?8,body_html=?9,body_text=?10,
+                   content_hash=?11,revision_hash=?12
+                 WHERE id=?1",
+                params![
+                    revision,
+                    article.canonical_url,
+                    article.title,
+                    article.author,
+                    article.category,
+                    article.published_at,
+                    article.modified_at,
+                    article.original,
+                    article.body_html,
+                    article.body_text,
+                    content_hash,
+                    revision_hash
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        transaction
+            .execute(
+                "UPDATE documents SET canonical_url=?2,title=?3,author=?4,category=?5,published_at=?6,
+                   modified_at=?7,body_html=?8,body_text=?9,content_hash=?10,revision_hash=?11,
+                   body_state=?12,body_pending=0,etag=?13,last_modified=?14,
+                   checked_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                 WHERE id=?1",
+                params![
+                    document_id,
+                    article.canonical_url,
+                    article.title,
+                    article.author,
+                    article.category,
+                    article.published_at,
+                    article.modified_at,
+                    article.body_html,
+                    article.body_text,
+                    content_hash,
+                    revision_hash,
+                    if article.unsupported_body {
+                        "unsupported"
+                    } else {
+                        "normal"
+                    },
+                    article.etag,
+                    article.last_modified
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        // The revision's references become the fetched ones. Unchanged URLs
+        // keep their rows and download state.
+        let urls: HashSet<&str> = article.resources.iter().map(|r| r.url.as_str()).collect();
+        let stale: Vec<(i64, Option<String>)> = transaction
+            .prepare("SELECT id,url,local_path FROM resources WHERE revision_id=?1")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([revision], |r| {
+                        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get(2)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .filter(|(_, url, _)| !urls.contains(url.as_str()))
+            .map(|(id, _, path)| (id, path))
+            .collect();
+        let mut filled = Filled {
+            revised,
+            orphaned: Vec::new(),
+        };
+        for (id, path) in stale {
+            transaction
+                .execute("DELETE FROM resources WHERE id=?1", [id])
+                .map_err(|e| e.to_string())?;
+            filled.orphaned.extend(path);
+        }
+        for resource in &article.resources {
+            insert_resource(
+                &transaction,
+                document_id,
+                revision,
+                &resource.url,
+                &resource.filename,
+                &resource.kind,
+            )?;
+        }
+        // Local vectors of the excerpt are recomputed from the body. The
+        // feed's vector stays until the feed describes a newer revision.
+        for table in ["notice_classifications", "notice_embeddings"] {
+            transaction
+                .execute(
+                    &format!("DELETE FROM {table} WHERE document_id=?1 AND revision_id=?2"),
+                    params![document_id, revision],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        notice_dates::extract(&transaction, document_id)?;
+        filled.orphaned = unused(&transaction, std::mem::take(&mut filled.orphaned))?;
+        transaction.commit().map_err(|e| e.to_string())?;
+        Ok(filled)
+    }
 }
 
 fn v1_revision_hash(connection: &Connection, document_id: i64) -> Result<String, String> {

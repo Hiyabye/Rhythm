@@ -239,3 +239,13 @@ test('the notice feed status reads the same under a Windows user agent', async (
   await expect(feed).not.toContainText('연결되면 자동으로 다시 받습니다');
   expect(await callCount(page, 'feed_sync')).toBe(1);
 });
+
+test('an opened feed notice fetches its body under a Windows user agent', async ({ page }) => {
+  await mockDesktop(page, { windows: true, feedBody: { result: 'fail' } });
+  await page.goto('/');
+  await page.locator('#notice-1').click();
+  const summary = page.getByRole('region', { name: '공지 요약', exact: true });
+  await expect(summary.getByRole('alert')).toContainText('본문을 가져오지 못했습니다');
+  await summary.getByRole('button', { name: '다시 시도', exact: true }).click();
+  await expect(page.locator('.reader-body')).toContainText('보관된 한국어 본문입니다.');
+});

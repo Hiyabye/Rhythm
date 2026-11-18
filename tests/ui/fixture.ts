@@ -84,6 +84,11 @@ export interface FixtureOptions {
   feedSyncResult?: Partial<FeedStatus>;
   feedSyncDelay?: number;
   feedSyncError?: string;
+  // Opened notices hold only the feed's excerpt until `archive_fetch_body`
+  // (after `delay` ms) fills them; `fail` fails the first fetch, `revised`
+  // reports a school text that differs from the feed's, `removed` marks the
+  // notices deleted at the school.
+  feedBody?: { result?: 'filled' | 'revised' | 'fail'; delay?: number; removed?: boolean };
   schedulerError?: boolean;
   pendingActivation?: ProactiveActivation;
   notificationAuthorization?: string;
@@ -202,6 +207,8 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     if (!options.studium?.results) studium.results = studiumStates('not_checked');
     type Board = { source_id: string; mode: string; page: number; message: string };
     let sync = { running: false, mode: 'historical', message: '수집 대기 중입니다.', active: [] as Board[] };
+    const filledBodies = new Set<number>();
+    let bodyFailures = options.feedBody?.result === 'fail' ? 1 : 0;
     let feed: FeedStatus = { running: false, generated_at: '2026-11-18T03:00:00.000Z', checked_at: '2026-11-18T03:05:00.000Z', stale: false, result: 'ok', error: null, failing_boards: [], ...options.feed };
     const board = (mode: string, page = 1, source_id = 'computing-updates'): Board => ({ source_id, mode, page, message: '공개 공지를 가져오는 중입니다.' });
     const separator = options.windows ? '\\' : '/';
@@ -718,7 +725,13 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             const item = entries.find((entry) => entry.id === args.id);
             if (!item) throw '공지 없음';
             const unsupported = options.unsupportedBody && (args.revisionId ?? 2) === 2;
-            return { item: copy(item), canonical_url: options.unsupportedBody
+            if (options.feedBody && !filledBodies.has(item.id)) {
+              return { item: copy(item), canonical_url: 'https://computing.sogang.ac.kr/ko/community/news/detail/282',
+                body_html: '', body_text: '피드 요약: 2026년 10월 30일까지 신청서를 제출하세요.', summary_only: true,
+                removed: options.feedBody.removed ?? false, revision_id: 1,
+                revisions: [{ id: 1, content_hash: 'abc', collected_at: '2026-10-24 12:00:00' }], resources: [] };
+            }
+            return { item: copy(item), summary_only: false, removed: options.feedBody?.removed ?? false, canonical_url: options.unsupportedBody
               ? 'https://www.sogang.ac.kr/notice/original/551681'
               : 'https://computing.sogang.ac.kr/ko/community/news/detail/282',
               body_html: unsupported ? '' : options.body ?? '<p>보관된 한국어 본문입니다.</p>',
@@ -731,6 +744,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
                   : [{ id: 1, content_hash: 'abc', collected_at: '2026-10-24 12:00:00' }],
               resources: copy(options.resources ?? []) };
           }
+          case 'archive_fetch_body':
+            await wait(options.feedBody?.delay ?? 0);
+            if (bodyFailures > 0) {
+              bodyFailures--;
+              throw '학교 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.';
+            }
+            filledBodies.add(args.id);
+            return options.feedBody?.result === 'revised';
           case 'archive_state': {
             await wait(fixture.stateDelay);
             if (args.isRead !== null && options.readError) throw '읽음 상태를 저장하지 못했습니다. 디스크 공간을 확인해 주세요.';

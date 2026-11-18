@@ -261,7 +261,11 @@ pub async fn set_extension(
             completion.wait().await;
         }
         match id.as_str() {
-            extensions::NOTICES | extensions::CYBERCAMPUS => state.archive.wait().await,
+            extensions::NOTICES => {
+                state.archive.wait().await;
+                state.archive.bodies.wait().await;
+            }
+            extensions::CYBERCAMPUS => state.archive.wait().await,
             extensions::STUDIUM => {
                 finish_studium_disable(&state.store, &state.studium, studium_completion).await?;
             }

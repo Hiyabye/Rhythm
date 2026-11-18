@@ -148,6 +148,18 @@ pub async fn archive_document(
     let _lease = state.operation_gate.shared().await?;
     with_store(&state.store, |s| s.document(id, revision_id))
 }
+/// Fetches the body of an opened feed notice from the school; the reader
+/// shows the feed's excerpt meanwhile. Returns whether the school's text
+/// differs from the revision the feed described.
+#[tauri::command]
+pub async fn archive_fetch_body(state: State<'_, AppState>, id: i64) -> Result<bool, String> {
+    let _lease = state.operation_gate.shared().await?;
+    state
+        .archive
+        .bodies
+        .fetch(&state.store, &state.data_root, &state.network, id)
+        .await
+}
 #[tauri::command]
 pub async fn archive_state(
     state: State<'_, AppState>,

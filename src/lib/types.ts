@@ -254,6 +254,10 @@ export interface DocumentDetail {
   canonical_url: string;
   body_html: string;
   body_text: string;
+  /** This revision holds only the feed's excerpt; its body has not been fetched from the school. */
+  summary_only: boolean;
+  /** The school deleted the notice; it stays because it was saved. */
+  removed: boolean;
   revision_id: number;
   revisions: RevisionInfo[];
   resources: ResourceRecord[];

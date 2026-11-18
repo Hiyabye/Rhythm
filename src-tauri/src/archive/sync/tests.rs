@@ -3658,3 +3658,183 @@ async fn trashed_notices_stay_in_sync_and_deleted_ones_are_never_fetched_again()
     let source = with_store(&store, |s| s.source("se-notices")).unwrap();
     assert_eq!(source.failed, 0);
 }
+
+/// Mirrors main-board notice `id` from the feed as the collector saw `page`
+/// (the fake's detail response), with only its excerpt archived.
+fn mirror(store: &SharedStore, seq: u64, id: u64, page: &str) -> i64 {
+    use rhythm_feed::record::{BodyState, Entry, Notice, Record, Resource, ResourceKind};
+    let external = id.to_string();
+    let definition = with_store(store, |s| s.source(MAIN)).unwrap().definition;
+    let entry = ListingEntry {
+        external_id: external.clone(),
+        url: parser::main_canonical(&external).to_string(),
+        pinned: false,
+        modified_at: None,
+    };
+    let article = parser::article(&definition, &entry, page).unwrap();
+    let notice = Notice {
+        source_id: MAIN.into(),
+        external_id: external.clone(),
+        revision_hash: crate::storage::feed::article_revision_hash(&article),
+        canonical_url: article.canonical_url.clone(),
+        title: article.title.clone(),
+        author: article.author.clone(),
+        category: article.category.clone(),
+        published_at: article.published_at.clone(),
+        modified_at: None,
+        body_state: if article.unsupported_body {
+            BodyState::Unsupported
+        } else {
+            BodyState::Normal
+        },
+        excerpt: rhythm_feed::excerpt(&article.body_text),
+        resources: article
+            .resources
+            .iter()
+            .map(|r| Resource {
+                url: r.url.clone(),
+                filename: r.filename.clone(),
+                kind: if r.kind == "image" {
+                    ResourceKind::Image
+                } else {
+                    ResourceKind::Attachment
+                },
+            })
+            .collect(),
+        dates: vec![],
+        dates_version: 1,
+        historical: false,
+        first_seen_at: "2026-11-18T01:00:00.000Z".into(),
+        revised_at: "2026-11-18T01:00:00.000Z".into(),
+    };
+    let records = [Entry {
+        seq,
+        record: Some(Record::Notice(Box::new(notice))),
+    }];
+    with_store(store, |s| match s.feed_cursor()? {
+        None => s.feed_apply_snapshot(seq, &records, &[]),
+        Some(_) => s.feed_apply_segment(seq, seq, &records, &[], false),
+    })
+    .unwrap();
+    with_store(store, |s| s.document_id(MAIN, &external))
+        .unwrap()
+        .unwrap()
+}
+fn detail_requests(fake: &Fake) -> usize {
+    fake.paths()
+        .iter()
+        .filter(|url| url.contains("/BbsData"))
+        .count()
+}
+
+#[tokio::test]
+async fn opening_a_feed_notice_fills_its_body_from_the_school() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![]);
+    let bodies = body::Bodies::default();
+    let same = mirror(&store, 1, 551700, &fake.detail(551700));
+    let before = with_store(&store, |s| s.document(same, None)).unwrap();
+    assert!(before.summary_only);
+
+    let revised = bodies.fetch(&store, dir.path(), &fake, same).await.unwrap();
+    assert!(!revised, "the school still shows the feed's revision");
+    let detail = with_store(&store, |s| s.document(same, None)).unwrap();
+    assert!(!detail.summary_only);
+    assert!(detail.body_html.contains("<h2>보관 자료 551700</h2>"));
+    assert_eq!(detail.revisions.len(), 1);
+    // Archive routes and robots.txt as the crawler uses them.
+    assert!(fake
+        .accesses
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|(_, access)| *access == network::Access::Source));
+    // Opened again: the body is here, so nothing is requested.
+    assert!(!bodies.fetch(&store, dir.path(), &fake, same).await.unwrap());
+    assert_eq!(detail_requests(&fake), 1);
+
+    // The school changed another notice after the collector saw it.
+    let changed = mirror(&store, 2, 551701, &fake.detail(551701));
+    fake.changed
+        .lock()
+        .unwrap()
+        .insert(551701, "<p>수정된 안내입니다.</p>".into());
+    assert!(bodies
+        .fetch(&store, dir.path(), &fake, changed)
+        .await
+        .unwrap());
+    let detail = with_store(&store, |s| s.document(changed, None)).unwrap();
+    assert_eq!(detail.body_text, "수정된 안내입니다.");
+    assert_eq!(detail.revisions.len(), 1);
+    assert_eq!(
+        fake.paths()
+            .iter()
+            .filter(|url| url.ends_with("/robots.txt"))
+            .count(),
+        1,
+        "robots.txt is reused between opens"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_body_fetch_keeps_the_excerpt_until_a_retry() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![]);
+    let bodies = body::Bodies::default();
+    let id = mirror(&store, 1, 551702, &fake.detail(551702));
+    let excerpt = with_store(&store, |s| s.document(id, None))
+        .unwrap()
+        .body_text;
+    fake.failed.lock().unwrap().insert(551702);
+    assert!(bodies.fetch(&store, dir.path(), &fake, id).await.is_err());
+    let detail = with_store(&store, |s| s.document(id, None)).unwrap();
+    assert!(detail.summary_only);
+    assert_eq!(detail.body_text, excerpt);
+
+    // With the notices extension off nothing is requested.
+    with_store(&store, |s| s.set_enabled("sogang_notices", false)).unwrap();
+    fake.failed.lock().unwrap().clear();
+    let requests = detail_requests(&fake);
+    assert!(bodies.fetch(&store, dir.path(), &fake, id).await.is_err());
+    assert_eq!(detail_requests(&fake), requests);
+
+    with_store(&store, |s| s.set_enabled("sogang_notices", true)).unwrap();
+    assert!(!bodies.fetch(&store, dir.path(), &fake, id).await.unwrap());
+    assert!(
+        !with_store(&store, |s| s.document(id, None))
+            .unwrap()
+            .summary_only
+    );
+}
+
+#[tokio::test]
+async fn opening_a_feed_viewer_notice_reads_its_pdf() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = viewer_fake(&[(551680, VIEWER_PDF)]);
+    let bodies = body::Bodies::default();
+    let id = mirror(&store, 1, 551680, &fake.detail(551680));
+    assert!(!bodies.fetch(&store, dir.path(), &fake, id).await.unwrap());
+    let detail = with_store(&store, |s| s.document(id, None)).unwrap();
+    assert!(detail
+        .body_text
+        .contains("2026학년도 동계계절수업 수강신청 안내"));
+    assert_eq!(detail.revisions.len(), 1);
+    let pdf = detail
+        .resources
+        .iter()
+        .find(|r| r.url == VIEWER_PDF)
+        .unwrap();
+    assert_eq!(pdf.status, "downloaded");
+    // The body keeps the feed's hash, so the feed's next record of that
+    // revision leaves the PDF text in place.
+    mirror(&store, 2, 551680, &fake.detail(551680));
+    assert_eq!(
+        with_store(&store, |s| s.document(id, None))
+            .unwrap()
+            .body_text,
+        detail.body_text
+    );
+    assert!(fake
+        .paths()
+        .contains(&"https://scc.sogang.ac.kr/robots.txt".to_string()));
+}

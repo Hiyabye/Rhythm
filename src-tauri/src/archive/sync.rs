@@ -65,6 +65,8 @@ pub struct Controller {
     image_robots: RobotsCache,
     /// The eClass session and stored login of the `cybercampus` source.
     pub cybercampus: cybercampus::Connector,
+    /// Bodies of opened feed notices, fetched outside sync jobs.
+    pub bodies: body::Bodies,
 }
 type RobotsCache = Mutex<HashMap<String, Result<Arc<Robots>, String>>>;
 /// A job's boards. Up to `network::MAX_HOSTS` boards collect at once, never
@@ -123,6 +125,7 @@ impl Controller {
             queue: Mutex::default(),
             image_robots: Mutex::new(HashMap::new()),
             cybercampus: cybercampus::Connector::native(),
+            bodies: body::Bodies::default(),
         })
     }
     pub fn status(&self) -> Result<SyncStatus, String> {
@@ -828,6 +831,7 @@ impl Board<'_> {
 }
 
 mod articles;
+mod body;
 mod listing;
 mod pdf;
 mod resources;
