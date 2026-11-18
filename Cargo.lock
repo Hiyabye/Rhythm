@@ -3966,6 +3966,7 @@ dependencies = [
  "hmac",
  "reqwest 0.12.28",
  "rhythm-embed",
+ "rhythm-feed",
  "rhythm-sources",
  "rusqlite",
  "serde",

@@ -1,6 +1,6 @@
 //! One bounded collector run: crawls every public board into the state file.
 //!
-//! Usage: `rhythm-collector <state.sqlite3> [--r2 <prefix> [--init]] [--embed [--reset-canary]] [--pages N] [--articles N]`
+//! Usage: `rhythm-collector <state.sqlite3> [--r2 <prefix> [--init] [--publish <prefix>]] [--embed [--reset-canary]] [--pages N] [--articles N]`
 //!
 //! The budgets bound each pass of each board; history resumes from its
 //! checkpoint on the next run. A failed board is recorded in its health row and
@@ -18,9 +18,14 @@
 //! `WorkersAi::from_env`). A Workers AI failure only stops embedding.
 //! `--reset-canary` is the maintainer's decision after a drift stop: the run
 //! records a new canary reference.
+//!
+//! With `--publish`, the run also publishes the signed feed under that prefix
+//! in the public feed bucket (`publish.rs`; the key from `KEY_VARIABLE`): its
+//! files before the state upload, the manifest after it.
 use rhythm_collector::{
     crawl::{self, Budget},
     embedding::{self, Limits},
+    publish,
     r2::{self, R2},
     remote,
     state::State,
@@ -31,8 +36,8 @@ use std::{
     ffi::OsString, path::PathBuf, process::ExitCode, sync::atomic::AtomicBool, time::SystemTime,
 };
 
-const USAGE: &str = "usage: rhythm-collector <state.sqlite3> [--r2 <prefix> [--init]] \
-     [--embed [--reset-canary]] [--pages N] [--articles N]";
+const USAGE: &str = "usage: rhythm-collector <state.sqlite3> [--r2 <prefix> [--init] \
+     [--publish <prefix>]] [--embed [--reset-canary]] [--pages N] [--articles N]";
 
 /// The v1 client's user agent (#166 O16): Sogang sees one identity for
 /// Rhythm, with the same robots and per-host pacing.
@@ -47,6 +52,7 @@ struct Args {
     budget: Budget,
     r2: Option<String>,
     init: bool,
+    publish: Option<String>,
     embed: bool,
     reset_canary: bool,
 }
@@ -56,6 +62,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut budget = Budget::default();
     let mut r2 = None;
     let mut init = false;
+    let mut publish = None;
     let mut embed = false;
     let mut reset_canary = false;
     while let Some(arg) = args.next() {
@@ -70,6 +77,12 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             }
             "--init" => {
                 init = true;
+                continue;
+            }
+            "--publish" if publish.is_none() => {
+                let prefix = args.next().ok_or("--publish needs a prefix")?;
+                remote::validate_prefix(&prefix)?;
+                publish = Some(prefix);
                 continue;
             }
             "--embed" => {
@@ -96,6 +109,10 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     if init && r2.is_none() {
         return Err("--init needs --r2".into());
     }
+    // The manifest goes out after the state upload (publish.rs).
+    if publish.is_some() && r2.is_none() {
+        return Err("--publish needs --r2".into());
+    }
     if reset_canary && !embed {
         return Err("--reset-canary needs --embed".into());
     }
@@ -104,6 +121,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         budget,
         r2,
         init,
+        publish,
         embed,
         reset_canary,
     })
@@ -174,10 +192,23 @@ async fn run(args: Args) -> Result<(), String> {
         return work(&State::open(&args.state)?, &args, ai.as_ref()).await;
     };
     let store = R2::from_env(remote::BUCKET)?;
+    let feed = match &args.publish {
+        Some(feed_prefix) => Some((
+            R2::from_env(publish::BUCKET)?,
+            feed_prefix,
+            publish::signer_from_env()?,
+        )),
+        None => None,
+    };
     let base = remote::download(&store, prefix, &args.state, args.init).await?;
     println!("state: {}", base.as_deref().unwrap_or("new"));
     let state = State::open(&args.state)?;
     work(&state, &args, ai.as_ref()).await?;
+    let now = publish::timestamp(SystemTime::now());
+    if let Some((feed_store, feed_prefix, signer)) = &feed {
+        let report = publish::prepare(&state, feed_store, feed_prefix, signer, &now).await?;
+        println!("{}", publish::summary(&report));
+    }
     let mut snapshot = OsString::from(args.state.as_os_str());
     snapshot.push(".upload");
     let key = remote::upload(
@@ -190,6 +221,12 @@ async fn run(args: Args) -> Result<(), String> {
     )
     .await?;
     println!("uploaded {key}");
+    if let Some((feed_store, feed_prefix, signer)) = &feed {
+        publish::finish(&state, feed_store, feed_prefix, signer, &now)
+            .await
+            .map_err(|e| format!("uploaded {key}, but the manifest was not published: {e}"))?;
+        println!("published {feed_prefix}manifest.json");
+    }
     // A failed prune leaves extra versions; the run still reports it.
     let pruned = remote::prune(&store, prefix)
         .await
@@ -253,6 +290,11 @@ mod tests {
         assert!(args(&["state.sqlite3", "--deadline", "1"]).is_err());
         assert!(args(&["state.sqlite3", "--init"]).is_err());
         assert!(args(&["state.sqlite3", "--reset-canary"]).is_err());
+        assert!(args(&["state.sqlite3", "--publish", "feed/"]).is_err());
+        assert!(args(&["state.sqlite3", "--r2", "state/", "--publish", "feed"]).is_err());
+        let publish = args(&["work.sqlite3", "--r2", "state/", "--publish", "feed/"]).unwrap();
+        assert_eq!(publish.publish.as_deref(), Some("feed/"));
+        assert_eq!(args(&["state.sqlite3"]).unwrap().publish, None);
         assert!(args(&["state.sqlite3", "--r2"]).is_err());
         assert!(args(&["state.sqlite3", "--r2", "state"]).is_err());
         assert!(args(&["state.sqlite3", "--r2", "a/", "--r2", "b/"]).is_err());
