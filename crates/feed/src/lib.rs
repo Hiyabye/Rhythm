@@ -49,5 +49,36 @@ pub fn excerpt(body_text: &str) -> String {
     body_text.chars().take(EXCERPT_CHARS).collect()
 }
 
+/// The parts of a parsed notice that `revision_hash` covers. Markup is left
+/// out, so a markup-only change is not a revision.
+pub struct Revision<'a> {
+    pub canonical_url: &'a str,
+    pub title: &'a str,
+    pub author: Option<&'a str>,
+    pub category: Option<&'a str>,
+    pub published_at: &'a str,
+    pub body_text: &'a str,
+    /// `(url, filename, kind)` in the order the page lists them.
+    pub resources: &'a [(&'a str, &'a str, &'a str)],
+}
+
+/// A notice's `revision_hash`: the SHA-256 of the JSON array of `revision`'s
+/// fields in declaration order. The collector publishes it and the app
+/// recomputes it over a body it fetched, to tell whether that body is the
+/// revision the feed describes.
+pub fn revision_hash(revision: &Revision) -> String {
+    let encoded = serde_json::to_vec(&(
+        revision.canonical_url,
+        revision.title,
+        revision.author,
+        revision.category,
+        revision.published_at,
+        revision.body_text,
+        revision.resources,
+    ))
+    .expect("strings serialize");
+    manifest::sha256_hex(&encoded)
+}
+
 #[cfg(test)]
 mod tests;

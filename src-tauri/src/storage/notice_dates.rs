@@ -77,6 +77,48 @@ pub(super) fn extract(connection: &Connection, document_id: i64) -> Result<(), S
     Ok(())
 }
 
+/// Replaces a notice's dates with the ones the feed extracted from its full
+/// body, which the app does not hold until the notice is opened.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "called by the feed sync, #177 PR 2")
+)]
+pub(super) fn store_feed(
+    connection: &Connection,
+    document_id: i64,
+    revision_hash: &str,
+    version: u32,
+    found: &[rhythm_feed::record::NoticeDate],
+) -> Result<(), String> {
+    use rhythm_feed::record::DateKind;
+    connection
+        .execute(
+            "DELETE FROM notice_date_extractions WHERE document_id=?1",
+            [document_id],
+        )
+        .map_err(|e| e.to_string())?;
+    connection
+        .execute(
+            "INSERT INTO notice_date_extractions(document_id,content_hash,version) VALUES(?1,?2,?3)",
+            params![document_id, revision_hash, version],
+        )
+        .map_err(|e| e.to_string())?;
+    for (ordinal, date) in found.iter().enumerate() {
+        let kind = match date.kind {
+            DateKind::Deadline => Kind::Deadline,
+            DateKind::Start => Kind::Start,
+            DateKind::Date => Kind::Date,
+        };
+        connection
+            .execute(
+                "INSERT INTO notice_dates(document_id,ordinal,day,time,end_day,end_time,label,kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+                params![document_id, ordinal as i64, date.day, date.time, date.end_day, date.end_time, date.label, kind_name(kind)],
+            )
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn notice_date(row: &rusqlite::Row) -> rusqlite::Result<NoticeDate> {
     Ok(NoticeDate {
         document_id: row.get(0)?,
@@ -95,7 +137,8 @@ const COLUMNS: &str =
 
 impl Store {
     /// Extracts dates for at most `limit` notices whose stored dates are missing
-    /// or stale, and returns how many it processed. Callers repeat it with the
+    /// or stale, and returns how many it processed. A feed notice not yet
+    /// opened keeps the feed's dates: its text is only the excerpt. Callers repeat it with the
     /// store unlocked between batches until it returns 0.
     pub(crate) fn refresh_notice_dates(&self, limit: i64) -> Result<usize, String> {
         let stale: Vec<i64> = self
@@ -103,7 +146,8 @@ impl Store {
             .prepare(
                 "SELECT d.id FROM documents d
                  LEFT JOIN notice_date_extractions e ON e.document_id=d.id
-                 WHERE e.document_id IS NULL OR e.content_hash<>d.content_hash OR e.version<>?1
+                 WHERE d.body_pending=0
+                   AND (e.document_id IS NULL OR e.content_hash<>d.content_hash OR e.version<>?1)
                  ORDER BY d.id DESC LIMIT ?2",
             )
             .and_then(|mut statement| {

@@ -125,17 +125,17 @@ fn resource_row(row: &Row<'_>) -> rusqlite::Result<ResourceRecord> {
         error: row.get(9)?,
     })
 }
-fn valid_id(id: &str) -> bool {
+pub(super) fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
         && id
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
 }
-fn public_url(value: &str) -> bool {
+pub(super) fn public_url(value: &str) -> bool {
     web_url(value, false)
 }
-fn web_url(value: &str, allow_http: bool) -> bool {
+pub(super) fn web_url(value: &str, allow_http: bool) -> bool {
     value.len() <= 8192
         && url::Url::parse(value).is_ok_and(|url| {
             (url.scheme() == "https" || (allow_http && url.scheme() == "http"))
