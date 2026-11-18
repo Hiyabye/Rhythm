@@ -6,6 +6,7 @@ mod commands;
 pub(crate) use commands::storage_error;
 mod core;
 mod extensions;
+mod feed;
 mod intelligence;
 mod notification_permission;
 pub(crate) mod operation_gate;
@@ -32,6 +33,7 @@ pub(crate) struct AppState {
     launch_at_login: Mutex<()>,
     pub(crate) proactive: Arc<proactive::Scheduler>,
     pub(crate) archive: Arc<archive::sync::Controller>,
+    pub(crate) feed: Arc<feed::Controller>,
     pub(crate) studium: Arc<studium::controller::Controller>,
     pub(crate) studium_notifications: Arc<studium::notification::Notifications>,
     pub(crate) studium_views: Arc<studium::views::Views>,
@@ -121,6 +123,7 @@ impl AppState {
             armed: true,
         };
         self.archive.cancel();
+        self.feed.cancel();
         self.models.cancel();
         // A command admitted before the reservation may start a download
         // under the AI gate; cancel again once it has released the gate.
@@ -131,6 +134,7 @@ impl AppState {
         self.studium_notifications.quiesce().await;
         self.studium_views.quiesce().await;
         self.archive.wait().await;
+        self.feed.wait().await;
         if let Some(completion) = studium_completion {
             completion.wait().await;
         }
@@ -444,9 +448,11 @@ fn main() {
             );
             studium.attach_views(&studium_views);
             let network = archive::client().map_err(std::io::Error::other)?;
+            let feed = Arc::new(feed::Controller::default());
             let proactive = proactive::Scheduler::new(
                 store.clone(),
                 archive.clone(),
+                feed.clone(),
                 network.clone(),
                 data_root.clone(),
                 app.handle().clone(),
@@ -481,11 +487,12 @@ fn main() {
                 lifecycle,
                 tray_available,
                 proactive: Arc::new(proactive),
-                registry: Registry::new(archive.clone(), studium.clone()),
+                registry: Registry::new(archive.clone(), studium.clone(), feed.clone()),
                 studium,
                 studium_notifications: studium_notifications.clone(),
                 studium_views: studium_views.clone(),
                 archive,
+                feed,
                 network,
                 classifier,
                 models: intelligence::models::Controller::default(),
@@ -623,6 +630,8 @@ fn main() {
             archive::archive_start,
             archive::archive_cancel,
             archive::archive_status,
+            feed::feed_status,
+            feed::feed_sync,
             archive::archive_retry_resource,
             archive::archive_resource_image,
             archive::archive_reveal_resource,
@@ -669,6 +678,7 @@ fn main() {
                 state.studium_notifications.shutdown().await;
                 state.proactive.shutdown().await;
                 state.archive.wait().await;
+                state.feed.wait().await;
                 if let Some(completion) = studium_completion {
                     completion.wait().await;
                 } else {

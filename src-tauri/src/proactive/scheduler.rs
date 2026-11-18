@@ -31,6 +31,7 @@ const WAKE_INTERVAL: Duration = Duration::from_secs(15);
 pub struct Scheduler {
     store: sync::SharedStore,
     archive: Arc<Controller>,
+    feed: Arc<crate::feed::Controller>,
     network: archive::Client,
     root: PathBuf,
     app: AppHandle,
@@ -93,6 +94,7 @@ impl Scheduler {
     pub fn new(
         store: sync::SharedStore,
         archive: Arc<Controller>,
+        feed: Arc<crate::feed::Controller>,
         network: archive::Client,
         root: PathBuf,
         app: AppHandle,
@@ -105,6 +107,7 @@ impl Scheduler {
         Self {
             store,
             archive,
+            feed,
             network,
             root,
             app,
@@ -137,6 +140,7 @@ impl Scheduler {
         let mut stop = control.sender.subscribe();
         let store = self.store.clone();
         let archive = self.archive.clone();
+        let feed = self.feed.clone();
         let network = self.network.clone();
         let root = self.root.clone();
         let app = self.app.clone();
@@ -161,6 +165,7 @@ impl Scheduler {
                 tokio::select! {
                     _ = interval.tick() => {
                         if let Ok(_lease) = operation_gate.shared().await {
+                            run_feed(&store, &feed, &root).await;
                             if let Err(error) = cycle(
                                 &store,
                                 &archive,
@@ -196,6 +201,7 @@ impl Scheduler {
         let task = if let Ok(mut control) = self.control.lock() {
             let _ = control.sender.send(true);
             self.archive.cancel();
+            self.feed.cancel();
             control.task.take()
         } else {
             None
@@ -528,6 +534,22 @@ pub(super) async fn run_scheduled_task<T: sync::Transport + Clone + 'static>(
             .map(|_| ())
     })?;
     Ok(outcome)
+}
+
+/// The feed sync (#177 P2): at launch and then on the feed controller's
+/// schedule while the notices extension is on, whether or not the opt-in
+/// scheduler is. Maintenance and exit cancel it through `quiesce`.
+async fn run_feed(store: &sync::SharedStore, feed: &crate::feed::Controller, root: &Path) {
+    if !feed.due() || !with_store(store, |s| s.enabled(crate::extensions::NOTICES)).unwrap_or(false)
+    {
+        return;
+    }
+    if let Err(error) = feed
+        .run(store, root, &crate::feed::transport::HttpsTransport)
+        .await
+    {
+        eprintln!("Feed: {error}");
+    }
 }
 
 async fn cycle(

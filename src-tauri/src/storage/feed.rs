@@ -9,11 +9,6 @@
 //! are skipped and counted rather than failing the file: the file is signed,
 //! so a bad record is a publisher bug, and refusing the file would stall the
 //! mirror for good.
-// The feed sync that calls this lands in #177 PR 2; `expect` fails once it does.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the feed sync, #177 PR 2")
-)]
 use super::{
     archive::{public_url, valid_id, web_url},
     notice_dates, proactive, Store,
@@ -25,6 +20,10 @@ use rhythm_feed::{
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::collections::HashSet;
+
+mod state;
+pub(crate) use state::FeedResult;
+pub use state::FeedStatus;
 
 /// Bounds a record must stay within; the feed's own limits are smaller.
 const MAX_TEXT: usize = 16_384;
@@ -106,12 +105,15 @@ impl Store {
 
     /// Applies a segment from `from_seq` to `to_seq`, skipping the seqs the
     /// cursor already covers. The cursor must lie inside it or at its start.
+    /// `quiet` (a sync that began from the snapshot) keeps its notices out of
+    /// notifications too, so a first sync never notifies.
     pub(crate) fn feed_apply_segment(
         &self,
         from_seq: u64,
         to_seq: u64,
         entries: &[Entry],
         vectors: &[u8],
+        quiet: bool,
     ) -> Result<Applied, String> {
         let cursor = self
             .feed_cursor()?
@@ -127,6 +129,9 @@ impl Store {
         let mut applied = Applied::default();
         for entry in entries.iter().filter(|e| e.seq > cursor) {
             apply(&transaction, entry, &vectors, &mut applied)?;
+        }
+        if quiet {
+            proactive::advance_baseline(&transaction)?;
         }
         self.finish(transaction, to_seq, applied)
     }
@@ -438,6 +443,46 @@ fn upsert(connection: &Connection, notice: &Notice, applied: &mut Applied) -> Re
 }
 
 /// The feed's `revision_hash` of a v1 notice's latest archived revision.
+/// The crawler archived `document_id`'s body (`upsert_article`). For a notice
+/// the feed described, that body counts as opened: the date backfill reads it
+/// and the revision carries the feed hash of what was archived, so a later
+/// feed record of the same revision keeps it (#177; the crawler leaves public
+/// boards in PR 8).
+pub(super) fn adopt_crawled(
+    connection: &Connection,
+    document_id: i64,
+    unsupported: bool,
+) -> Result<(), String> {
+    let feed: bool = connection
+        .query_row(
+            "SELECT revision_hash IS NOT NULL FROM documents WHERE id=?1",
+            [document_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if !feed {
+        return Ok(());
+    }
+    let hash = v1_revision_hash(connection, document_id)?;
+    connection
+        .execute(
+            "UPDATE documents SET revision_hash=?2,body_pending=0,body_state=?3 WHERE id=?1",
+            params![
+                document_id,
+                hash,
+                if unsupported { "unsupported" } else { "normal" }
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    connection
+        .execute(
+            "UPDATE document_revisions SET revision_hash=?2 WHERE id=(SELECT MAX(id) FROM document_revisions WHERE document_id=?1)",
+            params![document_id, hash],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn v1_revision_hash(connection: &Connection, document_id: i64) -> Result<String, String> {
     let (url, title, author, category, published, body): (
         String,

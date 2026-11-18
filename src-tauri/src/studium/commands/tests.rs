@@ -123,7 +123,11 @@ impl Harness {
         store.set_enabled(STUDIUM, true).unwrap();
         let controller = Controller::new();
         Self {
-            registry: Registry::new(crate::archive::sync::Controller::new(), controller.clone()),
+            registry: Registry::new(
+                crate::archive::sync::Controller::new(),
+                controller.clone(),
+                Default::default(),
+            ),
             controller,
             gate: Arc::new(AdmissionGate::default()),
             shutdown: AtomicBool::new(false),

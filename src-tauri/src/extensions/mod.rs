@@ -80,13 +80,19 @@ pub fn owner(family: &str) -> &'static str {
 pub struct Registry {
     jobs: std::sync::Arc<crate::archive::sync::Controller>,
     studium: std::sync::Arc<crate::studium::controller::Controller>,
+    feed: std::sync::Arc<crate::feed::Controller>,
 }
 impl Registry {
     pub fn new(
         jobs: std::sync::Arc<crate::archive::sync::Controller>,
         studium: std::sync::Arc<crate::studium::controller::Controller>,
+        feed: std::sync::Arc<crate::feed::Controller>,
     ) -> Self {
-        Self { jobs, studium }
+        Self {
+            jobs,
+            studium,
+            feed,
+        }
     }
     pub fn list(&self, store: &Store) -> Result<Vec<ExtensionInfo>, String> {
         BUILT_IN
@@ -117,6 +123,9 @@ impl Registry {
         if !enabled && matches!(id, NOTICES | CYBERCAMPUS) {
             self.jobs.cancel();
         }
+        if !enabled && id == NOTICES {
+            self.feed.cancel();
+        }
         if !enabled && id == STUDIUM {
             self.studium.cancel();
             self.studium.clear();
@@ -126,6 +135,7 @@ impl Registry {
     pub fn stop_all(&self) {
         self.jobs.cancel();
         self.studium.cancel();
+        self.feed.cancel();
     }
 }
 
@@ -139,6 +149,7 @@ mod tests {
         let registry = Registry::new(
             crate::archive::sync::Controller::new(),
             crate::studium::controller::Controller::new(),
+            Default::default(),
         );
         let listed = registry.list(&store).unwrap();
         assert_eq!(
@@ -184,6 +195,7 @@ mod tests {
         let registry = Registry::new(
             crate::archive::sync::Controller::new(),
             crate::studium::controller::Controller::new(),
+            Default::default(),
         );
         assert!(!store.enabled(STUDIUM).unwrap());
         registry.set(&store, STUDIUM, true).unwrap();

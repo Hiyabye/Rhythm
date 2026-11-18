@@ -34,12 +34,14 @@ pub(crate) fn temp_store() -> (tempfile::TempDir, Store) {
     (directory, store)
 }
 
-pub(crate) const SCHEMA_VERSION: i64 = 37;
+pub(crate) const SCHEMA_VERSION: i64 = 38;
 
 // Statements that roll a test profile back below the migration that added each
 // object, newest first; a rollback test joins the ones that migration needs
 // and keeps its own `PRAGMA user_version`. 036 needs none: it rebuilds
 // `notice_classifications` and can run again. 037 and later add their fragment here.
+#[cfg(test)]
+pub(crate) const UNDO_FEED_SYNC: &str = "DROP TABLE feed_boards; ALTER TABLE feed_state DROP COLUMN error; ALTER TABLE feed_state DROP COLUMN result; ALTER TABLE feed_state DROP COLUMN checked_at; ALTER TABLE feed_state DROP COLUMN base; ";
 #[cfg(test)]
 pub(crate) const UNDO_FEED: &str = "DROP TABLE feed_classifications; DROP TABLE feed_embeddings; DROP TABLE feed_state; ALTER TABLE document_revisions DROP COLUMN revision_hash; ALTER TABLE documents DROP COLUMN removed_at; ALTER TABLE documents DROP COLUMN from_feed; ALTER TABLE documents DROP COLUMN body_pending; ALTER TABLE documents DROP COLUMN body_state; ALTER TABLE documents DROP COLUMN revision_hash; ";
 #[cfg(test)]
@@ -73,7 +75,7 @@ pub(crate) const UNDO_STUDIUM: &str =
 pub(crate) const UNDO_GROUPS: &str = "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; ";
 
 /// Ordered schema migrations; index `n` upgrades `user_version` n to n+1.
-pub(super) const MIGRATIONS: [&str; 37] = [
+pub(super) const MIGRATIONS: [&str; 38] = [
     include_str!("../../migrations/001_foundation.sql"),
     include_str!("../../migrations/002_archive.sql"),
     include_str!("../../migrations/003_intelligence.sql"),
@@ -111,6 +113,7 @@ pub(super) const MIGRATIONS: [&str; 37] = [
     include_str!("../../migrations/035_calendar_reminders.sql"),
     include_str!("../../migrations/036_classification_categories.sql"),
     include_str!("../../migrations/037_feed_mirror.sql"),
+    include_str!("../../migrations/038_feed_sync.sql"),
 ];
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {
@@ -474,7 +477,7 @@ mod tests {
             .unwrap()
             .connection
             .execute_batch(
-                &format!("{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_INTERVAL}{UNDO_AUTO_TRASH}
+                &format!("{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_INTERVAL}{UNDO_AUTO_TRASH}
                  UPDATE settings SET theme='dark',clock_format='24h';
                  PRAGMA user_version=25;"),
             )
@@ -590,7 +593,7 @@ mod tests {
                            VALUES('cybercampus','사이버캠퍼스','서강대학교','','https://eclass.sogang.ac.kr/','cybercampus',1,{subscribed}),
                                  ('sogang-academic','학사','서강대학교','','https://www.sogang.ac.kr/','sogang',1,1);
                          INSERT INTO source_extensions VALUES('cybercampus','sogang_notices'),('sogang-academic','sogang_notices');
-                         {UNDO_GROUPS}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
+                         {UNDO_GROUPS}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
                          PRAGMA user_version=19;",
                         notices = notices as i32,
                         subscribed = subscribed as i32,
@@ -630,7 +633,7 @@ mod tests {
             .unwrap()
             .connection
             .execute_batch(
-                &format!("{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_INTERVAL}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
+                &format!("{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_INTERVAL}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
                  UPDATE settings SET theme='dark',energy_profile='eco',interests='장학금';
                  PRAGMA user_version=23;"),
             )
@@ -684,7 +687,7 @@ mod tests {
             db.set_enabled("search", true).unwrap();
             db.connection
                 .execute_batch(
-                    &format!("{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
+                    &format!("{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
                      DELETE FROM extension_preferences WHERE extension_id='calendar';
                      PRAGMA user_version=21;"),
                 )

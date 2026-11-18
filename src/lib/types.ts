@@ -347,6 +347,27 @@ export interface SyncStatus {
   message: string;
   active: ActiveSource[];
 }
+/** The signed notice feed's sync state, as the feed status and sync commands return it. */
+export interface FeedStatus {
+  running: boolean;
+  /** When the server published the last accepted feed. */
+  generated_at: string | null;
+  /** The last sync that ended without an error. */
+  checked_at: string | null;
+  /** The accepted feed is more than three hours old. */
+  stale: boolean;
+  /** `null` before the first attempt. */
+  result: 'ok' | 'offline' | 'failed' | 'update_required' | null;
+  error: string | null;
+  /** Subscribed boards the server failed on three or more times in a row. */
+  failing_boards: FeedBoard[];
+}
+export interface FeedBoard {
+  source_id: string;
+  name: string;
+  last_success_at: string | null;
+  consecutive_failures: number;
+}
 export interface ActiveSource {
   source_id: string;
   mode: string;

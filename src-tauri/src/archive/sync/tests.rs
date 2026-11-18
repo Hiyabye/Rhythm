@@ -1157,6 +1157,7 @@ async fn disabling_extension_during_fetch_prevents_commit() {
         let registry = crate::extensions::Registry::new(
             controller.clone(),
             crate::studium::controller::Controller::new(),
+            Default::default(),
         );
         with_store(&store, |s| registry.set(s, "sogang_notices", false)).unwrap();
         gate.release.notify_one();
