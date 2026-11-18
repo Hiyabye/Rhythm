@@ -28,6 +28,8 @@ const rules = {
     /^package(-lock)?\.json$/,
     // Bundled as app resources.
     /^LICENSE$/, /^assets\/licenses\//],
+  // The feed Worker is its own npm package.
+  worker: [/^worker\//],
 };
 
 // Markdown under src-tauri/, crates/ or scripts/ is documentation; no Rust

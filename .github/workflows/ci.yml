@@ -25,6 +25,7 @@ jobs:
       frontend: ${{ steps.classify.outputs.frontend }}
       rust: ${{ steps.classify.outputs.rust }}
       packaging: ${{ steps.classify.outputs.packaging }}
+      worker: ${{ steps.classify.outputs.worker }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -55,6 +56,25 @@ jobs:
       - run: npm run test:release
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:ui
+
+  worker:
+    name: Feed Worker
+    needs: changes
+    if: needs.changes.outputs.worker == 'true'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      # The tests need only TypeScript; wrangler's install scripts never run here.
+      - run: npm ci --ignore-scripts
+      - run: npm test
 
   rust-fmt:
     name: Rust formatting

@@ -1,0 +1,24 @@
+name = "rhythm-feed"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+# Rhythm sends no telemetry; neither does its tooling.
+send_metrics = false
+
+[vars]
+# The bucket prefix the collector publishes to (`--publish`).
+PREFIX = "feed/"
+
+[[r2_buckets]]
+binding = "FEED"
+bucket_name = "rhythm-feed"
+
+# Per-IP limit (#166 O16a). One sync is about 3-40 requests; a first sync reads
+# the snapshot and up to about 30 daily segments. Counts are per Cloudflare
+# location and approximate.
+[[ratelimits]]
+name = "LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 60
+  period = 60
