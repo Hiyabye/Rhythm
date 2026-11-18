@@ -62,6 +62,8 @@
     "allow-cybercampus-save-login",
     "allow-cybercampus-status",
     "allow-cybercampus-tasks",
+    "allow-feed-status",
+    "allow-feed-sync",
     "allow-get-snapshot",
     "allow-lifecycle-set-close-to-background",
     "allow-lifecycle-set-launch-at-login",

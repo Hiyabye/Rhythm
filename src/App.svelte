@@ -5,6 +5,7 @@
   import Icon from './lib/Icon.svelte';
   import ArchiveView from './lib/ArchiveView.svelte';
   import SourceSettings from './lib/SourceSettings.svelte';
+  import FeedSettings from './lib/FeedSettings.svelte';
   import AiSettings from './lib/AiSettings.svelte';
   import PersonalizationSettings from './lib/PersonalizationSettings.svelte';
   import BackupSettings from './lib/BackupSettings.svelte';
@@ -474,6 +475,7 @@
             {#if snapshot}<ExtensionSettings extensions={snapshot.extensions} {busy} ontoggle={toggleExtension} />
             {:else if !loading}<p class="muted">데스크톱 앱에서 확장 기능을 켤 수 있습니다.</p>{/if}
           {:else if settingsPane === 'boards'}
+            {#if desktop}<FeedSettings enabled={noticesEnabled} />{/if}
             <SourceSettings enabled={noticesEnabled} extension="sogang_notices" />
           {:else if settingsPane === 'cybercampus'}
             <SourceSettings enabled={enabled.has('cybercampus')} extension="cybercampus" />

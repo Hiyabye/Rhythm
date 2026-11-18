@@ -520,6 +520,7 @@ async fn disabling_automatic_joins_its_fetch_clears_results_and_enable_does_not_
     let registry = Registry::new(
         crate::archive::sync::Controller::new(),
         h.controller.clone(),
+        Default::default(),
     );
     let completion = change_extension(&registry, &h.store, &h.controller, STUDIUM, false).unwrap();
     finish_studium_disable(&h.store, &h.controller, completion)

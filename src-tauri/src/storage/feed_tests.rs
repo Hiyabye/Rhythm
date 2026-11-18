@@ -1,6 +1,6 @@
 use super::*;
 use crate::archive::model::*;
-use feed::Applied;
+use feed::{Applied, FeedResult};
 use rhythm_feed::{
     record::{
         BodyState, Classification, DateKind, Embedding, Entry, Notice, NoticeDate, Record, Removal,
@@ -191,7 +191,7 @@ fn a_snapshot_then_segments_mirror_the_feed() {
     let (_directory, store) = database();
     assert_eq!(store.feed_cursor().unwrap(), None);
     // Without a snapshot there is no cursor to continue from.
-    assert!(store.feed_apply_segment(1, 1, &[], &[]).is_err());
+    assert!(store.feed_apply_segment(1, 1, &[], &[], false).is_err());
 
     let first = feed_notice("1", &"가".repeat(400));
     let second = feed_notice("2", "둘째 본문");
@@ -251,6 +251,7 @@ fn a_snapshot_then_segments_mirror_the_feed() {
                 removal(8, "1"),
             ],
             &vectors(1),
+            false,
         )
         .unwrap();
     assert_eq!(
@@ -273,8 +274,8 @@ fn a_snapshot_then_segments_mirror_the_feed() {
         "notice 1's vector left with it"
     );
     // A segment that does not continue from the cursor is refused.
-    assert!(store.feed_apply_segment(10, 11, &[], &[]).is_err());
-    assert!(store.feed_apply_segment(3, 8, &[], &[]).is_err());
+    assert!(store.feed_apply_segment(10, 11, &[], &[], false).is_err());
+    assert!(store.feed_apply_segment(3, 8, &[], &[], false).is_err());
 }
 
 #[test]
@@ -334,7 +335,7 @@ fn a_snapshot_removes_only_notices_that_came_from_the_feed() {
 
     // Listed again, the saved notice is no longer marked removed.
     store
-        .feed_apply_segment(9, 10, &[upsert(10, &saved)], &[])
+        .feed_apply_segment(9, 10, &[upsert(10, &saved)], &[], false)
         .unwrap();
     assert_eq!(row(&store, "saved").unwrap().3, None);
 }
@@ -457,7 +458,9 @@ fn a_populated_profile_upgrades_and_a_failed_upgrade_rolls_back() {
             .unwrap();
         store
             .connection
-            .execute_batch(&format!("{UNDO_FEED}PRAGMA user_version=36;"))
+            .execute_batch(&format!(
+                "{UNDO_FEED_SYNC}{UNDO_FEED}PRAGMA user_version=36;"
+            ))
             .unwrap();
     }
     let store = Store::open(&path).unwrap();
@@ -476,7 +479,7 @@ fn a_populated_profile_upgrades_and_a_failed_upgrade_rolls_back() {
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_FEED}CREATE TABLE feed_state(id INTEGER); PRAGMA user_version=36;"
+            "{UNDO_FEED_SYNC}{UNDO_FEED}CREATE TABLE feed_state(id INTEGER); PRAGMA user_version=36;"
         ))
         .unwrap();
     assert!(Store::open(&path).is_err());
@@ -488,4 +491,201 @@ fn a_populated_profile_upgrades_and_a_failed_upgrade_rolls_back() {
     assert!(connection
         .prepare("SELECT revision_hash FROM documents")
         .is_err());
+}
+
+#[test]
+fn a_crawled_body_on_a_feed_notice_counts_as_opened() {
+    let (_directory, store) = database();
+    let page = article("1", "크롤러가 받은 본문 2026년 11월 30일까지 신청");
+    store
+        .feed_apply_snapshot(
+            1,
+            &[upsert(1, &notice("one", &article("1", "다른 본문")))],
+            &[],
+        )
+        .unwrap();
+    assert!(
+        row(&store, "1").unwrap().1,
+        "the feed notice holds its excerpt"
+    );
+
+    store.upsert_article("one", &page, false).unwrap();
+    let (body, pending, from_feed, _, revisions) = row(&store, "1").unwrap();
+    assert_eq!(
+        (body.as_str(), pending, from_feed, revisions),
+        (page.body_text.as_str(), false, true, 2)
+    );
+    // Its dates come from the crawled body, not the feed.
+    let id = document(&store, "1");
+    assert_eq!(store.notice_dates(id).unwrap()[0].day, "2026-11-30");
+
+    // The feed's record of that same revision keeps the body.
+    store
+        .feed_apply_segment(2, 2, &[upsert(2, &notice("one", &page))], &[], false)
+        .unwrap();
+    let (body, pending, _, _, revisions) = row(&store, "1").unwrap();
+    assert_eq!(
+        (body.as_str(), pending, revisions),
+        (page.body_text.as_str(), false, 2)
+    );
+    // A v1 notice the feed never described is untouched.
+    store
+        .upsert_article("one", &article("v1", "예전 본문"), false)
+        .unwrap();
+    let hash: Option<String> = store
+        .connection
+        .query_row(
+            "SELECT revision_hash FROM documents WHERE external_id='v1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(hash, None);
+}
+
+fn manifest(generated_at: &str, boards: &[(&str, u32)]) -> rhythm_feed::Manifest {
+    let file = rhythm_feed::FileRef::new("snapshots/1.jsonl.zst".into(), b"x");
+    rhythm_feed::Manifest {
+        format: rhythm_feed::FORMAT.into(),
+        generated_at: generated_at.into(),
+        moved_to: None,
+        embedding: rhythm_feed::manifest::EmbeddingInfo {
+            model: "model".into(),
+            scope: "model#hash".into(),
+            dimensions: 1024,
+            canary: None,
+        },
+        boards: boards
+            .iter()
+            .map(
+                |&(source_id, failures)| rhythm_feed::manifest::BoardHealth {
+                    source_id: source_id.into(),
+                    last_success_at: None,
+                    consecutive_failures: failures,
+                    history_complete: true,
+                },
+            )
+            .collect(),
+        snapshot: rhythm_feed::manifest::Snapshot {
+            through_seq: 1,
+            records: file,
+            vectors: None,
+        },
+        segments: vec![],
+    }
+}
+
+#[test]
+fn the_status_reports_feed_age_and_subscribed_failing_boards() {
+    let (_directory, store) = database();
+    store
+        .catalog(&[
+            definition("one", "main"),
+            definition("two", "main"),
+            definition("campus", "cybercampus"),
+        ])
+        .unwrap();
+    store.subscribe("one", true).unwrap();
+    store.subscribe("two", true).unwrap();
+    let at = |text: &str| {
+        chrono::DateTime::parse_from_rfc3339(text)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    };
+    let empty = store.feed_status(at("2026-11-18T12:00:00Z")).unwrap();
+    assert_eq!(
+        (empty.generated_at, empty.result, empty.stale),
+        (None, None, false)
+    );
+
+    store
+        .feed_accept(
+            &manifest(
+                "2026-11-18T12:00:00.000Z",
+                &[("one", 3), ("two", 2), ("gone", 9)],
+            ),
+            "https://feed.example.org/",
+        )
+        .unwrap();
+    store.feed_record(FeedResult::Ok, None).unwrap();
+    let fresh = store.feed_status(at("2026-11-18T15:00:00Z")).unwrap();
+    assert!(!fresh.stale, "three hours is not yet stale");
+    assert!(fresh.checked_at.is_some());
+    // At three failures, on a subscribed board the app knows.
+    assert_eq!(
+        fresh
+            .failing_boards
+            .iter()
+            .map(|b| b.source_id.as_str())
+            .collect::<Vec<_>>(),
+        ["one"]
+    );
+    assert!(store.feed_status(at("2026-11-18T15:00:01Z")).unwrap().stale);
+
+    // A failure keeps the last success time; an older manifest is refused.
+    let checked = fresh.checked_at;
+    store
+        .feed_record(FeedResult::Offline, Some("연결 안 됨"))
+        .unwrap();
+    let offline = store.feed_status(at("2026-11-18T13:00:00Z")).unwrap();
+    assert_eq!(
+        (
+            offline.result.as_deref(),
+            offline.error.as_deref(),
+            offline.checked_at
+        ),
+        (Some("offline"), Some("연결 안 됨"), checked)
+    );
+    assert!(store
+        .feed_accept(
+            &manifest("2026-11-18T11:59:59.000Z", &[]),
+            "https://feed.example.org/"
+        )
+        .is_err());
+    assert_eq!(
+        store
+            .feed_status(at("2026-11-18T13:00:00Z"))
+            .unwrap()
+            .failing_boards
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_schema_37_profile_upgrades_and_a_failed_upgrade_rolls_back() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    {
+        let store = Store::open(&path).unwrap();
+        store.catalog(&[definition("one", "main")]).unwrap();
+        store
+            .feed_apply_snapshot(3, &[upsert(1, &feed_notice("1", "본문"))], &[])
+            .unwrap();
+        store
+            .connection
+            .execute_batch(&format!("{UNDO_FEED_SYNC}PRAGMA user_version=37;"))
+            .unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
+    assert_eq!(store.feed_cursor().unwrap(), Some(3));
+    assert_eq!(store.feed_state().unwrap().base, None);
+    assert_eq!(store.feed_status(chrono::Utc::now()).unwrap().result, None);
+    drop(store);
+
+    // A table left behind makes 038 fail; the open changes nothing.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(&format!(
+            "{UNDO_FEED_SYNC}CREATE TABLE feed_boards(id INTEGER); PRAGMA user_version=37;"
+        ))
+        .unwrap();
+    assert!(Store::open(&path).is_err());
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 37);
+    assert!(connection.prepare("SELECT base FROM feed_state").is_err());
 }

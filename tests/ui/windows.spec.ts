@@ -228,3 +228,14 @@ test('setup uses the Windows notification wording', async ({ page }) => {
   await expect(page.getByRole('button', { name: '시험 알림으로 연결 확인' })).toBeVisible();
   await expect(page.getByRole('button', { name: '운영체제 알림 권한 요청' })).toHaveCount(0);
 });
+
+test('the notice feed status reads the same under a Windows user agent', async ({ page }) => {
+  await mockDesktop(page, { windows: true, feed: { result: 'offline', stale: true }, feedSyncResult: { result: 'ok', stale: false } });
+  await page.goto('/');
+  await openSettings(page, '게시판');
+  const feed = page.getByRole('region', { name: '공지 피드', exact: true });
+  await expect(feed).toContainText('연결되면 자동으로 다시 받습니다');
+  await feed.getByRole('button', { name: '지금 받기', exact: true }).click();
+  await expect(feed).not.toContainText('연결되면 자동으로 다시 받습니다');
+  expect(await callCount(page, 'feed_sync')).toBe(1);
+});

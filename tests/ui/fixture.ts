@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test';
-import type { CalendarTodo, ClockFormat, NoticeDate, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation, StudiumMiniStatus, StudiumSeatLayout, StudiumSnapshot, Theme } from '../../src/lib/types';
+import type { CalendarTodo, ClockFormat, FeedStatus, NoticeDate, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation, StudiumMiniStatus, StudiumSeatLayout, StudiumSnapshot, Theme } from '../../src/lib/types';
 
 // Invented regular marker origins, unrelated to the school's real floor plans.
 export function syntheticStudiumLayout(total: number): StudiumSeatLayout {
@@ -78,6 +78,12 @@ export interface FixtureOptions {
   proactiveSaveError?: boolean;
   proactiveClearError?: boolean;
   lifecycleError?: boolean;
+  // The notice feed's status; defaults to a fresh, successful sync.
+  feed?: Partial<FeedStatus>;
+  // What `feed_sync` changes once it finishes after `feedSyncDelay` ms.
+  feedSyncResult?: Partial<FeedStatus>;
+  feedSyncDelay?: number;
+  feedSyncError?: string;
   schedulerError?: boolean;
   pendingActivation?: ProactiveActivation;
   notificationAuthorization?: string;
@@ -196,6 +202,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     if (!options.studium?.results) studium.results = studiumStates('not_checked');
     type Board = { source_id: string; mode: string; page: number; message: string };
     let sync = { running: false, mode: 'historical', message: '수집 대기 중입니다.', active: [] as Board[] };
+    let feed: FeedStatus = { running: false, generated_at: '2026-11-18T03:00:00.000Z', checked_at: '2026-11-18T03:05:00.000Z', stale: false, result: 'ok', error: null, failing_boards: [], ...options.feed };
     const board = (mode: string, page = 1, source_id = 'computing-updates'): Board => ({ source_id, mode, page, message: '공개 공지를 가져오는 중입니다.' });
     const separator = options.windows ? '\\' : '/';
     const defaultModelDirectory = options.windows ? 'C:\\Rhythm-test\\models' : '/isolated/models';
@@ -671,6 +678,13 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
               saved: live.filter((x) => x.saved).length, new_since_sync: 0, resource_bytes: 0, trashed: entries.length - live.length };
           }
           case 'archive_status': return copy(sync);
+          case 'feed_status': return copy(feed);
+          case 'feed_sync':
+            if (options.feedSyncError) throw options.feedSyncError;
+            feed = { ...feed, running: true };
+            await wait(options.feedSyncDelay ?? 0);
+            feed = { ...feed, ...options.feedSyncResult, running: false };
+            return copy(feed);
           case 'archive_query':
           case 'archive_ranked_query': {
             const query = args.query;

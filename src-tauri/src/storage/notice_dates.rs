@@ -79,10 +79,6 @@ pub(super) fn extract(connection: &Connection, document_id: i64) -> Result<(), S
 
 /// Replaces a notice's dates with the ones the feed extracted from its full
 /// body, which the app does not hold until the notice is opened.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the feed sync, #177 PR 2")
-)]
 pub(super) fn store_feed(
     connection: &Connection,
     document_id: i64,

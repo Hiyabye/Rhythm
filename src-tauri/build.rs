@@ -95,6 +95,8 @@ fn main() {
         "archive_start",
         "archive_cancel",
         "archive_status",
+        "feed_status",
+        "feed_sync",
         "archive_retry_resource",
         "archive_resource_image",
         "archive_reveal_resource",
