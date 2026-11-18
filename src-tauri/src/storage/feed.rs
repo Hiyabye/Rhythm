@@ -59,7 +59,8 @@ impl Store {
     /// step 4). Notices from the feed that it no longer lists were removed;
     /// v1 notices the feed never described stay (user decision, 2026-11-18).
     /// Its vectors and categories replace every earlier one, and nothing it
-    /// carries becomes a notification candidate.
+    /// carries becomes a notification candidate, and the notices it adds
+    /// start read: a first sync is a backfill, not news.
     pub(crate) fn feed_apply_snapshot(
         &self,
         through_seq: u64,
@@ -80,7 +81,7 @@ impl Store {
             if let Some(Record::Notice(notice)) = &entry.record {
                 listed.insert((notice.source_id.clone(), notice.external_id.clone()));
             }
-            apply(&transaction, entry, &vectors, &mut applied)?;
+            apply(&transaction, entry, &vectors, true, &mut applied)?;
         }
         let held: Vec<(i64, String, String)> = transaction
             .prepare("SELECT id,source_id,external_id FROM documents WHERE from_feed=1")
@@ -107,7 +108,7 @@ impl Store {
     /// Applies a segment from `from_seq` to `to_seq`, skipping the seqs the
     /// cursor already covers. The cursor must lie inside it or at its start.
     /// `quiet` (a sync that began from the snapshot) keeps its notices out of
-    /// notifications too, so a first sync never notifies.
+    /// notifications and unread counts too, so a first sync never notifies.
     pub(crate) fn feed_apply_segment(
         &self,
         from_seq: u64,
@@ -129,7 +130,7 @@ impl Store {
             .map_err(|e| e.to_string())?;
         let mut applied = Applied::default();
         for entry in entries.iter().filter(|e| e.seq > cursor) {
-            apply(&transaction, entry, &vectors, &mut applied)?;
+            apply(&transaction, entry, &vectors, quiet, &mut applied)?;
         }
         if quiet {
             proactive::advance_baseline(&transaction)?;
@@ -168,12 +169,13 @@ fn apply(
     transaction: &Connection,
     entry: &Entry,
     vectors: &[&[u8; VECTOR_BYTES]],
+    quiet: bool,
     applied: &mut Applied,
 ) -> Result<(), String> {
     let applied_one = match &entry.record {
         // A record kind of a newer minor version.
         None => return Ok(()),
-        Some(Record::Notice(notice)) => upsert(transaction, notice, applied)?,
+        Some(Record::Notice(notice)) => upsert(transaction, notice, quiet, applied)?,
         Some(Record::Embedding(embedding)) => embed(transaction, embedding, vectors)?,
         Some(Record::Classification(classification)) => classify(transaction, classification)?,
         Some(Record::Remove(removal)) => {
@@ -256,8 +258,16 @@ fn kind_name(kind: ResourceKind) -> &'static str {
     }
 }
 
-/// Applies a `notice.upsert`; `false` when it was skipped.
-fn upsert(connection: &Connection, notice: &Notice, applied: &mut Applied) -> Result<bool, String> {
+/// Applies a `notice.upsert`; `false` when it was skipped. A notice it adds
+/// starts read when it arrives `quiet` or from the collector's history
+/// import: neither is news, so neither floods the unread count. Notices
+/// already here keep their read state.
+fn upsert(
+    connection: &Connection,
+    notice: &Notice,
+    quiet: bool,
+    applied: &mut Applied,
+) -> Result<bool, String> {
     if !known_board(connection, &notice.source_id)? || !valid_notice(notice) {
         return Ok(false);
     }
@@ -375,8 +385,8 @@ fn upsert(connection: &Connection, notice: &Notice, applied: &mut Applied) -> Re
             let id = connection.last_insert_rowid();
             connection
                 .execute(
-                    "INSERT OR IGNORE INTO document_state(document_id) VALUES(?1)",
-                    [id],
+                    "INSERT OR IGNORE INTO document_state(document_id,is_read) VALUES(?1,?2)",
+                    params![id, quiet || notice.historical],
                 )
                 .map_err(|e| e.to_string())?;
             id

@@ -876,3 +876,59 @@ fn notice_hash(store: &Store, id: i64) -> String {
         )
         .unwrap()
 }
+
+#[test]
+fn a_backfill_starts_read_and_later_arrivals_stay_unread() {
+    let (_directory, store) = database();
+    // A v1 notice the user has not read, then the first sync.
+    store
+        .upsert_article("one", &article("v1", "예전 본문"), false)
+        .unwrap();
+    let read = |store: &Store, id: &str| -> bool {
+        store
+            .connection
+            .query_row(
+                "SELECT is_read FROM document_state WHERE document_id=?1",
+                [document(store, id)],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    store
+        .feed_apply_snapshot(1, &[upsert(1, &feed_notice("old", "본문"))], &[])
+        .unwrap();
+    store
+        .feed_apply_segment(
+            2,
+            2,
+            &[upsert(2, &feed_notice("caught-up", "본문"))],
+            &[],
+            true,
+        )
+        .unwrap();
+    // Later syncs: a new notice, and one the collector's history import found.
+    let mut backlog = feed_notice("backlog", "본문");
+    backlog.historical = true;
+    store
+        .feed_apply_segment(
+            3,
+            5,
+            &[
+                upsert(3, &feed_notice("new", "본문")),
+                upsert(4, &backlog),
+                upsert(5, &feed_notice("v1", "예전 본문")),
+            ],
+            &[],
+            false,
+        )
+        .unwrap();
+    assert!(read(&store, "old") && read(&store, "caught-up") && read(&store, "backlog"));
+    assert!(
+        !read(&store, "new"),
+        "a notice arriving after the first sync is news"
+    );
+    assert!(
+        !read(&store, "v1"),
+        "a notice already here keeps its read state"
+    );
+}
