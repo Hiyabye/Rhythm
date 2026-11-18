@@ -80,6 +80,27 @@ fn board(source: &SourceDefinition) -> Result<Board, String> {
     };
     Ok(board)
 }
+/// The board engine renders some titles unescaped, such as `<HD현대삼호 온라인 채용설명회>`
+/// (#258), which an HTML parser turns into an empty element. No real element
+/// name holds a non-ASCII character, so such a tag's `<` is escaped before
+/// parsing and the literal text survives. The archived original stays as fetched.
+fn escape_text_tags(body: &str) -> String {
+    let mut escaped = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(index) = rest.find('<') {
+        escaped.push_str(&rest[..index]);
+        let after = &rest[index + 1..];
+        let name = after.strip_prefix('/').unwrap_or(after);
+        let name = &name[..name
+            .find(|c: char| c.is_ascii_whitespace() || c == '/' || c == '>')
+            .unwrap_or(name.len())];
+        let text_tag = name.starts_with(|c: char| c.is_ascii_alphabetic()) && !name.is_ascii();
+        escaped.push_str(if text_tag { "&lt;" } else { "<" });
+        rest = after;
+    }
+    escaped.push_str(rest);
+    escaped
+}
 fn ee(board: &Board) -> bool {
     board.host == "ee.sogang.ac.kr"
 }
@@ -406,7 +427,7 @@ pub(super) fn listing(
     body: &str,
 ) -> Result<ListingPage, String> {
     let board = board(source)?;
-    let html = Html::parse_document(body);
+    let html = Html::parse_document(&escape_text_tags(body));
     let root = html.root_element();
     let name = one(
         root,
@@ -493,7 +514,7 @@ pub(super) fn article(
     let board = board(source)?;
     let url = detail_url(source, entry)?;
     let (external_id, page) = article_parts(&board, &url)?;
-    let html = Html::parse_document(body);
+    let html = Html::parse_document(&escape_text_tags(body));
     let root = html.root_element();
     let name = one(
         root,
