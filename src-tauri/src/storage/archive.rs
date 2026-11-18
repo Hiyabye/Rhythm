@@ -151,7 +151,40 @@ fn require_changed(changed: usize) -> Result<(), String> {
         Ok(())
     }
 }
-fn meaningful_hash(article: &ArticleInput) -> Result<String, String> {
+/// The bounds a fetched article must stay within before it is archived.
+pub(super) fn check_article(source_id: &str, article: &ArticleInput) -> Result<(), String> {
+    let empty_body = article.body_text.trim().is_empty() && article.body_html.trim().is_empty();
+    let invalid_unsupported_body = article.unsupported_body
+        && (source_id != "sogang-academic"
+            || !empty_body
+            || article.resources.iter().any(|r| r.kind == "image"));
+    if !valid_id(&article.external_id)
+        || article.title.trim().is_empty()
+        || article.title.len() > 16_384
+        || article.original.len() > 8 * 1024 * 1024
+        || article.body_html.len() > 8 * 1024 * 1024
+        || article.body_text.len() > 8 * 1024 * 1024
+        || !public_url(&article.canonical_url)
+        || article.published_at.trim().is_empty()
+        || article.resources.len() > 256
+        || invalid_unsupported_body
+        || (empty_body && article.resources.is_empty() && !article.unsupported_body)
+    {
+        return Err("공지의 식별자, 본문 또는 크기를 확인해 주세요.".into());
+    }
+    for resource in &article.resources {
+        // Retaining a safe reference is not permission to fetch it. The
+        // transport separately enforces HTTPS and exact approved hosts.
+        if !web_url(&resource.url, true)
+            || resource.filename.len() > 4096
+            || !["image", "attachment"].contains(&resource.kind.as_str())
+        {
+            return Err("첨부 자료의 주소나 종류를 확인해 주세요.".into());
+        }
+    }
+    Ok(())
+}
+pub(super) fn meaningful_hash(article: &ArticleInput) -> Result<String, String> {
     let resources: Vec<_> = article
         .resources
         .iter()
@@ -855,37 +888,10 @@ impl Store {
         article: &ArticleInput,
         historical: bool,
     ) -> Result<(i64, bool), String> {
-        let source = self.source(source_id)?;
-        let empty_body = article.body_text.trim().is_empty() && article.body_html.trim().is_empty();
-        let invalid_unsupported_body = article.unsupported_body
-            && (source_id != "sogang-academic"
-                || !empty_body
-                || article.resources.iter().any(|r| r.kind == "image"));
-        if !source.definition.supported
-            || !valid_id(&article.external_id)
-            || article.title.trim().is_empty()
-            || article.title.len() > 16_384
-            || article.original.len() > 8 * 1024 * 1024
-            || article.body_html.len() > 8 * 1024 * 1024
-            || article.body_text.len() > 8 * 1024 * 1024
-            || !public_url(&article.canonical_url)
-            || article.published_at.trim().is_empty()
-            || article.resources.len() > 256
-            || invalid_unsupported_body
-            || (empty_body && article.resources.is_empty() && !article.unsupported_body)
-        {
+        if !self.source(source_id)?.definition.supported {
             return Err("공지의 식별자, 본문 또는 크기를 확인해 주세요.".into());
         }
-        for resource in &article.resources {
-            // Retaining a safe reference is not permission to fetch it. The
-            // transport separately enforces HTTPS and exact approved hosts.
-            if !web_url(&resource.url, true)
-                || resource.filename.len() > 4096
-                || !["image", "attachment"].contains(&resource.kind.as_str())
-            {
-                return Err("첨부 자료의 주소나 종류를 확인해 주세요.".into());
-            }
-        }
+        check_article(source_id, article)?;
         let hash = meaningful_hash(article)?;
         if self.notice_deleted(source_id, &article.external_id)? {
             return Err("영구 삭제한 공지라 다시 보관하지 않습니다.".into());
@@ -1364,9 +1370,10 @@ impl Store {
         let selected = revision_id
             .or_else(|| revisions.first().map(|r| r.id))
             .ok_or("보관된 버전을 찾을 수 없습니다.")?;
-        let (canonical_url,body_html,body_text): (String, String, String)=self.connection.query_row("SELECT canonical_url,body_html,body_text,title,author,category,published_at FROM document_revisions WHERE id=?1 AND document_id=?2",params![selected,id],|r| {
+        // A feed revision without an original holds only the feed's excerpt.
+        let (canonical_url,body_html,body_text,summary_only): (String, String, String, bool)=self.connection.query_row("SELECT canonical_url,body_html,body_text,title,author,category,published_at,original='' AND revision_hash IS NOT NULL FROM document_revisions WHERE id=?1 AND document_id=?2",params![selected,id],|r| {
             item.title=r.get(3)?; item.author=r.get(4)?; item.category=r.get(5)?; item.published_at=r.get(6)?;
-            Ok((r.get(0)?,r.get(1)?,r.get(2)?))
+            Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(7)?))
         }).map_err(|_|"이 공지에 해당하는 보관 버전을 찾을 수 없습니다.".to_string())?;
         let mut resource_statement=self.connection.prepare(&format!("SELECT {RESOURCE_COLUMNS} FROM resources WHERE document_id=?1 AND revision_id=?2 ORDER BY id")).map_err(|e|e.to_string())?;
         let resources = resource_statement
@@ -1381,11 +1388,21 @@ impl Store {
         }
         .into();
         item.snippet = excerpt(&body_text, &[]);
+        let removed = self
+            .connection
+            .query_row(
+                "SELECT removed_at IS NOT NULL FROM documents WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
         Ok(DocumentDetail {
             item,
             canonical_url,
             body_html,
             body_text,
+            summary_only,
+            removed,
             revision_id: selected,
             revisions,
             resources,

@@ -125,6 +125,7 @@ impl Registry {
         }
         if !enabled && id == NOTICES {
             self.feed.cancel();
+            self.jobs.bodies.cancel();
         }
         if !enabled && id == STUDIUM {
             self.studium.cancel();
@@ -136,6 +137,7 @@ impl Registry {
         self.jobs.cancel();
         self.studium.cancel();
         self.feed.cancel();
+        self.jobs.bodies.cancel();
     }
 }
 

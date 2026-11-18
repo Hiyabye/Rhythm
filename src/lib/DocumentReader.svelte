@@ -24,6 +24,12 @@
   let loading = $state(true);
   let busy = $state(false);
   let resourceBusy = $state(false);
+  // A feed notice holds only the feed's excerpt until its body is fetched from
+  // the school; the excerpt stays readable meanwhile and after a failure.
+  let bodyBusy = $state(false);
+  let bodyError = $state('');
+  let bodyRevised = $state(false);
+  let bodyRequested = false;
   let localResourceErrors = $state<Record<number, string>>({});
   let error = $state('');
   let feedback = $state('');
@@ -88,16 +94,19 @@
     }
   }
 
-  async function load(revisionId: number | null, markRead = false) {
+  // `refresh` rereads the open revision in place, keeping it on screen and focus where it is.
+  async function load(revisionId: number | null, markRead = false, refresh = false) {
     const request = ++generation;
     const documentId = id;
     const feedbackRequest = ++feedbackGeneration;
     const writeGeneration = feedbackWriteGeneration;
     const feedbackWritePending = pendingFeedbackDocumentId === documentId;
-    loading = true;
-    detail = null;
-    classification = null;
-    safeHtml = '';
+    if (!refresh) {
+      loading = true;
+      detail = null;
+      classification = null;
+      safeHtml = '';
+    }
     error = '';
     try {
       const result = await invoke<DocumentDetail>('archive_document', { id: documentId, revisionId });
@@ -115,8 +124,15 @@
       selectedRevision = result.revision_id;
       safeHtml = rendered.html;
       localResourceErrors = rendered.errors;
-      await tick();
-      heading?.focus({ preventScroll: true });
+      if (!refresh) {
+        await tick();
+        heading?.focus({ preventScroll: true });
+      }
+      if (result.summary_only && result.revision_id === result.revisions[0]?.id && !result.removed
+        && enabledSources.includes(result.item.source_id) && !bodyRequested) {
+        bodyRequested = true;
+        void fetchBody();
+      }
       // A failed preference/state write must never make readable archival text
       // unavailable (for example when the disk is full or becomes read-only).
       if (markRead && !result.item.is_read) {
@@ -144,6 +160,24 @@
       } catch { /* Feedback controls remain usable if a read fails. */ }
     }
     if (!disposed && request === generation) loading = false;
+  }
+
+  async function fetchBody() {
+    if (bodyBusy) return;
+    const documentId = id;
+    bodyBusy = true;
+    bodyError = '';
+    try {
+      const revised = await invoke<boolean>('archive_fetch_body', { id: documentId });
+      if (disposed || documentId !== id) return;
+      bodyRevised = revised;
+      // Filled in place, so the open revision now holds the body.
+      await load(detail?.revision_id ?? null, false, true);
+      void loadDates();
+      onchange();
+    } catch (reason) {
+      if (!disposed && documentId === id) bodyError = archiveError(reason);
+    } finally { if (!disposed) bodyBusy = false; }
   }
 
   async function localHtml(document: DocumentDetail, request: number): Promise<{ html: string; errors: Record<number, string> }> {
@@ -365,6 +399,12 @@
           <button class="button secondary small danger" disabled={busy} onclick={() => void deletePermanently()}>영구 삭제</button>
         </div>
       {/if}
+      {#if detail.removed}
+        <div class="reader-trash" role="note"><span><strong>원문 삭제됨</strong> · 학교 사이트에서 삭제된 공지입니다. 저장해 둔 내용은 이 기기에 남아 있습니다.</span></div>
+      {/if}
+      {#if bodyRevised}
+        <div class="reader-trash" role="note"><span><strong>원문이 수정됨</strong> · 학교 사이트의 본문이 받아 둔 공지 요약과 달라, 학교 사이트의 현재 본문을 보관했습니다.</span></div>
+      {/if}
       <div class="notice-meta"><time datetime={detail.item.published_at}>{archiveDate(detail.item.published_at)}</time>{#if detail.item.author}<span>{detail.item.author}</span>{/if}{#if detail.item.category}<span>{detail.item.category}</span>{/if}{#if ai && classification}<span class="ai-tag">분류 · {classification.category}{classification.low_confidence ? ' · 확신 낮음' : ''}</span>{/if}</div>
       <div class="reader-actions">
         <button class="button secondary small" disabled={busy} onclick={() => updateState('is_read')}>{detail.item.is_read ? '읽지 않음으로 표시' : '읽음으로 표시'}</button>
@@ -378,7 +418,9 @@
         <button class="button secondary small" aria-pressed={documentFeedback === 'not_interested'} disabled={busy} onclick={() => void setDocumentFeedback(documentFeedback === 'not_interested' ? null : 'not_interested')}>관심 없어요</button>
         {#if documentFeedback}<button class="text-button" disabled={busy} onclick={() => void setDocumentFeedback(null)}>피드백 취소</button>{/if}
       </div>
-      <p class="archive-local-status">{#if detail.body_html === '' && detail.body_text === ''}
+      <p class="archive-local-status">{#if detail.summary_only}
+        아직 공지 요약만 있습니다. 본문은 학교 사이트에서 가져와 이 기기에 보관합니다.
+      {:else if detail.body_html === '' && detail.body_text === ''}
         본문은 지원되지 않아 로컬에 보관되지 않았습니다.{#if detail.resources.length} {detail.resources.some((item) => localResourceErrors[item.id]) ? '일부 로컬 자료가 없거나 손상되었을 수 있습니다. 아래에서 확인하거나 다시 내려받아 주세요.' : detail.resources.every((item) => item.status === 'downloaded') ? '연결된 자료도 모두 저장되어 있습니다.' : '일부 자료는 로컬에 없습니다. 아래에서 상태를 확인하세요.'}{/if}
       {:else}
         본문은 로컬에 보관되어 있습니다. {detail.resources.some((item) => localResourceErrors[item.id]) ? '일부 로컬 자료가 없거나 손상되었을 수 있습니다. 아래에서 확인하거나 다시 내려받아 주세요.' : detail.resources.every((item) => item.status === 'downloaded') ? '연결된 자료도 모두 저장되어 있습니다.' : '일부 자료는 로컬에 없습니다. 아래에서 상태를 확인하세요.'}
@@ -391,7 +433,18 @@
         </label>
       {/if}
     </header>
-    {#if detail.body_html === '' && detail.body_text === ''}
+    {#if detail.summary_only}
+      <section class="reader-summary" aria-label="공지 요약">
+        {#if detail.body_text}<p class="reader-plain"><strong>요약</strong> · {detail.body_text}</p>{/if}
+        {#if bodyBusy}<p class="loading" role="status">학교 사이트에서 본문을 가져오는 중입니다…</p>
+        {:else if bodyError}
+          <p class="archive-error" role="alert">본문을 가져오지 못했습니다. {bodyError}</p>
+          <button class="button secondary small" onclick={() => void fetchBody()}>다시 시도</button>
+        {:else if !latest}<p class="footnote">이 버전은 공지 요약만 보관되어 있습니다.</p>
+        {:else if detail.removed}<p class="footnote">학교 사이트에서 삭제되어 본문을 가져올 수 없습니다.</p>
+        {:else if !enabled}<p class="footnote">본문을 받으려면 설정 → 확장 기능에서 이 공지의 정보원을 켜 주세요.</p>{/if}
+      </section>
+    {:else if detail.body_html === '' && detail.body_text === ''}
       <p class="reader-plain" role="status"><strong>본문 미지원</strong> · 이 공지의 본문은 로컬에 보관되지 않았습니다. 학교 원문을 열어 확인해 주세요.</p>
     {:else}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions (Wide document tables need an explicitly focusable keyboard scroll region.) -->

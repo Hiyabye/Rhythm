@@ -88,6 +88,7 @@ fn main() {
         "archive_query",
         "archive_ranked_query",
         "archive_document",
+        "archive_fetch_body",
         "archive_state",
         "archive_trash",
         "archive_restore",

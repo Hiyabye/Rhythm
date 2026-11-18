@@ -123,6 +123,7 @@ impl AppState {
             armed: true,
         };
         self.archive.cancel();
+        self.archive.bodies.cancel();
         self.feed.cancel();
         self.models.cancel();
         // A command admitted before the reservation may start a download
@@ -134,6 +135,7 @@ impl AppState {
         self.studium_notifications.quiesce().await;
         self.studium_views.quiesce().await;
         self.archive.wait().await;
+        self.archive.bodies.wait().await;
         self.feed.wait().await;
         if let Some(completion) = studium_completion {
             completion.wait().await;
@@ -623,6 +625,7 @@ fn main() {
             archive::archive_query,
             archive::archive_ranked_query,
             archive::archive_document,
+            archive::archive_fetch_body,
             archive::archive_state,
             archive::archive_trash,
             archive::archive_restore,
@@ -678,6 +681,7 @@ fn main() {
                 state.studium_notifications.shutdown().await;
                 state.proactive.shutdown().await;
                 state.archive.wait().await;
+                state.archive.bodies.wait().await;
                 state.feed.wait().await;
                 if let Some(completion) = studium_completion {
                     completion.wait().await;

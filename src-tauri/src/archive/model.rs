@@ -89,6 +89,11 @@ pub struct DocumentDetail {
     pub canonical_url: String,
     pub body_html: String,
     pub body_text: String,
+    /// This revision holds only the feed's excerpt; its body has not been
+    /// fetched from the school.
+    pub summary_only: bool,
+    /// The school deleted the notice; it stays because it was saved.
+    pub removed: bool,
     pub revision_id: i64,
     pub revisions: Vec<RevisionInfo>,
     pub resources: Vec<ResourceRecord>,

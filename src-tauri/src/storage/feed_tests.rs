@@ -689,3 +689,246 @@ fn a_schema_37_profile_upgrades_and_a_failed_upgrade_rolls_back() {
     assert_eq!(version, 37);
     assert!(connection.prepare("SELECT base FROM feed_state").is_err());
 }
+
+/// The page as the app fetches it when `notice` is opened.
+fn fetched(id: &str, body: &str, resources: &[(&str, &str, &str)]) -> ArticleInput {
+    ArticleInput {
+        original: format!("<html>{body}</html>"),
+        resources: resources
+            .iter()
+            .map(|(url, filename, kind)| ResourceInput {
+                url: (*url).into(),
+                filename: (*filename).into(),
+                kind: (*kind).into(),
+            })
+            .collect(),
+        ..article(id, body)
+    }
+}
+const ATTACHMENT: (&str, &str, &str) =
+    ("https://www.sogang.ac.kr/file/a.pdf", "a.pdf", "attachment");
+
+#[test]
+fn an_opened_notice_fills_its_feed_revision_in_place() {
+    let (_directory, store) = database();
+    let body = "2026년 11월 25일까지 신청서를 제출하세요.";
+    let notice = feed_notice("1", body);
+    store
+        .feed_apply_snapshot(1, &[upsert(1, &notice)], &[])
+        .unwrap();
+    let id = document(&store, "1");
+    assert!(store.document(id, None).unwrap().summary_only);
+    let (_, entry) = store.pending_body(id).unwrap().unwrap();
+    assert_eq!(entry.url, notice.canonical_url);
+
+    let filled = store
+        .fill_feed_body(id, &fetched("1", body, &[ATTACHMENT]), true)
+        .unwrap();
+    assert_eq!(
+        filled,
+        feed::Filled::default(),
+        "the feed described this text"
+    );
+    let (text, pending, _, _, revisions) = row(&store, "1").unwrap();
+    assert_eq!((text.as_str(), pending, revisions), (body, false, 1));
+    let detail = store.document(id, None).unwrap();
+    assert!(!detail.summary_only);
+    assert_eq!(detail.body_html, format!("<p>{body}</p>"));
+    assert_eq!(detail.resources.len(), 1);
+    // Still the feed's revision: nothing above the notification baseline.
+    assert!(
+        count(&store, "SELECT MAX(id) FROM document_revisions")
+            <= store.proactive_baseline().unwrap()
+    );
+    // Dates now come from the body.
+    let dates = store.notice_dates(id).unwrap();
+    assert_eq!(dates[0].day, "2026-11-25");
+    assert!(store.pending_body(id).unwrap().is_none());
+
+    // The feed's next record of the same revision keeps the body, and a second
+    // fill (another open finishing later) changes nothing.
+    store
+        .feed_apply_segment(2, 2, &[upsert(2, &notice)], &[], false)
+        .unwrap();
+    assert_eq!(row(&store, "1").unwrap().0, body);
+    let filled = store
+        .fill_feed_body(id, &fetched("1", "늦게 받은 본문", &[ATTACHMENT]), true)
+        .unwrap();
+    assert_eq!(filled, feed::Filled::default());
+    assert_eq!(row(&store, "1").unwrap().0, body);
+}
+
+#[test]
+fn a_revised_school_text_takes_its_own_hash() {
+    let (_directory, store) = database();
+    let notice = feed_notice("2", "옛 본문");
+    store
+        .feed_apply_snapshot(
+            1,
+            &[upsert(1, &notice), embedding(2, &notice, 0)],
+            &vectors(1),
+        )
+        .unwrap();
+    let id = document(&store, "2");
+    // The feed's attachment was downloaded; the school dropped it since.
+    store
+        .connection
+        .execute(
+            "UPDATE resources SET status='downloaded',local_path='resources/ab/cd',bytes=1,sha256=?2
+             WHERE document_id=?1",
+            params![id, "0".repeat(64)],
+        )
+        .unwrap();
+    let image = ("https://www.sogang.ac.kr/file/b.png", "b.png", "image");
+    let page = fetched("2", "고친 본문", &[image]);
+    let filled = store.fill_feed_body(id, &page, true).unwrap();
+    assert_eq!(
+        filled,
+        feed::Filled {
+            revised: true,
+            orphaned: vec!["resources/ab/cd".into()]
+        }
+    );
+    let detail = store.document(id, None).unwrap();
+    assert_eq!(detail.body_text, "고친 본문");
+    assert_eq!(
+        detail.revisions.len(),
+        1,
+        "filled in place, not a new revision"
+    );
+    let urls: Vec<_> = detail.resources.iter().map(|r| r.url.as_str()).collect();
+    assert_eq!(urls, [image.0]);
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM feed_embeddings"),
+        1,
+        "the feed's vector stays until it describes the new revision"
+    );
+
+    // When the feed catches up with that revision, the body stays.
+    let mut later = feed_notice("2", "고친 본문");
+    later.revision_hash = feed::article_revision_hash(&page);
+    later.resources = vec![Resource {
+        url: image.0.into(),
+        filename: image.1.into(),
+        kind: ResourceKind::Image,
+    }];
+    store
+        .feed_apply_segment(2, 2, &[upsert(2, &later)], &[], false)
+        .unwrap();
+    let (text, pending, _, _, revisions) = row(&store, "2").unwrap();
+    assert_eq!((text.as_str(), pending, revisions), ("고친 본문", false, 1));
+}
+
+#[test]
+fn only_pending_feed_notices_are_fetched_and_a_pdf_body_keeps_the_feed_hash() {
+    let (_directory, store) = database();
+    store
+        .upsert_article("one", &article("v1", "예전 본문"), false)
+        .unwrap();
+    let saved = feed_notice("saved", "저장한 공지");
+    let pdf = feed_notice("pdf", "");
+    store
+        .feed_apply_snapshot(2, &[upsert(1, &saved), upsert(2, &pdf)], &[])
+        .unwrap();
+    let saved_id = document(&store, "saved");
+    store
+        .set_document_state(saved_id, None, Some(true))
+        .unwrap();
+    store
+        .feed_apply_segment(3, 3, &[removal(3, "saved")], &[], false)
+        .unwrap();
+    // A v1 body is here, and the school deleted the saved notice.
+    assert!(store
+        .pending_body(document(&store, "v1"))
+        .unwrap()
+        .is_none());
+    assert!(store.pending_body(saved_id).unwrap().is_none());
+    assert!(store.document(saved_id, None).unwrap().removed);
+    assert_eq!(
+        store
+            .fill_feed_body(saved_id, &fetched("saved", "본문", &[]), true)
+            .unwrap(),
+        feed::Filled::default()
+    );
+    assert!(row(&store, "saved").unwrap().1, "still the excerpt");
+
+    // A body made from a PDF's text is not compared with the feed's hash.
+    let id = document(&store, "pdf");
+    let hash = notice_hash(&store, id);
+    let filled = store
+        .fill_feed_body(
+            id,
+            &fetched("pdf", "PDF에서 읽은 본문", &[ATTACHMENT]),
+            false,
+        )
+        .unwrap();
+    assert!(!filled.revised);
+    assert_eq!(notice_hash(&store, id), hash);
+    assert_eq!(row(&store, "pdf").unwrap().0, "PDF에서 읽은 본문");
+}
+fn notice_hash(store: &Store, id: i64) -> String {
+    store
+        .connection
+        .query_row(
+            "SELECT revision_hash FROM documents WHERE id=?1",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+#[test]
+fn a_backfill_starts_read_and_later_arrivals_stay_unread() {
+    let (_directory, store) = database();
+    // A v1 notice the user has not read, then the first sync.
+    store
+        .upsert_article("one", &article("v1", "예전 본문"), false)
+        .unwrap();
+    let read = |store: &Store, id: &str| -> bool {
+        store
+            .connection
+            .query_row(
+                "SELECT is_read FROM document_state WHERE document_id=?1",
+                [document(store, id)],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    store
+        .feed_apply_snapshot(1, &[upsert(1, &feed_notice("old", "본문"))], &[])
+        .unwrap();
+    store
+        .feed_apply_segment(
+            2,
+            2,
+            &[upsert(2, &feed_notice("caught-up", "본문"))],
+            &[],
+            true,
+        )
+        .unwrap();
+    // Later syncs: a new notice, and one the collector's history import found.
+    let mut backlog = feed_notice("backlog", "본문");
+    backlog.historical = true;
+    store
+        .feed_apply_segment(
+            3,
+            5,
+            &[
+                upsert(3, &feed_notice("new", "본문")),
+                upsert(4, &backlog),
+                upsert(5, &feed_notice("v1", "예전 본문")),
+            ],
+            &[],
+            false,
+        )
+        .unwrap();
+    assert!(read(&store, "old") && read(&store, "caught-up") && read(&store, "backlog"));
+    assert!(
+        !read(&store, "new"),
+        "a notice arriving after the first sync is news"
+    );
+    assert!(
+        !read(&store, "v1"),
+        "a notice already here keeps its read state"
+    );
+}
