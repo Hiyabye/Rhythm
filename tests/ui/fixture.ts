@@ -89,6 +89,10 @@ export interface FixtureOptions {
   // reports a school text that differs from the feed's, `removed` marks the
   // notices deleted at the school.
   feedBody?: { result?: 'filled' | 'revised' | 'fail'; delay?: number; removed?: boolean };
+  // The open notice's files; `archive_fetch_resources` (after `delay` ms)
+  // stores the pending ones, or with `fail` records them failed and throws.
+  resources?: ResourceRecord[];
+  feedFiles?: { delay?: number; fail?: boolean };
   schedulerError?: boolean;
   pendingActivation?: ProactiveActivation;
   notificationAuthorization?: string;
@@ -208,6 +212,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     type Board = { source_id: string; mode: string; page: number; message: string };
     let sync = { running: false, mode: 'historical', message: '수집 대기 중입니다.', active: [] as Board[] };
     const filledBodies = new Set<number>();
+    const resourceRows: ResourceRecord[] = copy(options.resources ?? []);
     let bodyFailures = options.feedBody?.result === 'fail' ? 1 : 0;
     let feed: FeedStatus = { running: false, generated_at: '2026-11-18T03:00:00.000Z', checked_at: '2026-11-18T03:05:00.000Z', stale: false, result: 'ok', error: null, failing_boards: [], ...options.feed };
     const board = (mode: string, page = 1, source_id = 'computing-updates'): Board => ({ source_id, mode, page, message: '공개 공지를 가져오는 중입니다.' });
@@ -742,7 +747,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
                 : options.revisions
                   ? [{ id: 1, content_hash: 'abc', collected_at: '2026-10-24 12:00:00' }, { id: 2, content_hash: 'def', collected_at: '2026-10-23 12:00:00' }]
                   : [{ id: 1, content_hash: 'abc', collected_at: '2026-10-24 12:00:00' }],
-              resources: copy(options.resources ?? []) };
+              resources: copy(resourceRows) };
           }
           case 'archive_fetch_body':
             await wait(options.feedBody?.delay ?? 0);
@@ -752,6 +757,15 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             }
             filledBodies.add(args.id);
             return options.feedBody?.result === 'revised';
+          case 'archive_fetch_resources':
+            await wait(options.feedFiles?.delay ?? 0);
+            for (const row of resourceRows.filter((resource) => resource.status === 'pending')) {
+              Object.assign(row, options.feedFiles?.fail
+                ? { status: 'failed', error: '학교 서버에 연결하지 못했습니다.' }
+                : { status: 'downloaded', mime: 'image/png', bytes: 70, local_path: 'resources/hash.png', sha256: 'abc' });
+            }
+            if (options.feedFiles?.fail) throw '학교 서버가 요청을 제한했습니다. 잠시 후 다시 시도해 주세요.';
+            return null;
           case 'archive_state': {
             await wait(fixture.stateDelay);
             if (args.isRead !== null && options.readError) throw '읽음 상태를 저장하지 못했습니다. 디스크 공간을 확인해 주세요.';

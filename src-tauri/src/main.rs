@@ -626,6 +626,7 @@ fn main() {
             archive::archive_ranked_query,
             archive::archive_document,
             archive::archive_fetch_body,
+            archive::archive_fetch_resources,
             archive::archive_state,
             archive::archive_trash,
             archive::archive_restore,

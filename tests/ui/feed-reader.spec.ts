@@ -55,3 +55,34 @@ test('a notice deleted at the school shows what was kept without fetching', asyn
   await expect(summary).toContainText('삭제되어 본문을 가져올 수 없습니다');
   expect(await callCount(page, 'archive_fetch_body')).toBe(0);
 });
+
+const pendingImage = { id: 7, url: 'https://www.sogang.ac.kr/file-fe-prd/editor/a.png', filename: '안내.png', kind: 'image',
+  status: 'pending', mime: null, bytes: null, local_path: null, sha256: null, error: null };
+
+test('files of an opened notice download after its body and then show', async ({ page }) => {
+  await mockDesktop(page, { feedBody: {}, feedFiles: { delay: 400 }, resources: [pendingImage],
+    body: `<p>보관된 한국어 본문입니다.</p><img data-resource-url="${pendingImage.url}" alt="안내 이미지">` });
+  await page.goto('/');
+  await page.locator('#notice-1').click();
+
+  const files = page.locator('.reader-resources').filter({ hasText: '첨부 자료 및 이미지' });
+  await expect(files.getByRole('status')).toHaveText('학교 사이트에서 이미지와 첨부 파일을 내려받는 중입니다…');
+  await expect(files.getByRole('button', { name: '안내.png 다시 내려받기', exact: true })).toBeDisabled();
+  await expect(page.locator('.reader-body img')).toHaveAttribute('src', /^data:image\/png;base64,/);
+  await expect(files).toContainText('로컬 저장됨');
+  await expect(files.getByRole('status')).toHaveCount(0);
+  await expect(page.locator('.reader-header h2')).toBeFocused();
+  expect(await callCount(page, 'archive_fetch_resources')).toBe(1);
+});
+
+test('a failed file download is shown and left for a retry', async ({ page }) => {
+  await mockDesktop(page, { feedFiles: { fail: true }, resources: [pendingImage] });
+  await page.goto('/');
+  await page.locator('#notice-1').click();
+
+  const files = page.locator('.reader-resources').filter({ hasText: '첨부 자료 및 이미지' });
+  await expect(files.getByRole('alert')).toContainText('자료를 내려받지 못했습니다. 학교 서버가 요청을 제한했습니다.');
+  await expect(files).toContainText('다운로드 실패');
+  await expect(files.getByRole('button', { name: '안내.png 다시 내려받기', exact: true })).toBeEnabled();
+  expect(await callCount(page, 'archive_fetch_resources')).toBe(1);
+});

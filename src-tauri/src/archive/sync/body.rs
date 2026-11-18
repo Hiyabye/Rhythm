@@ -17,6 +17,7 @@ const ROBOTS_TTL: Duration = Duration::from_secs(60 * 60);
 pub struct Bodies {
     active: Mutex<Vec<Arc<AtomicBool>>>,
     robots: Mutex<HashMap<String, (Instant, Arc<Robots>)>>,
+    downloading: Mutex<HashSet<i64>>,
 }
 
 struct Active<'a>(&'a Bodies, Arc<AtomicBool>);
@@ -24,6 +25,25 @@ impl Drop for Active<'_> {
     fn drop(&mut self) {
         if let Ok(mut active) = self.0.active.lock() {
             active.retain(|cancel| !Arc::ptr_eq(cancel, &self.1));
+        }
+    }
+}
+
+/// The notice whose files one call is downloading.
+struct Downloading<'a>(&'a Bodies, i64);
+impl<'a> Downloading<'a> {
+    fn claim(bodies: &'a Bodies, id: i64) -> Result<Option<Self>, String> {
+        let mut downloading = bodies
+            .downloading
+            .lock()
+            .map_err(|_| "첨부 자료를 내려받지 못했습니다.")?;
+        Ok(downloading.insert(id).then_some(Self(bodies, id)))
+    }
+}
+impl Drop for Downloading<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut downloading) = self.0.downloading.lock() {
+            downloading.remove(&self.1);
         }
     }
 }
@@ -114,6 +134,66 @@ impl Bodies {
             let _ = tokio::fs::remove_file(root.join(path)).await;
         }
         Ok(filled.revised)
+    }
+
+    /// Downloads the images and attachments of opened notice `id` that were
+    /// not tried yet, under the crawler's rules: the board's robots.txt,
+    /// another image host's own, the per-file caps and one job's budget.
+    /// Each failure is recorded on its file, which then waits for an explicit
+    /// retry. Cybercampus files stay with its session sync. A second call for
+    /// the same notice waits for the first.
+    pub async fn resources<T: Transport>(
+        &self,
+        store: &SharedStore,
+        root: &Path,
+        transport: &T,
+        id: i64,
+    ) -> Result<(), String> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.active
+            .lock()
+            .map_err(|_| "첨부 자료를 내려받지 못했습니다.")?
+            .push(cancel.clone());
+        let _active = Active(self, cancel.clone());
+        let _downloading = loop {
+            if let Some(guard) = Downloading::claim(self, id)? {
+                break guard;
+            }
+            active(&cancel)?;
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        };
+        let Some((definition, entry, resources)) =
+            with_store(store, |s| {
+                let Some((source, entry, resources)) = s.pending_downloads(id)? else {
+                    return Ok(None);
+                };
+                enabled(s, &source)?;
+                let definition = s.source(&source)?.definition;
+                Ok((definition.family != cybercampus::FAMILY)
+                    .then_some((definition, entry, resources)))
+            })?
+        else {
+            return Ok(());
+        };
+        let url = parser::detail_url(&definition, &entry)?;
+        let policy = self.robots(transport, &url, &cancel).await?;
+        let image_robots = RobotsCache::default();
+        let total = AtomicU64::new(0);
+        for resource in resources {
+            with_store(store, |s| enabled(s, &definition.id))?;
+            download_resource(
+                store,
+                root,
+                transport,
+                &cancel,
+                &policy,
+                &image_robots,
+                &resource,
+                &total,
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     /// Downloads the notice's viewer PDFs it does not hold yet. A failed
