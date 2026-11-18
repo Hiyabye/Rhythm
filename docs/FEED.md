@@ -6,7 +6,7 @@ The feed is format **1.0**. It carries notice metadata, a 320-character body exc
 
 ## Files
 
-The Worker (`https://rhythm-feed.hiyabye0465.workers.dev`) serves these files from the public R2 bucket `rhythm-feed`:
+The Worker (`https://rhythm-feed.hiyabye0465.workers.dev`) serves these files from the public R2 bucket `rhythm-feed`, under the prefix the collector publishes to (`--publish`; `feed/` in production):
 
 | Path | Contents | Mutable |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ The Worker (`https://rhythm-feed.hiyabye0465.workers.dev`) serves these files fr
 | `segments/…vec` | The vectors those records reference | never |
 | `snapshots/…jsonl.zst`, `snapshots/…vec` | The full current state through a seq | never |
 
-The manifest gives each file's path, SHA-256 and size. Clients treat paths as opaque. A path is relative to the manifest. Its components are non-empty, contain only ASCII letters, digits, `.`, `_` and `-`, and are never `.` or `..`; the crate rejects any other path. The publisher names files after their seq range and content hash, so a file name never refers to two different contents.
+The manifest gives each file's path, SHA-256 and size. Clients treat paths as opaque. A path is relative to the manifest. Its components are non-empty, contain only ASCII letters, digits, `.`, `_` and `-`, and are never `.` or `..`; the crate rejects any other path. The publisher names files after their role, seq range and content hash (`segments/run-…`, `segments/day-…`, `snapshots/…`), so a file name never refers to two different contents.
 
 ## Versioning
 
@@ -115,7 +115,8 @@ A vectors file holds whole vectors and nothing else (#166 O19a). Each vector is 
   - Each collector run that changes something publishes one run segment.
   - At the first publish of a new UTC day, the previous day's run segments are merged into one daily segment with the same seq range, so no seq is lost. A snapshot is written at the same time.
   - The manifest then lists the daily segment in place of the run segments. The run segment files are deleted a day later, so a client that read the previous manifest can still download them.
-- **Retention:** daily segments and the previous snapshot are kept for 30 days; older files are deleted.
+- **Retention:** daily segments stay listed for 30 days. A replaced snapshot, like a compacted run segment, is deleted a day after it leaves the manifest (user decision, 2026-11-18), so the manifest lists only the newest snapshot. A day without changes keeps the same snapshot file.
+- **Publish order** (user decision, 2026-11-18): a run uploads its new files, records their seqs in its state, uploads the state, and only then uploads the manifest and its signature. A failed state upload therefore leaves only unlisted files, which the next run deletes before it assigns the same seqs again. A run refuses to publish when the live manifest lists a seq its state has not assigned (a rolled-back state), when the live manifest is not older than its clock, or when the live manifest does not verify with its key.
 
 ## Applying the feed
 

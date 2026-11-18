@@ -12,12 +12,13 @@ use std::{collections::HashSet, path::Path, sync::Mutex};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 /// Ordered schema migrations; index `n` upgrades `user_version` n to n+1.
-const MIGRATIONS: [&str; 5] = [
+const MIGRATIONS: [&str; 6] = [
     include_str!("../migrations/001_initial.sql"),
     include_str!("../migrations/002_notice_dates.sql"),
     include_str!("../migrations/003_deletions.sql"),
     include_str!("../migrations/004_embeddings.sql"),
     include_str!("../migrations/005_classifications.sql"),
+    include_str!("../migrations/006_feed.sql"),
 ];
 /// A second "not found" removes a notice only this long after the first.
 const MISSING_CONFIRM: &str = "-1 day";
@@ -942,6 +943,9 @@ fn revision_hash(article: &ArticleInput) -> Result<String, String> {
     Ok(crate::sha256_hex(encoded))
 }
 
+mod feed;
+pub use feed::{Commit, FileRow, Published, Scanned, StoredRecord};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -963,10 +967,10 @@ mod tests {
         assert_eq!((board.next_page, board.history_complete), (4, true));
         assert!(state.seed_complete("sogang-academic").unwrap());
         state
-            .with(|c| c.execute_batch("PRAGMA user_version=6;"))
+            .with(|c| c.execute_batch("PRAGMA user_version=7;"))
             .unwrap();
         drop(state);
-        assert!(State::open(&path).err().unwrap().contains("version 6"));
+        assert!(State::open(&path).err().unwrap().contains("version 7"));
     }
 
     #[test]
