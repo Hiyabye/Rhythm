@@ -67,6 +67,24 @@ impl WorkersAi {
 
 impl Embedder for WorkersAi {
     async fn embed(&self, texts: &[String]) -> Result<Embedded, String> {
+        split(self, texts).await
+    }
+}
+
+/// Why one request failed: only an input too big for the model is retried,
+/// in smaller requests.
+enum Failure {
+    TooBig(String),
+    Other(String),
+}
+
+/// One request for some texts, as `split` sends it.
+trait Request {
+    fn request(&self, texts: &[String]) -> impl Future<Output = Result<Embedded, Failure>>;
+}
+
+impl Request for WorkersAi {
+    async fn request(&self, texts: &[String]) -> Result<Embedded, Failure> {
         let mut failure = String::new();
         for attempt in 0..ATTEMPTS {
             if attempt > 0 {
@@ -86,17 +104,69 @@ impl Embedder for WorkersAi {
                 }
                 Ok(response) => {
                     let status = response.status();
-                    let body = response.text().await.map_err(|e| e.to_string())?;
+                    let body = response
+                        .text()
+                        .await
+                        .map_err(|e| Failure::Other(e.to_string()))?;
                     if status != StatusCode::OK {
-                        return Err(format!("Workers AI HTTP {status}{}", errors(&body)));
+                        let error = format!("Workers AI HTTP {status}{}", errors(&body));
+                        return Err(if status == StatusCode::BAD_REQUEST && too_big(&body) {
+                            Failure::TooBig(error)
+                        } else {
+                            Failure::Other(error)
+                        });
                     }
-                    return parse(&body, texts.len());
+                    return parse(&body, texts.len()).map_err(Failure::Other);
                 }
                 Err(error) => failure = error.without_url().to_string(),
             }
         }
-        Err(format!("Workers AI: {failure}"))
+        Err(Failure::Other(format!("Workers AI: {failure}")))
     }
+}
+
+/// Sends the texts in one request, or in halves while Workers AI answers that
+/// the input is too big. The limit is on the tokens of the whole request,
+/// summed over its texts: measured 2026-11-18 after the first production run
+/// hit it, 27,565 tokens passed and about 33,000 failed (`3030 input too
+/// big`). A single input is at most 7 KiB (`rhythm_embed::input`), at most
+/// about 5,500 tokens in the same measurement, so the halving ends.
+async fn split<R: Request>(requests: &R, texts: &[String]) -> Result<Embedded, String> {
+    let mut embedded = Embedded {
+        vectors: Vec::with_capacity(texts.len()),
+        neurons: 0.0,
+    };
+    // A stack of the parts still to send, the next one on top.
+    let mut parts = vec![texts];
+    while let Some(part) = parts.pop() {
+        match requests.request(part).await {
+            Ok(done) => {
+                embedded.vectors.extend(done.vectors);
+                embedded.neurons += done.neurons;
+            }
+            Err(Failure::TooBig(_)) if part.len() > 1 => {
+                let (first, second) = part.split_at(part.len() / 2);
+                parts.extend([second, first]);
+            }
+            Err(Failure::TooBig(error) | Failure::Other(error)) => return Err(error),
+        }
+    }
+    Ok(embedded)
+}
+
+/// Whether Cloudflare's errors say the input is too big for the model.
+fn too_big(body: &str) -> bool {
+    serde_json::from_str::<Value>(body).is_ok_and(|value| {
+        value["errors"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|error| {
+                error["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("input too big"))
+            })
+    })
 }
 
 /// Cloudflare's error codes and messages, for the run log.
@@ -202,6 +272,97 @@ mod tests {
         let failed = json!({"success": false, "errors": [{"code": 4006, "message": "daily free allocation used"}]});
         let error = parse(&failed.to_string(), 1).err().unwrap();
         assert!(error.contains("4006"), "{error}");
+    }
+
+    /// Answers like Workers AI with a context of `limit` bytes per request:
+    /// each vector points along the axis its text names.
+    struct Sized {
+        limit: usize,
+        calls: std::cell::RefCell<Vec<usize>>,
+    }
+    impl Request for Sized {
+        async fn request(&self, texts: &[String]) -> Result<Embedded, Failure> {
+            self.calls.borrow_mut().push(texts.len());
+            if texts.iter().map(String::len).sum::<usize>() > self.limit {
+                return Err(Failure::TooBig("input too big".into()));
+            }
+            let axis = |text: &String| {
+                let mut vector = vec![0.0; DIMENSIONS];
+                vector[text.trim_start_matches('x').parse::<usize>().unwrap()] = 1.0;
+                vector
+            };
+            Ok(Embedded {
+                vectors: texts.iter().map(axis).collect(),
+                neurons: texts.len() as f64,
+            })
+        }
+    }
+
+    fn texts(lengths: &[usize]) -> Vec<String> {
+        lengths
+            .iter()
+            .enumerate()
+            .map(|(i, length)| format!("{}{i}", "x".repeat(*length)))
+            .collect()
+    }
+
+    fn axes(embedded: &Embedded) -> Vec<usize> {
+        let axis = |v: &Vec<f32>| v.iter().position(|x| *x == 1.0).unwrap();
+        embedded.vectors.iter().map(axis).collect()
+    }
+
+    #[tokio::test]
+    async fn a_batch_too_big_is_sent_in_halves_in_order() {
+        // Each text is its length plus its index digit: 10 × 101 bytes.
+        let fake = Sized {
+            limit: 1_010,
+            calls: Default::default(),
+        };
+        let all = split(&fake, &texts(&[100; 10])).await.unwrap();
+        assert_eq!(*fake.calls.borrow(), [10], "one request when it fits");
+        assert_eq!(axes(&all), (0..10).collect::<Vec<_>>());
+
+        let fake = Sized {
+            limit: 1_000,
+            calls: Default::default(),
+        };
+        let long = texts(&[300, 300, 300, 300, 300, 10, 10, 10, 10, 900]);
+        let embedded = split(&fake, &long).await.unwrap();
+        assert_eq!(axes(&embedded), (0..10).collect::<Vec<_>>());
+        assert_eq!(embedded.neurons, 10.0, "only answered requests count");
+        // 2,450 bytes; then 1,505 (texts 0-4) splits into 602 and 903, and
+        // 955 (texts 5-9) fits.
+        assert_eq!(*fake.calls.borrow(), [10, 5, 2, 3, 5]);
+    }
+
+    #[tokio::test]
+    async fn only_a_single_input_too_big_or_another_error_fails() {
+        let fake = Sized {
+            limit: 100,
+            calls: Default::default(),
+        };
+        let error = split(&fake, &texts(&[10, 500])).await.err().unwrap();
+        assert!(error.contains("too big"), "{error}");
+        assert_eq!(*fake.calls.borrow(), [2, 1, 1]);
+
+        struct Quota;
+        impl Request for Quota {
+            async fn request(&self, _: &[String]) -> Result<Embedded, Failure> {
+                Err(Failure::Other("4006 daily free allocation used".into()))
+            }
+        }
+        let error = split(&Quota, &texts(&[10, 10])).await.err().unwrap();
+        assert!(error.contains("4006"), "{error}");
+    }
+
+    #[test]
+    fn the_too_big_answer_is_recognized() {
+        // The body of the first production run's failure.
+        let body = json!({"success": false, "errors": [{"code": 3030, "message": "AiError: AiError: input too big (cb3bfee4-866d-4d29-b0a0-80308a7bef10)"}]});
+        assert!(too_big(&body.to_string()));
+        let quota = json!({"success": false, "errors": [{"code": 4006, "message": "daily free allocation used"}]});
+        assert!(!too_big(&quota.to_string()));
+        assert!(!too_big("<html>"));
     }
 
     #[test]
