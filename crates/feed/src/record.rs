@@ -1,0 +1,217 @@
+//! Change records: one JSON object per line with its `seq` and `kind`,
+//! compressed with zstd. A segment holds every seq of its range in order; a
+//! snapshot holds the current upserts, each with the seq that last set it.
+use crate::{Error, MAX_DECODED_BYTES};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::io::Read;
+
+/// zstd level for published files: a snapshot is written once a day.
+const LEVEL: i32 = 19;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum Record {
+    #[serde(rename = "notice.upsert")]
+    Notice(Box<Notice>),
+    #[serde(rename = "embedding.upsert")]
+    Embedding(Embedding),
+    #[serde(rename = "classification.upsert")]
+    Classification(Classification),
+    #[serde(rename = "notice.remove")]
+    Remove(Removal),
+}
+
+/// A notice's current revision without its body: the first `EXCERPT_CHARS`
+/// characters stand in for it (#166 D13, O2).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Notice {
+    pub source_id: String,
+    pub external_id: String,
+    pub revision_hash: String,
+    pub canonical_url: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub category: Option<String>,
+    /// `YYYY-MM-DD`, as the board shows it.
+    pub published_at: String,
+    /// The site's own change time (RFC 3339 UTC), when it reports one.
+    pub modified_at: Option<String>,
+    pub body_state: BodyState,
+    pub excerpt: String,
+    pub resources: Vec<Resource>,
+    pub dates: Vec<NoticeDate>,
+    /// `rhythm_sources::dates::EXTRACTOR_VERSION` of `dates`.
+    pub dates_version: u32,
+    /// Found by the history import rather than as a new notice: never notified.
+    pub historical: bool,
+    pub first_seen_at: String,
+    /// When the server last saw a meaningful revision.
+    pub revised_at: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BodyState {
+    Normal,
+    /// The body could not be read (an iframe or a scanned PDF); the notice is
+    /// metadata only and the app may fetch the original when opened.
+    Unsupported,
+}
+
+/// A reference only; the feed never carries the bytes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Resource {
+    pub url: String,
+    pub filename: String,
+    pub kind: ResourceKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceKind {
+    Attachment,
+    Image,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NoticeDate {
+    pub day: String,
+    pub time: Option<String>,
+    pub end_day: Option<String>,
+    pub end_time: Option<String>,
+    pub label: String,
+    pub kind: DateKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DateKind {
+    Deadline,
+    Start,
+    Date,
+}
+
+/// A notice revision's vector: `vector` indexes the vectors file published
+/// with the same records file.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Embedding {
+    pub source_id: String,
+    pub external_id: String,
+    pub revision_hash: String,
+    pub scope: String,
+    pub vector: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Classification {
+    pub source_id: String,
+    pub external_id: String,
+    pub revision_hash: String,
+    pub scope: String,
+    pub category: String,
+    pub score: f32,
+    pub margin: f32,
+    pub low_confidence: bool,
+}
+
+/// The notice was deleted at its source (#166 D24).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Removal {
+    pub source_id: String,
+    pub external_id: String,
+    pub removed_at: String,
+}
+
+/// One decoded line. `record` is `None` for a kind this version doesn't know,
+/// which a client skips (a minor format addition).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Entry {
+    pub seq: u64,
+    pub record: Option<Record>,
+}
+
+#[derive(Serialize)]
+struct Line<'a> {
+    seq: u64,
+    #[serde(flatten)]
+    record: &'a Record,
+}
+
+/// JSONL, zstd-compressed.
+pub fn encode(entries: &[(u64, Record)]) -> Result<Vec<u8>, Error> {
+    let mut text = Vec::new();
+    for (seq, record) in entries {
+        serde_json::to_writer(&mut text, &Line { seq: *seq, record })
+            .map_err(|e| Error::Invalid(e.to_string()))?;
+        text.push(b'\n');
+    }
+    zstd::encode_all(text.as_slice(), LEVEL).map_err(|e| Error::Invalid(e.to_string()))
+}
+
+/// A segment: exactly the seqs `from..=to`, in order.
+pub fn decode_segment(bytes: &[u8], from: u64, to: u64) -> Result<Vec<Entry>, Error> {
+    let entries = decode(bytes, MAX_DECODED_BYTES)?;
+    let expected = (from..=to).map(Some);
+    if !entries.iter().map(|e| Some(e.seq)).eq(expected) {
+        return Err(Error::Invalid(format!(
+            "segment does not hold exactly seq {from} to {to}"
+        )));
+    }
+    Ok(entries)
+}
+
+/// A snapshot: upserts only, seqs increasing and at most `through`.
+pub fn decode_snapshot(bytes: &[u8], through: u64) -> Result<Vec<Entry>, Error> {
+    let entries = decode(bytes, MAX_DECODED_BYTES)?;
+    if entries.windows(2).any(|pair| pair[0].seq >= pair[1].seq)
+        || entries.last().is_some_and(|last| last.seq > through)
+    {
+        return Err(Error::Invalid(format!(
+            "snapshot seqs are not increasing up to {through}"
+        )));
+    }
+    if entries
+        .iter()
+        .any(|entry| matches!(entry.record, Some(Record::Remove(_))))
+    {
+        return Err(Error::Invalid("snapshot holds a removal".into()));
+    }
+    Ok(entries)
+}
+
+pub(crate) fn decode(bytes: &[u8], limit: u64) -> Result<Vec<Entry>, Error> {
+    let mut text = Vec::new();
+    zstd::stream::read::Decoder::new(bytes)
+        .map_err(|e| Error::Invalid(e.to_string()))?
+        .take(limit + 1)
+        .read_to_end(&mut text)
+        .map_err(|e| Error::Invalid(format!("records do not decompress: {e}")))?;
+    if text.len() as u64 > limit {
+        return Err(Error::Invalid("records are too large".into()));
+    }
+    let text =
+        std::str::from_utf8(&text).map_err(|_| Error::Invalid("records are not UTF-8".into()))?;
+    text.lines()
+        .enumerate()
+        .map(|(number, line)| {
+            line_entry(line).map_err(|e| Error::Invalid(format!("record line {}: {e}", number + 1)))
+        })
+        .collect()
+}
+
+fn line_entry(line: &str) -> Result<Entry, String> {
+    let value: Value = serde_json::from_str(line).map_err(|e| e.to_string())?;
+    let seq = value["seq"].as_u64().ok_or("no seq")?;
+    let kind = value["kind"].as_str().ok_or("no kind")?;
+    let known = matches!(
+        kind,
+        "notice.upsert" | "embedding.upsert" | "classification.upsert" | "notice.remove"
+    );
+    let record = if known {
+        Some(serde_json::from_value(value).map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
+    Ok(Entry { seq, record })
+}

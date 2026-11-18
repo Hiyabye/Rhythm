@@ -3985,6 +3985,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rhythm-feed"
+version = "0.0.0"
+dependencies = [
+ "ring",
+ "serde",
+ "serde_json",
+ "zstd",
+]
+
+[[package]]
 name = "rhythm-sources"
 version = "0.0.0"
 dependencies = [
