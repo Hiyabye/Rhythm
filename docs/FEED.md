@@ -23,7 +23,7 @@ The Worker (`worker/`) serves exactly these files and answers 404 for any other 
 - **Methods:** `GET` and `HEAD`; anything else is 405.
 - **Caching:** `manifest.json` and `manifest.json.sig` are `cache-control: no-cache`; segments and snapshots are `public, max-age=31536000, immutable`. Every response carries `etag` and `last-modified`, and `If-None-Match` (or `If-Modified-Since` without it) returns 304 when the file is unchanged. Other preconditions are ignored.
 - **Types:** `application/json` for the manifest and its signature, `application/zstd` for `.jsonl.zst`, `application/octet-stream` for `.vec`.
-- **Rate limit:** about 60 requests a minute per client address and Cloudflare location; beyond it the Worker answers 429 with `retry-after: 60`.
+- **Rate limit:** a nominal 60 requests a minute per client address and Cloudflare location, counted approximately (several hundred passed in a minute in a live check); beyond it the Worker answers 429 with `retry-after: 60`. A client must handle 429 but cannot rely on a fixed threshold.
 - No CORS headers: the feed is for the app, not for browser pages.
 
 ## Versioning
