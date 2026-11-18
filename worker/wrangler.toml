@@ -3,6 +3,8 @@ main = "src/index.ts"
 compatibility_date = "2026-11-01"
 # Rhythm sends no telemetry; neither does its tooling.
 send_metrics = false
+# Serve only the workers.dev URL, not a public URL per uploaded version.
+preview_urls = false
 
 [vars]
 # The bucket prefix the collector publishes to (`--publish`).
