@@ -1,5 +1,5 @@
 [workspace]
-members = ["src-tauri", "crates/collector", "crates/embed", "crates/sources"]
+members = ["src-tauri", "crates/collector", "crates/embed", "crates/feed", "crates/sources"]
 exclude = ["src-tauri/vendor/mac-usernotifications"]
 resolver = "2"
 

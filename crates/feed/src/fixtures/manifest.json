@@ -1,0 +1,58 @@
+{
+  "format": "1.0",
+  "generated_at": "2026-11-18T03:15:42.120Z",
+  "moved_to": null,
+  "embedding": {
+    "model": "@cf/qwen/qwen3-embedding-0.6b",
+    "scope": "@cf/qwen/qwen3-embedding-0.6b#4e4150fdebae2e6e3e30bb8f2578f253181df5d4f13f83c0fdfa6e279a364e75",
+    "dimensions": 1024,
+    "canary": "normal"
+  },
+  "boards": [
+    {
+      "source_id": "sogang-academic",
+      "last_success_at": "2026-11-18T03:14:10.502Z",
+      "consecutive_failures": 0,
+      "history_complete": true
+    }
+  ],
+  "snapshot": {
+    "through_seq": 51210,
+    "records": {
+      "path": "snapshots/51210-9f86d081884c7d65.jsonl.zst",
+      "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "size": 18734120
+    },
+    "vectors": {
+      "path": "snapshots/51210-60303ae22b998861.vec",
+      "sha256": "60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752",
+      "size": 17786456
+    }
+  },
+  "segments": [
+    {
+      "from_seq": 50901,
+      "to_seq": 51210,
+      "records": {
+        "path": "segments/50901-51210-fd61a03af4f77d87.jsonl.zst",
+        "sha256": "fd61a03af4f77d870fc21e05e7e80678095c92d808cfb3b5c279ee04c74aca13",
+        "size": 21844
+      },
+      "vectors": {
+        "path": "segments/50901-51210-a4e624d686e03ed2.vec",
+        "sha256": "a4e624d686e03ed2767c0abd85c14426b0b1157d2ce81d27bb4fe4f6f01d688a",
+        "size": 107940
+      }
+    },
+    {
+      "from_seq": 51211,
+      "to_seq": 51214,
+      "records": {
+        "path": "segments/51211-51214-ef2d127de37b942b.jsonl.zst",
+        "sha256": "ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d",
+        "size": 1290
+      },
+      "vectors": null
+    }
+  ]
+}
