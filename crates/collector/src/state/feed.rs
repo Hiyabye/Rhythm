@@ -110,6 +110,19 @@ impl State {
         self.with(|c| c.query_row("SELECT next_seq FROM feed", [], |row| int(row, 0)))
     }
 
+    /// Forgets everything published, so the next publish starts again at seq
+    /// 1 with every notice (`--reset-feed`).
+    pub fn feed_reset(&self) -> Result<(), String> {
+        self.with(|c| {
+            let transaction = c.unchecked_transaction()?;
+            transaction.execute_batch(
+                "DELETE FROM feed_records; DELETE FROM feed_files; DELETE FROM feed_notices;
+                 UPDATE feed SET next_seq=1;",
+            )?;
+            transaction.commit()
+        })
+    }
+
     /// Every notice with its current records and what it last published, by id.
     pub fn feed_scan(&self) -> Result<Vec<Scanned>, String> {
         self.with(|c| {
