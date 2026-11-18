@@ -7,8 +7,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { classify } from '../scripts/ci-changes.mjs';
 
-const none = { frontend: false, rust: false, packaging: false };
-const all = { frontend: true, rust: true, packaging: true };
+const none = { frontend: false, rust: false, packaging: false, worker: false };
+const all = { frontend: true, rust: true, packaging: true, worker: true };
 
 test('documentation-only changes run no jobs', () => {
   assert.deepEqual(classify(['README.md', 'AGENTS.md', 'docs/ROADMAP.md', 'PRODUCT.md']), none);
@@ -37,6 +37,9 @@ test('each area selects only its own jobs', () => {
   assert.deepEqual(classify(['LICENSE']), { ...none, packaging: true });
   assert.deepEqual(classify(['assets/licenses/chrono-LICENSE.txt']), { ...none, rust: true, packaging: true });
   assert.equal(classify(['rust-toolchain.toml']).rust, true);
+  for (const file of ['worker/src/index.ts', 'worker/test/index.test.mjs', 'worker/package-lock.json', 'worker/wrangler.toml']) {
+    assert.deepEqual(classify([file]), { ...none, worker: true }, file);
+  }
 });
 
 test('frontend files read by Rust tests also run the Rust jobs', () => {

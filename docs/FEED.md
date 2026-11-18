@@ -18,6 +18,14 @@ The Worker (`https://rhythm-feed.hiyabye0465.workers.dev`) serves these files fr
 
 The manifest gives each file's path, SHA-256 and size. Clients treat paths as opaque. A path is relative to the manifest. Its components are non-empty, contain only ASCII letters, digits, `.`, `_` and `-`, and are never `.` or `..`; the crate rejects any other path. The publisher names files after their role, seq range and content hash (`segments/run-…`, `segments/day-…`, `snapshots/…`), so a file name never refers to two different contents.
 
+The Worker (`worker/`) serves exactly these files and answers 404 for any other path, including other prefixes of the bucket and percent-encoded or non-canonical paths:
+
+- **Methods:** `GET` and `HEAD`; anything else is 405.
+- **Caching:** `manifest.json` and `manifest.json.sig` are `cache-control: no-cache`; segments and snapshots are `public, max-age=31536000, immutable`. Every response carries `etag` and `last-modified`, and `If-None-Match` (or `If-Modified-Since` without it) returns 304 when the file is unchanged. Other preconditions are ignored.
+- **Types:** `application/json` for the manifest and its signature, `application/zstd` for `.jsonl.zst`, `application/octet-stream` for `.vec`.
+- **Rate limit:** about 60 requests a minute per client address and Cloudflare location; beyond it the Worker answers 429 with `retry-after: 60`.
+- No CORS headers: the feed is for the app, not for browser pages.
+
 ## Versioning
 
 `format` is `major.minor`. A client reads every minor version of its own major and refuses another major (`Error::UnsupportedFormat`). The app then shows "앱을 업데이트하세요" and keeps its mirror as it is.
