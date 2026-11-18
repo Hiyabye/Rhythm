@@ -1,6 +1,6 @@
 //! One bounded collector run: crawls every public board into the state file.
 //!
-//! Usage: `rhythm-collector <state.sqlite3> [--r2 <prefix> [--init] [--publish <prefix>]] [--embed [--reset-canary]] [--pages N] [--articles N]`
+//! Usage: `rhythm-collector <state.sqlite3> [--r2 <prefix> [--init] [--publish <prefix> [--reset-feed]]] [--embed [--reset-canary]] [--pages N] [--articles N]`
 //!
 //! The budgets bound each pass of each board; history resumes from its
 //! checkpoint on the next run. A failed board is recorded in its health row and
@@ -21,7 +21,9 @@
 //!
 //! With `--publish`, the run also publishes the signed feed under that prefix
 //! in the public feed bucket (`publish.rs`; the key from `KEY_VARIABLE`): its
-//! files before the state upload, the manifest after it.
+//! files before the state upload, the manifest after it. `--reset-feed` is
+//! the maintainer's restart after a state rollback: the feed starts again at
+//! seq 1, which only a feed without clients can take (docs/FEED.md).
 use rhythm_collector::{
     crawl::{self, Budget},
     embedding::{self, Limits},
@@ -37,7 +39,7 @@ use std::{
 };
 
 const USAGE: &str = "usage: rhythm-collector <state.sqlite3> [--r2 <prefix> [--init] \
-     [--publish <prefix>]] [--embed [--reset-canary]] [--pages N] [--articles N]";
+     [--publish <prefix> [--reset-feed]]] [--embed [--reset-canary]] [--pages N] [--articles N]";
 
 /// The v1 client's user agent (#166 O16): Sogang sees one identity for
 /// Rhythm, with the same robots and per-host pacing.
@@ -53,6 +55,7 @@ struct Args {
     r2: Option<String>,
     init: bool,
     publish: Option<String>,
+    reset_feed: bool,
     embed: bool,
     reset_canary: bool,
 }
@@ -63,6 +66,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut r2 = None;
     let mut init = false;
     let mut publish = None;
+    let mut reset_feed = false;
     let mut embed = false;
     let mut reset_canary = false;
     while let Some(arg) = args.next() {
@@ -83,6 +87,10 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
                 let prefix = args.next().ok_or("--publish needs a prefix")?;
                 remote::validate_prefix(&prefix)?;
                 publish = Some(prefix);
+                continue;
+            }
+            "--reset-feed" => {
+                reset_feed = true;
                 continue;
             }
             "--embed" => {
@@ -113,6 +121,9 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     if publish.is_some() && r2.is_none() {
         return Err("--publish needs --r2".into());
     }
+    if reset_feed && publish.is_none() {
+        return Err("--reset-feed needs --publish".into());
+    }
     if reset_canary && !embed {
         return Err("--reset-canary needs --embed".into());
     }
@@ -122,6 +133,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         r2,
         init,
         publish,
+        reset_feed,
         embed,
         reset_canary,
     })
@@ -206,7 +218,18 @@ async fn run(args: Args) -> Result<(), String> {
     work(&state, &args, ai.as_ref()).await?;
     let now = publish::timestamp(SystemTime::now());
     if let Some((feed_store, feed_prefix, signer)) = &feed {
-        let report = publish::prepare(&state, feed_store, feed_prefix, signer, &now).await?;
+        if args.reset_feed {
+            println!("feed reset: publishing again from seq 1");
+        }
+        let report = publish::prepare(
+            &state,
+            feed_store,
+            feed_prefix,
+            signer,
+            &now,
+            args.reset_feed,
+        )
+        .await?;
         println!("{}", publish::summary(&report));
     }
     let mut snapshot = OsString::from(args.state.as_os_str());
@@ -295,6 +318,9 @@ mod tests {
         let publish = args(&["work.sqlite3", "--r2", "state/", "--publish", "feed/"]).unwrap();
         assert_eq!(publish.publish.as_deref(), Some("feed/"));
         assert_eq!(args(&["state.sqlite3"]).unwrap().publish, None);
+        assert!(args(&["work.sqlite3", "--r2", "state/", "--reset-feed"]).is_err());
+        let reset = args(&["w.sqlite3", "--r2", "s/", "--publish", "f/", "--reset-feed"]).unwrap();
+        assert!(reset.reset_feed && !publish.reset_feed);
         assert!(args(&["state.sqlite3", "--r2"]).is_err());
         assert!(args(&["state.sqlite3", "--r2", "state"]).is_err());
         assert!(args(&["state.sqlite3", "--r2", "a/", "--r2", "b/"]).is_err());

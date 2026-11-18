@@ -145,7 +145,9 @@ fn remove(state: &State, id: u32, removed: bool) {
 
 /// One run's publish at `now`, as `main` orders it.
 async fn run(state: &State, bucket: &Bucket, signer: &Signer, now: &str) -> Report {
-    let report = prepare(state, bucket, PREFIX, signer, now).await.unwrap();
+    let report = prepare(state, bucket, PREFIX, signer, now, false)
+        .await
+        .unwrap();
     finish(state, bucket, PREFIX, signer, now).await.unwrap();
     report
 }
@@ -490,14 +492,22 @@ async fn a_state_behind_the_published_feed_is_refused() {
         PREFIX,
         &signer,
         "2026-11-18T04:00:00.000Z",
+        false,
     )
     .await
     .unwrap_err();
     assert!(error.contains("reuse seqs"), "{error}");
     // So would a clock behind the live manifest, and another key.
-    let error = prepare(&state, &bucket, PREFIX, &signer, "2026-11-18T03:00:00.000Z")
-        .await
-        .unwrap_err();
+    let error = prepare(
+        &state,
+        &bucket,
+        PREFIX,
+        &signer,
+        "2026-11-18T03:00:00.000Z",
+        false,
+    )
+    .await
+    .unwrap_err();
     assert!(error.contains("clock"), "{error}");
     let error = prepare(
         &state,
@@ -505,6 +515,7 @@ async fn a_state_behind_the_published_feed_is_refused() {
         PREFIX,
         &other_signer(),
         "2026-11-18T05:00:00.000Z",
+        false,
     )
     .await
     .unwrap_err();
@@ -528,9 +539,16 @@ async fn a_lost_state_upload_reuses_only_seqs_no_client_saw() {
 
     // This run's files are uploaded, but its state never is.
     add(&state, 2, "올라가지 못한 공지");
-    prepare(&state, &bucket, PREFIX, &signer, "2026-11-18T04:00:00.000Z")
-        .await
-        .unwrap();
+    prepare(
+        &state,
+        &bucket,
+        PREFIX,
+        &signer,
+        "2026-11-18T04:00:00.000Z",
+        false,
+    )
+    .await
+    .unwrap();
     drop(state);
 
     // The next run starts from the saved state: seq 2 is assigned again.
@@ -542,6 +560,71 @@ async fn a_lost_state_upload_reuses_only_seqs_no_client_saw() {
     assert_eq!(bucket.keys(), listed_keys(&manifest_of(&bucket, key)));
     client.sync(&bucket, key);
     client.assert_mirrors(&state);
+}
+
+#[tokio::test]
+async fn a_reset_republishes_a_rolled_back_state_from_seq_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let bucket = Bucket::default();
+    let signer = signer();
+    let key = signer.public_key();
+    let state = State::open(&directory.path().join("state.sqlite3")).unwrap();
+    add(&state, 1, "공지");
+    run(&state, &bucket, &signer, "2026-11-18T03:00:00.000Z").await;
+    let saved = directory.path().join("saved.sqlite3");
+    state.vacuum_into(&saved).unwrap();
+    add(&state, 2, "되돌릴 공지");
+    embed(&state, 2, 2, Some("학사"));
+    run(&state, &bucket, &signer, "2026-11-18T04:00:00.000Z").await;
+    let before = bucket.keys();
+    drop(state);
+
+    // The rolled-back state, after a crawl of its own.
+    let state = State::open(&saved).unwrap();
+    add(&state, 3, "다음 공지");
+    let error = prepare(
+        &state,
+        &bucket,
+        PREFIX,
+        &signer,
+        "2026-11-18T05:00:00.000Z",
+        false,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("reuse seqs"), "{error}");
+    let report = prepare(
+        &state,
+        &bucket,
+        PREFIX,
+        &signer,
+        "2026-11-18T05:00:00.000Z",
+        true,
+    )
+    .await
+    .unwrap();
+    // Notices 1 and 3 again, with a snapshot of them.
+    assert_eq!(report.seqs, Some((1, 2)));
+    assert!(report.snapshot);
+    // Until the new manifest is up, the old one still lists every old file.
+    for key in &before {
+        assert!(bucket.keys().contains(key), "{key}");
+    }
+    finish(&state, &bucket, PREFIX, &signer, "2026-11-18T05:00:00.000Z")
+        .await
+        .unwrap();
+    let mut client = Client::default();
+    client.sync(&bucket, key);
+    assert!(client.from_snapshot);
+    client.assert_mirrors(&state);
+
+    // The next ordinary run deletes the files only the old feed listed.
+    let report = run(&state, &bucket, &signer, "2026-11-18T06:00:00.000Z").await;
+    assert_eq!(report.seqs, None);
+    assert_eq!(bucket.keys(), listed_keys(&manifest_of(&bucket, key)));
+    let mut fresh = Client::default();
+    fresh.sync(&bucket, key);
+    fresh.assert_mirrors(&state);
 }
 
 #[test]

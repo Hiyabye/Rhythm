@@ -6,8 +6,12 @@
 //!    a seq this state has not assigned (a rolled-back state would reuse it)
 //!    or is not older than this run's clock. It deletes files retired at least
 //!    a day ago and objects no state row names (left by a run whose state
-//!    upload failed). On the first run of a UTC day it compacts earlier days'
-//!    run segments into daily segments and writes a snapshot. The records
+//!    upload failed). With `restart` it first forgets what the state
+//!    published, so the feed starts again at seq 1 (`--reset-feed`, for a
+//!    rolled-back state); the old files stay while the live manifest lists
+//!    them and the next run deletes them. On the first run of a UTC day it
+//!    compacts earlier days' run segments into daily segments and writes a
+//!    snapshot. The records
 //!    that changed become one run segment. Files are uploaded before the
 //!    state records them.
 //! 2. `finish` writes and signs the manifest from the state, so clients only
@@ -58,9 +62,13 @@ pub async fn prepare<S: ObjectStore>(
     prefix: &str,
     signer: &Signer,
     now: &str,
+    restart: bool,
 ) -> Result<Report, String> {
     let keys = store.list(prefix).await?;
     let live = live_manifest(store, prefix, signer, &keys).await?;
+    if restart {
+        state.feed_reset()?;
+    }
     let next_seq = state.feed_next_seq()?;
     if let Some(live) = &live {
         let last = live
@@ -68,7 +76,7 @@ pub async fn prepare<S: ObjectStore>(
             .last()
             .map_or(0, |s| s.to_seq)
             .max(live.snapshot.through_seq);
-        if last >= next_seq {
+        if last >= next_seq && !restart {
             return Err(format!(
                 "the published feed reaches seq {last} but this state only {}: refusing to reuse seqs",
                 next_seq - 1
