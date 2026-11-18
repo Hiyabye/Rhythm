@@ -3838,3 +3838,87 @@ async fn opening_a_feed_viewer_notice_reads_its_pdf() {
         .paths()
         .contains(&"https://scc.sogang.ac.kr/robots.txt".to_string()));
 }
+
+fn resource_requests(fake: &Fake) -> usize {
+    fake.paths()
+        .iter()
+        .filter(|url| *url == PNG_URL || *url == PDF_URL)
+        .count()
+}
+
+#[tokio::test]
+async fn opening_a_feed_notice_downloads_its_files_once_the_body_is_here() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![]);
+    fake.resources.store(true, Ordering::Release);
+    let bodies = body::Bodies::default();
+    let id = mirror(&store, 1, 551703, &fake.detail(551703));
+
+    // Before the body the feed's links may still change, so nothing is fetched.
+    bodies
+        .resources(&store, dir.path(), &fake, id)
+        .await
+        .unwrap();
+    assert_eq!(resource_requests(&fake), 0);
+
+    bodies.fetch(&store, dir.path(), &fake, id).await.unwrap();
+    bodies
+        .resources(&store, dir.path(), &fake, id)
+        .await
+        .unwrap();
+    let detail = with_store(&store, |s| s.document(id, None)).unwrap();
+    assert_eq!(detail.resources.len(), 2);
+    assert!(detail.resources.iter().all(|r| r.status == "downloaded"));
+    let png = detail.resources.iter().find(|r| r.url == PNG_URL).unwrap();
+    assert!(local_resource(&store, dir.path(), png.id).await.is_ok());
+    let accesses = fake.accesses.lock().unwrap().clone();
+    assert!(accesses
+        .iter()
+        .any(|(url, access)| url == PNG_URL && *access == network::Access::EmbeddedImage));
+    assert!(accesses
+        .iter()
+        .any(|(url, access)| url == PDF_URL && *access == network::Access::Source));
+
+    // Opened again: every file is here.
+    bodies
+        .resources(&store, dir.path(), &fake, id)
+        .await
+        .unwrap();
+    assert_eq!(resource_requests(&fake), 2);
+}
+
+#[tokio::test]
+async fn a_failed_file_waits_for_an_explicit_retry() {
+    let (dir, store) = setup(&[MAIN]);
+    let fake = Fake::new(vec![]);
+    fake.resources.store(true, Ordering::Release);
+    let bodies = body::Bodies::default();
+    let id = mirror(&store, 1, 551704, &fake.detail(551704));
+    bodies.fetch(&store, dir.path(), &fake, id).await.unwrap();
+
+    // With the notices extension off nothing is requested.
+    with_store(&store, |s| s.set_enabled("sogang_notices", false)).unwrap();
+    assert!(bodies
+        .resources(&store, dir.path(), &fake, id)
+        .await
+        .is_err());
+    assert_eq!(resource_requests(&fake), 0);
+    with_store(&store, |s| s.set_enabled("sogang_notices", true)).unwrap();
+
+    fake.missing_resources.store(true, Ordering::Release);
+    bodies
+        .resources(&store, dir.path(), &fake, id)
+        .await
+        .unwrap();
+    let detail = with_store(&store, |s| s.document(id, None)).unwrap();
+    assert!(detail.resources.iter().all(|r| r.status == "failed"));
+    assert_eq!(resource_requests(&fake), 2);
+
+    // Opening the notice again does not repeat the failed requests.
+    fake.missing_resources.store(false, Ordering::Release);
+    bodies
+        .resources(&store, dir.path(), &fake, id)
+        .await
+        .unwrap();
+    assert_eq!(resource_requests(&fake), 2);
+}

@@ -231,7 +231,11 @@ pub(in crate::archive) async fn install_resource(
     tokio::fs::create_dir_all(root.join("resources"))
         .await
         .map_err(|_| "첨부 저장 폴더를 만들지 못했습니다. 저장 공간과 권한을 확인해 주세요.")?;
-    let temporary = root.join(format!("resources/{hash}.part"));
+    // A notice opened while a sync downloads the same file installs it
+    // concurrently, so each download writes its own partial file.
+    static PARTS: AtomicU64 = AtomicU64::new(0);
+    let part = PARTS.fetch_add(1, Ordering::Relaxed);
+    let temporary = root.join(format!("resources/{hash}.{part}.part"));
     tokio::fs::write(&temporary, &bytes)
         .await
         .map_err(|_| "첨부 파일을 저장하지 못했습니다. 남은 저장 공간과 권한을 확인해 주세요.")?;

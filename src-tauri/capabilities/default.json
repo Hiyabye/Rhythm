@@ -26,6 +26,7 @@
     "allow-archive-cancel",
     "allow-archive-document",
     "allow-archive-fetch-body",
+    "allow-archive-fetch-resources",
     "allow-archive-open-original",
     "allow-archive-purge",
     "allow-archive-query",

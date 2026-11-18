@@ -13,7 +13,7 @@ use super::{
     archive::{check_article, meaningful_hash, public_url, valid_id, web_url},
     notice_dates, proactive, Store,
 };
-use crate::archive::model::{ArticleInput, ListingEntry};
+use crate::archive::model::{ArticleInput, ListingEntry, ResourceRecord};
 use rhythm_embed::CATEGORIES;
 use rhythm_feed::{
     record::{BodyState, Classification, Embedding, Entry, Notice, Record, ResourceKind},
@@ -567,6 +567,41 @@ impl Store {
             Some(false) => Ok(None),
             Some(true) => self.document_entry(document_id).map(Some),
         }
+    }
+
+    /// The source, listing identity and not yet attempted (`pending`)
+    /// resources of an opened notice's latest revision, or `None` when there
+    /// is nothing to download: the body has not arrived (its fetch brings
+    /// the final references), the source deleted the notice, or every file
+    /// was tried. Failed files wait for an explicit retry.
+    pub(crate) fn pending_downloads(
+        &self,
+        document_id: i64,
+    ) -> Result<Option<(String, ListingEntry, Vec<ResourceRecord>)>, String> {
+        let ready: Option<bool> = self
+            .connection
+            .query_row(
+                "SELECT body_pending=0 AND removed_at IS NULL FROM documents WHERE id=?1",
+                [document_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        match ready {
+            None => return Err("보관된 공지를 찾을 수 없습니다.".into()),
+            Some(false) => return Ok(None),
+            Some(true) => {}
+        }
+        let pending: Vec<ResourceRecord> = self
+            .pending_resources(document_id)?
+            .into_iter()
+            .filter(|r| r.status == "pending")
+            .collect();
+        if pending.is_empty() {
+            return Ok(None);
+        }
+        let (source, entry) = self.document_entry(document_id)?;
+        Ok(Some((source, entry, pending)))
     }
 
     /// Fills the latest revision of an opened feed notice in place with the

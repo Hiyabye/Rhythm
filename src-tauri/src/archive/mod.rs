@@ -160,6 +160,17 @@ pub async fn archive_fetch_body(state: State<'_, AppState>, id: i64) -> Result<b
         .fetch(&state.store, &state.data_root, &state.network, id)
         .await
 }
+/// Downloads the images and attachments of an opened notice that were not
+/// tried yet. The reader calls it once the body is here and reloads after.
+#[tauri::command]
+pub async fn archive_fetch_resources(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
+    state
+        .archive
+        .bodies
+        .resources(&state.store, &state.data_root, &state.network, id)
+        .await
+}
 #[tauri::command]
 pub async fn archive_state(
     state: State<'_, AppState>,

@@ -30,6 +30,10 @@
   let bodyError = $state('');
   let bodyRevised = $state(false);
   let bodyRequested = false;
+  // Its images and attachments follow once the body is here.
+  let filesBusy = $state(false);
+  let filesError = $state('');
+  let filesRequested = false;
   let localResourceErrors = $state<Record<number, string>>({});
   let error = $state('');
   let feedback = $state('');
@@ -133,6 +137,12 @@
         bodyRequested = true;
         void fetchBody();
       }
+      if (!result.summary_only && result.revision_id === result.revisions[0]?.id && !result.removed
+        && enabledSources.includes(result.item.source_id) && !filesRequested
+        && result.resources.some((resource) => resource.status === 'pending')) {
+        filesRequested = true;
+        void fetchFiles();
+      }
       // A failed preference/state write must never make readable archival text
       // unavailable (for example when the disk is full or becomes read-only).
       if (markRead && !result.item.is_read) {
@@ -178,6 +188,24 @@
     } catch (reason) {
       if (!disposed && documentId === id) bodyError = archiveError(reason);
     } finally { if (!disposed) bodyBusy = false; }
+  }
+
+  async function fetchFiles() {
+    const documentId = id;
+    filesBusy = true;
+    filesError = '';
+    try {
+      await invoke('archive_fetch_resources', { id: documentId });
+      if (disposed || documentId !== id) return;
+      await load(detail?.revision_id ?? null, false, true);
+      onchange();
+    } catch (reason) {
+      if (!disposed && documentId === id) {
+        filesError = archiveError(reason);
+        // Files finished before the failure are stored; show their state.
+        await load(detail?.revision_id ?? null, false, true);
+      }
+    } finally { if (!disposed) filesBusy = false; }
   }
 
   async function localHtml(document: DocumentDetail, request: number): Promise<{ html: string; errors: Record<number, string> }> {
@@ -361,7 +389,7 @@
   }
 
   async function retry(resourceId: number) {
-    if (!enabled || resourceBusy) return;
+    if (!enabled || resourceBusy || filesBusy) return;
     error = '';
     try {
       const result = await invoke<SyncStatus>('archive_retry_resource', { id: resourceId });
@@ -455,11 +483,13 @@
       <section class="reader-resources" aria-labelledby="resource-heading">
         <h3 id="resource-heading">첨부 자료 및 이미지 <span class="muted">{detail.resources.length}</span></h3>
         <p class="footnote">저장된 파일은 폴더에서 직접 확인할 수 있습니다. 파일은 자동으로 실행되지 않습니다.</p>
+        {#if filesBusy}<p class="loading" role="status">학교 사이트에서 이미지와 첨부 파일을 내려받는 중입니다…</p>
+        {:else if filesError}<p class="archive-error" role="alert">자료를 내려받지 못했습니다. {filesError}</p>{/if}
         {#each detail.resources as resource (resource.id)}
           <div class="resource-row">
             <div><strong>{resource.filename || (resource.kind === 'image' ? '본문 이미지' : '첨부 파일')}</strong><p>{localResourceErrors[resource.id] ? '로컬 자료 확인 필요' : resourceStatus(resource.status)} · {archiveSize(resource.bytes)}{#if resource.mime} · {resource.mime}{/if}</p>{#if localResourceErrors[resource.id]}<p class="archive-error" role="alert">{localResourceErrors[resource.id]}</p>{:else if resource.error}<p class="archive-error">{resource.error}</p>{/if}{#if resource.sha256}<details><summary>무결성 정보</summary><code>SHA-256 {resource.sha256}</code></details>{/if}</div>
             {#if resource.status === 'downloaded'}<button class="text-button" onclick={() => reveal(resource.id)}>{localResourceErrors[resource.id] ? '로컬 파일 다시 확인' : '저장 폴더에서 보기'}</button>{/if}
-            <button class="text-button" disabled={!enabled || resourceBusy} aria-label={`${resource.filename || '첨부 자료'} 다시 내려받기`} onclick={() => retry(resource.id)}>{resourceBusy ? '자료 다운로드 중…' : '다시 내려받기'}</button>
+            <button class="text-button" disabled={!enabled || resourceBusy || filesBusy} aria-label={`${resource.filename || '첨부 자료'} 다시 내려받기`} onclick={() => retry(resource.id)}>{resourceBusy ? '자료 다운로드 중…' : '다시 내려받기'}</button>
           </div>
         {/each}
         {#if !enabled}<p class="footnote">자료를 추가로 받으려면 설정 → 확장 기능에서 이 공지의 정보원을 켜 주세요.</p>{/if}
