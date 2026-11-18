@@ -232,7 +232,7 @@ fn prune_history(connection: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-fn advance_baseline(connection: &Connection) -> Result<(), String> {
+pub(super) fn advance_baseline(connection: &Connection) -> Result<(), String> {
     connection
         .execute(
             "UPDATE proactive_baseline

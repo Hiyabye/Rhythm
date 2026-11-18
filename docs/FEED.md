@@ -83,7 +83,7 @@ A records file is UTF-8 JSON Lines compressed with zstd. Each line is one object
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `source_id`, `external_id` | string | The notice identity (as in v1) |
-| `revision_hash` | string | Changes with every meaningful revision |
+| `revision_hash` | string | Changes with every meaningful revision: `rhythm_feed::revision_hash`, the SHA-256 (lowercase hex) of the compact JSON array `[canonical_url, title, author, category, published_at, body_text, [[url, filename, kind], …]]` of the parsed page, so a client can tell whether a body it fetched is this revision |
 | `canonical_url` | string | The original page; the app fetches the body from it when the notice is opened (#166 D14) |
 | `title`, `author`, `category` | string, string?, string? | As the board shows them |
 | `published_at` | string | `YYYY-MM-DD` |

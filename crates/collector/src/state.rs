@@ -921,26 +921,24 @@ fn resources_json(article: &ArticleInput) -> Result<String, String> {
         .collect();
     serde_json::to_string(&resources).map_err(|e| e.to_string())
 }
-/// Identity of the published revision. Unlike the app's content hash it leaves
-/// out the HTML, which the collector does not keep: a markup-only change is not
-/// a new revision.
+/// Identity of the published revision (`rhythm_feed::revision_hash`). Unlike
+/// the app's content hash it leaves out the HTML, which the collector does not
+/// keep: a markup-only change is not a new revision.
 fn revision_hash(article: &ArticleInput) -> Result<String, String> {
     let resources: Vec<_> = article
         .resources
         .iter()
-        .map(|r| (&r.url, &r.filename, &r.kind))
+        .map(|r| (r.url.as_str(), r.filename.as_str(), r.kind.as_str()))
         .collect();
-    let encoded = serde_json::to_vec(&(
-        &article.canonical_url,
-        &article.title,
-        &article.author,
-        &article.category,
-        &article.published_at,
-        &article.body_text,
-        resources,
-    ))
-    .map_err(|e| e.to_string())?;
-    Ok(crate::sha256_hex(encoded))
+    Ok(rhythm_feed::revision_hash(&rhythm_feed::Revision {
+        canonical_url: &article.canonical_url,
+        title: &article.title,
+        author: article.author.as_deref(),
+        category: article.category.as_deref(),
+        published_at: &article.published_at,
+        body_text: &article.body_text,
+        resources: &resources,
+    }))
 }
 
 mod feed;

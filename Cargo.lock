@@ -3939,6 +3939,7 @@ dependencies = [
  "pdf-extract",
  "reqwest 0.12.28",
  "rhythm-embed",
+ "rhythm-feed",
  "rhythm-sources",
  "rusqlite",
  "scraper",

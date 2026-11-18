@@ -1,6 +1,6 @@
 use super::*;
 use crate::extensions;
-use crate::storage::UNDO_REMINDERS;
+use crate::storage::{UNDO_FEED, UNDO_REMINDERS};
 
 fn fixture() -> (tempfile::TempDir, Store) {
     let directory = tempfile::tempdir().unwrap();
@@ -298,7 +298,9 @@ fn schema_thirty_four_upgrades_todos_without_reminders() {
         todo(&store, "예전 할 일", "2026-11-10", Some("09:00"), None);
         store
             .connection
-            .execute_batch(&format!("{UNDO_REMINDERS} PRAGMA user_version=34;"))
+            .execute_batch(&format!(
+                "{UNDO_FEED}{UNDO_REMINDERS} PRAGMA user_version=34;"
+            ))
             .unwrap();
     }
     let store = Store::open(&path).unwrap();

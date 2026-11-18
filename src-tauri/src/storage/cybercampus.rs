@@ -305,8 +305,8 @@ impl Store {
 mod tests {
     use super::*;
     use crate::storage::{
-        UNDO_ALERTS, UNDO_AUTO_TRASH, UNDO_CLOCK, UNDO_DATES, UNDO_FAVORITES, UNDO_GROUPS,
-        UNDO_MINI_GEOMETRY, UNDO_REMINDERS, UNDO_STUDIUM, UNDO_TODOS, UNDO_TRASH,
+        UNDO_ALERTS, UNDO_AUTO_TRASH, UNDO_CLOCK, UNDO_DATES, UNDO_FAVORITES, UNDO_FEED,
+        UNDO_GROUPS, UNDO_MINI_GEOMETRY, UNDO_REMINDERS, UNDO_STUDIUM, UNDO_TODOS, UNDO_TRASH,
     };
     use rusqlite::Connection;
 
@@ -338,7 +338,7 @@ mod tests {
                 .execute_batch(
                     &format!("DROP TABLE cybercampus_tasks; DROP TABLE cybercampus_courses;
                      ALTER TABLE settings DROP COLUMN onboarding_completed;
-                     {UNDO_GROUPS}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
+                     {UNDO_GROUPS}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
                      PRAGMA user_version=17;"),
                 )
                 .unwrap();

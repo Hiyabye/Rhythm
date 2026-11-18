@@ -419,3 +419,21 @@ fn downloaded_files_must_match_their_reference() {
     assert!(file.check(b"segment bytez").is_err());
     assert!(file.check(b"segment byte").is_err());
 }
+
+#[test]
+fn revision_hash_is_the_sha256_of_the_json_fields() {
+    // Computed independently: SHA-256 of the compact JSON array.
+    let hash = revision_hash(&Revision {
+        canonical_url: "https://www.sogang.ac.kr/ko/detail/7",
+        title: "장학 공지 \"안내\"",
+        author: None,
+        category: Some("학사"),
+        published_at: "2026-11-02",
+        body_text: "본문\n둘째 줄",
+        resources: &[("https://www.sogang.ac.kr/a.pdf", "신청서.pdf", "attachment")],
+    });
+    assert_eq!(
+        hash,
+        "f9000578634c7565ceb9b888f6f24630f9e3990843f3b0cd165efea00f425b9e"
+    );
+}
