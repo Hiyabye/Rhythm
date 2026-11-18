@@ -1,6 +1,7 @@
 //! The collector's SQLite state: board checkpoints, the current revision of
 //! each notice and skipped notices. Every method takes the connection lock for
 //! one statement or transaction only, so no lock is held across network work.
+use rhythm_embed::Classified;
 use rhythm_sources::{
     dates::{self, Kind, EXTRACTOR_VERSION},
     model::{ArticleInput, ListingEntry},
@@ -11,11 +12,12 @@ use std::{collections::HashSet, path::Path, sync::Mutex};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 /// Ordered schema migrations; index `n` upgrades `user_version` n to n+1.
-const MIGRATIONS: [&str; 4] = [
+const MIGRATIONS: [&str; 5] = [
     include_str!("../migrations/001_initial.sql"),
     include_str!("../migrations/002_notice_dates.sql"),
     include_str!("../migrations/003_deletions.sql"),
     include_str!("../migrations/004_embeddings.sql"),
+    include_str!("../migrations/005_classifications.sql"),
 ];
 /// A second "not found" removes a notice only this long after the first.
 const MISSING_CONFIRM: &str = "-1 day";
@@ -527,6 +529,14 @@ pub struct Unembedded {
     pub body_text: String,
 }
 
+/// A notice whose current vector has no classification yet.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Unclassified {
+    pub id: i64,
+    pub revision_hash: String,
+    pub vector: Vec<u8>,
+}
+
 impl State {
     /// Notices without a vector of their current revision in `scope`.
     /// `fresh` selects those embedded every run: new notices (not found by the
@@ -687,8 +697,92 @@ impl State {
     }
     /// The maintainer's decision after a drift stop: forget the reference and
     /// the checks, so the next run records a new reference.
+    /// The cached prototypes go too: they were embedded by the model the
+    /// reset no longer trusts.
     pub fn reset_canary(&self) -> Result<(), String> {
-        self.with(|c| c.execute_batch("DELETE FROM canary; DELETE FROM canary_checks;"))
+        self.with(|c| {
+            c.execute_batch(
+                "DELETE FROM canary; DELETE FROM canary_checks; DELETE FROM prototypes;",
+            )
+        })
+    }
+
+    /// The f16 prototype vectors of `scope`, by ordinal.
+    pub fn prototypes(&self, scope: &str) -> Result<Vec<Vec<u8>>, String> {
+        self.with(|c| {
+            c.prepare("SELECT vector FROM prototypes WHERE scope=?1 ORDER BY ordinal")?
+                .query_map([scope], |row| row.get(0))?
+                .collect()
+        })
+    }
+    /// Replaces every cached prototype with those of `scope`.
+    pub fn store_prototypes(&self, scope: &str, vectors: &[Vec<u8>]) -> Result<(), String> {
+        self.with(|c| {
+            let transaction = c.unchecked_transaction()?;
+            transaction.execute("DELETE FROM prototypes", [])?;
+            for (ordinal, vector) in vectors.iter().enumerate() {
+                transaction.execute(
+                    "INSERT INTO prototypes(scope,ordinal,vector) VALUES(?1,?2,?3)",
+                    params![scope, ordinal as i64, vector],
+                )?;
+            }
+            transaction.commit()
+        })
+    }
+
+    /// Current vectors in `scope` whose classification is missing or was made
+    /// from another vector. Removed notices are skipped.
+    pub fn unclassified(&self, scope: &str, limit: usize) -> Result<Vec<Unclassified>, String> {
+        self.with(|c| {
+            c.prepare(
+                "SELECT n.id,n.revision_hash,e.vector FROM notices n
+                 JOIN embeddings e ON e.notice_id=n.id
+                 LEFT JOIN classifications k ON k.notice_id=n.id
+                 WHERE n.removed_at IS NULL AND e.scope=?1 AND e.revision_hash=n.revision_hash
+                   AND (k.notice_id IS NULL OR k.scope<>?1 OR k.revision_hash<>n.revision_hash)
+                 ORDER BY n.id LIMIT ?2",
+            )?
+            .query_map(params![scope, limit as i64], |row| {
+                Ok(Unclassified {
+                    id: row.get(0)?,
+                    revision_hash: row.get(1)?,
+                    vector: row.get(2)?,
+                })
+            })?
+            .collect()
+        })
+    }
+    pub fn store_classifications(
+        &self,
+        scope: &str,
+        rows: &[(&Unclassified, Classified)],
+    ) -> Result<(), String> {
+        self.with(|c| {
+            let transaction = c.unchecked_transaction()?;
+            for (notice, classified) in rows {
+                transaction.execute(
+                    &format!(
+                        "INSERT INTO classifications(notice_id,revision_hash,scope,category,score,
+                           margin,low_confidence,classified_at)
+                         VALUES(?1,?2,?3,?4,?5,?6,?7,{NOW})
+                         ON CONFLICT(notice_id) DO UPDATE SET revision_hash=excluded.revision_hash,
+                           scope=excluded.scope,category=excluded.category,score=excluded.score,
+                           margin=excluded.margin,low_confidence=excluded.low_confidence,
+                           classified_at=excluded.classified_at"
+                    ),
+                    params![
+                        notice.id,
+                        notice.revision_hash,
+                        scope,
+                        classified.category,
+                        f64::from(classified.score),
+                        f64::from(classified.margin),
+                        classified.low_confidence
+                    ],
+                )?;
+            }
+            transaction.commit()
+        })
     }
 }
 
@@ -869,10 +963,10 @@ mod tests {
         assert_eq!((board.next_page, board.history_complete), (4, true));
         assert!(state.seed_complete("sogang-academic").unwrap());
         state
-            .with(|c| c.execute_batch("PRAGMA user_version=5;"))
+            .with(|c| c.execute_batch("PRAGMA user_version=6;"))
             .unwrap();
         drop(state);
-        assert!(State::open(&path).err().unwrap().contains("version 5"));
+        assert!(State::open(&path).err().unwrap().contains("version 6"));
     }
 
     #[test]

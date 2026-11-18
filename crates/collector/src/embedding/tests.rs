@@ -1,7 +1,7 @@
 use super::*;
 use crate::workers_ai::Embedded;
 use rhythm_sources::model::ArticleInput;
-use std::sync::Mutex;
+use std::{collections::HashMap, sync::Mutex};
 
 const BOARD: &str = "sogang-academic";
 
@@ -13,6 +13,8 @@ struct Fake {
     neurons_per_text: Mutex<f64>,
     /// The call (counted from 0) that fails, if any.
     fail_at: Mutex<Option<usize>>,
+    /// Texts that get another text's vector.
+    same_as: Mutex<HashMap<String, String>>,
 }
 impl Fake {
     fn new() -> Self {
@@ -21,6 +23,7 @@ impl Fake {
             cosine: Mutex::new(1.0),
             neurons_per_text: Mutex::new(0.5),
             fail_at: Mutex::default(),
+            same_as: Mutex::default(),
         }
     }
     fn calls(&self) -> usize {
@@ -56,8 +59,10 @@ impl Embedder for Fake {
             return Err("Workers AI HTTP 429 Too Many Requests".into());
         }
         let cosine = *self.cosine.lock().unwrap();
+        let same_as = self.same_as.lock().unwrap();
         let vectors = texts
             .iter()
+            .map(|text| same_as.get(text).unwrap_or(text))
             .map(|text| {
                 let v = direction(text);
                 let e = direction(&format!("other:{text}"));
@@ -121,6 +126,10 @@ async fn band(state: &State, fake: &Fake, day: &str, cosine: f64) -> (String, Op
         .canary
         .unwrap()
 }
+/// Workers AI calls that embed the prototypes.
+fn prototype_calls() -> usize {
+    rhythm_embed::prototype_inputs().len().div_ceil(BATCH)
+}
 async fn run_day(state: &State, fake: &Fake, day: &str, limits: Limits) -> Report {
     run(state, fake, day, limits).await.unwrap()
 }
@@ -131,10 +140,22 @@ async fn the_canary_is_recorded_then_checked_once_a_day_in_its_bands() {
     let fake = Fake::new();
     let report = run_day(&state, &fake, "2026-11-18", Limits::default()).await;
     assert_eq!(report.canary, Some(("recorded".into(), None)));
-    assert_eq!(fake.calls(), 3, "28 texts in batches of 10");
-    assert_eq!(fake.texts().len(), 28);
+    let first = 3 + prototype_calls();
+    assert_eq!(
+        fake.calls(),
+        first,
+        "28 canary texts in batches of 10, then the prototypes"
+    );
+    assert_eq!(
+        fake.texts().len(),
+        28 + rhythm_embed::prototype_inputs().len()
+    );
     run_day(&state, &fake, "2026-11-18", Limits::default()).await;
-    assert_eq!(fake.calls(), 3, "once a day");
+    assert_eq!(
+        fake.calls(),
+        first,
+        "the canary once a day, the prototypes once"
+    );
 
     let (normal, min) = band(&state, &fake, "2026-11-19", 1.0).await;
     assert_eq!(normal, "normal");
@@ -160,6 +181,8 @@ async fn the_canary_is_recorded_then_checked_once_a_day_in_its_bands() {
     let reset = run_day(&state, &fake, "2026-11-22", Limits::default()).await;
     assert_eq!(reset.canary, Some(("recorded".into(), None)));
     assert_eq!(embedded(&state), ["1", "2"]);
+    // The reset embeds the prototypes again: canary, notice 2, prototypes.
+    assert_eq!(fake.calls() - calls, 3 + 1 + prototype_calls());
 }
 
 #[tokio::test]
@@ -257,12 +280,13 @@ async fn a_workers_ai_error_stops_embedding_for_the_run_and_keeps_stored_batches
     for id in 1..=25 {
         add_notice(&state, id, false, "2026-11-01");
     }
-    // The canary used calls 0..3; the notices' second batch fails.
-    *fake.fail_at.lock().unwrap() = Some(4);
+    // The notices' second batch fails.
+    let calls = fake.calls();
+    *fake.fail_at.lock().unwrap() = Some(calls + 1);
     let report = run_day(&state, &fake, "2026-11-18", Limits::default()).await;
     assert_eq!(report.fresh, 10);
     assert!(report.stopped.unwrap().contains("429"));
-    assert_eq!(fake.calls(), 5, "no request after the error");
+    assert_eq!(fake.calls(), calls + 2, "no request after the error");
     let error: Option<String> = state
         .with(|c| {
             c.query_row(
@@ -278,6 +302,145 @@ async fn a_workers_ai_error_stops_embedding_for_the_run_and_keeps_stored_batches
     let report = run_day(&state, &fake, "2026-11-18", Limits::default()).await;
     assert_eq!(report.fresh, 15);
     assert_eq!(embedded(&state).len(), 25);
+}
+
+/// Each classified notice's external ID, category and low-confidence marker.
+fn classified(state: &State) -> Vec<(String, String, bool)> {
+    state
+        .with(|c| {
+            c.prepare(
+                "SELECT n.external_id,k.category,k.low_confidence FROM classifications k
+                 JOIN notices n ON n.id=k.notice_id ORDER BY n.external_id+0",
+            )?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect()
+        })
+        .unwrap()
+}
+fn row(id: &str, category: &str, low_confidence: bool) -> (String, String, bool) {
+    (id.into(), category.into(), low_confidence)
+}
+
+#[tokio::test]
+async fn each_vector_is_classified_once_with_prototypes_embedded_once_per_scope() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new();
+    // Notice 1 embeds exactly like a 장학 prototype; notice 2 like none.
+    let (category, prototype) = rhythm_embed::prototype_inputs()
+        .into_iter()
+        .find(|(category, _)| *category == "장학")
+        .unwrap();
+    fake.same_as.lock().unwrap().insert(input(1), prototype);
+    add_notice(&state, 1, false, "2026-11-01");
+    add_notice(&state, 2, false, "2026-11-02");
+    let report = run_day(&state, &fake, "2026-11-18", Limits::default()).await;
+    assert_eq!((report.fresh, report.classified), (2, 2));
+    assert_eq!(
+        classified(&state),
+        [row("1", category, false), row("2", "기타", true)]
+    );
+    assert_eq!(
+        state.prototypes(&scope()).unwrap().len(),
+        rhythm_embed::prototype_inputs().len()
+    );
+    let score: f64 = state
+        .with(|c| {
+            c.query_row(
+                "SELECT score FROM classifications WHERE notice_id=1",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert!(score > 0.999, "{score}");
+
+    // Unchanged vectors are not classified again, and the prototypes stay cached.
+    let calls = fake.calls();
+    let report = run_day(&state, &fake, "2026-11-18", Limits::default()).await;
+    assert_eq!((report.classified, fake.calls()), (0, calls));
+
+    // A revision gets a new vector and with it a new classification.
+    state
+        .with(|c| c.execute_batch("UPDATE notices SET body_text='고친 본문', revision_hash='new' WHERE external_id='1'"))
+        .unwrap();
+    let report = run_day(&state, &fake, "2026-11-18", Limits::default()).await;
+    assert_eq!((report.fresh, report.classified), (1, 1));
+    assert_eq!(fake.calls(), calls + 1, "only the revision is embedded");
+    assert_eq!(classified(&state)[0], row("1", "기타", true));
+
+    // A removed notice is not classified again.
+    state
+        .with(|c| {
+            c.execute_batch(
+                "UPDATE notices SET removed_at='2026-11-18T00:00:00.000Z' WHERE external_id='2';
+                 DELETE FROM classifications WHERE notice_id=(SELECT id FROM notices WHERE external_id='2');",
+            )
+        })
+        .unwrap();
+    let report = run_day(&state, &fake, "2026-11-18", Limits::default()).await;
+    assert_eq!(report.classified, 0);
+}
+
+#[tokio::test]
+async fn after_a_workers_ai_error_only_cached_prototypes_classify() {
+    // Without cached prototypes, an embedding error leaves the vectors
+    // already stored unclassified and requests no prototypes.
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new();
+    for id in 1..=15 {
+        add_notice(&state, id, false, "2026-11-01");
+    }
+    // The canary used calls 0..3; the notices' second batch fails.
+    *fake.fail_at.lock().unwrap() = Some(4);
+    let report = run_day(&state, &fake, "2026-11-18", Limits::default()).await;
+    assert_eq!((report.fresh, report.classified), (10, 0));
+    assert_eq!(fake.calls(), 5);
+    assert!(state.prototypes(&scope()).unwrap().is_empty());
+
+    // A failed prototype batch stores no prototypes and records the error.
+    *fake.fail_at.lock().unwrap() = Some(6);
+    let report = run_day(&state, &fake, "2026-11-18", Limits::default()).await;
+    assert_eq!((report.fresh, report.classified), (5, 0));
+    assert!(report.stopped.unwrap().contains("429"));
+    assert!(state.prototypes(&scope()).unwrap().is_empty());
+
+    // The next run embeds them and classifies every stored vector.
+    *fake.fail_at.lock().unwrap() = None;
+    let report = run_day(&state, &fake, "2026-11-18", Limits::default()).await;
+    assert_eq!((report.classified, report.stopped), (15, None));
+
+    // With the prototypes cached, a failed run still classifies what it stored.
+    for id in 16..=30 {
+        add_notice(&state, id, false, "2026-11-01");
+    }
+    *fake.fail_at.lock().unwrap() = Some(fake.calls() + 1);
+    let report = run_day(&state, &fake, "2026-11-18", Limits::default()).await;
+    assert_eq!((report.fresh, report.classified), (10, 10));
+    assert!(report.stopped.is_some());
+    assert_eq!(classified(&state).len(), 25);
+}
+
+#[test]
+fn every_category_fits_the_classification_table() {
+    let state = State::open_in_memory().unwrap();
+    for (id, category) in rhythm_embed::CATEGORIES.iter().enumerate() {
+        add_notice(&state, id as u32, false, "2026-11-01");
+        let notice = Unclassified {
+            id: state.notice_id(BOARD, &id.to_string()).unwrap().unwrap(),
+            revision_hash: "r".into(),
+            vector: Vec::new(),
+        };
+        let classified = rhythm_embed::Classified {
+            category,
+            score: -1.0,
+            margin: 2.0,
+            low_confidence: true,
+        };
+        state
+            .store_classifications("scope", &[(&notice, classified)])
+            .unwrap();
+    }
+    assert_eq!(classified(&state).len(), rhythm_embed::CATEGORIES.len());
 }
 
 #[test]

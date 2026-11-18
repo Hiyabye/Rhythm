@@ -136,6 +136,7 @@ async fn work(state: &State, args: &Args, ai: Option<&WorkersAi>) -> Result<(), 
         report.neurons,
         state.neurons(&day)?
     );
+    println!("classified {} notices", report.classified);
     if let Some(reason) = report.stopped {
         println!("embedding stopped: {reason}");
     }

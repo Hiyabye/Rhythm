@@ -8,18 +8,23 @@
 //! 2. embeds new and changed notices;
 //! 3. backfills the rest, newest first, at most `BACKFILL_PER_RUN` notices and
 //!    only while the day's Neurons stay below `BACKFILL_NEURONS`, which leaves
-//!    the rest of the free 10,000 for new notices and the canary.
+//!    the rest of the free 10,000 for new notices and the canary;
+//! 4. classifies every current vector of the scope against the category
+//!    prototypes (#166 O9), which are embedded once per scope and cached.
 //!
-//! Any Workers AI error stops embedding for the run; crawling and publishing
-//! never wait for it.
+//! Any Workers AI error stops embedding for the run, but cached prototypes
+//! still classify the vectors already stored; crawling and publishing never
+//! wait for it.
 use crate::{
     sha256_hex,
-    state::{State, Unembedded},
+    state::{State, Unclassified, Unembedded},
     workers_ai::{Embedder, BATCH, DIMENSIONS, MODEL},
 };
 
 pub const BACKFILL_PER_RUN: usize = 1_000;
 pub const BACKFILL_NEURONS: f64 = 9_000.0;
+/// Vectors classified per state transaction.
+const CLASSIFY_BATCH: usize = 1_000;
 const NORMAL: f64 = 0.9995;
 const STOP: f64 = 0.9970;
 
@@ -51,6 +56,7 @@ pub struct Report {
     pub canary: Option<(String, Option<f64>)>,
     pub fresh: usize,
     pub backfill: usize,
+    pub classified: usize,
     pub neurons: f64,
     /// Why embedding stopped early: a Workers AI error or the drift stop.
     pub stopped: Option<String>,
@@ -84,23 +90,104 @@ pub async fn run<E: Embedder>(
     }
     let scope = scope();
     let fresh = state.unembedded(&scope, true, usize::MAX)?;
-    if let Err(error) = embed(state, ai, day, &scope, &fresh, &mut report, None).await? {
-        return stop(state, day, report, error);
-    }
-    if state.neurons(day)? < limits.backfill_neurons {
+    let mut failure = embed(state, ai, day, &scope, &fresh, &mut report, None)
+        .await?
+        .err();
+    if failure.is_none() && state.neurons(day)? < limits.backfill_neurons {
         let backfill = state.unembedded(&scope, false, limits.backfill_per_run)?;
         let budget = Some(limits.backfill_neurons);
-        if let Err(error) = embed(state, ai, day, &scope, &backfill, &mut report, budget).await? {
-            return stop(state, day, report, error);
-        }
+        failure = embed(state, ai, day, &scope, &backfill, &mut report, budget)
+            .await?
+            .err();
     }
-    Ok(report)
+    // After an error, only prototypes cached by an earlier run classify.
+    let may_embed = failure.is_none();
+    let prototypes = match prototypes(state, ai, day, &scope, may_embed, &mut report).await? {
+        Ok(prototypes) => prototypes,
+        Err(error) => {
+            failure = Some(error);
+            None
+        }
+    };
+    if let Some(prototypes) = prototypes {
+        report.classified = classify(state, &scope, &prototypes)?;
+    }
+    match failure {
+        Some(error) => stop(state, day, report, error),
+        None => Ok(report),
+    }
 }
 
 fn stop(state: &State, day: &str, mut report: Report, error: String) -> Result<Report, String> {
     state.record_ai_error(day, &error)?;
     report.stopped = Some(error);
     Ok(report)
+}
+
+/// The scope's prototypes with their categories: cached, or embedded now when
+/// `may_embed`. `None` when they are neither.
+async fn prototypes<E: Embedder>(
+    state: &State,
+    ai: &E,
+    day: &str,
+    scope: &str,
+    may_embed: bool,
+    report: &mut Report,
+) -> Result<Result<Option<Vec<(&'static str, Vec<f32>)>>, String>, String> {
+    let inputs = rhythm_embed::prototype_inputs();
+    let mut vectors = state.prototypes(scope)?;
+    if vectors.len() != inputs.len() {
+        if !may_embed {
+            return Ok(Ok(None));
+        }
+        vectors.clear();
+        for batch in inputs.chunks(BATCH) {
+            let texts: Vec<String> = batch.iter().map(|(_, text)| text.clone()).collect();
+            match ai.embed(&texts).await {
+                Ok(embedded) => {
+                    state.add_neurons(day, embedded.neurons)?;
+                    report.neurons += embedded.neurons;
+                    vectors.extend(embedded.vectors.iter().map(|vector| encode(vector)));
+                }
+                Err(error) => return Ok(Err(error)),
+            }
+        }
+        state.store_prototypes(scope, &vectors)?;
+    }
+    Ok(Ok(Some(
+        inputs
+            .iter()
+            .zip(&vectors)
+            .map(|((category, _), vector)| (*category, decode(vector)))
+            .collect(),
+    )))
+}
+
+/// Classifies every unclassified current vector of the scope.
+fn classify(
+    state: &State,
+    scope: &str,
+    prototypes: &[(&'static str, Vec<f32>)],
+) -> Result<usize, String> {
+    let mut count = 0;
+    loop {
+        let notices: Vec<Unclassified> = state.unclassified(scope, CLASSIFY_BATCH)?;
+        let rows: Vec<_> = notices
+            .iter()
+            .map(|notice| {
+                let mut classified =
+                    rhythm_embed::classify_with(&decode(&notice.vector), prototypes);
+                // f16 rounding can put near-identical vectors just above 1.
+                classified.score = classified.score.clamp(-1.0, 1.0);
+                (notice, classified)
+            })
+            .collect();
+        state.store_classifications(scope, &rows)?;
+        count += rows.len();
+        if notices.len() < CLASSIFY_BATCH {
+            return Ok(count);
+        }
+    }
 }
 
 /// Embeds the notices in batches, storing each batch as it arrives. A
