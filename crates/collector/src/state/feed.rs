@@ -110,15 +110,38 @@ impl State {
         self.with(|c| c.query_row("SELECT next_seq FROM feed", [], |row| int(row, 0)))
     }
 
-    /// Forgets everything published, so the next publish starts again at seq
-    /// 1 with every notice (`--reset-feed`).
-    pub fn feed_reset(&self) -> Result<(), String> {
+    /// Forgets what was published, so the next publish assigns every notice a
+    /// seq from `next_seq` (`--reset-feed`). Every known file and the live
+    /// manifest's `listed` files (`(path, vectors path)`) are retired now, so
+    /// a client still on the old manifest has a day to download them.
+    pub fn feed_restart(
+        &self,
+        next_seq: u64,
+        listed: &[(String, Option<String>)],
+        now: &str,
+    ) -> Result<(), String> {
         self.with(|c| {
             let transaction = c.unchecked_transaction()?;
-            transaction.execute_batch(
-                "DELETE FROM feed_records; DELETE FROM feed_files; DELETE FROM feed_notices;
-                 UPDATE feed SET next_seq=1;",
+            transaction.execute_batch("DELETE FROM feed_records; DELETE FROM feed_notices;")?;
+            transaction.execute(
+                "UPDATE feed_files SET retired_at=?1 WHERE retired_at IS NULL",
+                [now],
             )?;
+            // Only paths matter for a retired file; size and hash are never read.
+            for (path, vectors) in listed {
+                let (hash, size) = match vectors {
+                    Some(_) => (Some(""), Some(0)),
+                    None => (None, None),
+                };
+                transaction.execute(
+                    &format!(
+                        "INSERT OR IGNORE INTO feed_files({FILE_COLUMNS},retired_at)
+                         VALUES(?1,'run',substr(?5,1,10),0,0,'',0,?2,?3,?4,?5)"
+                    ),
+                    params![path, vectors, hash, size, now],
+                )?;
+            }
+            transaction.execute("UPDATE feed SET next_seq=?1", [next_seq as i64])?;
             transaction.commit()
         })
     }

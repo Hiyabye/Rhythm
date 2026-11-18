@@ -22,8 +22,9 @@
 //! With `--publish`, the run also publishes the signed feed under that prefix
 //! in the public feed bucket (`publish.rs`; the key from `KEY_VARIABLE`): its
 //! files before the state upload, the manifest after it. `--reset-feed` is
-//! the maintainer's restart after a state rollback: the feed starts again at
-//! seq 1, which only a feed without clients can take (docs/FEED.md).
+//! the maintainer's restart after a state rollback: the feed continues after
+//! the published seqs with a snapshot of this state, which brings every
+//! client to it (docs/FEED.md).
 use rhythm_collector::{
     crawl::{self, Budget},
     embedding::{self, Limits},
@@ -219,7 +220,7 @@ async fn run(args: Args) -> Result<(), String> {
     let now = publish::timestamp(SystemTime::now());
     if let Some((feed_store, feed_prefix, signer)) = &feed {
         if args.reset_feed {
-            println!("feed reset: publishing again from seq 1");
+            println!("feed restart: a snapshot after the published seqs");
         }
         let report = publish::prepare(
             &state,
