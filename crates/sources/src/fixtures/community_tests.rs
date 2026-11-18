@@ -376,3 +376,27 @@ fn article_rejects_a_different_board_and_a_foreign_attachment_identity() {
     let page = listing(&notices, 1, include_str!("community-sse-notices-list.html")).unwrap();
     assert!(article(&notices, &entry_of(&page, "198"), &tampered).is_err());
 }
+#[test]
+fn unescaped_bracket_title_is_kept_literally() {
+    // ee-employment idx 2737 (#258) renders its title as raw `<HD현대삼호 …>`
+    // in both the list row and the detail page.
+    let original = "[고영테크놀러지] 2026 하반기 신입사원 채용 (~11/18)";
+    let raw = "<HD현대삼호 온라인 채용설명회>";
+    let list = include_str!("community-ee-employment-list.html").replace(original, raw);
+    let detail = include_str!("community-ee-employment-detail-2872.html").replace(original, raw);
+    let employment = source("ee-employment");
+    let page = listing(&employment, 1, &list).unwrap();
+    let parsed = article(&employment, &entry_of(&page, "2872"), &detail).unwrap();
+    assert_eq!(parsed.title, raw);
+    assert_eq!(parsed.original, detail);
+}
+#[test]
+fn only_tags_with_non_ascii_names_are_escaped() {
+    let markup =
+        r#"<p class="한글">본문<br/><a href="/x?a=1">링크</a></p><!-- 주석 --> 1 < 2 <한글>"#;
+    assert_eq!(escape_text_tags(markup), markup);
+    assert_eq!(
+        escape_text_tags("<strong><HD현대삼호 온라인 채용설명회></strong></HD현대>"),
+        "<strong>&lt;HD현대삼호 온라인 채용설명회></strong>&lt;/HD현대>"
+    );
+}
