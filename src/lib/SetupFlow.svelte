@@ -28,7 +28,7 @@
     { id: 'boards', label: '게시판', title: '받아 볼 게시판', line: '구독한 게시판만 가져옵니다. 구독만으로는 아무것도 내려받지 않습니다.', extension: 'sogang_notices' },
     { id: 'cybercampus', label: '사이버캠퍼스', title: '사이버캠퍼스 연결', line: '본인 강좌의 공지와 과제·마감을 가져옵니다. 로그인 정보는 운영체제 보안 저장소에만 저장합니다.', extension: 'cybercampus' },
     { id: 'interests', label: '관심사', title: '관심사', line: '추천 순위에만 쓰이며 이 기기에만 저장됩니다. 비워 두어도 됩니다.', extension: 'recommendations' },
-    { id: 'ai', label: 'AI', title: '공지 분류', line: '작은 분류 모델이 이 기기에서 공지를 주제별로 나누고, 비슷한 공지와 뜻으로 찾는 검색에도 쓰입니다. 설치하지 않아도 읽기, 검색, 추천을 모두 쓸 수 있습니다.', extension: 'ai' },
+    { id: 'ai', label: 'AI', title: '공지 분류', line: '학교 공지를 주제별로 나누고 비슷한 공지를 묶습니다. 이 기기에 작은 분류 모델을 설치하면 사이버캠퍼스 공지도 나누고 뜻으로 찾는 검색도 쓸 수 있습니다. 설치하지 않아도 읽기, 검색, 추천을 모두 쓸 수 있습니다.', extension: 'ai' },
     { id: 'background', label: '백그라운드', title: '백그라운드 실행', line: '처음에는 모두 꺼져 있습니다. 켜더라도 Rhythm이 실행 중이고 기기가 깨어 있을 때만 동작합니다.', extension: 'proactive' },
     { id: 'notifications', label: '알림', title: '알림', line: '새 공지를 운영체제 알림으로 받습니다. 처음에는 꺼져 있습니다.', extension: 'proactive' },
     { id: 'done', label: '완료', title: '준비가 끝났습니다', line: '지금까지 고른 설정입니다. 설정 → 일반에서 초기 설정을 다시 열 수 있습니다.' },

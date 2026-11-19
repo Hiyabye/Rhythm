@@ -290,7 +290,7 @@ export interface AiPreferences {
 }
 export interface AiClassification {
   document_id: number; revision_id: number; category: string;
-  low_confidence: boolean; created_at: string;
+  low_confidence: boolean;
 }
 export interface SimilarNotice {
   document_id: number; source_id: string; source_name: string; title: string;

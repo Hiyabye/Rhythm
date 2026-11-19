@@ -1429,6 +1429,95 @@ fn large_archive_operations() {
             elapsed[0], elapsed[3], elapsed[6]
         );
     }
+    // AI categories (#177 PR 5): even notices from the feed, odd ones under
+    // the installed local model, so the filter and counts read both tables.
+    let categories = crate::intelligence::classification::CATEGORIES;
+    let config = crate::intelligence::classification::config_hash();
+    let sha = "a".repeat(64);
+    let mut embedding = super::intelligence_tests::model("bench-embedding", "external");
+    embedding.kind = "embedding".into();
+    embedding.sha256 = Some(sha.clone());
+    store.ai_upsert_model(&embedding).unwrap();
+    let mut preferences = store.ai_preferences().unwrap();
+    preferences.embedding_model_id = Some(embedding.id.clone());
+    store.ai_save_preferences(&preferences).unwrap();
+    store.set_enabled(crate::extensions::AI, true).unwrap();
+    let ids: Vec<(i64, i64)> = store
+        .connection
+        .prepare("SELECT d.id,(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id) FROM documents d ORDER BY d.id")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    for (n, (id, revision)) in ids.iter().enumerate() {
+        let category = categories[n % categories.len()];
+        if n % 2 == 0 {
+            store
+                .connection
+                .execute("UPDATE documents SET from_feed=1 WHERE id=?1", [id])
+                .unwrap();
+            store
+                .connection
+                .execute(
+                    "INSERT INTO feed_classifications(document_id,revision_id,scope,category,score,margin,low_confidence)
+                     VALUES(?1,?2,?3,?4,0.8,0.1,0)",
+                    rusqlite::params![id, revision, format!("{}#bench", super::intelligence::FEED_MODEL), category],
+                )
+                .unwrap();
+        } else {
+            store
+                .ai_save_classification(&super::intelligence::ClassificationWrite {
+                    document_id: *id,
+                    revision_id: *revision,
+                    model_sha256: &sha,
+                    config_hash: config,
+                    category,
+                    score: 0.8,
+                    margin: 0.1,
+                    low_confidence: false,
+                })
+                .unwrap();
+        }
+    }
+    let in_category = (0..COUNT).filter(|n| n % categories.len() == 0).count() as u64;
+    let ai_cases = [
+        ("ai-inbox+counts", ArchiveQuery::default(), COUNT as u64),
+        (
+            "ai-category",
+            ArchiveQuery {
+                ai_category: Some(categories[0].into()),
+                ..Default::default()
+            },
+            in_category,
+        ),
+        (
+            "ai-category+text",
+            ArchiveQuery {
+                query: "장학금".into(),
+                ai_category: Some(categories[0].into()),
+                ..Default::default()
+            },
+            in_category,
+        ),
+    ];
+    for (label, query, total) in ai_cases {
+        store.archive_query(&query).unwrap(); // Explicit warm-up, not timed.
+        let mut elapsed = Vec::new();
+        for _ in 0..7 {
+            let start = Instant::now();
+            let page = store.archive_query(&query).unwrap();
+            elapsed.push(start.elapsed());
+            assert_eq!(page.total, total, "{label}");
+            let counts = page.ai_categories.unwrap();
+            assert_eq!(counts.unclassified, 0, "{label}");
+        }
+        elapsed.sort();
+        println!(
+            "{label}: total={total}, seven warm debug samples min={:?} median={:?} max={:?}",
+            elapsed[0], elapsed[3], elapsed[6]
+        );
+    }
     let start = Instant::now();
     let detail = store.document(long_id, None).unwrap();
     println!(

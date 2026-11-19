@@ -226,7 +226,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     const ai = { model_storage: modelStorage, catalog: [embeddingCatalog], models: [...(options.aiInstalled ? [model()] : []), ...(options.aiRetiredModel ? [model('qwen35-9b')] : []), ...(options.aiEmbeddingInstalled ? [model('qwen3-embedding-0-6b', 'embedding')] : [])], preferences: { execution_mode: options.aiExecutionMode ?? 'auto', model_directory: options.aiModelDirectory ?? null as string | null, embedding_model_id: options.aiEmbeddingInstalled ? 'qwen3-embedding-0-6b' : null as string | null, classification_enabled: true }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: 17179869184, disk_available_bytes: 27000000000, backend: 'cpu' }, busy: false, classification: { state: options.aiEmbeddingInstalled ? 'idle' : 'disabled', processed: 0 } };
     const classifications = entries.filter((item) => options.aiCategoryOf?.[item.id] !== null).map((item) => ({
       document_id: item.id, revision_id: 1, category: options.aiCategoryOf?.[item.id] ?? '장학',
-      low_confidence: Boolean(options.aiClassificationLow), created_at: '2026-10-24 12:00:00',
+      low_confidence: Boolean(options.aiClassificationLow),
     }));
     // As the store: AI categories exist only for the installed embedding model.
     const aiCategoryOf = (entry: DocumentItem) => ai.preferences.embedding_model_id ? classifications.find((row) => row.document_id === entry.id)?.category ?? null : null;
