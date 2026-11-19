@@ -1,6 +1,7 @@
 //! Persistent AI model inventory, preferences, notice vectors and classifications.
 //! No filesystem or inference work.
 use super::{trash::NOT_TRASHED, Store};
+use crate::intelligence::classification::config_hash;
 use rusqlite::{params, params_from_iter, types::Value as SqlValue, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
@@ -81,7 +82,6 @@ pub struct AiClassification {
     pub revision_id: i64,
     pub category: String,
     pub low_confidence: bool,
-    pub created_at: String,
 }
 
 /// A notice whose latest-revision embedding is close to another notice's. The
@@ -136,6 +136,53 @@ const SIMILAR_MIN_SCORE: f32 = 0.75;
 /// digit runs in the body, so a notice with other dates, times or amounts is
 /// never treated as a copy.
 const DUPLICATE_MIN_SCORE: f32 = 0.97;
+/// The Workers AI model of the feed's vectors and categories (`docs/FEED.md`,
+/// `embedding.model`). A feed row is used while its scope (`<model>#<config
+/// hash>`) names this model, whatever its config hash, so a collector config
+/// change keeps working in apps not yet updated (user decision, #177 PR 5).
+/// Its vectors are comparable with the local GGUF's (#170).
+pub const FEED_MODEL: &str = "@cf/qwen/qwen3-embedding-0.6b";
+/// The latest revision of `d`.
+pub(super) const LATEST_REVISION: &str =
+    "(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id)";
+/// Joins `d` to its category at `revision` (SQL): the feed's (`fc`) for a
+/// notice the feed described, the local model's (`lc`) for any other. Binds
+/// the feed model, then the local SHA-256 (NULL without an installed model)
+/// and config hash.
+pub(super) fn classification_join(revision: &str) -> String {
+    format!(
+        "LEFT JOIN feed_classifications fc ON d.from_feed=1 AND fc.document_id=d.id AND fc.revision_id={revision}
+           AND substr(fc.scope,1,instr(fc.scope,'#')-1)=?
+         LEFT JOIN notice_classifications lc ON d.from_feed=0 AND lc.document_id=d.id AND lc.revision_id={revision}
+           AND lc.model_sha256=? AND lc.config_hash=?"
+    )
+}
+/// Joins `d` to its vector at `revision` like `classification_join` (`fe`
+/// from the feed, `le` local). Binds the feed model, then the local SHA-256.
+/// `VECTOR_COLUMNS` reads the revision, the local dimension (NULL for the
+/// feed's int8 encoding) and the bytes for `decode_vector`.
+pub(super) fn vector_join(revision: &str) -> String {
+    format!(
+        "LEFT JOIN feed_embeddings fe ON d.from_feed=1 AND fe.document_id=d.id AND fe.revision_id={revision}
+           AND substr(fe.scope,1,instr(fe.scope,'#')-1)=?
+         LEFT JOIN notice_embeddings le ON d.from_feed=0 AND le.document_id=d.id AND le.revision_id={revision}
+           AND le.model_sha256=?"
+    )
+}
+pub(super) const VECTOR_COLUMNS: &str =
+    "COALESCE(fe.revision_id,le.revision_id),le.dim,COALESCE(fe.vector,le.vector)";
+pub(super) const HAS_VECTOR: &str = "COALESCE(fe.vector,le.vector) IS NOT NULL";
+/// A vector read through `VECTOR_COLUMNS`: the feed's int8 encoding when
+/// `dim` is NULL, the local f32 one otherwise. Both decode to unit length.
+pub(super) fn decode_vector(dim: Option<i64>, bytes: &[u8]) -> Result<Vec<f32>, String> {
+    let Some(dim) = dim else {
+        return match rhythm_feed::vector::decode(bytes) {
+            Ok(mut vectors) if vectors.len() == 1 => Ok(vectors.remove(0)),
+            _ => Err("저장된 임베딩이 완전하지 않습니다.".into()),
+        };
+    };
+    decode_embedding(dim, bytes)
+}
 pub(super) fn decode_embedding(dim: i64, bytes: &[u8]) -> Result<Vec<f32>, String> {
     let dim =
         usize::try_from(dim).map_err(|_| "저장된 임베딩 크기가 올바르지 않습니다.".to_string())?;
@@ -298,8 +345,19 @@ fn classification_row(row: &Row<'_>) -> rusqlite::Result<AiClassification> {
         revision_id: row.get(1)?,
         category: row.get(2)?,
         low_confidence: row.get(3)?,
-        created_at: row.get(4)?,
     })
+}
+fn valid_local(local: Option<(&str, &str)>) -> bool {
+    local.is_none_or(|(model, config)| valid_hash(model) && valid_hash(config))
+}
+/// The values `classification_join` binds.
+fn classification_values(local: Option<(&str, &str)>) -> Vec<SqlValue> {
+    let (model, config) = local.unzip();
+    vec![
+        SqlValue::Text(FEED_MODEL.into()),
+        model.map_or(SqlValue::Null, |v| SqlValue::Text(v.into())),
+        config.map_or(SqlValue::Null, |v| SqlValue::Text(v.into())),
+    ]
 }
 fn model_row(row: &Row<'_>) -> rusqlite::Result<AiModel> {
     Ok(AiModel {
@@ -681,7 +739,8 @@ impl Store {
     }
     /// Latest revisions whose current model/config classification is missing,
     /// newest publication first. A stored vector from another config is reused
-    /// by the caller, so this query only tracks the classification row.
+    /// by the caller, so this query only tracks the classification row. A
+    /// notice the feed described takes the feed's vector and category instead.
     pub fn ai_embedding_candidates(
         &self,
         model_sha256: &str,
@@ -697,7 +756,7 @@ impl Store {
                  JOIN document_revisions r ON r.id=(
                      SELECT MAX(latest.id) FROM document_revisions latest WHERE latest.document_id=d.id
                  )
-                 WHERE length(trim(r.title))>0
+                 WHERE d.from_feed=0 AND length(trim(r.title))>0
                    AND NOT EXISTS(
                        SELECT 1 FROM notice_classifications c
                        WHERE c.document_id=d.id AND c.revision_id=r.id
@@ -820,6 +879,13 @@ impl Store {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
+    /// The values `classification_join` binds for the installed local model.
+    pub(super) fn classification_scope(&self) -> Result<Vec<SqlValue>, String> {
+        let model = self.ai_embedding_model_sha()?;
+        Ok(classification_values(
+            model.as_deref().map(|model| (model, config_hash())),
+        ))
+    }
     /// SHA-256 of the selected embedding model while it is installed; stored
     /// vectors and classifications are scoped by it.
     pub fn ai_embedding_model_sha(&self) -> Result<Option<String>, String> {
@@ -831,36 +897,30 @@ impl Store {
             .filter(|model| model.kind == "embedding" && model.status == "installed")
             .and_then(|model| model.sha256))
     }
-    /// Latest-revision classifications for a visible page. Only the current
-    /// model and config are returned; stale rows stay as history.
+    /// Latest-revision classifications for a visible page: the feed's for a
+    /// feed notice, the local model's (in `local`, SHA-256 and config hash) for
+    /// any other. Stale rows stay as history.
     pub fn ai_classifications_for_documents(
         &self,
         document_ids: &[i64],
-        model_sha256: &str,
-        config_hash: &str,
+        local: Option<(&str, &str)>,
     ) -> Result<Vec<AiClassification>, String> {
         if document_ids.is_empty() {
             return Ok(Vec::new());
         }
-        if document_ids.len() > 200 || !valid_hash(model_sha256) || !valid_hash(config_hash) {
+        if document_ids.len() > 200 || !valid_local(local) {
             return Err("분류 조회 범위를 확인해 주세요.".into());
         }
-        let placeholders = (0..document_ids.len())
-            .map(|index| format!("?{}", index + 3))
-            .collect::<Vec<_>>()
-            .join(",");
+        let placeholders = vec!["?"; document_ids.len()].join(",");
         let sql = format!(
-            "SELECT c.document_id,c.revision_id,c.category,c.low_confidence,c.created_at
-             FROM notice_classifications c
-             WHERE c.model_sha256=?1 AND c.config_hash=?2
-               AND c.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=c.document_id)
-               AND c.document_id IN ({placeholders})
-             ORDER BY c.document_id"
+            "SELECT d.id,COALESCE(fc.revision_id,lc.revision_id),COALESCE(fc.category,lc.category),
+                    COALESCE(fc.low_confidence,lc.low_confidence)
+             FROM documents d {}
+             WHERE d.id IN ({placeholders}) AND COALESCE(fc.category,lc.category) IS NOT NULL
+             ORDER BY d.id",
+            classification_join(LATEST_REVISION)
         );
-        let mut values = vec![
-            SqlValue::Text(model_sha256.to_owned()),
-            SqlValue::Text(config_hash.to_owned()),
-        ];
+        let mut values = classification_values(local);
         values.extend(document_ids.iter().map(|id| SqlValue::Integer(*id)));
         self.connection
             .prepare(&sql)
@@ -874,72 +934,86 @@ impl Store {
         &self,
         document_id: i64,
         revision_id: i64,
-        model_sha256: &str,
-        config_hash: &str,
+        local: Option<(&str, &str)>,
     ) -> Result<Option<AiClassification>, String> {
-        if !valid_hash(model_sha256) || !valid_hash(config_hash) {
+        if !valid_local(local) {
             return Err("분류 모델 정보가 올바르지 않습니다.".into());
         }
+        let mut values = classification_values(local);
+        values.push(SqlValue::Integer(document_id));
         self.connection
             .query_row(
-                "SELECT document_id,revision_id,category,low_confidence,created_at
-                 FROM notice_classifications
-                 WHERE document_id=?1 AND revision_id=?2 AND model_sha256=?3 AND config_hash=?4",
-                params![document_id, revision_id, model_sha256, config_hash],
+                &format!(
+                    "SELECT d.id,COALESCE(fc.revision_id,lc.revision_id),COALESCE(fc.category,lc.category),
+                            COALESCE(fc.low_confidence,lc.low_confidence)
+                     FROM documents d {}
+                     WHERE d.id=? AND COALESCE(fc.category,lc.category) IS NOT NULL",
+                    // An integer cannot inject SQL, and it appears twice.
+                    classification_join(&revision_id.to_string())
+                ),
+                params_from_iter(values),
                 classification_row,
             )
             .optional()
             .map_err(|e| e.to_string())
     }
     /// Similar notices for each requested document, compared by the cosine of
-    /// latest-revision vectors from one embedding model. Only the newest
-    /// `SIMILARITY_WINDOW` embedded notices are candidates, and a document
-    /// without a vector for this model gets an empty list. Each list holds every
-    /// duplicate first, then up to `limit` matches in total.
+    /// latest-revision vectors: the feed's for a feed notice, the local
+    /// model's (`local_model`, its SHA-256) for any other. Only the newest
+    /// `SIMILARITY_WINDOW` notices with a vector are candidates, and a document
+    /// without one gets an empty list. Each list holds every duplicate first,
+    /// then up to `limit` matches in total.
     pub fn ai_similar_notices(
         &self,
         document_ids: &[i64],
-        model_sha256: &str,
+        local_model: Option<&str>,
         limit: usize,
     ) -> Result<Vec<(i64, Vec<SimilarNotice>)>, String> {
         if document_ids.is_empty() {
             return Ok(Vec::new());
         }
-        if document_ids.len() > 200 || !valid_hash(model_sha256) || limit == 0 || limit > 50 {
+        if document_ids.len() > 200
+            || !local_model.is_none_or(valid_hash)
+            || limit == 0
+            || limit > 50
+        {
             return Err("비슷한 공지 조회 범위를 확인해 주세요.".into());
         }
         let window = self
             .connection
             .prepare(&format!(
-                "SELECT d.id,e.revision_id,d.source_id,s.name,d.title,d.published_at,e.dim,e.vector
+                "SELECT d.id,{VECTOR_COLUMNS},d.source_id,s.name,d.title,d.published_at
                  FROM documents d
                  JOIN sources s ON s.id=d.source_id
-                 JOIN notice_embeddings e ON e.document_id=d.id AND e.model_sha256=?1
-                   AND e.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id)
-                 WHERE {NOT_TRASHED}
+                 {}
+                 WHERE {HAS_VECTOR} AND {NOT_TRASHED}
                  ORDER BY d.published_at DESC,d.id DESC
-                 LIMIT ?2"
+                 LIMIT ?",
+                vector_join(LATEST_REVISION)
             ))
             .map_err(|e| e.to_string())?
-            .query_map(params![model_sha256, SIMILARITY_WINDOW as i64], |row| {
-                Ok((
-                    WindowNotice {
-                        document_id: row.get(0)?,
-                        revision_id: row.get(1)?,
-                        source_id: row.get(2)?,
-                        source_name: row.get(3)?,
-                        title: row.get(4)?,
-                        published_at: row.get(5)?,
-                        vector: Vec::new(),
-                    },
-                    row.get::<_, i64>(6)?,
-                    row.get::<_, Vec<u8>>(7)?,
-                ))
-            })
+            .query_map(
+                params![FEED_MODEL, local_model, SIMILARITY_WINDOW as i64],
+                |row| {
+                    Ok((
+                        WindowNotice {
+                            document_id: row.get(0)?,
+                            revision_id: row.get(1)?,
+                            source_id: row.get(4)?,
+                            source_name: row.get(5)?,
+                            title: row.get(6)?,
+                            published_at: row.get(7)?,
+                            vector: Vec::new(),
+                        },
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                    ))
+                },
+            )
             .map_err(|e| e.to_string())?
             .map(|row| {
                 let (mut notice, dim, bytes) = row.map_err(|e| e.to_string())?;
-                notice.vector = decode_embedding(dim, &bytes)?;
+                notice.vector = decode_vector(dim, &bytes)?;
                 Ok(notice)
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -950,22 +1024,7 @@ impl Store {
         for &document_id in document_ids {
             let target = match window.iter().find(|n| n.document_id == document_id) {
                 Some(notice) => Some((notice.revision_id, notice.vector.clone())),
-                None => {
-                    let revision: Option<i64> = self
-                        .connection
-                        .query_row(
-                            "SELECT MAX(id) FROM document_revisions WHERE document_id=?1",
-                            [document_id],
-                            |row| row.get(0),
-                        )
-                        .map_err(|e| e.to_string())?;
-                    match revision {
-                        Some(revision) => self
-                            .ai_embedding(document_id, revision, model_sha256)?
-                            .map(|stored| (revision, stored.vector)),
-                        None => None,
-                    }
-                }
+                None => self.current_vector(document_id, local_model)?,
             };
             let Some((revision_id, vector)) = target else {
                 results.push((document_id, Vec::new()));
@@ -1020,5 +1079,27 @@ impl Store {
             results.push((document_id, similar));
         }
         Ok(results)
+    }
+    /// A document's latest-revision vector, chosen as `ai_similar_notices`
+    /// chooses it.
+    fn current_vector(
+        &self,
+        document_id: i64,
+        local_model: Option<&str>,
+    ) -> Result<Option<(i64, Vec<f32>)>, String> {
+        let row: Option<(i64, Option<i64>, Vec<u8>)> = self
+            .connection
+            .query_row(
+                &format!(
+                    "SELECT {VECTOR_COLUMNS} FROM documents d {} WHERE d.id=? AND {HAS_VECTOR}",
+                    vector_join(LATEST_REVISION)
+                ),
+                params![FEED_MODEL, local_model, document_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        row.map(|(revision, dim, bytes)| Ok((revision, decode_vector(dim, &bytes)?)))
+            .transpose()
     }
 }

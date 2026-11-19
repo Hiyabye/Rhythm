@@ -122,7 +122,7 @@ fn embedding(seq: u64, notice: &Notice, vector: u32) -> Entry {
             source_id: notice.source_id.clone(),
             external_id: notice.external_id.clone(),
             revision_hash: notice.revision_hash.clone(),
-            scope: "model#hash".into(),
+            scope: FEED_SCOPE.into(),
             vector,
         }),
     )
@@ -134,13 +134,23 @@ fn classification(seq: u64, notice: &Notice, category: &str) -> Entry {
             source_id: notice.source_id.clone(),
             external_id: notice.external_id.clone(),
             revision_hash: notice.revision_hash.clone(),
-            scope: "model#hash".into(),
+            scope: FEED_SCOPE.into(),
             category: category.into(),
             score: 0.75,
             margin: 0.125,
             low_confidence: false,
         }),
     )
+}
+const FEED_SCOPE: &str = "@cf/qwen/qwen3-embedding-0.6b#hash";
+/// `entry` with its vector or category under another scope.
+fn scoped(mut entry: Entry, scope: &str) -> Entry {
+    match entry.record.as_mut() {
+        Some(Record::Embedding(record)) => record.scope = scope.into(),
+        Some(Record::Classification(record)) => record.scope = scope.into(),
+        _ => unreachable!("only vectors and categories carry a scope"),
+    }
+    entry
 }
 fn removal(seq: u64, id: &str) -> Entry {
     entry(
@@ -551,7 +561,7 @@ fn manifest(generated_at: &str, boards: &[(&str, u32)]) -> rhythm_feed::Manifest
         moved_to: None,
         embedding: rhythm_feed::manifest::EmbeddingInfo {
             model: "model".into(),
-            scope: "model#hash".into(),
+            scope: FEED_SCOPE.into(),
             dimensions: 1024,
             canary: None,
         },
@@ -930,5 +940,162 @@ fn a_backfill_starts_read_and_later_arrivals_stay_unread() {
     assert!(
         !read(&store, "v1"),
         "a notice already here keeps its read state"
+    );
+}
+
+#[test]
+fn feed_vectors_and_categories_back_ai_and_local_rows_cover_other_notices() {
+    let (_directory, store) = database();
+    store.set_enabled(crate::extensions::AI, true).unwrap();
+    let local = "a".repeat(64);
+    let config = crate::intelligence::classification::config_hash();
+    // Vectors 0 and 1 point the same way; 2 is orthogonal to them.
+    let base: Vec<f32> = (0..DIMENSIONS)
+        .map(|i| if i < 512 { 1.0 } else { 0.0 })
+        .collect();
+    let other: Vec<f32> = (0..DIMENSIONS)
+        .map(|i| if i < 512 { 0.0 } else { 1.0 })
+        .collect();
+    let file = vector::encode(&[
+        vector::quantize(&base).unwrap(),
+        vector::quantize(&base).unwrap(),
+        vector::quantize(&other).unwrap(),
+    ]);
+    let scholarship = feed_notice("scholarship", "장학 안내");
+    let twin = feed_notice("twin", "장학 설명");
+    let foreign = feed_notice("foreign", "다른 모델");
+    // A later config hash of the same model still counts; another model does not.
+    store
+        .feed_apply_snapshot(
+            9,
+            &[
+                upsert(1, &scholarship),
+                upsert(2, &twin),
+                upsert(3, &foreign),
+                embedding(4, &scholarship, 0),
+                scoped(
+                    embedding(5, &twin, 1),
+                    "@cf/qwen/qwen3-embedding-0.6b#newer",
+                ),
+                scoped(embedding(6, &foreign, 1), "@cf/other/model#hash"),
+                classification(7, &scholarship, "장학"),
+                scoped(classification(8, &foreign, "학사"), "@cf/other/model#hash"),
+            ],
+            &file,
+        )
+        .unwrap();
+    let (scholarship, twin, foreign) = (
+        document(&store, "scholarship"),
+        document(&store, "twin"),
+        document(&store, "foreign"),
+    );
+    let revision = |id: i64| store.document(id, None).unwrap().revision_id;
+    // A v1 notice the feed never described keeps the local model's rows, and
+    // a local row on a feed notice is ignored.
+    store
+        .upsert_article("one", &article("v1", "예전 공지"), false)
+        .unwrap();
+    let v1 = document(&store, "v1");
+    for (id, category) in [(v1, "연구"), (foreign, "행사·활동")] {
+        store
+            .ai_save_classification(&super::intelligence::ClassificationWrite {
+                document_id: id,
+                revision_id: revision(id),
+                model_sha256: &local,
+                config_hash: config,
+                category,
+                score: 0.8,
+                margin: 0.1,
+                low_confidence: false,
+            })
+            .unwrap();
+    }
+    let unit = vector::decode(&vector::encode(&[vector::quantize(&base).unwrap()]))
+        .unwrap()
+        .remove(0);
+    store
+        .ai_save_embedding(v1, revision(v1), &local, &unit)
+        .unwrap();
+    store
+        .ai_save_embedding(foreign, revision(foreign), &local, &unit)
+        .unwrap();
+
+    let categories = |local_model: Option<&str>| {
+        store
+            .ai_classifications_for_documents(
+                &[scholarship, twin, foreign, v1],
+                local_model.map(|model| (model, config)),
+            )
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.document_id, row.category))
+            .collect::<Vec<_>>()
+    };
+    // Without a local model only the feed's category is in scope.
+    assert_eq!(categories(None), vec![(scholarship, "장학".to_string())]);
+    assert_eq!(
+        categories(Some(&local)),
+        vec![(scholarship, "장학".to_string()), (v1, "연구".to_string())]
+    );
+    assert_eq!(
+        store
+            .ai_classification(scholarship, revision(scholarship), None)
+            .unwrap()
+            .map(|row| row.category),
+        Some("장학".into())
+    );
+    assert!(store
+        .ai_classification(foreign, revision(foreign), Some((&local, config)))
+        .unwrap()
+        .is_none());
+    // The archive filter and counts need no local model for feed notices.
+    let page = store
+        .archive_query(&ArchiveQuery {
+            ai_category: Some("장학".into()),
+            ..ArchiveQuery::default()
+        })
+        .unwrap();
+    assert_eq!(
+        page.items.iter().map(|item| item.id).collect::<Vec<_>>(),
+        vec![scholarship]
+    );
+    let counts = page.ai_categories.unwrap();
+    assert_eq!(counts.unclassified, 3);
+
+    // Similar notices compare feed vectors with each other and, with a local
+    // model, with local vectors of other notices.
+    let similar = |local_model: Option<&str>| {
+        let mut ids = store
+            .ai_similar_notices(&[scholarship], local_model, 5)
+            .unwrap()
+            .remove(0)
+            .1
+            .into_iter()
+            .map(|notice| notice.document_id)
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
+    };
+    assert_eq!(similar(None), vec![twin]);
+    assert_eq!(similar(Some(&local)), vec![twin, v1]);
+    // Semantic search reads the same vectors.
+    let ranked = store
+        .archive_ranked_query(
+            &ArchiveQuery {
+                query: "없는말".into(),
+                ..ArchiveQuery::default()
+            },
+            Some((&local, &unit)),
+        )
+        .unwrap();
+    let mut hits = ranked.meaning_only.clone();
+    hits.sort();
+    assert_eq!(hits, vec![scholarship, twin, v1]);
+    // The local classifier embeds only notices the feed never described.
+    assert_eq!(
+        store
+            .ai_embedding_candidates(&"b".repeat(64), config, 10)
+            .unwrap(),
+        vec![(v1, revision(v1))]
     );
 }

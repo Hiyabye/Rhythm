@@ -690,14 +690,14 @@ fn classification_roundtrip_is_model_and_config_scoped() {
         .unwrap();
     assert_eq!(
         store
-            .ai_classification(1, revision, &model_a, &config)
+            .ai_classification(1, revision, Some((&model_a, &config)))
             .unwrap()
             .unwrap()
             .category,
         "장학"
     );
     assert!(store
-        .ai_classification(1, revision, &model_b, &config)
+        .ai_classification(1, revision, Some((&model_b, &config)))
         .unwrap()
         .is_none());
     assert!(store
@@ -711,7 +711,7 @@ fn classification_roundtrip_is_model_and_config_scoped() {
         vec![(1, revision)]
     );
     let rows = store
-        .ai_classifications_for_documents(&[1], &model_a, &config)
+        .ai_classifications_for_documents(&[1], Some((&model_a, &config)))
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].category, "장학");
@@ -761,7 +761,7 @@ fn classification_roundtrip_is_model_and_config_scoped() {
     store.ai_remove_model(&model.id).unwrap();
     assert!(store.ai_embedding(1, revision, &model_a).unwrap().is_none());
     assert!(store
-        .ai_classification(1, revision, &model_a, &config)
+        .ai_classification(1, revision, Some((&model_a, &config)))
         .unwrap()
         .is_none());
 }
@@ -875,7 +875,9 @@ fn similar_notices_flag_only_exact_cross_posts_and_isolate_model_hashes() {
     changed.title = title.into();
     assert!(store.upsert_article("test", &changed, true).unwrap().1);
 
-    let results = store.ai_similar_notices(&[target], &model_a, 5).unwrap();
+    let results = store
+        .ai_similar_notices(&[target], Some(&model_a), 5)
+        .unwrap();
     assert_eq!(results.len(), 1);
     let (id, similar) = &results[0];
     assert_eq!(*id, target);
@@ -898,7 +900,7 @@ fn similar_notices_flag_only_exact_cross_posts_and_isolate_model_hashes() {
     // Duplicates are symmetric and come first even when a non-duplicate scores
     // higher (`other_date` is closer to `copy` than `target` is).
     let results = store
-        .ai_similar_notices(&[copy, related], &model_a, 1)
+        .ai_similar_notices(&[copy, related], Some(&model_a), 1)
         .unwrap();
     assert_eq!(
         results[0]
@@ -919,22 +921,26 @@ fn similar_notices_flag_only_exact_cross_posts_and_isolate_model_hashes() {
     // The other model only sees its own vectors, and a document without a
     // vector for the model gets nothing.
     assert!(store
-        .ai_similar_notices(&[other_model], &model_b, 5)
+        .ai_similar_notices(&[other_model], Some(&model_b), 5)
         .unwrap()[0]
         .1
         .is_empty());
-    assert!(store.ai_similar_notices(&[target], &model_b, 5).unwrap()[0]
+    assert!(store
+        .ai_similar_notices(&[target], Some(&model_b), 5)
+        .unwrap()[0]
         .1
         .is_empty());
-    assert!(
-        store.ai_similar_notices(&[revised], &model_a, 5).unwrap()[0]
-            .1
-            .is_empty()
-    );
-    assert!(store.ai_similar_notices(&[target], "bad", 5).is_err());
-    assert!(store.ai_similar_notices(&[target], &model_a, 0).is_err());
     assert!(store
-        .ai_similar_notices(&vec![1; 201], &model_a, 5)
+        .ai_similar_notices(&[revised], Some(&model_a), 5)
+        .unwrap()[0]
+        .1
+        .is_empty());
+    assert!(store.ai_similar_notices(&[target], Some("bad"), 5).is_err());
+    assert!(store
+        .ai_similar_notices(&[target], Some(&model_a), 0)
+        .is_err());
+    assert!(store
+        .ai_similar_notices(&vec![1; 201], Some(&model_a), 5)
         .is_err());
 }
 
@@ -972,7 +978,10 @@ fn duplicate_check_reads_full_width_digits() {
         &[1.0, 0.02],
         &model,
     );
-    let similar = &store.ai_similar_notices(&[target], &model, 5).unwrap()[0].1;
+    let similar = &store
+        .ai_similar_notices(&[target], Some(&model), 5)
+        .unwrap()[0]
+        .1;
     assert_eq!(
         similar
             .iter()
@@ -1042,7 +1051,10 @@ fn duplicate_check_ignores_board_tags_and_contact_numbers() {
         );
         expected.push((id, *duplicate));
     }
-    let similar = &store.ai_similar_notices(&[target], &model, 20).unwrap()[0].1;
+    let similar = &store
+        .ai_similar_notices(&[target], Some(&model), 20)
+        .unwrap()[0]
+        .1;
     let mut actual = similar
         .iter()
         .map(|n| (n.document_id, n.duplicate))
@@ -1075,7 +1087,11 @@ fn similar_notice_candidates_are_bounded_to_the_newest_window() {
         &model,
     );
     assert_eq!(
-        store.ai_similar_notices(&[target], &model, 5).unwrap()[0].1[0].document_id,
+        store
+            .ai_similar_notices(&[target], Some(&model), 5)
+            .unwrap()[0]
+            .1[0]
+            .document_id,
         copy
     );
     // Fill the window with newer, orthogonal notices; the old copy falls out.
@@ -1107,7 +1123,9 @@ fn similar_notice_candidates_are_bounded_to_the_newest_window() {
     }
     transaction.commit().unwrap();
     // The target itself is outside the window but still has its vector.
-    assert!(store.ai_similar_notices(&[target], &model, 5).unwrap()[0]
+    assert!(store
+        .ai_similar_notices(&[target], Some(&model), 5)
+        .unwrap()[0]
         .1
         .is_empty());
 }
@@ -1356,7 +1374,7 @@ fn schema_thirty_six_accepts_revised_categories_and_keeps_old_rows() {
     let store = Store::open(&path).unwrap();
     assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
     let old = store
-        .ai_classification(1, revision, &model, &old_config)
+        .ai_classification(1, revision, Some((&model, &old_config)))
         .unwrap()
         .unwrap();
     assert_eq!(old.category, "수업·교육");
@@ -1498,10 +1516,11 @@ fn ai_category_filter_and_counts_use_latest_revision_under_the_installed_model()
     store.set_enabled(crate::extensions::AI, false).unwrap();
     assert!(query(None, "").unwrap().ai_categories.is_none());
     store.set_enabled(crate::extensions::AI, true).unwrap();
-    // Without an installed model nothing is classified in scope.
+    // Without an installed model no local row is in scope; the counts stay,
+    // since feed notices need no model.
     preferences.embedding_model_id = None;
     store.ai_save_preferences(&preferences).unwrap();
     let page = query(Some("장학"), "").unwrap();
     assert_eq!(page.total, 0);
-    assert!(page.ai_categories.is_none());
+    assert_eq!(page.ai_categories.unwrap().unclassified, documents);
 }

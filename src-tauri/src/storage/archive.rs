@@ -1,7 +1,11 @@
+use super::intelligence::{
+    classification_join, decode_vector, vector_join, FEED_MODEL, HAS_VECTOR, LATEST_REVISION,
+    VECTOR_COLUMNS,
+};
 use super::trash::NOT_TRASHED;
 use super::Store;
 use crate::archive::model::*;
-use crate::intelligence::classification::{config_hash, CATEGORIES};
+use crate::intelligence::classification::CATEGORIES;
 use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, Row};
 use sha2::{Digest, Sha256};
 
@@ -18,9 +22,6 @@ const ITEM_COLUMNS: &str = item_columns!("d.body_text");
 /// more is enough to tell whether it was cut. Avoids loading every full body.
 const ITEM_PREVIEW_COLUMNS: &str = item_columns!("substr(d.body_text,1,241)");
 const ITEM_FROM: &str = "documents d JOIN sources s ON s.id=d.source_id LEFT JOIN document_state u ON u.document_id=d.id";
-/// Matches `c` to the latest revision of `d` under the model SHA-256 and config
-/// hash bound next, in that order.
-const LATEST_CLASSIFICATION: &str = "c.document_id=d.id AND c.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id) AND c.model_sha256=? AND c.config_hash=?";
 const RESOURCE_COLUMNS: &str = "id,url,filename,kind,status,mime,bytes,local_path,sha256,error";
 
 type Validators = (Option<String>, Option<String>);
@@ -985,18 +986,12 @@ impl Store {
             if !CATEGORIES.contains(&category.as_str()) {
                 return Err("AI 분류를 확인해 주세요.".into());
             }
-            match self.ai_embedding_model_sha()? {
-                Some(model_sha256) => {
-                    filters.push(format!("EXISTS(SELECT 1 FROM notice_classifications c WHERE {LATEST_CLASSIFICATION} AND c.category=?)"));
-                    values.extend([
-                        model_sha256.into(),
-                        config_hash().to_owned().into(),
-                        category.clone().into(),
-                    ]);
-                }
-                // Without an installed model nothing is classified in scope.
-                None => filters.push("0".into()),
-            }
+            filters.push(format!(
+                "d.id IN (SELECT d.id FROM documents d {} WHERE COALESCE(fc.category,lc.category)=?)",
+                classification_join(LATEST_REVISION)
+            ));
+            values.extend(self.classification_scope()?);
+            values.push(category.clone().into());
         }
         if query.saved_only {
             filters.push("COALESCE(u.saved,0)=1".into());
@@ -1057,22 +1052,20 @@ impl Store {
         if !self.enabled(crate::extensions::AI)? {
             return Ok(None);
         }
-        let Some(model_sha256) = self.ai_embedding_model_sha()? else {
-            return Ok(None);
-        };
         let unfiltered = ArchiveQuery {
             ai_category: None,
             ..query.clone()
         };
         let (mut filters, filter_values) = self.archive_filters(&unfiltered)?;
-        let mut values: Vec<Value> = vec![model_sha256.into(), config_hash().to_owned().into()];
+        let mut values = self.classification_scope()?;
         values.extend(filter_values);
         push_text_filters(terms, &mut filters, &mut values);
         let mut counts = std::collections::HashMap::<Option<String>, u64>::new();
         let mut statement = self
             .connection
             .prepare(&format!(
-                "SELECT c.category,COUNT(*) FROM {ITEM_FROM} LEFT JOIN notice_classifications c ON {LATEST_CLASSIFICATION} WHERE {} GROUP BY c.category",
+                "SELECT COALESCE(fc.category,lc.category),COUNT(*) FROM {ITEM_FROM} {} WHERE {} GROUP BY 1",
+                classification_join(LATEST_REVISION),
                 filters.join(" AND ")
             ))
             .map_err(|e| e.to_string())?;
@@ -1175,9 +1168,10 @@ impl Store {
             .map_err(|e| e.to_string())?;
         Ok(ids)
     }
-    /// Latest-revision vectors of one embedding model that pass the
-    /// non-text filters, newest `SIMILARITY_WINDOW` first, ranked by cosine
-    /// to the query. A hit is kept only near the best one (see the constants).
+    /// Latest-revision vectors (the feed's for a feed notice, `model_sha256`'s
+    /// for any other) that pass the non-text filters, newest
+    /// `SIMILARITY_WINDOW` first, ranked by cosine to the query. A hit is kept
+    /// only near the best one (see the constants).
     fn semantic_ids(
         &self,
         query: &ArchiveQuery,
@@ -1188,16 +1182,16 @@ impl Store {
             return Err("검색 모델 식별자가 올바르지 않습니다.".into());
         }
         let (filters, filter_values) = self.archive_filters(query)?;
-        let mut values: Vec<Value> = vec![model_sha256.to_owned().into()];
+        let mut values: Vec<Value> =
+            vec![FEED_MODEL.to_owned().into(), model_sha256.to_owned().into()];
         values.extend(filter_values);
         values.push((super::intelligence::SIMILARITY_WINDOW as i64).into());
         let mut statement = self
             .connection
             .prepare(&format!(
-                "SELECT d.id,e.dim,e.vector FROM {ITEM_FROM}
-                 JOIN notice_embeddings e ON e.document_id=d.id AND e.model_sha256=?
-                   AND e.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id)
-                 WHERE {} ORDER BY d.published_at DESC,d.id DESC LIMIT ?",
+                "SELECT d.id,{VECTOR_COLUMNS} FROM {ITEM_FROM} {}
+                 WHERE {HAS_VECTOR} AND {} ORDER BY d.published_at DESC,d.id DESC LIMIT ?",
+                vector_join(LATEST_REVISION),
                 filters.join(" AND ")
             ))
             .map_err(|e| e.to_string())?;
@@ -1205,8 +1199,8 @@ impl Store {
             .query_map(params_from_iter(values.iter()), |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
                 ))
             })
             .map_err(|e| e.to_string())?
@@ -1216,7 +1210,7 @@ impl Store {
         let mut scored = rows
             .into_iter()
             .filter_map(|(id, dim, bytes)| {
-                let stored = super::intelligence::decode_embedding(dim, &bytes).ok()?;
+                let stored = decode_vector(dim, &bytes).ok()?;
                 let score = super::intelligence::cosine(vector, &stored)?;
                 score.is_finite().then_some((id, score))
             })

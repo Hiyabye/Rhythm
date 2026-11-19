@@ -247,8 +247,8 @@ fn embedding_model_sha(state: &AppState) -> Result<Option<String>, String> {
     with_store(state, |store| store.ai_embedding_model_sha())
 }
 
-/// Latest-revision classifications for the visible page. Returns nothing when
-/// no embedding model is selected or classification is disabled.
+/// Latest-revision classifications for the visible page: the feed's, plus the
+/// local model's for other notices while one is installed.
 #[tauri::command]
 pub async fn ai_classifications(
     state: tauri::State<'_, AppState>,
@@ -257,11 +257,13 @@ pub async fn ai_classifications(
     if document_ids.len() > 200 || document_ids.iter().any(|id| *id <= 0) {
         return Err("분류 조회 범위를 확인해 주세요.".into());
     }
-    let Some(sha) = embedding_model_sha(&state)? else {
-        return Ok(Vec::new());
-    };
+    let sha = embedding_model_sha(&state)?;
     with_store(&state, |store| {
-        store.ai_classifications_for_documents(&document_ids, &sha, classification::config_hash())
+        store.ai_classifications_for_documents(
+            &document_ids,
+            sha.as_deref()
+                .map(|sha| (sha, classification::config_hash())),
+        )
     })
 }
 
@@ -277,21 +279,19 @@ pub async fn ai_classification(
     if document_id <= 0 || revision_id <= 0 {
         return Err("분류 조회 식별자가 올바르지 않습니다.".into());
     }
-    let Some(sha) = embedding_model_sha(&state)? else {
-        return Ok(None);
-    };
+    let sha = embedding_model_sha(&state)?;
     with_store(&state, |store| {
         store.ai_classification(
             document_id,
             revision_id,
-            &sha,
-            classification::config_hash(),
+            sha.as_deref()
+                .map(|sha| (sha, classification::config_hash())),
         )
     })
 }
 
-/// Similar notices for the reader, from stored vectors only (no model call).
-/// Returns nothing without a selected, installed embedding model.
+/// Similar notices for the reader, from stored vectors only (no model call):
+/// the feed's, plus the local model's while one is installed.
 #[tauri::command]
 pub async fn ai_similar_notices(
     state: tauri::State<'_, AppState>,
@@ -300,12 +300,10 @@ pub async fn ai_similar_notices(
     if document_id <= 0 {
         return Err("비슷한 공지 조회 식별자가 올바르지 않습니다.".into());
     }
-    let Some(sha) = embedding_model_sha(&state)? else {
-        return Ok(Vec::new());
-    };
+    let sha = embedding_model_sha(&state)?;
     with_store(&state, |store| {
         Ok(store
-            .ai_similar_notices(&[document_id], &sha, 5)?
+            .ai_similar_notices(&[document_id], sha.as_deref(), 5)?
             .pop()
             .map(|(_, similar)| similar)
             .unwrap_or_default())
@@ -322,12 +320,10 @@ pub async fn ai_duplicate_notices(
     if document_ids.len() > 200 || document_ids.iter().any(|id| *id <= 0) {
         return Err("비슷한 공지 조회 범위를 확인해 주세요.".into());
     }
-    let Some(sha) = embedding_model_sha(&state)? else {
-        return Ok(Vec::new());
-    };
+    let sha = embedding_model_sha(&state)?;
     with_store(&state, |store| {
         Ok(store
-            .ai_similar_notices(&document_ids, &sha, 1)?
+            .ai_similar_notices(&document_ids, sha.as_deref(), 1)?
             .into_iter()
             .filter_map(|(document_id, similar)| {
                 let duplicates = similar
