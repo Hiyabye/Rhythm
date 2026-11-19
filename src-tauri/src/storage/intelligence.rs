@@ -157,6 +157,17 @@ pub(super) fn classification_join(revision: &str) -> String {
            AND lc.model_sha256=? AND lc.config_hash=?"
     )
 }
+/// The latest-revision category of `d` (NULL when unclassified), chosen as
+/// `classification_join` chooses it and with the same bound values. Only the
+/// branch of the notice's origin runs, so a whole-archive count stays close to
+/// one lookup per notice.
+pub(super) const CURRENT_CATEGORY: &str = "CASE WHEN d.from_feed=1 THEN
+     (SELECT fc.category FROM feed_classifications fc WHERE fc.document_id=d.id
+        AND fc.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id)
+        AND substr(fc.scope,1,instr(fc.scope,'#')-1)=?)
+   ELSE (SELECT lc.category FROM notice_classifications lc WHERE lc.document_id=d.id
+        AND lc.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id)
+        AND lc.model_sha256=? AND lc.config_hash=?) END";
 /// Joins `d` to its vector at `revision` like `classification_join` (`fe`
 /// from the feed, `le` local). Binds the feed model, then the local SHA-256.
 /// `VECTOR_COLUMNS` reads the revision, the local dimension (NULL for the

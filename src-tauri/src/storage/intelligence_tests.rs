@@ -232,7 +232,7 @@ fn database() -> (tempfile::TempDir, Store) {
     populated_schema_two(&path);
     (directory, Store::open(&path).unwrap())
 }
-fn model(id: &str, ownership: &str) -> AiModel {
+pub(super) fn model(id: &str, ownership: &str) -> AiModel {
     AiModel {
         id: id.into(),
         catalog_id: None,

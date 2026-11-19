@@ -1,5 +1,5 @@
 use super::intelligence::{
-    classification_join, decode_vector, vector_join, FEED_MODEL, HAS_VECTOR, LATEST_REVISION,
+    decode_vector, vector_join, CURRENT_CATEGORY, FEED_MODEL, HAS_VECTOR, LATEST_REVISION,
     VECTOR_COLUMNS,
 };
 use super::trash::NOT_TRASHED;
@@ -986,10 +986,7 @@ impl Store {
             if !CATEGORIES.contains(&category.as_str()) {
                 return Err("AI 분류를 확인해 주세요.".into());
             }
-            filters.push(format!(
-                "d.id IN (SELECT d.id FROM documents d {} WHERE COALESCE(fc.category,lc.category)=?)",
-                classification_join(LATEST_REVISION)
-            ));
+            filters.push(format!("({CURRENT_CATEGORY})=?"));
             values.extend(self.classification_scope()?);
             values.push(category.clone().into());
         }
@@ -1064,8 +1061,7 @@ impl Store {
         let mut statement = self
             .connection
             .prepare(&format!(
-                "SELECT COALESCE(fc.category,lc.category),COUNT(*) FROM {ITEM_FROM} {} WHERE {} GROUP BY 1",
-                classification_join(LATEST_REVISION),
+                "SELECT {CURRENT_CATEGORY},COUNT(*) FROM {ITEM_FROM} WHERE {} GROUP BY 1",
                 filters.join(" AND ")
             ))
             .map_err(|e| e.to_string())?;
