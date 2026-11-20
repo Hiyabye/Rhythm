@@ -2,7 +2,7 @@
 
 The v2 collector publishes Sogang's public notices as a signed feed, and the app mirrors it into its own SQLite database (#166). This document is the contract between the two. `crates/feed` (`rhythm-feed`) implements it, and both sides depend on that crate.
 
-The feed is format **1.0**. It carries notice metadata, a 320-character body excerpt, extracted dates, resource links, embedding vectors and server categories. It never carries full bodies, original HTML or resource bytes (#166 D13). Nothing in the feed depends on who reads it, and requests carry no user data.
+The feed is format **1.1** (1.1 added `body_hash`). It carries notice metadata, a 320-character body excerpt and a hash of the full body, extracted dates, resource links, embedding vectors and server categories. It never carries full bodies, original HTML or resource bytes (#166 D13). Nothing in the feed depends on who reads it, and requests carry no user data.
 
 ## Files
 
@@ -43,7 +43,7 @@ Anything else is a major change: removing or renaming a field, changing a field'
 
 | Field | Meaning |
 | --- | --- |
-| `format` | `"1.0"` |
+| `format` | `"1.1"` |
 | `generated_at` | When this manifest was published (RFC 3339 UTC) |
 | `moved_to` | `null`, or the HTTPS base URL the feed moved to (#166 D22). The manifest there must verify like this one |
 | `embedding.model`, `embedding.scope` | The Workers AI model and the scope (model + `rhythm_embed::config_hash`) of new vectors |
@@ -90,6 +90,7 @@ A records file is UTF-8 JSON Lines compressed with zstd. Each line is one object
 | `modified_at` | string? | The site's own change time (RFC 3339 UTC), when it reports one |
 | `body_state` | `normal` \| `unsupported` | `unsupported`: the body could not be read (an iframe, or a scanned or link-only PDF); the notice is metadata only |
 | `excerpt` | string | The first 320 characters (Unicode scalar values) of the body text |
+| `body_hash` | string? | Since 1.1: `rhythm_feed::body_hash`, the SHA-256 (lowercase hex) of the UTF-8 body text, so a client can tell a body change beyond the excerpt from a metadata-only revision. Absent from a 1.0 publisher |
 | `resources[]` | `{url, filename, kind}` | `kind` is `attachment` or `image`. These are links only; the app fetches them under its own policy |
 | `dates[]` | `{day, time?, end_day?, end_time?, label, kind}` | Dates extracted from the full body (#166 O1); `kind` is `deadline`, `start` or `date` |
 | `dates_version` | integer | The `rhythm_sources::dates::EXTRACTOR_VERSION` that produced `dates` |

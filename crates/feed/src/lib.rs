@@ -12,9 +12,9 @@ pub use manifest::{verify, FileRef, Manifest, Signer};
 pub use record::{Entry, Record};
 
 pub const FORMAT_MAJOR: u32 = 1;
-pub const FORMAT_MINOR: u32 = 0;
+pub const FORMAT_MINOR: u32 = 1;
 /// `FORMAT_MAJOR.FORMAT_MINOR`, as the manifest writes it.
-pub const FORMAT: &str = "1.0";
+pub const FORMAT: &str = "1.1";
 /// Body characters a notice record carries instead of its body (#166 O2).
 pub const EXCERPT_CHARS: usize = 320;
 pub const DIMENSIONS: usize = 1024;
@@ -47,6 +47,11 @@ impl std::error::Error for Error {}
 /// A notice body's excerpt: its first `EXCERPT_CHARS` characters.
 pub fn excerpt(body_text: &str) -> String {
     body_text.chars().take(EXCERPT_CHARS).collect()
+}
+
+/// A notice's `body_hash`: the SHA-256 (lowercase hex) of its body text.
+pub fn body_hash(body_text: &str) -> String {
+    manifest::sha256_hex(body_text.as_bytes())
 }
 
 /// The parts of a parsed notice that `revision_hash` covers. Markup is left

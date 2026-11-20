@@ -39,6 +39,10 @@ pub struct Notice {
     pub modified_at: Option<String>,
     pub body_state: BodyState,
     pub excerpt: String,
+    /// `body_hash` of the full body text (format 1.1); `None` from a 1.0
+    /// publisher. Tells a client whether the body changed beyond the excerpt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_hash: Option<String>,
     pub resources: Vec<Resource>,
     pub dates: Vec<NoticeDate>,
     /// `rhythm_sources::dates::EXTRACTOR_VERSION` of `dates`.
