@@ -15,7 +15,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
-tokio = { version = "1", features = ["process", "io-util", "time", "sync", "rt-multi-thread", "macros", "fs", "net"] }
+tokio = { version = "1", features = ["process", "io-util", "time", "sync", "rt-multi-thread", "macros", "fs", "net", "signal"] }
 rusqlite = { version = "0.38", default-features = false, features = ["bundled", "backup"] }
 zip = { version = "9.2.2", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }

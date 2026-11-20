@@ -419,7 +419,7 @@ A load starts `llama-server -m <model> --no-webui --no-slots -np 1 -c 8192 -lv 4
 
 Requests are one HTTP/1.1 exchange per connection to `/v1/embeddings`, with a 120 s deadline and a bounded batch of 32 inputs of at most 8 KiB. Responses need an exact `Content-Length` and are bounded to 4 MiB; a malformed, duplicate, non-finite or wrong-length vector rejects the batch. Stdout is discarded; stderr is drained as bounded diagnostic lines.
 
-A failed request reaps the process and the next one starts a fresh one; a late response is never reused. A crash is observed on the next status or request and never blocks archive or settings access. On Windows the process is in a kill-on-close job object. Inventory changes and the updater wait until the process is reaped (`stop_confirmed`).
+A failed request reaps the process and the next one starts a fresh one; a late response is never reused. A crash is observed on the next status or request and never blocks archive or settings access. On Windows the process is in a kill-on-close job object. On macOS nothing ends a child with its parent, so SIGTERM, SIGINT and SIGHUP take the normal exit path, and the server's pid goes to `run/embedding/llama.pid`: at the next launch, after the data-directory lock, `stop_orphan` ends a server that a killed or crashed Rhythm left behind, only if its command line is a `llama-server` naming that directory (a reused pid is left alone), then deletes the file (#273). Inventory changes and the updater wait until the process is reaped (`stop_confirmed`).
 
 macOS tries Metal first and falls back to CPU for the session after a load or request failure. Windows ships and runs only the CPU build.
 

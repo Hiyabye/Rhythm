@@ -23,6 +23,11 @@ const MAX_LOG_LINE: u64 = 4096;
 // sockaddr_un.sun_path is 104 bytes on macOS (108 on Linux), including the NUL.
 #[cfg(unix)]
 const MAX_SOCKET_PATH: usize = 103;
+/// The running server's pid, so the next launch can end a server left behind
+/// when Rhythm was killed or crashed (#273). Windows needs none: the job object
+/// ends the server with Rhythm.
+#[cfg(unix)]
+const PID_FILE: &str = "llama.pid";
 
 /// One way to start the bundled server.
 #[derive(Clone, Debug)]
@@ -128,6 +133,12 @@ impl Server {
         }
         let observed = Arc::new(Mutex::new(Observed::default()));
         let (mut child, job) = spawn(command, observed.clone())?;
+        #[cfg(unix)]
+        if let Some(pid) = child.id() {
+            if std::fs::write(runtime.join(PID_FILE), pid.to_string()).is_err() {
+                eprintln!("AI engine: could not record the server pid");
+            }
+        }
         let ready =
             wait_until_ready(&mut child, key.as_deref(), &socket, &observed, deadline).await;
         let _ = std::fs::remove_file(&key_file);
@@ -136,6 +147,8 @@ impl Server {
             Err(error) => {
                 reap(&mut child).await;
                 let _ = std::fs::remove_file(&socket);
+                #[cfg(unix)]
+                let _ = std::fs::remove_file(runtime.join(PID_FILE));
                 return Err(error);
             }
         };
@@ -219,6 +232,8 @@ impl Server {
             let _ = std::fs::remove_file(socket);
         }
         let _ = std::fs::remove_file(self.runtime.join("llama.key"));
+        #[cfg(unix)]
+        let _ = std::fs::remove_file(self.runtime.join(PID_FILE));
     }
 
     /// Like `stop`, but reports whether the exit was confirmed.
@@ -246,6 +261,59 @@ impl Server {
         self.stop().await;
         Ok(())
     }
+}
+
+/// Ends a server that an earlier Rhythm process left running in `runtime`:
+/// `kill_on_drop` and the exit path never run when Rhythm is killed or
+/// crashes, and launchd then adopts the server with its model in memory. Call
+/// once at launch, after the data-directory lock and before any server starts.
+/// Only a process whose command line is a `llama-server` naming this runtime
+/// directory is signalled, so a reused pid is left alone.
+#[cfg(unix)]
+pub(crate) fn stop_orphan(runtime: &Path) {
+    let file = runtime.join(PID_FILE);
+    let Ok(text) = std::fs::read_to_string(&file) else {
+        return;
+    };
+    // 0 and 1 would signal a process group or launchd.
+    if let Some(pid) = text.trim().parse::<u32>().ok().filter(|pid| *pid > 1) {
+        let ours = || command_line(pid).is_some_and(|command| owns(&command, runtime));
+        if ours() {
+            eprintln!("AI engine: stopping server {pid} left by an earlier run");
+            signal(pid, "-TERM");
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while ours() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            if ours() {
+                signal(pid, "-KILL");
+            }
+        }
+    }
+    let _ = std::fs::remove_file(file);
+}
+
+#[cfg(unix)]
+fn command_line(pid: u32) -> Option<String> {
+    let output = std::process::Command::new("/bin/ps")
+        .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let command = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (output.status.success() && !command.is_empty()).then_some(command)
+}
+
+/// The server names its socket or key file, both inside `runtime`.
+#[cfg(unix)]
+fn owns(command: &str, runtime: &Path) -> bool {
+    command.contains("llama-server") && command.contains(&format!("{}/llama.", runtime.display()))
+}
+
+#[cfg(unix)]
+fn signal(pid: u32, name: &str) {
+    let _ = std::process::Command::new("/bin/kill")
+        .args([name, &pid.to_string()])
+        .status();
 }
 
 /// Creates the private runtime directory: only this user may enter it, so only
@@ -637,5 +705,64 @@ mod tests {
         assert!(error.contains("불러오지 못했습니다"), "{error}");
         assert!(!runtime.join("llama.key").exists());
         assert!(!runtime.join("llama.sock").exists());
+        assert!(!runtime.join(PID_FILE).exists());
+    }
+
+    #[cfg(unix)]
+    async fn start_fake(directory: &Path) -> (Server, PathBuf) {
+        let (executable, model) = super::super::test_worker::fake_engine(directory, "ok");
+        let runtime = directory.join("run");
+        let launch = Launch {
+            executable,
+            backend: "cpu",
+            context: 1024,
+            pooling: "last".into(),
+        };
+        let server = Server::start(&launch, &model, &runtime, Duration::from_secs(20))
+            .await
+            .unwrap();
+        (server, runtime)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_server_left_by_a_killed_app_is_stopped_at_the_next_launch() {
+        let directory = tempfile::tempdir().unwrap();
+        // A normal stop leaves no pid behind.
+        let (server, runtime) = start_fake(&directory.path().join("a")).await;
+        assert!(runtime.join(PID_FILE).exists());
+        server.stop().await;
+        assert!(!runtime.join(PID_FILE).exists());
+
+        // As if Rhythm were killed: neither `stop` nor `kill_on_drop` runs.
+        let (server, runtime) = start_fake(&directory.path().join("b")).await;
+        let pid = server.process_id().unwrap();
+        std::mem::forget(server);
+        assert!(command_line(pid).is_some_and(|c| owns(&c, &runtime)));
+        stop_orphan(&runtime);
+        // This test process is its parent, so only a zombie remains.
+        assert!(!command_line(pid).is_some_and(|c| owns(&c, &runtime)));
+        assert!(!runtime.join(PID_FILE).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pid_reused_by_another_process_is_left_alone() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = directory.path().join("run");
+        prepare_runtime(&runtime).unwrap();
+        let mut other = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        std::fs::write(runtime.join(PID_FILE), other.id().to_string()).unwrap();
+        stop_orphan(&runtime);
+        assert!(
+            other.try_wait().unwrap().is_none(),
+            "an unrelated process was signalled"
+        );
+        assert!(!runtime.join(PID_FILE).exists());
+        other.kill().unwrap();
+        other.wait().unwrap();
     }
 }
