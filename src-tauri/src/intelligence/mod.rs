@@ -7,6 +7,8 @@ mod evaluation;
 pub(crate) mod model_storage;
 pub mod models;
 mod server;
+#[cfg(unix)]
+pub(crate) use server::stop_orphan;
 #[cfg(test)]
 mod test_worker;
 

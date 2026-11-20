@@ -325,6 +325,29 @@ mod notification_launch_queue_tests {
 const RESTORE_FAILED_NOTE: &str =
     "\n\n기존 파일은 보존했습니다. 오류 원인을 확인한 뒤 다시 실행해 주세요.";
 
+/// Routes SIGTERM, SIGINT and SIGHUP (`kill`, Ctrl-C, logout) through the
+/// normal exit, so `RunEvent::Exit` stops jobs and reaps the embedding server
+/// (#273). SIGKILL and crashes are left to `intelligence::stop_orphan` at the
+/// next launch.
+#[cfg(unix)]
+async fn quit_on_signal(app: tauri::AppHandle) {
+    use tokio::signal::unix::{signal, SignalKind};
+    let (Ok(mut term), Ok(mut interrupt), Ok(mut hangup)) = (
+        signal(SignalKind::terminate()),
+        signal(SignalKind::interrupt()),
+        signal(SignalKind::hangup()),
+    ) else {
+        eprintln!("종료 신호 처리를 설정하지 못했습니다.");
+        return;
+    };
+    tokio::select! {
+        _ = term.recv() => {}
+        _ = interrupt.recv() => {}
+        _ = hangup.recv() => {}
+    }
+    app.exit(0);
+}
+
 fn main() {
     let context = tauri::generate_context!();
     #[cfg(windows)]
@@ -475,9 +498,13 @@ fn main() {
                 .resource_dir()
                 .map_err(std::io::Error::other)?
                 .join("llama");
+            let runtime = data_root.join("run").join("embedding");
+            // A server that a killed or crashed Rhythm left running still holds
+            // its model in memory (#273).
+            #[cfg(unix)]
+            intelligence::stop_orphan(&runtime);
             let classifier = Arc::new(intelligence::classification::Controller::new(
-                &llama,
-                &data_root.join("run").join("embedding"),
+                &llama, &runtime,
             ));
             let hardware = intelligence::models::hardware(&data_root);
             let maintenance_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -540,6 +567,8 @@ fn main() {
                 // not take away archive, AI or settings access.
                 eprintln!("Proactive: 스케줄러를 시작하지 못했습니다: {error}");
             }
+            #[cfg(unix)]
+            tauri::async_runtime::spawn(quit_on_signal(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
