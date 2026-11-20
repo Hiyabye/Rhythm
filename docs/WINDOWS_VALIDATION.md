@@ -9,6 +9,8 @@ What has actually been observed on Windows 11 x64. Build setup is in [Windows](W
 - **Contributor PC, #36 (in-app update), 2026-11-04.** The same PC (NVIDIA driver 31.0.15.5244), commit `fa86dad`, a fresh clone with `core.autocrlf=false`. Builds used a validation identifier, a disposable updater key and a loopback manifest; the evidence archive is attached to issue #36.
 - **GitHub CI (`windows-latest`).** Every pull request and push to `main` that touches Rust runs Clippy and tests for the workspace on a hosted Windows Server runner, including supervision tests against a fake `llama-server` and a lifecycle test of the staged real CPU build without model weights. `main` also builds the NSIS installer when packaging inputs change. These tests check supervision, not inference.
 
+**v2 (feed) is unobserved on Windows.** The feed sync, body and files on open, feed categories, search and similar notices, the CPU classifier and query embedding have never run natively on Windows; v2.0.0 shipped on CI evidence alone (user decision 2026-11-20, no Windows PC available). The checks are listed in #271.
+
 No second PC or VM has been tested. The only installed runs of the current codebase are the PR #63 and #36 builds under validation identifiers (see [AI on Windows](#ai-on-windows) and [In-app update](#in-app-update)).
 
 ## Automated checks on the contributor PC (PR #2, shared identifier)

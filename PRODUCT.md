@@ -14,9 +14,11 @@ One primary user: the author, a Sogang University computer science and engineeri
 
 The job: never miss school information that matters, without checking a dozen university boards by hand, while keeping all personal data on the device.
 
+Since v2.0.0 one central collector (a scheduled GitHub Actions job) gathers the public boards, embeds and classifies them once through Cloudflare Workers AI, and publishes a signed feed; every app mirrors the whole feed, so the server learns nothing about any user. Personal data (interests, feedback, saved and read state, todos, search queries, Cybercampus) never leaves the device.
+
 ## Product Purpose
 
-Rhythm collects public Sogang notice boards into a local archive. It ranks what matters to this user with explainable, deterministic rules, finds dates in notice text for a local calendar, and can classify notices with a small local embedding model. Archived content stays readable and searchable offline.
+Rhythm mirrors public Sogang notice boards from the signed feed into a local archive and fetches a notice's full body and files from the school when the user opens it. It ranks what matters to this user with explainable, deterministic rules, shows the feed's dates in a local calendar and the feed's categories and similar notices, and embeds search queries and Cybercampus notices with a small local embedding model. Archived content stays readable and searchable offline.
 
 The direction is a personal planning hub: the place the user's day is organized around. Notices are the first data source. An opt-in Cybercampus connector adds the user's own course notices and deadlines. Possible later extensions (opportunities, calendar and tasks, a personal agent) share the same archive, search and personalization core. These extensions are possible future decisions, not current features.
 
@@ -24,16 +26,16 @@ Success: the user trusts Rhythm to bring forward what matters, at the right time
 
 ## Positioning
 
-- **Local-first by construction.** No account, cloud database or telemetry. Classification runs on the device in a bundled llama.cpp server that only Rhythm starts and can reach; notice text never leaves the device for AI.
+- **Local-first for everything personal.** No account, telemetry or cloud storage of user data. Public notices come from one signed feed that is identical for every user; the app never uploads anything. Search queries and Cybercampus notices are embedded on the device in a bundled llama.cpp server that only Rhythm starts and can reach.
 - **Explainable, not oracular.** Recommendations are ranked by deterministic score signals, never by a model. Today keeps each pick to one line, so the signals are not shown there (user decision, 2026-11-07). AI output is optional and labeled. Its only effect on ranking is a small, capped bonus for notices similar to ones the user saved or marked interested, shown as a reason and off while AI is off; it never creates urgency.
 - **User decides.** Subscriptions, collection, model installs, background sync and notifications are all off until the user turns them on. Learned preferences can be inspected, edited and deleted.
-- **Archive, not a feed.** Notices are preserved with meaningful revision history, local attachments and offline reading. Fetch/parse failures never erase good content.
+- **An archive, not just a feed reader.** Notices are preserved with meaningful revision history, local attachments and offline reading once opened. Fetch/parse failures never erase good content.
 
 ## Operating Context
 
 The usage moments that matter most:
 
-1. **Background + alerts.** Rhythm runs from the menu bar (the notification area on Windows) with the window closed. Scheduled incremental sync and native notifications pull the user in only when something matters (sensitivity modes, quiet hours, deduplication, rate limits).
+1. **Background + alerts.** Rhythm runs from the menu bar (the notification area on Windows) with the window closed. The feed sync (every 30 minutes while open), opt-in Cybercampus sync and native notifications pull the user in only when something matters (sensitivity modes, quiet hours, deduplication, rate limits).
 2. **Planning hub.** Rhythm becomes the center of the day, especially as planning-oriented extensions arrive.
 
 Also supported but secondary: a quick check of Today, deep reading of long notices with tables and attachments, and archive search.
@@ -44,10 +46,10 @@ Current information architecture: every feature beyond the core shell is a built
 
 ## Capabilities and Constraints
 
-- 34 cataloged public sources, all supported (main academic, five computing, four engineering, nine electronic/system semiconductor department, three dormitory, seven mechanical engineering and five semiconductor engineering boards), plus the opt-in Cybercampus course-notice source that needs the user's own login. Unsupported sources, if any, are shown as such and are never presented as working.
-- Historical import (resumable, cancellable) stays a separate pass from incremental "new and changed" checks, but one manual **새로고침** runs the new-notice pass first and then continues unfinished history. Progress shows real counts and phases, never fabricated percentages.
+- 34 cataloged public sources, all supported (main academic, five computing, four engineering, nine electronic/system semiconductor department, three dormitory, seven mechanical engineering and five semiconductor engineering boards), delivered through the feed, plus the opt-in Cybercampus course-notice source that the app collects itself with the user's own login. Unsupported sources, if any, are shown as such and are never presented as working.
+- Public boards have no collect controls in the app: the board settings show the feed's age, the last check and each board's collector health, and a stale feed or a feed format the app cannot read is shown, never hidden. Cybercampus keeps **새로고침**; its progress shows real counts and phases, never fabricated percentages.
 - Reader: sanitized local content only, with no scripts, iframes, remote images or live school pages. Original links open in the OS browser on explicit action. Attachments are revealed in Finder or File Explorer, never executed. Iframe-only notices keep metadata only and explain why, except that a school PDF-viewer body is shown as the PDF's extracted text with the PDF attached.
-- Local AI: the Qwen3-Embedding 0.6B GGUF, user-installed, run by a bundled llama.cpp server (Metal or CPU on macOS; CPU on Windows) for category classification, similar notices and meaning-based search. AI summaries and the remote engine were retired (#226). Calendar dates come from deterministic text rules, not a model. Classification and dates can be wrong, and the UI must say to verify in the original.
+- AI: feed notices carry the collector's Qwen3-Embedding 0.6B vectors and categories (Workers AI), so categories and similar notices need no local model. The same model as a user-installed GGUF, run by a bundled llama.cpp server (Metal or CPU on macOS; CPU on Windows), embeds search queries for meaning-based search and classifies Cybercampus notices. AI summaries and the remote engine were retired (#226). Calendar dates come from deterministic text rules, not a model. Classification and dates can be wrong, and the UI must say to verify in the original.
 - Personalization: explicit interests, per-notice interested/not interested feedback, learned topics from saves and positive feedback only, 180-day expiry, full reset.
 - Lifecycle: close-to-background, login start, hidden login start, scheduler and notifications all default off. The automatic update check (builds with the updater key) defaults on by user decision; it only announces, and installing always needs confirmation.
 - Single-file `.rhythm-backup` backup/restore (unencrypted, excludes model weights). Restore quits the app and finalizes on the next manual launch.
