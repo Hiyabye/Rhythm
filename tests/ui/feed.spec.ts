@@ -62,3 +62,15 @@ test('without the notice extension the feed is not polled', async ({ page }) => 
   expect(await callCount(page, 'feed_status')).toBe(0);
   await expect(page.locator('.banner').filter({ hasText: '공지 피드' })).toHaveCount(0);
 });
+
+test('the sidebar dates public boards by the last feed check, not their old crawl', async ({ page }) => {
+  const sourceList = [{ id: 'sogang-academic', name: '학사공지', organization: '서강대학교', supported: true, subscribed: true, last_success: '2026-10-01T00:00:00.000Z' }];
+  await mockDesktop(page, { sourceList });
+  await page.goto('/');
+  await expect(page.locator('.sync-line')).toHaveText('마지막 확인 11월 18일');
+
+  // A feed never checked leaves nothing to show, whatever the v1 crawl recorded.
+  await mockDesktop(page, { sourceList, feed: { checked_at: null } });
+  await page.goto('/');
+  await expect(page.locator('.sync-line')).toHaveText('아직 가져온 적 없음');
+});

@@ -471,7 +471,7 @@ fn a_populated_profile_upgrades_and_a_failed_upgrade_rolls_back() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}PRAGMA user_version=36;"
+                "{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}PRAGMA user_version=36;"
             ))
             .unwrap();
     }
@@ -491,7 +491,7 @@ fn a_populated_profile_upgrades_and_a_failed_upgrade_rolls_back() {
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}CREATE TABLE feed_state(id INTEGER); PRAGMA user_version=36;"
+            "{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}CREATE TABLE feed_state(id INTEGER); PRAGMA user_version=36;"
         ))
         .unwrap();
     assert!(Store::open(&path).is_err());
@@ -652,7 +652,7 @@ fn a_schema_37_profile_upgrades_and_a_failed_upgrade_rolls_back() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_BODY_HASH}{UNDO_FEED_SYNC}PRAGMA user_version=37;"
+                "{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}PRAGMA user_version=37;"
             ))
             .unwrap();
     }
@@ -667,7 +667,7 @@ fn a_schema_37_profile_upgrades_and_a_failed_upgrade_rolls_back() {
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_BODY_HASH}{UNDO_FEED_SYNC}CREATE TABLE feed_boards(id INTEGER); PRAGMA user_version=37;"
+            "{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}CREATE TABLE feed_boards(id INTEGER); PRAGMA user_version=37;"
         ))
         .unwrap();
     assert!(Store::open(&path).is_err());
@@ -1111,6 +1111,133 @@ fn renamed_attachment(mut notice: Notice) -> Notice {
 fn without_body_hash(mut notice: Notice) -> Notice {
     notice.body_hash = None;
     notice
+}
+fn seen_at(id: &str, first_seen_at: &str) -> Notice {
+    Notice {
+        first_seen_at: first_seen_at.into(),
+        ..feed_notice(id, &format!("본문 {id}"))
+    }
+}
+fn accept(store: &Store, generated_at: &str) {
+    store
+        .feed_accept(&manifest(generated_at, &[]), "https://feed.example.org/")
+        .unwrap();
+}
+fn new_since_sync(store: &Store) -> u64 {
+    store.archive_summary().unwrap().new_since_sync
+}
+
+#[test]
+fn new_since_sync_counts_what_the_latest_manifest_brought() {
+    let (_directory, store) = database();
+    store
+        .catalog(&[
+            definition("one", "main"),
+            definition("cybercampus", "cybercampus"),
+        ])
+        .unwrap();
+    // A notice the app crawled in v1 never counts, however recent.
+    store
+        .upsert_article("one", &article("v1", "예전 본문"), false)
+        .unwrap();
+    // The first sync has no previous manifest to compare with.
+    accept(&store, "2026-11-18T12:00:00.000Z");
+    store
+        .feed_apply_snapshot(
+            1,
+            &[upsert(1, &seen_at("1", "2026-11-18T11:40:00.000Z"))],
+            &[],
+        )
+        .unwrap();
+    assert_eq!(new_since_sync(&store), 0);
+
+    accept(&store, "2026-11-18T12:30:00.000Z");
+    segment(
+        &store,
+        2,
+        &[
+            seen_at("2", "2026-11-18T12:10:00.000Z"),
+            seen_at("3", "2026-11-18T12:20:00.000Z"),
+        ],
+    );
+    assert_eq!(new_since_sync(&store), 2);
+    // The same manifest again (a sync with nothing new) keeps the count.
+    accept(&store, "2026-11-18T12:30:00.000Z");
+    store.feed_record(FeedResult::Ok, None).unwrap();
+    assert_eq!(new_since_sync(&store), 2);
+    // A historical backfill notice does not count either.
+    accept(&store, "2026-11-18T13:00:00.000Z");
+    segment(
+        &store,
+        4,
+        &[
+            seen_at("4", "2026-11-18T12:40:00.000Z"),
+            Notice {
+                historical: true,
+                ..seen_at("5", "2026-11-18T12:45:00.000Z")
+            },
+        ],
+    );
+    assert_eq!(new_since_sync(&store), 1);
+    // A newer manifest that brought nothing resets it.
+    accept(&store, "2026-11-18T13:30:00.000Z");
+    assert_eq!(new_since_sync(&store), 0);
+
+    // Cybercampus keeps its own run-based rule.
+    store
+        .upsert_article("cybercampus", &article("A-1", "강의 공지"), false)
+        .unwrap();
+    assert_eq!(new_since_sync(&store), 1);
+}
+
+#[test]
+fn a_schema_40_profile_starts_counting_at_the_next_manifest() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    {
+        let store = Store::open(&path).unwrap();
+        store.catalog(&[definition("one", "main")]).unwrap();
+        accept(&store, "2026-11-18T12:00:00.000Z");
+        store
+            .feed_apply_snapshot(
+                1,
+                &[upsert(1, &seen_at("1", "2026-11-18T11:40:00.000Z"))],
+                &[],
+            )
+            .unwrap();
+        accept(&store, "2026-11-18T12:30:00.000Z");
+        segment(&store, 2, &[seen_at("2", "2026-11-18T12:10:00.000Z")]);
+        store
+            .connection
+            .execute_batch(&format!("{UNDO_PREVIOUS_MANIFEST}PRAGMA user_version=40;"))
+            .unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
+    assert_eq!(new_since_sync(&store), 0);
+    accept(&store, "2026-11-18T13:00:00.000Z");
+    segment(&store, 3, &[seen_at("3", "2026-11-18T12:40:00.000Z")]);
+    assert_eq!(new_since_sync(&store), 1);
+    drop(store);
+
+    // The column left in place makes 041 fail; the open changes nothing.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("PRAGMA user_version=40;")
+        .unwrap();
+    assert!(Store::open(&path).is_err());
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let (version, previous): (i64, Option<String>) = connection
+        .query_row(
+            "SELECT (SELECT user_version FROM pragma_user_version),previous_generated_at FROM feed_state",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (version, previous.as_deref()),
+        (40, Some("2026-11-18T12:30:00.000Z"))
+    );
 }
 fn segment(store: &Store, from: u64, notices: &[Notice]) {
     let entries: Vec<Entry> = notices

@@ -1220,8 +1220,14 @@ impl Store {
             ai_categories: self.ai_category_counts(query, &terms)?,
         })
     }
+    /// `new_since_sync` counts what the latest sync brought: Cybercampus
+    /// notices collected since its previous successful run, and feed notices
+    /// the collector first saw after the manifest accepted before the latest
+    /// one (a feed notice's `collected_at` is that first sighting). The first
+    /// feed sync has no previous manifest and counts nothing.
     pub(crate) fn archive_summary(&self) -> Result<ArchiveSummary, String> {
-        self.connection.query_row(&format!("SELECT COUNT(*),COALESCE(SUM(COALESCE(u.is_read,0)=0),0),COALESCE(SUM(COALESCE(u.saved,0)=1),0),COALESCE(SUM(d.historical=0 AND d.collected_at>=COALESCE(s.previous_success,'1970')),0),(SELECT COALESCE(SUM(bytes),0) FROM (SELECT MAX(bytes) bytes FROM resources WHERE status='downloaded' GROUP BY local_path)),(SELECT COUNT(*) FROM trashed_documents) FROM documents d JOIN sources s ON s.id=d.source_id LEFT JOIN document_state u ON u.document_id=d.id WHERE {NOT_TRASHED}"),[],|r|Ok(ArchiveSummary {documents:r.get::<_,i64>(0)? as u64,unread:r.get::<_,i64>(1)? as u64,saved:r.get::<_,i64>(2)? as u64,new_since_sync:r.get::<_,i64>(3)? as u64,resource_bytes:r.get::<_,i64>(4)? as u64,trashed:r.get::<_,i64>(5)? as u64})).map_err(|e|e.to_string())
+        const CYBERCAMPUS: &str = crate::archive::catalog::CYBERCAMPUS_SOURCE_ID;
+        self.connection.query_row(&format!("SELECT COUNT(*),COALESCE(SUM(COALESCE(u.is_read,0)=0),0),COALESCE(SUM(COALESCE(u.saved,0)=1),0),COALESCE(SUM(d.historical=0 AND CASE WHEN d.source_id='{CYBERCAMPUS}' THEN d.collected_at>=COALESCE(s.previous_success,'1970') ELSE d.from_feed=1 AND d.collected_at>COALESCE((SELECT previous_generated_at FROM feed_state WHERE id=1),'9999') END),0),(SELECT COALESCE(SUM(bytes),0) FROM (SELECT MAX(bytes) bytes FROM resources WHERE status='downloaded' GROUP BY local_path)),(SELECT COUNT(*) FROM trashed_documents) FROM documents d JOIN sources s ON s.id=d.source_id LEFT JOIN document_state u ON u.document_id=d.id WHERE {NOT_TRASHED}"),[],|r|Ok(ArchiveSummary {documents:r.get::<_,i64>(0)? as u64,unread:r.get::<_,i64>(1)? as u64,saved:r.get::<_,i64>(2)? as u64,new_since_sync:r.get::<_,i64>(3)? as u64,resource_bytes:r.get::<_,i64>(4)? as u64,trashed:r.get::<_,i64>(5)? as u64})).map_err(|e|e.to_string())
     }
     pub(crate) fn document(
         &self,

@@ -1,7 +1,7 @@
 use super::*;
 use crate::storage::{
     UNDO_ALERTS, UNDO_BODY_HASH, UNDO_DATES, UNDO_FEED, UNDO_FEED_SYNC, UNDO_MINI_GEOMETRY,
-    UNDO_REMINDERS, UNDO_TODO_DOCUMENT,
+    UNDO_PREVIOUS_MANIFEST, UNDO_REMINDERS, UNDO_TODO_DOCUMENT,
 };
 
 fn fixture() -> (tempfile::TempDir, Store) {
@@ -475,7 +475,7 @@ fn populated_schema_twenty_eight_upgrade_and_settings_backup_preserve_rules_with
     settings.clock_format = "24h".into();
     settings.auto_trash_months = 6;
     store.save(&settings).unwrap();
-    store.connection.execute_batch(&format!("{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS} PRAGMA user_version=28;")).unwrap();
+    store.connection.execute_batch(&format!("{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS} PRAGMA user_version=28;")).unwrap();
     drop(store);
     let store = Store::open(&directory.path().join("alerts.db")).unwrap();
     assert_eq!(store.studium_auto_interval().unwrap(), 17);
@@ -531,7 +531,7 @@ fn populated_schema_twenty_eight_upgrade_and_settings_backup_preserve_rules_with
 #[test]
 fn alert_migration_failure_keeps_schema_twenty_eight_and_sentinel() {
     let (directory, store) = fixture();
-    store.connection.execute_batch(&format!("{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS} CREATE TABLE studium_alert_rules(sentinel TEXT); INSERT INTO studium_alert_rules VALUES('keep'); PRAGMA user_version=28;")).unwrap();
+    store.connection.execute_batch(&format!("{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS} CREATE TABLE studium_alert_rules(sentinel TEXT); INSERT INTO studium_alert_rules VALUES('keep'); PRAGMA user_version=28;")).unwrap();
     drop(store);
     assert!(Store::open(&directory.path().join("alerts.db")).is_err());
     let connection = Connection::open(directory.path().join("alerts.db")).unwrap();
