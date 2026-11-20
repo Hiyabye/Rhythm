@@ -235,6 +235,7 @@ fn valid_notice(notice: &Notice) -> bool {
         && !notice.published_at.trim().is_empty()
         && notice.published_at.len() <= 64
         && notice.excerpt.len() <= MAX_TEXT
+        && notice.body_hash.as_deref().is_none_or(is_sha256)
         && notice.resources.len() <= MAX_RESOURCES
         && notice
             .resources
@@ -311,8 +312,9 @@ fn upsert(
                     .map_err(|e| e.to_string())?;
                 connection
                     .execute(
-                        "UPDATE document_revisions SET revision_hash=?2 WHERE id=(SELECT MAX(id) FROM document_revisions WHERE document_id=?1)",
-                        params![id, notice.revision_hash],
+                        "UPDATE document_revisions SET revision_hash=?2,body_hash=COALESCE(body_hash,?3)
+                         WHERE id=(SELECT MAX(id) FROM document_revisions WHERE document_id=?1)",
+                        params![id, notice.revision_hash, notice.body_hash],
                     )
                     .map_err(|e| e.to_string())?;
                 // The feed's dates stand in only while the body is not here.
@@ -395,8 +397,8 @@ fn upsert(
     connection
         .execute(
             "INSERT INTO document_revisions(document_id,canonical_url,title,author,category,published_at,
-               modified_at,original,body_html,body_text,content_hash,revision_hash)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,'','',?8,?9,?9)",
+               modified_at,original,body_html,body_text,content_hash,revision_hash,body_hash)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,'','',?8,?9,?9,?10)",
             params![
                 id,
                 notice.canonical_url,
@@ -406,7 +408,8 @@ fn upsert(
                 notice.published_at,
                 notice.modified_at,
                 notice.excerpt,
-                notice.revision_hash
+                notice.revision_hash,
+                notice.body_hash
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -609,8 +612,10 @@ impl Store {
     /// so freshness and notifications are unchanged. With `compare` the
     /// article's `revision_hash` decides whether the school's text is the
     /// revision the feed described; without it (a PDF-viewer notice, whose
-    /// body is the PDF's text) the feed's hash is kept. A revised text takes its own hash, so the feed's later record
-    /// of that revision keeps this body. Nothing changes when the body arrived
+    /// body is the PDF's text) the feed's `revision_hash` and `body_hash` are
+    /// kept, so its next revision compares with what the collector saw. A
+    /// revised text takes its own hashes, so the feed's later record of that
+    /// revision keeps this body. Nothing changes when the body arrived
     /// meanwhile (another open, the crawler) or the notice left the feed.
     pub(crate) fn fill_feed_body(
         &self,
@@ -653,7 +658,7 @@ impl Store {
             .execute(
                 "UPDATE document_revisions SET canonical_url=?2,title=?3,author=?4,category=?5,
                    published_at=?6,modified_at=?7,original=?8,body_html=?9,body_text=?10,
-                   content_hash=?11,revision_hash=?12
+                   content_hash=?11,revision_hash=?12,body_hash=COALESCE(?13,body_hash)
                  WHERE id=?1",
                 params![
                     revision,
@@ -667,7 +672,8 @@ impl Store {
                     article.body_html,
                     article.body_text,
                     content_hash,
-                    revision_hash
+                    revision_hash,
+                    compare.then(|| rhythm_feed::body_hash(&article.body_text))
                 ],
             )
             .map_err(|e| e.to_string())?;

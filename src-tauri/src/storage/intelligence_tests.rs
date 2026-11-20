@@ -1351,7 +1351,7 @@ fn schema_thirty_six_accepts_revised_categories_and_keeps_old_rows() {
     Connection::open(&path)
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_FEED_SYNC}{UNDO_FEED}DROP TABLE notice_classifications;
+            "{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}DROP TABLE notice_classifications;
              CREATE TABLE notice_classifications (
               document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
               revision_id INTEGER NOT NULL,

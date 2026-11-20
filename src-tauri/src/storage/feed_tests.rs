@@ -1,6 +1,7 @@
 use super::*;
 use crate::archive::model::*;
 use feed::{Applied, FeedResult};
+use proactive::ProactiveEventKind;
 use rhythm_feed::{
     record::{
         BodyState, Classification, DateKind, Embedding, Entry, Notice, NoticeDate, Record, Removal,
@@ -73,6 +74,7 @@ fn notice(source: &str, article: &ArticleInput) -> Notice {
         modified_at: None,
         body_state: BodyState::Normal,
         excerpt: rhythm_feed::excerpt(&article.body_text),
+        body_hash: Some(rhythm_feed::body_hash(&article.body_text)),
         resources: vec![Resource {
             url: "https://www.sogang.ac.kr/file/a.pdf".into(),
             filename: "a.pdf".into(),
@@ -469,7 +471,7 @@ fn a_populated_profile_upgrades_and_a_failed_upgrade_rolls_back() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_FEED_SYNC}{UNDO_FEED}PRAGMA user_version=36;"
+                "{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}PRAGMA user_version=36;"
             ))
             .unwrap();
     }
@@ -489,7 +491,7 @@ fn a_populated_profile_upgrades_and_a_failed_upgrade_rolls_back() {
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_FEED_SYNC}{UNDO_FEED}CREATE TABLE feed_state(id INTEGER); PRAGMA user_version=36;"
+            "{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}CREATE TABLE feed_state(id INTEGER); PRAGMA user_version=36;"
         ))
         .unwrap();
     assert!(Store::open(&path).is_err());
@@ -674,7 +676,9 @@ fn a_schema_37_profile_upgrades_and_a_failed_upgrade_rolls_back() {
             .unwrap();
         store
             .connection
-            .execute_batch(&format!("{UNDO_FEED_SYNC}PRAGMA user_version=37;"))
+            .execute_batch(&format!(
+                "{UNDO_BODY_HASH}{UNDO_FEED_SYNC}PRAGMA user_version=37;"
+            ))
             .unwrap();
     }
     let store = Store::open(&path).unwrap();
@@ -688,7 +692,7 @@ fn a_schema_37_profile_upgrades_and_a_failed_upgrade_rolls_back() {
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_FEED_SYNC}CREATE TABLE feed_boards(id INTEGER); PRAGMA user_version=37;"
+            "{UNDO_BODY_HASH}{UNDO_FEED_SYNC}CREATE TABLE feed_boards(id INTEGER); PRAGMA user_version=37;"
         ))
         .unwrap();
     assert!(Store::open(&path).is_err());
@@ -1098,4 +1102,183 @@ fn feed_vectors_and_categories_back_ai_and_local_rows_cover_other_notices() {
             .unwrap(),
         vec![(v1, revision(v1))]
     );
+}
+
+/// Notification candidates above the baseline as (external id, kind), then
+/// the baseline moves past them so the next step starts clean.
+fn take_candidates(store: &Store) -> Vec<(String, ProactiveEventKind)> {
+    let found = store
+        .proactive_candidates(100)
+        .unwrap()
+        .into_iter()
+        .map(|c| {
+            let id: String = store
+                .connection
+                .query_row(
+                    "SELECT external_id FROM documents WHERE id=?1",
+                    [c.document_id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            (id, c.event_type)
+        })
+        .collect();
+    store.proactive_establish_baseline().unwrap();
+    found
+}
+/// `notice` as a later revision whose attachment was renamed: the body and
+/// title stay, so it is not news.
+fn renamed_attachment(mut notice: Notice) -> Notice {
+    notice.resources[0].filename = "b.pdf".into();
+    notice.revision_hash = rhythm_feed::body_hash("renamed");
+    notice
+}
+/// `notice` as a 1.0 publisher sends it: no `body_hash`.
+fn without_body_hash(mut notice: Notice) -> Notice {
+    notice.body_hash = None;
+    notice
+}
+fn segment(store: &Store, from: u64, notices: &[Notice]) {
+    let entries: Vec<Entry> = notices
+        .iter()
+        .enumerate()
+        .map(|(i, n)| upsert(from + i as u64, n))
+        .collect();
+    let to = from + notices.len() as u64 - 1;
+    store
+        .feed_apply_segment(from, to, &entries, &[], false)
+        .unwrap();
+}
+
+#[test]
+fn feed_arrivals_notify_only_when_the_title_or_body_changed() {
+    use ProactiveEventKind::{New, Revision};
+    let (_directory, store) = database();
+    let long = format!("{}끝 A", "가".repeat(400));
+    store
+        .feed_apply_snapshot(
+            2,
+            &[
+                upsert(1, &feed_notice("seen", "본문")),
+                upsert(2, &feed_notice("long", &long)),
+            ],
+            &[],
+        )
+        .unwrap();
+    assert_eq!(take_candidates(&store), [], "a first sync is not news");
+
+    let mut backlog = feed_notice("backlog", "본문");
+    backlog.historical = true;
+    segment(
+        &store,
+        3,
+        &[
+            feed_notice("new", "본문"),
+            feed_notice("two", "본문"),
+            backlog,
+        ],
+    );
+    assert_eq!(
+        take_candidates(&store),
+        [("new".to_string(), New), ("two".to_string(), New)]
+    );
+
+    // A body edit beyond the excerpt is news; a renamed attachment is not.
+    let edited = feed_notice("long", &format!("{}끝 B", "가".repeat(400)));
+    assert_eq!(edited.excerpt, feed_notice("long", &long).excerpt);
+    segment(
+        &store,
+        6,
+        &[edited, renamed_attachment(feed_notice("seen", "본문"))],
+    );
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM document_revisions"), 7);
+    assert_eq!(take_candidates(&store), [("long".to_string(), Revision)]);
+
+    // Once opened, a revision holds the full page. A renamed attachment is
+    // still not news, whether or not the publisher sent a body hash.
+    for id in ["new", "two"] {
+        store
+            .fill_feed_body(
+                document(&store, id),
+                &fetched(id, "본문", &[ATTACHMENT]),
+                true,
+            )
+            .unwrap();
+    }
+    segment(
+        &store,
+        8,
+        &[
+            renamed_attachment(feed_notice("new", "본문")),
+            without_body_hash(renamed_attachment(feed_notice("two", "본문"))),
+        ],
+    );
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM document_revisions"), 9);
+    assert_eq!(take_candidates(&store), []);
+    // A changed body is news either way.
+    segment(
+        &store,
+        10,
+        &[
+            feed_notice("new", "고친 본문"),
+            without_body_hash(feed_notice("two", "고친 본문")),
+        ],
+    );
+    assert_eq!(
+        take_candidates(&store),
+        [("new".to_string(), Revision), ("two".to_string(), Revision)]
+    );
+}
+
+#[test]
+fn a_feed_revision_of_a_crawled_notice_compares_with_the_crawled_body() {
+    use ProactiveEventKind::Revision;
+    let (_directory, store) = database();
+    let body = format!("{}끝 A", "가".repeat(400));
+    for id in ["v1", "old"] {
+        store
+            .upsert_article("one", &article(id, &body), false)
+            .unwrap();
+    }
+    // `old` was crawled before revisions carried a body hash.
+    store
+        .connection
+        .execute(
+            "UPDATE document_revisions SET body_hash=NULL WHERE document_id=?1",
+            [document(&store, "old")],
+        )
+        .unwrap();
+    store
+        .feed_apply_snapshot(1, &[upsert(1, &feed_notice("other", "본문"))], &[])
+        .unwrap();
+    assert_eq!(take_candidates(&store), []);
+
+    // Same body, other metadata: a revision, but not news.
+    segment(
+        &store,
+        2,
+        &[
+            renamed_attachment(feed_notice("v1", &body)),
+            renamed_attachment(feed_notice("old", &body)),
+        ],
+    );
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM document_revisions"), 5);
+    assert_eq!(take_candidates(&store), []);
+
+    // The crawled body hash shows an edit beyond the excerpt; without one
+    // only the excerpt can be compared, so that edit goes unnoticed.
+    let edited = format!("{}끝 B", "가".repeat(400));
+    store
+        .connection
+        .execute(
+            "UPDATE document_revisions SET body_hash=NULL WHERE document_id=?1",
+            [document(&store, "old")],
+        )
+        .unwrap();
+    segment(
+        &store,
+        4,
+        &[feed_notice("v1", &edited), feed_notice("old", &edited)],
+    );
+    assert_eq!(take_candidates(&store), [("v1".to_string(), Revision)]);
 }

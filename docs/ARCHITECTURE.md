@@ -100,6 +100,7 @@ Rust owns persistence; browser previews never substitute localStorage or simulat
 | `036_classification_categories` | Rebuilds `notice_classifications` with the revised category CHECK (수업·교육 split into 수업 and 교육·프로그램; new 학과 소식 and 생활·시설); `수업·교육` stays allowed for rows under the previous config hash. Stored vectors are reclassified under the new config without re-embedding |
 | `037_feed_mirror` | The feed mirror (#177): `documents.revision_hash`, `body_state`, `body_pending` (the body is the feed's excerpt until opened), `from_feed` and `removed_at`; `document_revisions.revision_hash`; `feed_state` (cursor, last accepted `generated_at`), `feed_embeddings` (int8 vector per notice) and `feed_classifications`, both tied to the revision they describe |
 | `038_feed_sync` | Feed sync state (#177): `feed_state.base` (the feed URL after a signed `moved_to`), `checked_at` (last sync without an error), `result`/`error` (how the last attempt ended), and `feed_boards` (board health from the last accepted manifest) |
+| `039_revision_body_hash` | `document_revisions.body_hash` (#177): `rhythm_feed::body_hash` of the revision's full body text, from the feed record or computed when a body is archived; NULL on older revisions |
 
 ### Archive tables
 
@@ -337,7 +338,7 @@ Reading, search and saving of archived notices work with every source extension 
 
 ## Notifications
 
-Notifications are opt-in and independent of the scheduler. Discovery runs after archive commits. Candidate identity is document + revision + kind. Migration 005 set a revision ceiling so upgrades never announce old notices; a historical first seed is excluded, but a later meaningful revision of an old notice can qualify. Policy, source and negative-interest checks repeat before delivery; rejections are stored as `suppressed` with a reason. Events reference archive identities and read titles from archived revisions; no notice body is copied.
+Notifications are opt-in and independent of the scheduler. Discovery runs after archive commits and on every scheduler wake, after the feed sync, so feed arrivals become candidates like crawled ones (#177). Candidate identity is document + revision + kind. Migration 005 set a revision ceiling so upgrades never announce old notices; a historical first seed is excluded, but a later meaningful revision of an old notice can qualify. A revision qualifies only when its title or body differs from the previous revision. Two archived bodies compare as text (HTML or text); beside a feed revision not yet opened, which holds only the excerpt, they compare by `body_hash` (migration 039, feed format 1.1), or by the first 320 characters when either revision has no hash (a 1.0 publisher, or archived before 039). A candidate of an inactive source (unsubscribed board, extension off, notice in 휴지통) gets only a dedupe row, no history event: the feed mirrors every board, so suppressed events would crowd real decisions out of the bounded history, and the dedupe row keeps it from replaying once the source is active (user decision, 2026-11-20). Policy, source and negative-interest checks repeat before delivery; rejections are stored as `suppressed` with a reason. Events reference archive identities and read titles from archived revisions; no notice body is copied.
 
 | Setting | Values |
 | --- | --- |
