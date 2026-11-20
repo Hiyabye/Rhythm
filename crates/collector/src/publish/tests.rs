@@ -367,6 +367,11 @@ async fn a_client_mirror_equals_the_state_minus_bodies() {
     // The excerpt stands in for the body.
     let notice = &first.notices[&(BOARD.to_string(), "1".to_string())];
     assert_eq!(notice.excerpt.chars().count(), rhythm_feed::EXCERPT_CHARS);
+    // The body hash covers the whole body, beyond the excerpt (format 1.1).
+    assert_eq!(
+        notice.body_hash.as_deref(),
+        Some(crate::sha256_hex(format!("본문 1 {}", "가".repeat(400))).as_str())
+    );
 
     // A revision with its new vector, a removal and a new notice.
     add(&state, 1, "고친 본문");

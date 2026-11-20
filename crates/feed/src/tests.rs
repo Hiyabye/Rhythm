@@ -21,6 +21,7 @@ fn notice(id: &str) -> Notice {
         modified_at: Some("2026-11-03T01:02:03.000Z".into()),
         body_state: BodyState::Normal,
         excerpt: excerpt("신청 기간은 11월 10일부터\n11월 14일까지입니다."),
+        body_hash: Some(body_hash("신청 기간은 11월 10일부터\n11월 14일까지입니다.")),
         resources: vec![Resource {
             url: "https://www.sogang.ac.kr/file/1".into(),
             filename: "안내문.pdf".into(),
@@ -103,6 +104,7 @@ fn records_round_trip_through_a_segment() {
     assert_eq!(first["body_state"], "normal");
     assert_eq!(first["dates"][0]["kind"], "deadline");
     assert_eq!(first["resources"][0]["kind"], "attachment");
+    assert_eq!(first["body_hash"].as_str().map(str::len), Some(64));
 }
 
 #[test]
@@ -169,6 +171,24 @@ fn unknown_kinds_and_fields_are_skipped_but_known_ones_must_parse() {
     ] {
         assert!(decode_segment(&compressed(&[bad]), 1, 1).is_err(), "{bad}");
     }
+    // A 1.0 publisher sends no `body_hash`, and `None` is not written.
+    let mut old = line.clone();
+    old.as_object_mut().unwrap().remove("summary");
+    old.as_object_mut().unwrap().remove("body_hash");
+    let entries = decode_segment(&compressed(&[&old.to_string()]), 1, 1).unwrap();
+    let Some(Record::Notice(decoded)) = &entries[0].record else {
+        panic!("a notice");
+    };
+    assert_eq!(decoded.body_hash, None);
+    assert_eq!(
+        serde_json::to_value(Record::Notice(decoded.clone())).unwrap(),
+        {
+            let mut written = old.clone();
+            written.as_object_mut().unwrap().remove("seq");
+            written
+        }
+    );
+
     let mut state: serde_json::Value = line.clone();
     state["body_state"] = "iframe".into();
     assert!(decode_segment(&compressed(&[&state.to_string()]), 1, 1).is_err());
@@ -435,5 +455,14 @@ fn revision_hash_is_the_sha256_of_the_json_fields() {
     assert_eq!(
         hash,
         "f9000578634c7565ceb9b888f6f24630f9e3990843f3b0cd165efea00f425b9e"
+    );
+}
+
+#[test]
+fn body_hash_is_the_sha256_of_the_body_text() {
+    // Computed independently with `shasum -a 256`.
+    assert_eq!(
+        body_hash("본문\n둘째 줄"),
+        "101421e941d699012a0b4f42eb5747e6d59b214c3b3bb6a92c832188631e289c"
     );
 }

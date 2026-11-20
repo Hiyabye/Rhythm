@@ -88,6 +88,14 @@ pub(super) fn consider_candidates(
         .collect::<std::collections::HashMap<_, _>>();
     let mut eligible_candidates = Vec::new();
     for candidate in candidates {
+        if !candidate.source_active {
+            store.proactive_pass_inactive(&crate::storage::proactive::ProactiveEventKey {
+                document_id: candidate.document_id,
+                revision_id: candidate.revision_id,
+                event_type: candidate.event_type,
+            })?;
+            continue;
+        }
         let score = score_by_id.get(&candidate.document_id);
         let reason = suppression_reason(
             candidate.source_active,

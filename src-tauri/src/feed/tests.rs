@@ -100,6 +100,7 @@ fn notice(id: &str, title: &str) -> Record {
         modified_at: None,
         body_state: BodyState::Normal,
         excerpt: format!("{title} 본문"),
+        body_hash: None,
         resources: vec![],
         dates: vec![],
         dates_version: 1,

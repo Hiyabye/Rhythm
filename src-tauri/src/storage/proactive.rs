@@ -498,6 +498,22 @@ impl Store {
         })
     }
 
+    /// Settles a candidate of an inactive source (an unsubscribed board, an
+    /// extension that is off, a notice in 휴지통) with a dedupe row only. The
+    /// feed mirrors every board, so a suppressed event for each would crowd
+    /// real decisions out of the bounded history; the dedupe row still keeps
+    /// the revision from replaying once the source is active again.
+    pub fn proactive_pass_inactive(&self, key: &ProactiveEventKey) -> Result<(), String> {
+        self.connection
+            .execute(
+                "INSERT OR IGNORE INTO proactive_dedupe(document_id,revision_id,event_type)
+                 VALUES(?1,?2,?3)",
+                params![key.document_id, key.revision_id, key.event_type],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     #[cfg(test)]
     pub fn proactive_event(&self, id: i64) -> Result<ProactiveEvent, String> {
         event_by_id(&self.connection, id)
@@ -508,7 +524,10 @@ impl Store {
     /// (New), unsubscribed or extension-disabled sources and identities already
     /// in the dedupe ledger; revisions whose title and body match the immediate
     /// predecessor are meta-only and skipped. Historical post-baseline revisions
-    /// are eligible.
+    /// are eligible. A feed revision not yet opened (no original) holds only
+    /// the 320-character excerpt (`rhythm_feed::EXCERPT_CHARS`), so beside one
+    /// the bodies compare by `body_hash`, or by excerpt when a revision
+    /// predates it.
     pub fn proactive_candidates(&self, limit: usize) -> Result<Vec<ProactiveCandidate>, String> {
         let limit = limit.clamp(1, MAX_CANDIDATES) as i64;
         let mut statement = self
@@ -520,10 +539,15 @@ impl Store {
                  first_revision(document_id,revision_id) AS (
                    SELECT document_id,MIN(id) FROM document_revisions GROUP BY document_id
                  ),
-                 revision_previous(
-                   document_id,revision_id,prev_title,prev_body_html,prev_body_text
-                 ) AS (
-                   SELECT r.document_id,r.id,p.title,p.body_html,p.body_text
+                 revision_previous(document_id,revision_id,changed) AS (
+                   SELECT r.document_id,r.id,COALESCE(r.title<>p.title OR CASE
+                     WHEN NOT (r.original='' AND r.revision_hash IS NOT NULL)
+                       AND NOT (p.original='' AND p.revision_hash IS NOT NULL)
+                       THEN r.body_html<>p.body_html OR r.body_text<>p.body_text
+                     WHEN r.body_hash IS NOT NULL AND p.body_hash IS NOT NULL
+                       THEN r.body_hash<>p.body_hash
+                     ELSE substr(r.body_text,1,320)<>substr(p.body_text,1,320)
+                   END,1)
                    FROM document_revisions r
                    LEFT JOIN document_revisions p ON p.id=(
                      SELECT MAX(prev.id) FROM document_revisions prev
@@ -553,12 +577,7 @@ impl Store {
                    JOIN first_revision f ON f.document_id=r.document_id
                    JOIN revision_previous rp
                      ON rp.document_id=r.document_id AND rp.revision_id=r.id
-                   WHERE NOT (d.historical=1 AND f.revision_id=r.id)
-                     AND (
-                       COALESCE(r.title<>rp.prev_title,1)
-                       OR COALESCE(r.body_html<>rp.prev_body_html,1)
-                       OR COALESCE(r.body_text<>rp.prev_body_text,1)
-                     )
+                   WHERE NOT (d.historical=1 AND f.revision_id=r.id) AND rp.changed
                  )
                  SELECT c.document_id,c.revision_id,c.event_type,c.title,c.source_id,
                         c.source_name,c.category,c.published_at,c.collected_at,c.historical,

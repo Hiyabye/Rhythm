@@ -3688,6 +3688,7 @@ fn mirror(store: &SharedStore, seq: u64, id: u64, page: &str) -> i64 {
             BodyState::Normal
         },
         excerpt: rhythm_feed::excerpt(&article.body_text),
+        body_hash: Some(rhythm_feed::body_hash(&article.body_text)),
         resources: article
             .resources
             .iter()

@@ -294,14 +294,13 @@ fn sensitivity_policies_suppress_cold_start_and_negative_signals() {
 }
 
 #[test]
-fn inactive_sources_are_suppressed_before_any_notification_can_be_delivered() {
-    use crate::storage::proactive::ProactiveEventState;
+fn inactive_sources_are_settled_without_history_and_never_replayed() {
     use rusqlite::Connection;
 
     for disable_source in ["subscription", "extension"] {
         let (directory, store, settings) = seeded_store(disable_source != "subscription");
+        let connection = Connection::open(directory.path().join("rhythm.db")).unwrap();
         if disable_source == "extension" {
-            let connection = Connection::open(directory.path().join("rhythm.db")).unwrap();
             connection
                 .execute(
                     "INSERT INTO source_extensions(source_id,extension_id)
@@ -321,11 +320,20 @@ fn inactive_sources_are_suppressed_before_any_notification_can_be_delivered() {
         assert!(notification::consider_candidates(&store, &settings)
             .unwrap()
             .is_empty());
-        let history = store.proactive_history(10).unwrap();
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].event.state, ProactiveEventState::Suppressed);
-        assert_eq!(history[0].event.attempt_count, 0);
+        // The feed mirrors every board: an inactive one leaves no history.
+        assert!(store.proactive_history(10).unwrap().is_empty());
         assert_eq!(store.proactive_recent_delivery_attempts(600).unwrap(), 0);
+
+        // Activating the source later does not announce what it missed.
+        connection
+            .execute_batch(
+                "UPDATE sources SET subscribed=1; UPDATE extension_preferences SET enabled=1;",
+            )
+            .unwrap();
+        assert!(store.proactive_candidates(10).unwrap().is_empty());
+        assert!(notification::consider_candidates(&store, &settings)
+            .unwrap()
+            .is_empty());
     }
 }
 

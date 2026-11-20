@@ -763,6 +763,8 @@ impl Store {
         let Some(revision) = revision else {
             return Ok(false);
         };
+        // `body_hash` stays the empty body's, as the collector, which never
+        // reads the PDF, describes this revision.
         transaction
             .execute(
                 "UPDATE document_revisions SET body_html=?2,body_text=?3,content_hash=?4 WHERE id=?1",
@@ -924,7 +926,7 @@ impl Store {
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
-        transaction.execute("INSERT INTO document_revisions(document_id,canonical_url,title,author,category,published_at,modified_at,original,body_html,body_text,content_hash) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![id,article.canonical_url,article.title,article.author,article.category,article.published_at,article.modified_at,article.original,article.body_html,article.body_text,hash]).map_err(|e|e.to_string())?;
+        transaction.execute("INSERT INTO document_revisions(document_id,canonical_url,title,author,category,published_at,modified_at,original,body_html,body_text,content_hash,body_hash) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",params![id,article.canonical_url,article.title,article.author,article.category,article.published_at,article.modified_at,article.original,article.body_html,article.body_text,hash,rhythm_feed::body_hash(&article.body_text)]).map_err(|e|e.to_string())?;
         let revision_id = transaction.last_insert_rowid();
         if existing.is_some() {
             transaction

@@ -186,6 +186,7 @@ impl State {
             while let Some(row) = rows.next()? {
                 let id: i64 = row.get(0)?;
                 let resources: String = row.get(12)?;
+                let body_text: String = row.get(11)?;
                 let resources: Vec<Resource> = serde_json::from_str(&resources)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
                 let notice = Notice {
@@ -202,7 +203,8 @@ impl State {
                         "normal" => BodyState::Normal,
                         _ => BodyState::Unsupported,
                     },
-                    excerpt: rhythm_feed::excerpt(&row.get::<_, String>(11)?),
+                    excerpt: rhythm_feed::excerpt(&body_text),
+                    body_hash: Some(rhythm_feed::body_hash(&body_text)),
                     resources,
                     dates: dates.remove(&id).unwrap_or_default(),
                     dates_version: row.get(13)?,
