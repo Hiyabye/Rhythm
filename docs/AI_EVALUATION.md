@@ -1,6 +1,8 @@
 # AI evaluation
 
-What local AI has been verified to do, the pinned artifact and how to run the opt-in evaluations. Installation integrity, runtime embedding, classification accuracy and native behavior are separate claims.
+What Rhythm's AI has been verified to do: the collector's server embeddings, the pinned local artifact and how to run the opt-in evaluations. Installation integrity, runtime embedding, classification accuracy and native behavior are separate claims.
+
+Since v2.0.0 the collector embeds and classifies public notices through Cloudflare Workers AI and ships vectors and categories in the feed; the app embeds only search queries and Cybercampus notices with the local model (#166 D5, D6, D12, D25). Both sides use the same model, input builder, prototypes and thresholds (`crates/embed`), so a local query vector is compared directly with feed vectors.
 
 AI summaries (Qwen3.5 2B/4B and Gemma 4 E2B/E4B generation, optional vision projectors) and the OpenAI-compatible remote engine were retired (#226); their evaluation evidence is in git history before that change. Calendar dates come from the deterministic extractor (`crates/sources/src/dates.rs`), measured in [the roadmap](ROADMAP.md#current-state).
 
@@ -8,13 +10,34 @@ AI summaries (Qwen3.5 2B/4B and Gemma 4 E2B/E4B generation, optional vision proj
 
 Inference runs in upstream `llama-server` from llama.cpp build **b12068** (`0.8.0-dev`, commit `4402e6540`), pinned with per-archive size and SHA-256 in `scripts/llama-cpp.json`: `macos-arm64` (Metal) and `win-cpu-x64`. It runs only as an embedding server (`--embedding`, with the model's pooling mode); no remote tokenizer is used. How Rhythm runs it is in [architecture](ARCHITECTURE.md#inference-process).
 
+## Server embedding (Workers AI)
+
+The collector sends the exact `rhythm_embed::input` strings (instruction prefix + title + first 1,000 body characters) through the `text` field of `@cf/qwen/qwen3-embedding-0.6b`, never the `queries`/`instruction` fields, which format the prompt differently (cosine 0.973 to the app's query vector, #166 D26). Cloudflare's [data usage page](https://developers.cloudflare.com/workers-ai/platform/data-usage/) states that Workers AI inputs and outputs are not used for training and are not retained after the request (checked 2026-11-20); the collector sends public notice text only and uses no AI Gateway.
+
+**Equivalence with the local model** (#170, 2026-11-17, one Mac; reference = local Metal f32, baseline = everything on local CPU): 413 notices (325 from a copied archive, 26 detail fixtures of the other board families, the 18 synthetic cases), the 78 prototypes and 42 queries.
+
+| | Local CPU (baseline) | Workers AI notices/prototypes + Metal queries |
+| --- | --- | --- |
+| Same-text cosine min / median (491 texts) | 0.99740 / 0.99962 | 0.99876 / 0.99968 |
+| Category changes at 0.68 (of 413) | 6 | 2 |
+| Search top-10 overlap mean / min (42 queries) | 9.55 / 8 | 9.76 / 9 |
+| Pairs crossing 0.75 / 0.97 (of 85,078) | 413 / 29 | 264 / 9 |
+
+Token counts matched for every checked text. Workers AI differs from local Metal less than local CPU does, so the v1 thresholds (0.68 category, 0.20/0.08 search, 0.75 similar, 0.97 duplicate) carry over.
+
+**Vector encoding:** the feed carries int8 × 1,024 with a per-vector f32 scale (1,028 bytes, [FEED.md](FEED.md)). Encoded the same way on both sides, it stayed within the CPU baseline (2 category changes, top-10 9.69 / 8, 268 / 8 crossings); int8 alone keeps cosine ≥ 0.99986 to f32. Vectors truncated to 512 or 256 dimensions failed with the v1 thresholds (12–24 category changes, top-10 below 8) and are not used.
+
+**Drift canary:** Cloudflare can change the hosted model without notice. Once per UTC day the collector re-embeds 28 committed canary inputs (`crates/collector/src/canary.json`: the 18 synthetic cases with the classifier prefix and 10 queries with the search prefix) and compares them with the first recorded reference: min cosine ≥ 0.9995 is normal, 0.9970–0.9995 warns, < 0.9970 stops new vectors until the maintainer resets it. Three same-day runs over 11.7 hours on 2026-11-17 gave cosine ≈ 1.0, batched or not.
+
+**Not measured:** Windows local query vectors against Workers AI (the Windows comparison was dropped by maintainer decision, 2026-11-17; a small difference there affects query ranking only); category accuracy of feed notices beyond the copied-archive evaluation below.
+
 ## Pinned artifacts
 
 `src-tauri/src/intelligence/catalog.json` is the executable manifest; its checksum comes from the pinned repository LFS metadata. One-click installation accepts only `verified` entries.
 
 | Model | Repository / file | Revision | Bytes | Status |
 | --- | --- | --- | ---: | --- |
-| Qwen3-Embedding 0.6B | [`Qwen/Qwen3-Embedding-0.6B-GGUF`](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF) / `Qwen3-Embedding-0.6B-Q8_0.gguf` | `370f27d7550e0def9b39c1f16d3fbaa13aa67728` | 639,150,592 | Notice classification; macOS Metal and CPU (18 fixtures) |
+| Qwen3-Embedding 0.6B | [`Qwen/Qwen3-Embedding-0.6B-GGUF`](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF) / `Qwen3-Embedding-0.6B-Q8_0.gguf` | `370f27d7550e0def9b39c1f16d3fbaa13aa67728` | 639,150,592 | Search queries and Cybercampus classification; macOS Metal and CPU (18 fixtures) |
 
 ```text
 Embedding 06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439
