@@ -17,7 +17,7 @@ use tauri::State;
 pub use notification::NotificationActivation;
 #[cfg(windows)]
 pub(crate) use reminders::{
-    token_from_uri as reminder_token_from_uri, TOKEN_PREFIX as REMINDER_PREFIX,
+    token_from_uri as reminder_token_from_uri, token_prefix as reminder_prefix,
 };
 pub use scheduler::Scheduler;
 

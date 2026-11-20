@@ -15,7 +15,11 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::Notify;
 
 #[cfg(any(windows, test))]
-pub(crate) const TOKEN_PREFIX: &str = "rhythm-win://studium/";
+pub(crate) fn token_prefix() -> &'static str {
+    crate::core::windows_identity::current()
+        .studium_prefix
+        .as_str()
+}
 const MAX_RESPONSES: usize = 12;
 
 struct Run {
@@ -531,8 +535,7 @@ fn token() -> Result<String, String> {
 
 #[cfg(any(windows, test))]
 pub(crate) fn token_from_uri(uri: &str) -> Option<&str> {
-    let token = uri.strip_prefix(TOKEN_PREFIX)?;
-    crate::storage::notification_activation::valid_token(token).then_some(token)
+    crate::core::windows_identity::current().studium_token_from_uri(uri)
 }
 
 fn text(candidate: &AlertCandidate) -> Result<(String, String), String> {

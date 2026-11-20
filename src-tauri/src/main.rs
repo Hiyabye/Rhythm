@@ -240,7 +240,7 @@ fn spawn_notification_activation(app: &tauri::AppHandle, uri: String) {
                     .studium_notifications
                     .handle_windows_activation(&uri)
                     .await
-            } else if uri.starts_with(proactive::REMINDER_PREFIX) {
+            } else if uri.starts_with(proactive::reminder_prefix()) {
                 state.proactive.handle_windows_reminder(&uri).await
             } else {
                 state.proactive.handle_windows_activation(&uri).await
@@ -256,11 +256,14 @@ fn spawn_notification_activation(app: &tauri::AppHandle, uri: String) {
 
 fn dispatch_notification_arguments(app: &tauri::AppHandle, arguments: &[String]) -> bool {
     #[cfg(windows)]
-    if let Some(uri) = arguments.iter().find(|value| {
-        value.starts_with("rhythm-win://notification/")
-            || value.starts_with(studium::notification::TOKEN_PREFIX)
-            || value.starts_with(proactive::REMINDER_PREFIX)
-    }) {
+    if let Some(uri) = {
+        let identity = core::windows_identity::current();
+        arguments.iter().find(|value| {
+            value.starts_with(identity.notification_prefix.as_str())
+                || value.starts_with(identity.studium_prefix.as_str())
+                || value.starts_with(identity.reminder_prefix.as_str())
+        })
+    } {
         if proactive::windows_notification::token_from_uri(uri).is_none()
             && studium::notification::token_from_uri(uri).is_none()
             && proactive::reminder_token_from_uri(uri).is_none()
@@ -324,6 +327,10 @@ const RESTORE_FAILED_NOTE: &str =
 
 fn main() {
     let context = tauri::generate_context!();
+    core::windows_identity::init(
+        &context.config().identifier,
+        context.config().product_name.as_deref(),
+    );
     #[cfg(windows)]
     if let Err(error) = proactive::windows_notification::initialize_process_identity() {
         eprintln!("Windows 알림 프로세스 식별자를 설정하지 못했습니다: {error}");

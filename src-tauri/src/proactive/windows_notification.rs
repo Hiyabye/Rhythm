@@ -27,16 +27,21 @@ use windows::{
     },
 };
 
-const APP_ID: &str = "io.github.hiyabye.rhythm";
-const PREFIX: &str = "rhythm-win://notification/";
+use crate::core::windows_identity;
+
 const SETTING_NOT_FOUND: i32 = 0x80070490_u32 as i32;
+
+fn to_wide(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
 
 /// Call before creating any window so Windows associates this process with
 /// the same identity as the installed Start Menu shortcut.
 pub(crate) fn initialize_process_identity() -> Result<(), String> {
+    let aumid = to_wide(&windows_identity::current().aumid);
     unsafe {
-        windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(w!(
-            "io.github.hiyabye.rhythm"
+        windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(PCWSTR::from_raw(
+            aumid.as_ptr(),
         ))
     }
     .map_err(|error| format!("{error:?}"))
@@ -96,7 +101,8 @@ fn shortcut_check_registered(current: &std::path::Path) -> Result<(), String> {
     let folder_string = unsafe { folder.to_string() };
     unsafe { CoTaskMemFree(Some(folder.0.cast())) };
     let folder_string = folder_string.map_err(|_| "Programs folder has invalid UTF-16")?;
-    let path = std::path::Path::new(&folder_string).join("Rhythm.lnk");
+    let path =
+        std::path::Path::new(&folder_string).join(&windows_identity::current().shortcut_filename);
     shortcut_check_executable(&path, current)
 }
 
@@ -142,7 +148,7 @@ fn shortcut_check_executable(
         .position(|&ch| ch == 0)
         .and_then(|end| String::from_utf16(&text[..end]).ok())
         .ok_or("ShellLink AUMID is invalid")?;
-    if id != APP_ID {
+    if id != windows_identity::current().aumid {
         return Err("ShellLink AUMID does not match".into());
     }
     let mut value = unsafe { properties.GetValue(&TOAST_ACTIVATOR_CLSID) }
@@ -195,11 +201,13 @@ fn protocol_registered_to_current_exe() -> bool {
 }
 
 fn protocol_registered_to_exe(executable: &std::path::Path) -> bool {
+    let identity = windows_identity::current();
+    let scheme_path = to_wide(&identity.protocol_reg_key);
     let mut scheme_key = HKEY::default();
     let opened = unsafe {
         RegOpenKeyExW(
             HKEY_CURRENT_USER,
-            w!("Software\\Classes\\rhythm-win"),
+            PCWSTR::from_raw(scheme_path.as_ptr()),
             None,
             KEY_QUERY_VALUE,
             &mut scheme_key,
@@ -225,11 +233,12 @@ fn protocol_registered_to_exe(executable: &std::path::Path) -> bool {
     if flag != ERROR_SUCCESS || scheme_type != REG_SZ {
         return false;
     }
+    let command_path = to_wide(&identity.protocol_command_reg_key);
     let mut key = HKEY::default();
     let opened = unsafe {
         RegOpenKeyExW(
             HKEY_CURRENT_USER,
-            w!("Software\\Classes\\rhythm-win\\shell\\open\\command"),
+            PCWSTR::from_raw(command_path.as_ptr()),
             None,
             KEY_QUERY_VALUE,
             &mut key,
@@ -317,8 +326,7 @@ impl Drop for RuntimeGuard {
 }
 
 pub(crate) fn token_from_uri(uri: &str) -> Option<&str> {
-    let token = uri.strip_prefix(PREFIX)?;
-    crate::storage::notification_activation::valid_token(token).then_some(token)
+    windows_identity::current().notification_token_from_uri(uri)
 }
 
 pub(super) fn new_token() -> Result<String, String> {
@@ -337,8 +345,9 @@ pub(crate) fn authorization() -> &'static str {
     if !shortcut_matches_current_exe() {
         return "unavailable";
     }
-    let Ok(notifier) = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))
-    else {
+    let Ok(notifier) = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
+        windows_identity::current().aumid.as_str(),
+    )) else {
         return "unavailable";
     };
     classify_setting(notifier.Setting().map_err(|error| error.code().0)).status()
@@ -362,8 +371,9 @@ pub(crate) fn request_connection_test() -> Result<(&'static str, bool), String> 
     if !shortcut_matches_current_exe() {
         return Ok(("unavailable", false));
     }
-    let notifier = match ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))
-    {
+    let notifier = match ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
+        windows_identity::current().aumid.as_str(),
+    )) {
         Ok(notifier) => notifier,
         Err(_) => return Ok(("unavailable", false)),
     };
@@ -424,7 +434,11 @@ pub(crate) struct PreparedToast {
 }
 
 pub(super) fn prepare(title: &str, body: &str, token: &str) -> Result<PreparedToast, String> {
-    prepare_for_uri(title, body, &format!("{PREFIX}{token}"))
+    prepare_for_uri(
+        title,
+        body,
+        &format!("{}{token}", windows_identity::current().notification_prefix),
+    )
 }
 
 pub(crate) fn prepare_studium(
@@ -435,7 +449,7 @@ pub(crate) fn prepare_studium(
     prepare_for_uri(
         title,
         body,
-        &format!("{}{token}", crate::studium::notification::TOKEN_PREFIX),
+        &format!("{}{token}", crate::studium::notification::token_prefix()),
     )
 }
 
@@ -447,7 +461,7 @@ pub(super) fn prepare_reminder(
     prepare_for_uri(
         title,
         body,
-        &format!("{}{token}", super::reminders::TOKEN_PREFIX),
+        &format!("{}{token}", super::reminders::token_prefix()),
     )
 }
 
@@ -464,12 +478,16 @@ fn prepare_for_uri(title: &str, body: &str, uri: &str) -> Result<PreparedToast, 
                 .into(),
         );
     }
-    if token_from_uri(uri).is_none() && crate::studium::notification::token_from_uri(uri).is_none()
+    if token_from_uri(uri).is_none()
+        && crate::studium::notification::token_from_uri(uri).is_none()
+        && super::reminders::token_from_uri(uri).is_none()
     {
         return Err("알림 활성화 정보가 올바르지 않습니다.".into());
     }
-    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))
-        .map_err(|e| e.to_string())?;
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
+        windows_identity::current().aumid.as_str(),
+    ))
+    .map_err(|e| e.to_string())?;
     if notifier.Setting().map_err(|e| e.to_string())? != NotificationSetting::Enabled {
         return Err("Windows 알림이 꺼져 있습니다.".into());
     }
@@ -529,14 +547,15 @@ mod tests {
     #[test]
     fn protocol_parser_is_strict_and_xml_text_is_escaped() {
         let token = "ab".repeat(32);
+        let prefix = &windows_identity::current().notification_prefix;
         assert_eq!(
-            token_from_uri(&format!("{PREFIX}{token}")),
+            token_from_uri(&format!("{prefix}{token}")),
             Some(token.as_str())
         );
         for suffix in ["?x=1", "/extra", "#x"] {
-            assert!(token_from_uri(&format!("{PREFIX}{token}{suffix}")).is_none());
+            assert!(token_from_uri(&format!("{prefix}{token}{suffix}")).is_none());
         }
-        assert!(token_from_uri(&format!("{PREFIX}{}", token.to_uppercase())).is_none());
+        assert!(token_from_uri(&format!("{prefix}{}", token.to_uppercase())).is_none());
         assert_eq!(escape_xml("<&>\"'"), "&lt;&amp;&gt;&quot;&apos;");
         assert_ne!(new_token().unwrap(), new_token().unwrap());
     }
@@ -573,6 +592,7 @@ mod tests {
     #[test]
     #[ignore = "read-only diagnostic against an explicitly named installed executable"]
     fn installed_notification_diagnostics() {
+        let identity = windows_identity::current();
         let executable = std::path::PathBuf::from(
             std::env::var_os("RHYTHM_NOTIFICATION_DIAGNOSTIC_EXE")
                 .expect("set RHYTHM_NOTIFICATION_DIAGNOSTIC_EXE to the installed rhythm.exe"),
@@ -596,7 +616,9 @@ mod tests {
                 }
                 Err(error) => println!("shortcut=error: {error}"),
             }
-            match ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID)) {
+            match ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
+                identity.aumid.as_str(),
+            )) {
                 Ok(notifier) => match notifier.Setting() {
                     Ok(setting) => {
                         println!("notifier_setting={setting:?}");
@@ -608,15 +630,11 @@ mod tests {
             }
             // This changes only the short-lived diagnostic process identity.
             // It does not write registration or Windows notification settings.
-            match unsafe {
-                windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(w!(
-                    "io.github.hiyabye.rhythm"
-                ))
-            } {
+            match initialize_process_identity() {
                 Ok(()) => {
                     println!("set_process_aumid=ok");
                     match ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
-                        APP_ID,
+                        identity.aumid.as_str(),
                     ))
                     .and_then(|notifier| notifier.Setting())
                     {
@@ -629,7 +647,7 @@ mod tests {
                         }
                     }
                 }
-                Err(error) => println!("set_process_aumid=error: {error:?}"),
+                Err(error) => println!("set_process_aumid=error: {error}"),
             }
         }
         assert!(
@@ -654,16 +672,13 @@ mod tests {
             protocol_registered_to_exe(&executable),
             "protocol does not match installation"
         );
-        unsafe {
-            windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(w!(
-                "io.github.hiyabye.rhythm"
-            ))
-        }
-        .expect("set diagnostic process AppUserModelID");
+        initialize_process_identity().expect("set diagnostic process AppUserModelID");
         let _runtime = RuntimeGuard::initialize().expect("initialize WinRT");
         shortcut_check_registered(&executable).expect("installed shortcut prerequisites");
-        let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))
-            .expect("create notification manager");
+        let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
+            windows_identity::current().aumid.as_str(),
+        ))
+        .expect("create notification manager");
         match notifier.Setting() {
             Ok(NotificationSetting::Enabled) => {
                 println!("setting_before=Enabled; no experiment needed; no toast sent");

@@ -11,7 +11,11 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::watch;
 
 #[cfg(any(windows, test))]
-pub(crate) const TOKEN_PREFIX: &str = "rhythm-win://reminder/";
+pub(crate) fn token_prefix() -> &'static str {
+    crate::core::windows_identity::current()
+        .reminder_prefix
+        .as_str()
+}
 #[cfg(any(windows, target_os = "macos"))]
 const UNCERTAIN: &str = "할 일 알림 전달 결과를 확인하지 못했습니다. 자동 재전송하지 않습니다.";
 
@@ -151,8 +155,7 @@ fn token() -> Result<String, String> {
 
 #[cfg(any(windows, test))]
 pub(crate) fn token_from_uri(uri: &str) -> Option<&str> {
-    let token = uri.strip_prefix(TOKEN_PREFIX)?;
-    crate::storage::notification_activation::valid_token(token).then_some(token)
+    crate::core::windows_identity::current().reminder_token_from_uri(uri)
 }
 
 /// Title and body in the user's 12/24-hour format, like the calendar shows them.
@@ -223,18 +226,16 @@ mod tests {
     #[test]
     fn only_reminder_links_are_accepted() {
         let token = "a".repeat(64);
+        let prefix = token_prefix();
         assert_eq!(
-            token_from_uri(&format!("{TOKEN_PREFIX}{token}")),
+            token_from_uri(&format!("{prefix}{token}")),
             Some(token.as_str())
         );
         assert_eq!(
             token_from_uri(&format!("rhythm-win://notification/{token}")),
             None
         );
-        assert_eq!(
-            token_from_uri(&format!("{TOKEN_PREFIX}{}", "g".repeat(64))),
-            None
-        );
-        assert_eq!(token_from_uri(TOKEN_PREFIX), None);
+        assert_eq!(token_from_uri(&format!("{prefix}{}", "g".repeat(64))), None);
+        assert_eq!(token_from_uri(prefix), None);
     }
 }
