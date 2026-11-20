@@ -101,7 +101,6 @@
       const running = Boolean(status?.running);
       feedback = source.family !== 'cybercampus' ? (subscribed ? `${source.name} 구독을 시작했습니다. 이 게시판 공지를 추천과 알림에 포함합니다.` : `${source.name} 구독을 해제했습니다. 받은 공지는 목록에 남고 추천과 알림에서만 빠집니다.`)
         : !subscribed ? `${source.name} 구독을 해제했습니다.${running ? ' 이 게시판의 가져오기만 멈춥니다.' : ''} 보관한 공지는 남습니다.`
-        : next.joined ? `${source.name} 구독을 시작했습니다. 진행 중인 새로고침에서 함께 가져옵니다.`
         : running ? `${source.name} 구독을 시작했습니다. 지금 진행 중인 작업이 끝난 뒤 새로고침을 눌러야 수집합니다.`
         : `${source.name} 구독을 시작했습니다. 가져오기를 눌러야 수집합니다.`;
     } catch (reason) { if (active) error = archiveError(reason); }

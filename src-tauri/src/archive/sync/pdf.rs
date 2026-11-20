@@ -2,117 +2,40 @@
 //! PDF is archived as an attachment and its text layer becomes the body.
 use super::*;
 
-/// Viewer PDFs of older archived notices one job may download.
-const BACKFILL_DOWNLOADS: usize = 10;
-
-/// The network a body fill may use to download a missing viewer PDF.
-pub(super) struct Download<'a, T> {
-    pub(super) transport: &'a T,
-    pub(super) policy: &'a Robots,
-    pub(super) total: &'a AtomicU64,
-}
-
-impl Board<'_> {
-    /// Fills an archived notice's empty body from the text of its viewer PDFs,
-    /// re-parsing the stored response so older notices gain the PDF reference.
-    /// Missing PDFs are downloaded only with `download`. Returns whether a
-    /// download was attempted.
-    pub(super) async fn fill_pdf_body<T: Transport>(
-        &self,
-        store: &SharedStore,
-        root: &Path,
-        download: Option<Download<'_, T>>,
-        id: i64,
-    ) -> Result<bool, String> {
-        let (source, entry, original) = with_store(store, |s| {
-            let (source, entry) = s.document_entry(id)?;
-            Ok((s.source(&source)?.definition, entry, s.latest_original(id)?))
-        })?;
-        let Ok(mut article) = parser::article(&source, &entry, &original) else {
-            return Ok(false);
-        };
-        let viewer: Vec<String> = parser::viewer_pdf_resources(&article)
-            .into_iter()
-            .map(|r| r.url.clone())
-            .collect();
-        if viewer.is_empty() {
-            return Ok(false);
-        }
-        let pending = with_store(store, |s| {
-            ensure_active(self.cancel)?;
-            s.attach_resources(id, &article.resources)?;
-            Ok(s.pending_resources(id)?
-                .iter()
-                .any(|r| r.status == "pending" && viewer.contains(&r.url)))
-        })?;
-        let downloaded = pending && download.is_some();
-        if let (true, Some(download)) = (pending, download) {
-            self.pending_resources(
-                store,
-                root,
-                download.transport,
-                download.policy,
-                id,
-                download.total,
-            )
-            .await?;
-        }
-        local_pdf_text(store, root, id, &mut article).await?;
-        if !article.unsupported_body {
-            with_store(store, |s| {
-                ensure_active(self.cancel)?;
-                if !s.fill_body(id, &article)? {
-                    s.upsert_article(&source.id, &article, false)?;
-                }
-                Ok(())
-            })?;
-        }
-        Ok(downloaded)
+/// Fills an archived notice's empty body from the text of its downloaded
+/// viewer PDFs, re-parsing the stored response so older notices gain the PDF
+/// reference. Used after an explicit retry downloads such a PDF.
+pub(super) async fn fill_pdf_body(
+    store: &SharedStore,
+    root: &Path,
+    cancel: &AtomicBool,
+    id: i64,
+) -> Result<(), String> {
+    let (source, entry, original) = with_store(store, |s| {
+        let (source, entry) = s.document_entry(id)?;
+        Ok((s.source(&source)?.definition, entry, s.latest_original(id)?))
+    })?;
+    let Ok(mut article) = parser::article(&source, &entry, &original) else {
+        return Ok(());
+    };
+    if parser::viewer_pdf_resources(&article).is_empty() {
+        return Ok(());
     }
-    /// Fills older notices archived before viewer PDFs were recognized, or
-    /// whose PDF arrived later through a retry or the bulk download.
-    pub(super) async fn backfill_pdf_bodies<T: Transport>(
-        &self,
-        store: &SharedStore,
-        root: &Path,
-        transport: &T,
-        definition: &SourceDefinition,
-        total: &AtomicU64,
-    ) -> Result<(), String> {
-        if definition.id != "sogang-academic" {
-            return Ok(());
-        }
-        let candidates = with_store(store, |s| s.pdf_viewer_candidates(&definition.id))?;
-        if candidates.is_empty() {
-            return Ok(());
-        }
-        let policy = Robots::load(
-            transport,
-            &parser::list_url(definition, 1)?,
-            self.cancel,
-            network::Access::Source,
-        )
-        .await?;
-        let mut downloads = 0;
-        for (id, _) in candidates {
-            active(self.cancel)?;
-            let download = if downloads < BACKFILL_DOWNLOADS
-                && total.load(Ordering::Acquire) < IMPORT_RESOURCES
-            {
-                Some(Download {
-                    transport,
-                    policy: &policy,
-                    total,
-                })
-            } else {
-                None
-            };
-            if self.fill_pdf_body(store, root, download, id).await? {
-                downloads += 1;
+    with_store(store, |s| {
+        ensure_active(cancel)?;
+        s.attach_resources(id, &article.resources)
+    })?;
+    local_pdf_text(store, root, id, &mut article).await?;
+    if !article.unsupported_body {
+        with_store(store, |s| {
+            ensure_active(cancel)?;
+            if !s.fill_body(id, &article)? {
+                s.upsert_article(&source.id, &article, false)?;
             }
-        }
-        Ok(())
+            Ok(())
+        })?;
     }
+    Ok(())
 }
 
 /// Makes the text of the document's downloaded viewer PDFs the article body.

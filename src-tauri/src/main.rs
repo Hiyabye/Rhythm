@@ -455,7 +455,6 @@ fn main() {
                 store.clone(),
                 archive.clone(),
                 feed.clone(),
-                network.clone(),
                 data_root.clone(),
                 app.handle().clone(),
                 operation_gate.clone(),

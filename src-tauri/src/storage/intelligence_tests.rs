@@ -665,6 +665,14 @@ fn classification_roundtrip_is_model_and_config_scoped() {
     let path = directory.path().join("db");
     populated_schema_two(&path);
     let store = Store::open(&path).unwrap();
+    // Only Cybercampus notices are embedded locally.
+    store
+        .connection
+        .execute_batch(
+            "INSERT OR IGNORE INTO sources(id,name,organization,description,url,family,supported,subscribed) VALUES('cybercampus','사이버캠퍼스','서강대학교','','https://eclass.sogang.ac.kr/','cybercampus',1,1);
+             UPDATE documents SET source_id='cybercampus' WHERE id=1;",
+        )
+        .unwrap();
     let revision = store.document(1, None).unwrap().revision_id;
     let model_a = "a".repeat(64);
     let model_b = "b".repeat(64);

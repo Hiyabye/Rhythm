@@ -275,7 +275,15 @@ fn revisions_deduplicate_content_but_preserve_changes_and_user_state() {
         None
     );
     assert_eq!(
-        store.validators("one", "123").unwrap().unwrap().0,
+        store
+            .connection
+            .query_row("SELECT etag FROM documents WHERE id=?1", [id], |row| row
+                .get::<_, Option<
+                String,
+            >>(
+                0
+            ))
+            .unwrap(),
         Some("new-validator".into())
     );
     original.body_text = "장학금 신청 마감이 2026-11-01로 변경되었습니다.".into();
@@ -1060,7 +1068,17 @@ fn metadata_changes_make_revisions_but_volatile_fields_do_not() {
     );
     assert_eq!(store.document(id, None).unwrap().revisions.len(), expected);
     assert_eq!(
-        store.validators("one", "a").unwrap().unwrap(),
+        store
+            .connection
+            .query_row(
+                "SELECT etag,last_modified FROM documents WHERE id=?1",
+                [id],
+                |r| Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<String>>(1)?
+                ))
+            )
+            .unwrap(),
         (input.etag.clone(), input.last_modified.clone())
     );
     assert_eq!(
@@ -1617,10 +1635,15 @@ fn skipped_articles_persist_validate_and_clear_on_archive() {
         (listed[0].reason.as_str(), listed[0].archived),
         ("다른 형식", false)
     );
-    let entries = store.skipped_entries("one").unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].0.external_id, "7");
-    assert!(entries[0].1, "the first historical marking is kept");
+    let historical: bool = store
+        .connection
+        .query_row(
+            "SELECT historical FROM skipped_articles WHERE source_id='one' AND external_id='7'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(historical, "the first historical marking is kept");
     store
         .upsert_article("one", &article("7", "공지", "본문", "2026-01-01"), true)
         .unwrap();
@@ -2258,6 +2281,14 @@ fn trashed_notices_leave_automatic_classification() {
         )
         .unwrap();
     store.trash_documents(&[trashed]).unwrap();
+    // Only Cybercampus notices are embedded locally.
+    store
+        .connection
+        .execute_batch(
+            "INSERT OR IGNORE INTO sources(id,name,organization,description,url,family,supported,subscribed) VALUES('cybercampus','사이버캠퍼스','서강대학교','','https://eclass.sogang.ac.kr/','cybercampus',1,1);
+             UPDATE documents SET source_id='cybercampus';",
+        )
+        .unwrap();
     let candidates = store
         .ai_embedding_candidates(&"a".repeat(64), &"b".repeat(64), 10)
         .unwrap()
@@ -2661,4 +2692,114 @@ fn schema_thirty_one_upgrade_backfills_dates_and_rolls_back_on_failure() {
         .query_row("SELECT calendar_all_deadlines FROM settings", [], |r| r
             .get::<_, i64>(0))
         .is_err());
+}
+
+#[test]
+fn schema_40_clears_public_board_crawl_state_and_keeps_cybercampus() {
+    use crate::storage::proactive::ProactiveTaskInput;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    let entry = |id: &str, url: &str| ListingEntry {
+        external_id: id.into(),
+        url: url.into(),
+        pinned: false,
+        modified_at: None,
+    };
+    {
+        let store = Store::open(&path).unwrap();
+        store.catalog(&crate::archive::definitions()).unwrap();
+        for id in ["sogang-academic", "cybercampus"] {
+            store
+                .source_progress(id, "completed", 1, false, 0, 0, 0, None, true)
+                .unwrap();
+            store
+                .source_progress(id, "failed", 7, true, 3, 2, 1, Some("오류"), false)
+                .unwrap();
+            store
+                .proactive_save_task(&ProactiveTaskInput {
+                    task_id: format!("source:{id}"),
+                    interval_minutes: 30,
+                    enabled: true,
+                })
+                .unwrap();
+            store.mark_seed_complete(id).unwrap();
+        }
+        store
+            .record_skipped(
+                "sogang-academic",
+                &entry("9", "https://www.sogang.ac.kr/ko/detail/9"),
+                false,
+                "본문을 읽지 못했습니다.",
+                &"0".repeat(64),
+            )
+            .unwrap();
+        store
+            .record_skipped(
+                "cybercampus",
+                &entry("A-1", "https://eclass.sogang.ac.kr/ilos/main.acl"),
+                false,
+                "본문을 읽지 못했습니다.",
+                &"0".repeat(64),
+            )
+            .unwrap();
+        store
+            .connection
+            .execute_batch("PRAGMA user_version=39;")
+            .unwrap();
+    }
+    // A failing 040 leaves the schema-39 profile as it was.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER fail BEFORE DELETE ON skipped_articles BEGIN SELECT RAISE(ABORT,'test'); END;",
+        )
+        .unwrap();
+    assert!(Store::open(&path).is_err());
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let (version, status): (i64, String) = connection
+        .query_row(
+            "SELECT (SELECT user_version FROM pragma_user_version),status FROM sources WHERE id='sogang-academic'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((version, status.as_str()), (39, "failed"));
+    connection.execute_batch("DROP TRIGGER fail;").unwrap();
+    drop(connection);
+
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
+    let public = store.source("sogang-academic").unwrap();
+    assert_eq!(
+        (
+            public.status.as_str(),
+            public.discovered + public.archived + public.failed,
+            public.last_error.is_none(),
+            public.last_attempt.is_none(),
+            public.skipped_count,
+        ),
+        ("idle", 0, true, true, 0)
+    );
+    // The last-checked time and the new-since-sync count still read these.
+    assert!(public.last_success.is_some());
+    let own = store.source("cybercampus").unwrap();
+    assert_eq!(
+        (
+            own.status.as_str(),
+            own.next_page,
+            own.history_complete,
+            own.failed,
+            own.last_error.as_deref(),
+            own.skipped_count,
+        ),
+        ("failed", 7, true, 1, Some("오류"), 1)
+    );
+    assert!(store.seed_complete("cybercampus").unwrap());
+    let tasks: Vec<_> = store
+        .proactive_tasks()
+        .unwrap()
+        .into_iter()
+        .map(|task| task.task_id)
+        .collect();
+    assert_eq!(tasks, ["source:cybercampus"]);
 }

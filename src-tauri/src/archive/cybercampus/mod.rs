@@ -7,7 +7,7 @@ pub mod client;
 pub mod credentials;
 pub mod parser;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use super::model::{ArticleInput, ListingEntry, ResourceRecord, SourceInfo};
 use super::sync::{self, with_store, DownloadOutcome, SharedStore};

@@ -25,7 +25,7 @@ const FIRST_VIEW: &str = r#"<div class="view_title"><span class="font_headline2"
 <tr><td colspan="2"><div class="editor_content"><p>첫 수업은 온라인으로 진행합니다.</p></div></td></tr></table>"#;
 
 #[derive(Clone, Debug)]
-struct Recorded {
+pub(crate) struct Recorded {
     path: String,
     query: Option<String>,
     form: Vec<(String, String)>,
@@ -33,7 +33,7 @@ struct Recorded {
 /// A scripted eClass: a session cookie from the index page, a login that
 /// accepts one password, and the fixture pages for two courses.
 #[derive(Default)]
-struct Fake {
+pub(crate) struct Fake {
     requests: Mutex<Vec<Recorded>>,
     logins: AtomicUsize,
     /// Number of further logged-in requests before the session expires.
@@ -42,7 +42,7 @@ struct Fake {
     notice_list: Mutex<Option<String>>,
 }
 impl Fake {
-    fn requests(&self) -> Vec<Recorded> {
+    pub(crate) fn requests(&self) -> Vec<Recorded> {
         self.requests.lock().unwrap().clone()
     }
     fn count(&self, path: &str) -> usize {
@@ -672,5 +672,148 @@ mod parsing {
             full_datetime("2026.11.09 (월) 오후 14:59").as_deref(),
             Some("2026-11-09")
         );
+    }
+}
+
+/// The scripted eClass behind the sync controller, calling `hook` before
+/// each notice list request.
+struct Hooked<'a> {
+    fake: Fake,
+    hook: Box<dyn Fn() + Send + Sync + 'a>,
+}
+impl client::Http for Hooked<'_> {
+    async fn send(
+        &self,
+        url: &Url,
+        method: &Method,
+        cookie: Option<String>,
+        limit: usize,
+        cancel: &AtomicBool,
+    ) -> Result<Response, String> {
+        if url.path() == "/ilos/cls/st/notice/notice_list.acl" {
+            (self.hook)();
+        }
+        self.fake.send(url, method, cookie, limit, cancel).await
+    }
+}
+/// A sync controller whose eClass login is saved, with the Cybercampus
+/// extension on.
+fn controller(setup: &Setup) -> Arc<crate::archive::sync::Controller> {
+    with_store(&setup.store, |s| s.set_enabled("cybercampus", true)).unwrap();
+    let controller = crate::archive::sync::Controller::with_connector(Connector::memory());
+    controller
+        .cybercampus
+        .vault
+        .save(&Credentials::new("20990001", "right").unwrap())
+        .unwrap();
+    controller
+}
+fn source_status(setup: &Setup) -> String {
+    with_store(&setup.store, |s| s.source(SOURCE_ID))
+        .unwrap()
+        .status
+}
+
+#[tokio::test]
+async fn the_controller_collects_cybercampus_and_keeps_only_scheduler_outcomes() {
+    let setup = setup(None);
+    let controller = controller(&setup);
+    let start = |lease: Option<crate::operation_gate::AdmissionLease>| {
+        let (store, root, http) = (
+            setup.store.clone(),
+            setup.root.clone(),
+            Arc::new(Fake::default()),
+        );
+        match lease {
+            Some(lease) => {
+                controller.start_tracked_admitted(store, root, http, None, "refresh".into(), lease)
+            }
+            None => {
+                controller.start_tracked_with_transport(store, root, http, None, "refresh".into())
+            }
+        }
+        .unwrap()
+        .1
+    };
+    let tracked = start(None);
+    controller.wait().await;
+    let outcome = controller.take_task_outcome(tracked).unwrap().unwrap();
+    assert!(outcome.result.is_ok(), "{outcome:?}");
+    assert_eq!(source_status(&setup), "completed");
+    assert_eq!(
+        with_store(&setup.store, |s| s.archive_query(&ArchiveQuery::default()))
+            .unwrap()
+            .total,
+        2
+    );
+    // A command-path job holds a lease and nobody takes its outcome.
+    let gate = Arc::new(crate::operation_gate::AdmissionGate::default());
+    let untracked = start(Some(gate.shared().await.unwrap()));
+    controller.wait().await;
+    assert!(controller.take_task_outcome(untracked).is_err());
+
+    // A failed sync is the job's failure.
+    controller.cybercampus.vault.clear().unwrap();
+    let failed = start(None);
+    controller.wait().await;
+    let outcome = controller.take_task_outcome(failed).unwrap().unwrap();
+    assert!(outcome.result.unwrap_err().contains(client::NO_LOGIN));
+    assert!(!outcome.cancelled);
+    assert_eq!(source_status(&setup), "failed");
+}
+
+#[tokio::test]
+async fn admission_takes_only_cybercampus_with_its_extension_on() {
+    let setup = setup(Some("right"));
+    let controller = crate::archive::sync::Controller::with_connector(Connector::memory());
+    let start = |ids: Option<&[&str]>, mode: &str| {
+        let started = controller.start_tracked_with_transport(
+            setup.store.clone(),
+            setup.root.clone(),
+            Arc::new(Fake::default()),
+            ids.map(|ids| ids.iter().map(|id| id.to_string()).collect()),
+            mode.into(),
+        );
+        started.map(|_| ())
+    };
+    // The notices extension does not cover the Cybercampus source.
+    assert!(start(Some(&[SOURCE_ID]), "refresh").is_err());
+    with_store(&setup.store, |s| s.set_enabled("cybercampus", true)).unwrap();
+    // Public boards come from the feed, and crawl-only modes are gone.
+    with_store(&setup.store, |s| s.subscribe("sogang-academic", true)).unwrap();
+    assert!(start(Some(&["sogang-academic"]), "refresh").is_err());
+    assert!(start(Some(&[SOURCE_ID, "sogang-academic"]), "refresh").is_err());
+    assert!(start(None, "historical").is_err());
+    for mode in ["refresh", "incremental", "skipped", "resources"] {
+        start(None, mode).unwrap();
+        controller.wait().await;
+    }
+    start(Some(&[SOURCE_ID]), "refresh").unwrap();
+    controller.wait().await;
+}
+
+#[tokio::test]
+async fn unsubscribing_stops_the_sync_and_cancelling_cancels_the_job() {
+    for unsubscribe in [true, false] {
+        let setup = setup(None);
+        let controller = controller(&setup);
+        let source = with_store(&setup.store, |s| s.source(SOURCE_ID)).unwrap();
+        let http = Hooked {
+            fake: Fake::default(),
+            hook: Box::new(|| {
+                if unsubscribe {
+                    with_store(&setup.store, |s| s.subscribe(SOURCE_ID, false)).unwrap();
+                    controller.cancel_source(SOURCE_ID);
+                } else {
+                    controller.cancel();
+                }
+            }),
+        };
+        let outcome = controller
+            .execute(&setup.store, &setup.root, &http, source, "refresh")
+            .await;
+        assert_eq!(outcome.is_ok(), unsubscribe, "{outcome:?}");
+        assert_eq!(source_status(&setup), "cancelled");
+        assert_eq!(http.fake.count("/ilos/cls/st/notice/notice_list.acl"), 1);
     }
 }

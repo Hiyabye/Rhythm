@@ -388,7 +388,6 @@ export interface ActiveSource {
   page: number;
   message: string;
 }
-/** `joined`: a running refresh of every subscribed board also collects this board. */
 /** A nested settings group of boards; off stops every board under it. */
 export interface SourceGroup {
   id: string;
@@ -399,7 +398,6 @@ export interface SourceGroup {
 export interface SubscribeResult {
   sources: SourceInfo[];
   groups: SourceGroup[];
-  joined: boolean;
 }
 
 /** A restore this launch finalized; mirrors `backup::RestoreOutcome`. */

@@ -681,82 +681,14 @@ fn failed_show_is_counted_as_an_attempt() {
         .is_none());
 }
 
-#[derive(Clone, Default)]
-struct SchedulerTransport {
-    pages: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
-}
-
-impl crate::archive::sync::Transport for SchedulerTransport {
-    async fn fetch(
-        &self,
-        url: &url::Url,
-        _validators: Option<(Option<String>, Option<String>)>,
-        _limit: usize,
-        _cancel: &std::sync::atomic::AtomicBool,
-        _access: crate::archive::sync::Access,
-    ) -> Result<crate::archive::sync::Fetch, crate::archive::sync::FetchError> {
-        use crate::archive::sync::Fetch;
-        let body = |bytes: Vec<u8>, mime: &str| {
-            Ok(Fetch::Body {
-                bytes,
-                mime: Some(mime.into()),
-                etag: None,
-                last_modified: None,
-            })
-        };
-        if url.path() == "/robots.txt" {
-            return body(b"User-agent: *\nAllow: /\n".to_vec(), "text/plain");
-        }
-        if url.path().ends_with("/boardList") {
-            let page = url
-                .query_pairs()
-                .find(|(key, _)| key == "pageNum")
-                .ok_or("missing pageNum")?
-                .1
-                .parse::<u32>()
-                .map_err(|error| error.to_string())?;
-            self.pages.lock().unwrap().push(page);
-            let mut list: serde_json::Value = serde_json::from_str(include_str!(
-                "../../../crates/sources/src/fixtures/main-list-exact.json"
-            ))
-            .unwrap();
-            let mut row = list["data"]["list"][0].clone();
-            row["pkId"] = serde_json::json!(900_000 + page);
-            row["title"] = serde_json::json!(format!("통합 검증 공지 {page}"));
-            row["isTop"] = serde_json::json!("N");
-            list["data"]["list"] = serde_json::json!([row]);
-            list["data"]["pageNum"] = serde_json::json!(page);
-            list["data"]["pages"] = serde_json::json!(2);
-            list["data"]["total"] = serde_json::json!(51);
-            list["data"]["size"] = serde_json::json!(1);
-            list["data"]["hasNextPage"] = serde_json::json!(page == 1);
-            return body(list.to_string().into_bytes(), "application/json");
-        }
-        if url.path() == "/api/api/v1/mainKo/BbsData" {
-            let id = url
-                .query_pairs()
-                .find(|(key, _)| key == "pkId")
-                .ok_or("missing pkId")?
-                .1
-                .parse::<u64>()
-                .map_err(|error| error.to_string())?;
-            let mut detail: serde_json::Value = serde_json::from_str(include_str!(
-                "../../../crates/sources/src/fixtures/main-detail.json"
-            ))
-            .unwrap();
-            detail["data"]["pkId"] = serde_json::json!(id);
-            detail["data"]["title"] = serde_json::json!(format!("통합 검증 공지 {id}"));
-            detail["data"]["content"] = serde_json::json!(format!("<p>장학금 연구 안내 {id}</p>"));
-            return body(detail.to_string().into_bytes(), "application/json");
-        }
-        Err(format!("unexpected fixture request: {url}").into())
-    }
-}
-
 #[tokio::test]
-async fn scheduled_controller_imports_multiple_fixture_pages_and_runs_again() {
+async fn scheduled_controller_collects_cybercampus_and_runs_again() {
     use crate::{
-        archive::{self, sync::Controller},
+        archive::{
+            self,
+            cybercampus::{credentials::Credentials, tests::Fake, Connector},
+            sync::Controller,
+        },
         storage::{
             proactive::{ProactiveOutcome, ProactiveTaskInput},
             Store,
@@ -770,14 +702,14 @@ async fn scheduled_controller_imports_multiple_fixture_pages_and_runs_again() {
     let store = Store::open(&path).unwrap();
     store.set_enabled("proactive", true).unwrap();
     store.catalog(&archive::definitions()).unwrap();
-    store.set_enabled("sogang_notices", true).unwrap();
-    store.subscribe("sogang-academic", true).unwrap();
+    store.set_enabled("cybercampus", true).unwrap();
+    store.subscribe("cybercampus", true).unwrap();
     let mut settings = store.proactive_settings().unwrap();
     settings.scheduler_enabled = true;
     settings.scheduler_paused = false;
     settings.notifications_enabled = false;
     store.proactive_save_settings(&settings).unwrap();
-    let task_id = "source:sogang-academic";
+    let task_id = "source:cybercampus";
     store
         .proactive_save_task(&ProactiveTaskInput {
             task_id: task_id.into(),
@@ -794,8 +726,13 @@ async fn scheduled_controller_imports_multiple_fixture_pages_and_runs_again() {
         .unwrap();
 
     let shared = Arc::new(Mutex::new(store));
-    let controller = Controller::new();
-    let transport = SchedulerTransport::default();
+    let controller = Controller::with_connector(Connector::memory());
+    controller
+        .cybercampus
+        .vault
+        .save(&Credentials::new("20990001", "right").unwrap())
+        .unwrap();
+    let transport = Arc::new(Fake::default());
     let (stop_sender, mut stop) = tokio::sync::watch::channel(false);
     let _keep_stop = stop_sender;
     let due = shared.lock().unwrap().proactive_due_tasks().unwrap();
@@ -864,7 +801,7 @@ async fn scheduled_controller_imports_multiple_fixture_pages_and_runs_again() {
             shared.clone(),
             directory.path().to_path_buf(),
             transport.clone(),
-            Some(vec!["sogang-academic".into()]),
+            Some(vec!["cybercampus".into()]),
             "incremental".into(),
         )
         .unwrap();
@@ -874,7 +811,7 @@ async fn scheduled_controller_imports_multiple_fixture_pages_and_runs_again() {
             shared.clone(),
             directory.path().to_path_buf(),
             transport.clone(),
-            Some(vec!["sogang-academic".into()]),
+            Some(vec!["cybercampus".into()]),
             "incremental".into(),
         )
         .unwrap();
@@ -887,7 +824,6 @@ async fn scheduled_controller_imports_multiple_fixture_pages_and_runs_again() {
     controller.wait().await;
     let later_outcome = controller.take_task_outcome(later_job).unwrap().unwrap();
     assert!(later_outcome.result.is_ok());
-    assert_eq!(transport.pages.lock().unwrap().len(), 8);
 }
 
 #[test]
@@ -925,9 +861,8 @@ fn scheduled_tasks_need_the_proactive_and_owning_extensions() {
 }
 
 #[test]
-fn only_cybercampus_keeps_a_scheduled_task_once_boards_come_from_the_feed() {
+fn only_cybercampus_gets_a_scheduled_task() {
     use crate::archive;
-    use crate::storage::proactive::ProactiveTaskInput;
     use std::sync::{Arc, Mutex};
     let (_directory, store) = crate::storage::temp_store();
     store.catalog(&archive::definitions()).unwrap();
@@ -939,25 +874,13 @@ fn only_cybercampus_keeps_a_scheduled_task_once_boards_come_from_the_feed() {
     let mut settings = store.proactive_settings().unwrap();
     settings.scheduler_enabled = true;
     store.proactive_save_settings(&settings).unwrap();
-    // A v1 profile already runs its public boards on the scheduler.
-    store
-        .proactive_save_task(&ProactiveTaskInput {
-            task_id: "source:sogang-academic".into(),
-            interval_minutes: 30,
-            enabled: true,
-        })
-        .unwrap();
     let prefs = store.proactive_effective_settings().unwrap();
     let energy = store.settings().unwrap();
     let store = Arc::new(Mutex::new(store));
     scheduler::reconcile_tasks(&store, &prefs, &energy).unwrap();
     let tasks = store.lock().unwrap().proactive_tasks().unwrap();
-    let enabled = |id: &str| tasks.iter().find(|t| t.task_id == id).unwrap().enabled;
-    assert!(enabled("source:cybercampus"));
-    // The row stays for #178 to drop, but never runs again.
-    assert!(!enabled("source:sogang-academic"));
-    assert!(tasks
-        .iter()
-        .filter(|t| t.task_id != "source:cybercampus")
-        .all(|t| !t.enabled));
+    // A subscribed public board comes from the feed and gets no task.
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task_id, "source:cybercampus");
+    assert!(tasks[0].enabled);
 }

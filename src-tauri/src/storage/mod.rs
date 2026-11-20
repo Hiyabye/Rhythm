@@ -34,12 +34,13 @@ pub(crate) fn temp_store() -> (tempfile::TempDir, Store) {
     (directory, store)
 }
 
-pub(crate) const SCHEMA_VERSION: i64 = 39;
+pub(crate) const SCHEMA_VERSION: i64 = 40;
 
 // Statements that roll a test profile back below the migration that added each
 // object, newest first; a rollback test joins the ones that migration needs
 // and keeps its own `PRAGMA user_version`. 036 needs none: it rebuilds
-// `notice_classifications` and can run again. 037 and later add their fragment here.
+// `notice_classifications` and can run again; nor does 040, which only clears
+// data. 037 and later add their fragment here.
 #[cfg(test)]
 pub(crate) const UNDO_BODY_HASH: &str = "ALTER TABLE document_revisions DROP COLUMN body_hash; ";
 #[cfg(test)]
@@ -77,7 +78,7 @@ pub(crate) const UNDO_STUDIUM: &str =
 pub(crate) const UNDO_GROUPS: &str = "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; ";
 
 /// Ordered schema migrations; index `n` upgrades `user_version` n to n+1.
-pub(super) const MIGRATIONS: [&str; 39] = [
+pub(super) const MIGRATIONS: [&str; 40] = [
     include_str!("../../migrations/001_foundation.sql"),
     include_str!("../../migrations/002_archive.sql"),
     include_str!("../../migrations/003_intelligence.sql"),
@@ -117,6 +118,7 @@ pub(super) const MIGRATIONS: [&str; 39] = [
     include_str!("../../migrations/037_feed_mirror.sql"),
     include_str!("../../migrations/038_feed_sync.sql"),
     include_str!("../../migrations/039_revision_body_hash.sql"),
+    include_str!("../../migrations/040_board_crawl_state.sql"),
 ];
 
 fn migrate(connection: &mut Connection, version: i64) -> Result<(), String> {

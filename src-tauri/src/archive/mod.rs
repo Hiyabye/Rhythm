@@ -23,9 +23,8 @@ pub fn definitions() -> Vec<SourceDefinition> {
 pub fn groups() -> Vec<SourceGroup> {
     catalog::groups()
 }
-/// Whether the app still collects this source itself (#177 PR 8): only
-/// Cybercampus. Public boards arrive through the feed; the board crawler
-/// stays unused until #178 removes it.
+/// Whether the app collects this source itself: only Cybercampus. Public
+/// boards arrive through the feed (#177, #178).
 pub(crate) fn app_collected(id: &str) -> bool {
     id == catalog::CYBERCAMPUS_SOURCE_ID
 }
@@ -66,17 +65,13 @@ pub async fn archive_subscribe(
         }
         s.subscribe(&id, subscribed)?;
         // Under the store lock, as job admission, so a running job and this
-        // choice agree on whether it collects the board.
-        let joined = if subscribed {
-            state.archive.join(s.source(&id)?)
-        } else {
+        // choice agree on whether it collects the source.
+        if !subscribed {
             state.archive.cancel_source(&id);
-            false
-        };
+        }
         Ok(SubscribeResult {
             sources: s.sources()?,
             groups: s.source_groups()?,
-            joined,
         })
     })
 }
@@ -85,8 +80,7 @@ pub async fn archive_source_groups(state: State<'_, AppState>) -> Result<Vec<Sou
     let _lease = state.operation_gate.shared().await?;
     with_store(&state.store, |s| s.source_groups())
 }
-/// Turns a settings group on or off. `joined` is whether a running refresh of
-/// every board collects a board the group turned back on.
+/// Turns a settings group of public boards on or off.
 #[tauri::command]
 pub async fn archive_set_group(
     state: State<'_, AppState>,
@@ -98,20 +92,10 @@ pub async fn archive_set_group(
         if !s.enabled(crate::extensions::NOTICES)? {
             return Err("이 정보원의 확장 기능을 먼저 켜 주세요.".into());
         }
-        // Under the store lock, as `archive_subscribe`, so a running job and
-        // the group agree on which boards it collects.
-        let mut joined = false;
-        for source in s.set_source_group(&id, enabled)? {
-            if source.subscribed {
-                joined |= state.archive.join(source);
-            } else {
-                state.archive.cancel_source(&source.definition.id);
-            }
-        }
+        s.set_source_group(&id, enabled)?;
         Ok(SubscribeResult {
             sources: s.sources()?,
             groups: s.source_groups()?,
-            joined,
         })
     })
 }
@@ -277,7 +261,7 @@ pub async fn archive_start(
         .start_tracked_admitted(
             state.store.clone(),
             state.data_root.clone(),
-            state.network.clone(),
+            Arc::new(cybercampus::client::Reqwest),
             Some(source_ids),
             mode,
             lease,

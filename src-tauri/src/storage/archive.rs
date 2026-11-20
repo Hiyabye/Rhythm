@@ -28,8 +28,6 @@ const ITEM_PREVIEW_COLUMNS: &str = item_columns!("substr(d.body_text,1,241)");
 const ITEM_FROM: &str = "documents d JOIN sources s ON s.id=d.source_id LEFT JOIN document_state u ON u.document_id=d.id";
 const RESOURCE_COLUMNS: &str = "id,url,filename,kind,status,mime,bytes,local_path,sha256,error";
 
-type Validators = (Option<String>, Option<String>);
-
 /// `off`: every group that is off itself or lies under a group that is off.
 const GROUPS_OFF: &str = "off(id) AS (SELECT id FROM source_groups WHERE enabled=0
     UNION SELECT g.id FROM source_groups g JOIN off ON g.parent_id=off.id)";
@@ -470,37 +468,6 @@ impl Store {
             .map_err(|e| e.to_string());
         ids
     }
-    /// Every skipped notice of a source, with the historical marking to retry it under.
-    pub(crate) fn skipped_entries(
-        &self,
-        source: &str,
-    ) -> Result<Vec<(ListingEntry, bool)>, String> {
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT k.external_id,k.url,k.historical FROM skipped_articles k
-                 WHERE k.source_id=?1 AND NOT EXISTS(
-                   SELECT 1 FROM deleted_notices x WHERE x.source_id=k.source_id AND x.external_id=k.external_id)
-                 ORDER BY k.skipped_at,k.external_id",
-            )
-            .map_err(|e| e.to_string())?;
-        let rows = statement
-            .query_map([source], |row| {
-                Ok((
-                    ListingEntry {
-                        external_id: row.get(0)?,
-                        url: row.get(1)?,
-                        pinned: false,
-                        modified_at: None,
-                    },
-                    row.get(2)?,
-                ))
-            })
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string());
-        rows
-    }
     /// Records a notice whose response was rejected for its content. A repeated
     /// rejection keeps the first skip time and the original historical marking.
     pub(crate) fn record_skipped(
@@ -643,21 +610,6 @@ impl Store {
             .optional()
             .map_err(|e| e.to_string())
     }
-    pub(crate) fn has_readable_content(&self, document_id: i64) -> Result<bool, String> {
-        self.connection
-            .query_row(
-                "SELECT d.body_html<>'' OR d.body_text<>'' OR EXISTS(
-                    SELECT 1 FROM resources r
-                    WHERE r.document_id=d.id
-                      AND r.revision_id=(SELECT MAX(id) FROM document_revisions WHERE document_id=d.id)
-                      AND r.kind='image'
-                 )
-                 FROM documents d WHERE d.id=?1",
-                [document_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())
-    }
     pub(crate) fn latest_original(&self, document_id: i64) -> Result<String, String> {
         self.connection
             .query_row(
@@ -667,40 +619,6 @@ impl Store {
                 |row| row.get(0),
             )
             .map_err(|e| e.to_string())
-    }
-    /// Notices still archived without a body whose stored response shows a PDF
-    /// viewer, newest first, with the identity to re-parse that response under.
-    pub(crate) fn pdf_viewer_candidates(
-        &self,
-        source: &str,
-    ) -> Result<Vec<(i64, ListingEntry)>, String> {
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT d.id,d.external_id,d.canonical_url FROM documents d
-                 JOIN document_revisions r
-                   ON r.id=(SELECT MAX(id) FROM document_revisions WHERE document_id=d.id)
-                 WHERE d.source_id=?1 AND d.body_html='' AND d.body_text=''
-                   AND instr(r.original,'/pdfviewer/')>0
-                 ORDER BY d.published_at DESC,d.id DESC LIMIT 1000",
-            )
-            .map_err(|e| e.to_string())?;
-        let rows = statement
-            .query_map([source], |row| {
-                Ok((
-                    row.get(0)?,
-                    ListingEntry {
-                        external_id: row.get(1)?,
-                        url: row.get(2)?,
-                        pinned: false,
-                        modified_at: None,
-                    },
-                ))
-            })
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string());
-        rows
     }
     /// Adds references the latest revision lacks because an earlier parser did
     /// not recognize them in the same stored response. Existing rows keep their state.
@@ -806,32 +724,6 @@ impl Store {
         transaction.commit().map_err(|e| e.to_string())?;
         Ok(true)
     }
-    /// True when the stored content hash equals this article's.
-    pub(crate) fn content_matches(
-        &self,
-        document_id: i64,
-        article: &ArticleInput,
-    ) -> Result<bool, String> {
-        let stored: String = self
-            .connection
-            .query_row(
-                "SELECT content_hash FROM documents WHERE id=?1",
-                [document_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(stored == meaningful_hash(article)?)
-    }
-    /// Whether any revision of the document referenced this URL.
-    pub(crate) fn knows_resource(&self, document_id: i64, url: &str) -> Result<bool, String> {
-        self.connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM resources WHERE document_id=?1 AND url=?2)",
-                params![document_id, url],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())
-    }
     /// The source and listing identity a document was archived under.
     pub(crate) fn document_entry(
         &self,
@@ -864,20 +756,6 @@ impl Store {
             )
             .map_err(|e| e.to_string())
     }
-    pub(crate) fn validators(
-        &self,
-        source: &str,
-        external: &str,
-    ) -> Result<Option<Validators>, String> {
-        self.connection
-            .query_row(
-                "SELECT etag,last_modified FROM documents WHERE source_id=?1 AND external_id=?2",
-                params![source, external],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()
-            .map_err(|e| e.to_string())
-    }
     /// True when the archived notice already carries the listing's own change
     /// timestamp. A sitemap-backed family uses this to skip a request instead of
     /// revalidating every article on each incremental run.
@@ -896,9 +774,6 @@ impl Store {
             .optional()
             .map(|stored| stored.flatten().is_some_and(|value| value == modified_at))
             .map_err(|e| e.to_string())
-    }
-    pub(crate) fn checked(&self, source: &str, external: &str) -> Result<(), String> {
-        require_changed(self.connection.execute(&format!("UPDATE documents SET checked_at={NOW} WHERE source_id=?1 AND external_id=?2"),params![source,external]).map_err(|e|e.to_string())?)
     }
     pub(crate) fn upsert_article(
         &self,
@@ -966,7 +841,6 @@ impl Store {
             // not a remote-byte recheck; local access still verifies integrity.
             transaction.execute("UPDATE resources SET (status,mime,bytes,local_path,sha256,error)=(SELECT status,mime,bytes,local_path,sha256,NULL FROM resources prior WHERE prior.document_id=?1 AND prior.url=?3 AND prior.kind=?4 AND prior.status='downloaded' AND prior.revision_id<>?2 ORDER BY prior.id DESC LIMIT 1) WHERE document_id=?1 AND revision_id=?2 AND url=?3 AND EXISTS(SELECT 1 FROM resources prior WHERE prior.document_id=?1 AND prior.url=?3 AND prior.kind=?4 AND prior.status='downloaded' AND prior.revision_id<>?2)",params![id,revision_id,resource.url,resource.kind]).map_err(|e|e.to_string())?;
         }
-        super::feed::adopt_crawled(&transaction, id, article.unsupported_body)?;
         super::notice_dates::extract(&transaction, id)?;
         transaction.commit().map_err(|e| e.to_string())?;
         Ok((id, true))

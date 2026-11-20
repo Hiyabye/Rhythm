@@ -435,47 +435,6 @@ fn upsert(
     Ok(true)
 }
 
-/// The feed's `revision_hash` of a v1 notice's latest archived revision.
-/// The crawler archived `document_id`'s body (`upsert_article`). For a notice
-/// the feed described, that body counts as opened: the date backfill reads it
-/// and the revision carries the feed hash of what was archived, so a later
-/// feed record of the same revision keeps it (#177; the crawler leaves public
-/// boards in PR 8).
-pub(super) fn adopt_crawled(
-    connection: &Connection,
-    document_id: i64,
-    unsupported: bool,
-) -> Result<(), String> {
-    let feed: bool = connection
-        .query_row(
-            "SELECT revision_hash IS NOT NULL FROM documents WHERE id=?1",
-            [document_id],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    if !feed {
-        return Ok(());
-    }
-    let hash = v1_revision_hash(connection, document_id)?;
-    connection
-        .execute(
-            "UPDATE documents SET revision_hash=?2,body_pending=0,body_state=?3 WHERE id=?1",
-            params![
-                document_id,
-                hash,
-                if unsupported { "unsupported" } else { "normal" }
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-    connection
-        .execute(
-            "UPDATE document_revisions SET revision_hash=?2 WHERE id=(SELECT MAX(id) FROM document_revisions WHERE document_id=?1)",
-            params![document_id, hash],
-        )
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 /// Adds a reference to a revision. As `upsert_article`: bytes already
 /// downloaded for the same URL and role are reused; local access still
 /// verifies their integrity.
@@ -616,7 +575,7 @@ impl Store {
     /// kept, so its next revision compares with what the collector saw. A
     /// revised text takes its own hashes, so the feed's later record of that
     /// revision keeps this body. Nothing changes when the body arrived
-    /// meanwhile (another open, the crawler) or the notice left the feed.
+    /// meanwhile (another open) or the notice left the feed.
     pub(crate) fn fill_feed_body(
         &self,
         document_id: i64,

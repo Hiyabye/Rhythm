@@ -505,56 +505,6 @@ fn a_populated_profile_upgrades_and_a_failed_upgrade_rolls_back() {
         .is_err());
 }
 
-#[test]
-fn a_crawled_body_on_a_feed_notice_counts_as_opened() {
-    let (_directory, store) = database();
-    let page = article("1", "크롤러가 받은 본문 2026년 11월 30일까지 신청");
-    store
-        .feed_apply_snapshot(
-            1,
-            &[upsert(1, &notice("one", &article("1", "다른 본문")))],
-            &[],
-        )
-        .unwrap();
-    assert!(
-        row(&store, "1").unwrap().1,
-        "the feed notice holds its excerpt"
-    );
-
-    store.upsert_article("one", &page, false).unwrap();
-    let (body, pending, from_feed, _, revisions) = row(&store, "1").unwrap();
-    assert_eq!(
-        (body.as_str(), pending, from_feed, revisions),
-        (page.body_text.as_str(), false, true, 2)
-    );
-    // Its dates come from the crawled body, not the feed.
-    let id = document(&store, "1");
-    assert_eq!(store.notice_dates(id).unwrap()[0].day, "2026-11-30");
-
-    // The feed's record of that same revision keeps the body.
-    store
-        .feed_apply_segment(2, 2, &[upsert(2, &notice("one", &page))], &[], false)
-        .unwrap();
-    let (body, pending, _, _, revisions) = row(&store, "1").unwrap();
-    assert_eq!(
-        (body.as_str(), pending, revisions),
-        (page.body_text.as_str(), false, 2)
-    );
-    // A v1 notice the feed never described is untouched.
-    store
-        .upsert_article("one", &article("v1", "예전 본문"), false)
-        .unwrap();
-    let hash: Option<String> = store
-        .connection
-        .query_row(
-            "SELECT revision_hash FROM documents WHERE external_id='v1'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(hash, None);
-}
-
 fn manifest(generated_at: &str, boards: &[(&str, u32)]) -> rhythm_feed::Manifest {
     let file = rhythm_feed::FileRef::new("snapshots/1.jsonl.zst".into(), b"x");
     rhythm_feed::Manifest {
@@ -1120,13 +1070,12 @@ fn feed_vectors_and_categories_back_ai_and_local_rows_cover_other_notices() {
     let mut hits = ranked.meaning_only.clone();
     hits.sort();
     assert_eq!(hits, vec![scholarship, twin, v1]);
-    // The local classifier embeds only notices the feed never described.
-    assert_eq!(
-        store
-            .ai_embedding_candidates(&"b".repeat(64), config, 10)
-            .unwrap(),
-        vec![(v1, revision(v1))]
-    );
+    // The local classifier embeds only Cybercampus notices: feed notices
+    // take the feed's vectors and a v1 public notice keeps its stored one.
+    assert!(store
+        .ai_embedding_candidates(&"b".repeat(64), config, 10)
+        .unwrap()
+        .is_empty());
 }
 
 /// Notification candidates above the baseline as (external id, kind), then
