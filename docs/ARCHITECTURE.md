@@ -199,7 +199,7 @@ Results have deterministic publication-date/ID order, source/category and saved/
 
 ## Sources and parsers
 
-`archive/catalog.rs` has 35 stable source identities: 34 public boards and the `cybercampus` connector (below). **Catalog presence is not support.** All 34 boards have verified list and detail extraction, resource handling and offline reopen:
+`crates/sources/src/catalog.rs` (re-exported as `archive::catalog`) has 35 stable source identities: 34 public boards and the `cybercampus` connector (below). **Catalog presence is not support.** All 34 boards have verified list and detail extraction, resource handling and offline reopen:
 
 | Source ID | Board |
 | --- | --- |
