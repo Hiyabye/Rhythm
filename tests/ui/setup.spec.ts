@@ -91,14 +91,27 @@ test('choosing no extension finishes with only Today', async ({ page }) => {
   expect(await callCount(page, 'set_extension')).toBe(0);
 });
 
-test('the last step fetches notices only when asked', async ({ page }) => {
-  await mockDesktop(page, { onboardingNeeded: true, sourceList: [{ id: 'computing-updates', name: '소식', organization: '소프트웨어융합대학', subscribed: true }] });
+test('the last step fetches Cybercampus only when asked, never the public boards', async ({ page }) => {
+  await mockDesktop(page, { onboardingNeeded: true, sourceList: [
+    { id: 'computing-updates', name: '소식', organization: '소프트웨어융합대학', supported: true, subscribed: true },
+    { id: 'cybercampus', name: '강의 공지', organization: '서강대학교 · 사이버캠퍼스', supported: true, subscribed: true, family: 'cybercampus' },
+  ] });
   await page.goto('/');
   for (const name of allSteps) await next(page, name);
+  await expect(page.getByRole('group', { name: '선택한 설정' })).toContainText('사이버캠퍼스 가져오기');
   await page.getByRole('button', { name: '가져오기', exact: true }).click();
   await expect(page.getByText('공개 공지를 가져오는 중입니다.')).toBeVisible();
-  expect(await callCount(page, 'archive_start')).toBe(1);
+  const starts = await page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'archive_start').map((call: any) => call.args));
+  expect(starts).toEqual([{ sourceIds: ['cybercampus'], mode: 'refresh' }]);
   await expect(page.getByRole('button', { name: '가져오기', exact: true })).toBeDisabled();
+});
+
+test('with only public boards the last step offers no fetch', async ({ page }) => {
+  await mockDesktop(page, { onboardingNeeded: true, sourceList: [{ id: 'computing-updates', name: '소식', organization: '소프트웨어융합대학', supported: true, subscribed: true }] });
+  await page.goto('/');
+  for (const name of allSteps) await next(page, name);
+  await expect(page.getByRole('group', { name: '선택한 설정' })).toContainText('구독한 게시판');
+  await expect(page.getByRole('button', { name: '가져오기', exact: true })).toHaveCount(0);
 });
 
 test('skipping ends setup without changing settings', async ({ page }) => {

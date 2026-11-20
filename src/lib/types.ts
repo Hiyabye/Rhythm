@@ -206,6 +206,16 @@ export interface SourceInfo {
   extension: string | null;
   /** Archived notices of this source not yet read. */
   unread: number;
+  /** The collector's health for this board from the last accepted feed manifest. */
+  feed: FeedBoardHealth | null;
+}
+
+export interface FeedBoardHealth {
+  last_success_at: string | null;
+  consecutive_failures: number;
+  /** Listed as failing in the feed pane. */
+  failing: boolean;
+  history_complete: boolean;
 }
 export interface SkippedArticle {
   external_id: string;

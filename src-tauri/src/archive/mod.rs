@@ -23,6 +23,23 @@ pub fn definitions() -> Vec<SourceDefinition> {
 pub fn groups() -> Vec<SourceGroup> {
     catalog::groups()
 }
+/// Whether the app still collects this source itself (#177 PR 8): only
+/// Cybercampus. Public boards arrive through the feed; the board crawler
+/// stays unused until #178 removes it.
+pub(crate) fn app_collected(id: &str) -> bool {
+    id == catalog::CYBERCAMPUS_SOURCE_ID
+}
+/// The sources an `archive_start` request may collect: every request names
+/// only app-collected sources, and none means all of them.
+fn collected_ids(ids: Option<Vec<String>>) -> Result<Vec<String>, String> {
+    match ids {
+        None => Ok(vec![catalog::CYBERCAMPUS_SOURCE_ID.to_string()]),
+        Some(ids) if ids.iter().all(|id| app_collected(id)) => Ok(ids),
+        Some(_) => Err(
+            "학교 게시판 공지는 공지 피드로 받습니다. 공지 피드의 지금 받기를 눌러 주세요.".into(),
+        ),
+    }
+}
 pub fn client() -> Result<Client, String> {
     network::Client::new(concat!(
         "Rhythm/",
@@ -253,6 +270,7 @@ pub async fn archive_start(
     source_ids: Option<Vec<String>>,
     mode: String,
 ) -> Result<SyncStatus, String> {
+    let source_ids = collected_ids(source_ids)?;
     let lease = state.operation_gate.shared().await?;
     state
         .archive
@@ -260,7 +278,7 @@ pub async fn archive_start(
             state.store.clone(),
             state.data_root.clone(),
             state.network.clone(),
-            source_ids,
+            Some(source_ids),
             mode,
             lease,
         )
@@ -356,6 +374,20 @@ pub async fn archive_open_original(url: String) -> Result<(), String> {
 #[cfg(test)]
 mod image_tests {
     use super::*;
+    #[test]
+    fn archive_start_collects_only_cybercampus() {
+        assert_eq!(collected_ids(None).unwrap(), ["cybercampus"]);
+        assert_eq!(
+            collected_ids(Some(vec!["cybercampus".into()])).unwrap(),
+            ["cybercampus"]
+        );
+        for ids in [
+            vec!["sogang-academic".to_string()],
+            vec!["cybercampus".into(), "computing-updates".into()],
+        ] {
+            assert!(collected_ids(Some(ids)).unwrap_err().contains("공지 피드"));
+        }
+    }
     #[test]
     fn verified_raster_images_do_not_depend_on_legacy_resource_role() {
         let png = b"\x89PNG\r\n\x1a\nlocal raster";

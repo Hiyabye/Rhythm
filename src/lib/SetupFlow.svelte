@@ -25,7 +25,7 @@
   const allSteps: { id: StepId; label: string; title: string; line: string; extension?: string }[] = [
     { id: 'start', label: '시작', title: 'Rhythm에 오신 것을 환영합니다', line: '계정이나 클라우드 없이 학교 소식과 일정을 이 기기에 모아 봅니다. 여기서 고른 설정은 나중에 설정에서 언제든 바꿀 수 있습니다.' },
     { id: 'extensions', label: '기능', title: '사용할 기능 고르기', line: '켠 기능만 메뉴와 오늘 화면에 나타납니다. 처음에는 모두 꺼져 있고, 설정 → 확장 기능에서 언제든 바꿀 수 있습니다.' },
-    { id: 'boards', label: '게시판', title: '받아 볼 게시판', line: '구독한 게시판만 가져옵니다. 구독만으로는 아무것도 내려받지 않습니다.', extension: 'sogang_notices' },
+    { id: 'boards', label: '게시판', title: '받아 볼 게시판', line: '학교 게시판 공지는 서버가 모은 공지 피드로 받습니다. 구독한 게시판의 공지를 추천과 알림에 씁니다.', extension: 'sogang_notices' },
     { id: 'cybercampus', label: '사이버캠퍼스', title: '사이버캠퍼스 연결', line: '본인 강좌의 공지와 과제·마감을 가져옵니다. 로그인 정보는 운영체제 보안 저장소에만 저장합니다.', extension: 'cybercampus' },
     { id: 'interests', label: '관심사', title: '관심사', line: '추천 순위에만 쓰이며 이 기기에만 저장됩니다. 비워 두어도 됩니다.', extension: 'recommendations' },
     { id: 'ai', label: 'AI', title: '공지 분류', line: '학교 공지를 주제별로 나누고 비슷한 공지를 묶습니다. 이 기기에 작은 분류 모델을 설치하면 사이버캠퍼스 공지도 나누고 뜻으로 찾는 검색도 쓸 수 있습니다. 설치하지 않아도 읽기, 검색, 추천을 모두 쓸 수 있습니다.', extension: 'ai' },
@@ -72,6 +72,8 @@
   let sources = $state<SourceInfo[]>([]);
   let proactive = $state<ProactiveSnapshot | null>(null);
   let subscribed = $derived(sources.filter((source) => source.supported && source.subscribed));
+  // Public boards arrive through the feed; only Cybercampus is collected here.
+  let cybercampusOn = $derived(enabled.has('cybercampus') && subscribed.some((source) => source.family === 'cybercampus'));
   let syncMessage = $state('');
   let syncBusy = $state(false);
   let summaryError = $state('');
@@ -148,7 +150,7 @@
   async function syncNow() {
     syncBusy = true;
     summaryError = '';
-    try { syncMessage = (await invoke<{ message: string }>('archive_start', { sourceIds: null, mode: 'refresh' })).message; }
+    try { syncMessage = (await invoke<{ message: string }>('archive_start', { sourceIds: ['cybercampus'], mode: 'refresh' })).message; }
     catch (reason) { summaryError = archiveError(reason); }
     finally { syncBusy = false; }
   }
@@ -172,7 +174,7 @@
         <div class="settings-group">
           <div class="settings-row"><span class="row-label">화면 테마</span><div class="segmented" role="group" aria-label="화면 테마">{#each themes as option}<button disabled={busy} class:selected={theme === option.id} aria-pressed={theme === option.id} onclick={() => onsave({ theme: option.id })}><Icon name={option.icon} size={15} />{option.label}</button>{/each}</div></div>
           <div class="settings-row"><span class="row-label">시간 표시<span class="row-detail">{snapshot.settings.clock_format === '12h' ? '오후 9:30' : '21:30'}</span></span><div class="segmented" role="group" aria-label="시간 표시">{#each clockFormats as option}<button disabled={busy} class:selected={snapshot.settings.clock_format === option.id} aria-pressed={snapshot.settings.clock_format === option.id} onclick={() => onsave({ clock_format: option.id })}>{option.label}</button>{/each}</div></div>
-          <div class="settings-row"><span class="row-label">전원 모드<Hint label="전원 모드">자동 동기화 간격에 적용됩니다. 절전은 60분마다, 균형은 30분, 성능은 15분마다 확인합니다.</Hint></span><div class="segmented" role="group" aria-label="전원 모드">{#each energyProfiles as option}<button disabled={busy} class:selected={snapshot.settings.energy_profile === option.id} aria-pressed={snapshot.settings.energy_profile === option.id} onclick={() => onsave({ energy_profile: option.id })}>{option.label}</button>{/each}</div></div>
+          <div class="settings-row"><span class="row-label">전원 모드<Hint label="전원 모드">사이버캠퍼스 자동 동기화 간격에 적용됩니다. 절전은 60분마다, 균형은 30분, 성능은 15분마다 확인합니다. 학교 게시판 공지 피드는 전원 모드와 관계없이 30분마다 받습니다.</Hint></span><div class="segmented" role="group" aria-label="전원 모드">{#each energyProfiles as option}<button disabled={busy} class:selected={snapshot.settings.energy_profile === option.id} aria-pressed={snapshot.settings.energy_profile === option.id} onclick={() => onsave({ energy_profile: option.id })}>{option.label}</button>{/each}</div></div>
           {#if updaterConfigured}<div class="settings-row"><span class="row-label">자동으로 업데이트 확인<Hint label="자동으로 업데이트 확인">앱이 실행 중일 때 하루에 한 번 GitHub에서 새 버전을 확인해 알려 드립니다. 내려받기와 설치는 직접 고를 때만 진행합니다.</Hint></span><button class="switch" class:on={autoCheck === true} role="switch" aria-label="자동으로 업데이트 확인" aria-checked={autoCheck === true} disabled={autoCheck === null} onclick={toggleAutoCheck}><span></span></button></div>{/if}
         </div>
       {:else if current === 'extensions'}
@@ -215,7 +217,7 @@
             <div class="settings-row"><span class="row-label">자동 동기화</span><span class="value">{proactive ? (proactive.settings.scheduler_enabled ? '켜짐' : '꺼짐') : '—'}</span></div>
             <div class="settings-row"><span class="row-label">알림</span><span class="value">{proactive ? (proactive.settings.notifications_enabled ? '켜짐' : '꺼짐') : '—'}</span></div>
           {/if}
-          {#if sourcesOn}<div class="settings-row"><span class="row-label">지금 공지 가져오기<Hint label="지금 공지 가져오기">구독한 게시판의 새 소식을 확인하고 이전 공지를 차례로 가져옵니다. 진행 상황은 사이드바와 각 게시판 설정에 표시됩니다.</Hint>{#if syncMessage}<span class="row-detail" role="status">{syncMessage}</span>{/if}</span><button class="button secondary small" disabled={syncBusy || Boolean(syncMessage) || !subscribed.length} onclick={syncNow}>가져오기</button></div>{/if}
+          {#if cybercampusOn}<div class="settings-row"><span class="row-label">사이버캠퍼스 가져오기<Hint label="사이버캠퍼스 가져오기">본인 강좌의 공지와 과제·마감을 지금 가져옵니다. 학교 게시판 공지는 공지 피드로 자동으로 받습니다.</Hint>{#if syncMessage}<span class="row-detail" role="status">{syncMessage}</span>{/if}</span><button class="button secondary small" disabled={syncBusy || Boolean(syncMessage)} onclick={syncNow}>가져오기</button></div>{/if}
         </div>
       {/if}
       </div>{/key}

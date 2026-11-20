@@ -22,7 +22,7 @@ use rhythm_feed::{
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::collections::HashSet;
 
-mod state;
+pub(crate) mod state;
 pub(crate) use state::FeedResult;
 pub use state::FeedStatus;
 

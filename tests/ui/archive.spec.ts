@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mockDesktop, callCount, navigate, openSettings, syncMode } from './fixture';
+import { mockDesktop, callCount, navigate, openSettings } from './fixture';
 import type { ResourceRecord } from '../../src/lib/types';
 
 const image: ResourceRecord = { id: 7, url: 'https://computing.sogang.ac.kr/web/file/editor/test.png', filename: '본문.png',
@@ -264,23 +264,52 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
   });
 }
 
-test('subscriptions have no automatic collection, protect refreshing state, show errors and cancel', async ({ page }) => {
-  await mockDesktop(page);
+test('public boards come from the feed: subscriptions only filter, and each board shows the server health', async ({ page }) => {
+  await mockDesktop(page, { sourceList: [
+    { id: 'computing-updates', name: '소식', organization: '소프트웨어융합대학', supported: true,
+      feed: { last_success_at: '2026-11-18T02:41:00Z', consecutive_failures: 0, failing: false, history_complete: false },
+      // Left from v1 crawling; the feed's health replaces it.
+      last_error: '학교 서버가 응답하지 않았습니다.', skipped_count: 1,
+      skipped: [{ external_id: '3110', url: 'https://computing.sogang.ac.kr/ko/community/news/detail/3110', reason: '형식 오류', skipped_at: '2026-11-04T00:00:00Z', archived: false }] },
+    { id: 'computing-career', name: '취업', organization: '소프트웨어융합대학', supported: true, subscribed: true,
+      feed: { last_success_at: '2026-11-17T22:11:00Z', consecutive_failures: 4, failing: true, history_complete: true } },
+    { id: 'computing-scholarship', name: '장학', organization: '소프트웨어융합대학', supported: true },
+    { id: 'unsupported-board', name: '미검증 게시판', organization: '다른 학과', supported: false, family: 'cms' },
+  ] });
   await page.goto('/');
   await openSettings(page, '게시판');
   const subscribe = page.getByRole('switch', { name: '소프트웨어융합대학 소식 구독', exact: true });
   await expect(subscribe).toBeEnabled();
+  // The app collects no public board, so the pane has no collect controls.
+  await expect(page.locator('.source-manager .collect-bar')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '자료 모두 내려받기', exact: true })).toHaveCount(0);
   // Unsupported boards are listed only on request, and never subscribable.
   const unsupported = page.getByRole('switch', { name: '다른 학과 미검증 게시판 구독', exact: true });
   await expect(unsupported).toHaveCount(0);
   await page.getByText('미지원 게시판 1개', { exact: true }).click();
   await expect(unsupported).toBeDisabled();
+
+  // A healthy board: the server's last success and its backlog, nothing from v1 crawling.
+  await expect(page.locator('.board-state.alert')).toHaveCount(1);
+  await expect(subscribe).not.toHaveAttribute('aria-describedby');
   await page.getByRole('button', { name: '소프트웨어융합대학 소식 상태', exact: true }).click();
   const status = page.getByRole('dialog', { name: '소식 상태', exact: true });
-  await expect(status).toContainText('일부 가져옴 · 이어받기 가능');
-  // Per-board collection is offered only for subscribed boards.
+  await expect(status).toContainText('정상 · 서버가 이전 공지를 모으는 중');
+  await expect(status).toContainText('서버 마지막 수집');
+  await expect(status).not.toContainText('가져오지 못한 공지');
+  await expect(status).not.toContainText('응답하지 않았습니다');
   await expect(status.getByRole('button')).toHaveCount(0);
   await page.keyboard.press('Escape');
+  // A board the server keeps failing on is marked, also for screen readers.
+  const career = page.getByRole('switch', { name: '소프트웨어융합대학 취업 구독', exact: true });
+  await expect(career).toHaveAccessibleDescription('서버가 계속 가져오지 못하는 게시판');
+  await page.getByRole('button', { name: '소프트웨어융합대학 취업 상태', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '취업 상태', exact: true })).toContainText('서버가 연속 4회 가져오지 못함 · 공개된 이전 공지 모두 받음');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '소프트웨어융합대학 장학 상태', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '장학 상태', exact: true })).toContainText('아직 공지 피드에서 이 게시판 소식을 받지 않았습니다.');
+  await page.keyboard.press('Escape');
+
   await page.evaluate(() => { (window as any).__fixture.subscribeError = true; });
   await subscribe.click();
   await expect(page.getByRole('alert')).toContainText('구독 설정을 저장하지 못했습니다');
@@ -292,83 +321,34 @@ test('subscriptions have no automatic collection, protect refreshing state, show
   await expect(subscribe).toBeDisabled();
   await expect(subscribe).toHaveAttribute('aria-checked', 'true');
   await expect(subscribe).toBeEnabled();
+  await expect(page.locator('.source-manager .archive-feedback')).toContainText('이 게시판 공지를 추천과 알림에 포함합니다');
+  await career.click();
+  await expect(career).toHaveAttribute('aria-checked', 'false');
+  await expect(page.locator('.source-manager .archive-feedback')).toContainText('받은 공지는 목록에 남고 추천과 알림에서만 빠집니다');
   expect(await callCount(page, 'archive_start')).toBe(0);
-  const starts = () => page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'archive_start').map((call: any) => call.args));
-  await page.getByRole('button', { name: '새로고침', exact: true }).click();
-  // The pane refreshes the subscribed boards it manages.
-  await expect.poll(starts).toEqual([{ sourceIds: ['computing-updates'], mode: 'refresh' }]);
-  await expect(page.locator('.collect-status')).toContainText('새로고침 준비 중');
-  // The one job reports each step, so the label follows new notices into the backlog.
-  await syncMode(page, 'incremental');
-  await expect(page.locator('.collect-status')).toContainText('새 소식 확인 중');
-  await syncMode(page, 'historical', 2);
-  await expect(page.locator('.collect-status')).toContainText('이전 공지 가져오는 중 · 소식 · 2쪽');
-  await expect(page.getByRole('button', { name: '가져오기 중단', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '가져오기 중단', exact: true }).click();
-  await expect(page.locator('.source-manager .archive-feedback')).toContainText('이미 저장한 공지는 유지됩니다');
-  // One board can still be refreshed on its own from its status popover.
-  await page.getByRole('button', { name: '소프트웨어융합대학 소식 상태', exact: true }).click();
-  await expect(status.getByRole('button', { name: '새 소식 확인', exact: true })).toHaveCount(0);
-  await status.getByRole('button', { name: '새로고침', exact: true }).click();
-  await expect.poll(starts).toEqual([{ sourceIds: ['computing-updates'], mode: 'refresh' }, { sourceIds: ['computing-updates'], mode: 'refresh' }]);
-  // Missing files of every subscribed board download through one explicit action.
-  await page.keyboard.press('Escape');
-  await page.evaluate(() => (window as any).__fixture.completeSync());
-  await expect(page.getByRole('button', { name: '자료 모두 내려받기', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: '자료 모두 내려받기', exact: true }).click();
-  await expect.poll(starts).toEqual([{ sourceIds: ['computing-updates'], mode: 'refresh' }, { sourceIds: ['computing-updates'], mode: 'refresh' }, { sourceIds: ['computing-updates'], mode: 'resources' }]);
-  await expect(page.locator('.collect-status')).toContainText('첨부 자료 모두 내려받는 중');
-});
-
-test('boards can be switched while a refresh runs, and several boards show progress at once', async ({ page }) => {
-  await mockDesktop(page, { sourceList: [
-    { id: 'computing-updates', name: '소식', organization: '소프트웨어융합대학', supported: true, subscribed: true },
-    { id: 'computing-career', name: '취업', organization: '소프트웨어융합대학', supported: true },
-    { id: 'sogang-academic', name: '학부 학사공지', organization: '서강대학교', supported: true, family: 'main' },
-  ] });
-  await page.goto('/');
-  await openSettings(page, '게시판');
-  await page.getByRole('button', { name: '새로고침', exact: true }).click();
-  await expect(page.getByRole('button', { name: '가져오기 중단', exact: true })).toBeVisible();
-  // Starting another job waits, but subscriptions stay open.
-  await expect(page.getByRole('button', { name: '새로고침', exact: true })).toBeDisabled();
-  const main = page.getByRole('switch', { name: '서강대학교 학부 학사공지 구독', exact: true });
-  await expect(main).toBeEnabled();
-  await main.click();
-  await expect(main).toHaveAttribute('aria-checked', 'true');
-  await expect(page.locator('.source-manager .archive-feedback')).toContainText('진행 중인 새로고침에서 함께 가져옵니다');
-  await page.evaluate(() => (window as any).__fixture.syncBoards(['computing-updates', 'sogang-academic']));
-  await expect(page.locator('.collect-status')).toContainText('게시판 2개를 동시에 가져오는 중');
-  await expect(page.locator('.board-state.spinning')).toHaveCount(2);
-  // Unsubscribing a running board stops only that board.
-  const updates = page.getByRole('switch', { name: '소프트웨어융합대학 소식 구독', exact: true });
-  await updates.click();
-  await expect(updates).toHaveAttribute('aria-checked', 'false');
-  await expect(page.locator('.source-manager .archive-feedback')).toContainText('이 게시판의 가져오기만 멈춥니다');
-  expect(await callCount(page, 'archive_cancel')).toBe(0);
 });
 
 test('skipped notices are listed per board with their originals and an explicit retry', async ({ page }) => {
   const parser = '학교 페이지 형식이 예상과 다릅니다. 기존 보관 자료는 유지됩니다.';
-  await mockDesktop(page, { sourceList: [{ id: 'computing-career', name: '취업', organization: '소프트웨어융합대학', supported: true, subscribed: true,
+  await mockDesktop(page, { sourceList: [{ id: 'cybercampus', name: '강의 공지', organization: '서강대학교 · 사이버캠퍼스', supported: true, subscribed: true, family: 'cybercampus',
     skipped_count: 21, skipped: [
-      { external_id: '3110', url: 'https://computing.sogang.ac.kr/ko/community/career/detail/3110', reason: parser, skipped_at: '2026-11-04T00:00:00Z', archived: false },
-      { external_id: '3111', url: 'https://computing.sogang.ac.kr/ko/community/career/detail/3111', reason: parser, skipped_at: '2026-11-03T00:00:00Z', archived: true },
+      { external_id: 'A1-3110', url: 'https://eclass.sogang.ac.kr/ilos/3110', reason: parser, skipped_at: '2026-11-04T00:00:00Z', archived: false },
+      { external_id: 'A1-3111', url: 'https://eclass.sogang.ac.kr/ilos/3111', reason: parser, skipped_at: '2026-11-03T00:00:00Z', archived: true },
     ] }] });
   await page.goto('/');
-  await openSettings(page, '게시판');
+  await openSettings(page, '사이버캠퍼스');
   // A skip is not a board failure: no warning mark on the tile.
   await expect(page.locator('.board-state.alert')).toHaveCount(0);
-  await page.getByRole('button', { name: '소프트웨어융합대학 취업 상태', exact: true }).click();
-  const status = page.getByRole('dialog', { name: '취업 상태', exact: true });
+  await page.getByRole('button', { name: '서강대학교 · 사이버캠퍼스 강의 공지 상태', exact: true }).click();
+  const status = page.getByRole('dialog', { name: '강의 공지 상태', exact: true });
   await expect(status).toContainText('가져오지 못한 공지 21건');
   await expect(status).toContainText('최근 2건만 표시합니다.');
   await expect(status).toContainText('이전에 보관한 내용은 그대로 읽을 수 있습니다.');
-  await status.getByRole('button', { name: '공지 3110 원문 열기', exact: true }).click();
+  await status.getByRole('button', { name: '공지 A1-3110 원문 열기', exact: true }).click();
   const calls = (command: string) => page.evaluate((name) => (window as any).__fixture.calls.filter((call: any) => call.command === name).map((call: any) => call.args), command);
-  await expect.poll(() => calls('archive_open_original')).toEqual([{ url: 'https://computing.sogang.ac.kr/ko/community/career/detail/3110' }]);
+  await expect.poll(() => calls('archive_open_original')).toEqual([{ url: 'https://eclass.sogang.ac.kr/ilos/3110' }]);
   await status.getByRole('button', { name: '가져오지 못한 공지 다시 시도', exact: true }).click();
-  await expect.poll(() => calls('archive_start')).toEqual([{ sourceIds: ['computing-career'], mode: 'skipped' }]);
+  await expect.poll(() => calls('archive_start')).toEqual([{ sourceIds: ['cybercampus'], mode: 'skipped' }]);
 });
 
 test('reader hydrates legacy attachment-role inline images once and rejects remote executable markup', async ({ page }) => {
@@ -706,14 +686,14 @@ test('board groups nest by level, and a group off hides and stops its subtree bu
   await expect(page.getByRole('heading', { name: '기계공학과' })).toHaveCount(0);
   await expect(pick('소프트웨어융합대학 소식')).toBeVisible();
   await expect(group('공과대학')).toContainText('꺼짐 · 게시판 3개');
-  await expect(page.locator('.source-manager .archive-feedback')).toContainText('고른 게시판과 보관한 공지는 그대로 남습니다');
-  await expect(page.locator('.collect-status')).toHaveText('구독 1개');
+  await expect(page.locator('.source-manager .archive-feedback')).toContainText('고른 게시판과 받은 공지는 그대로 남습니다');
+  await expect(group('서강대학교').locator('.board-group-count').first()).toHaveText('구독 1/5');
 
   // Level 1 off hides everything below it.
   await toggle('서강대학교').click();
   await expect(page.locator('.board-tile')).toHaveCount(0);
   await expect(toggle('공과대학')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '새로고침', exact: true })).toBeDisabled();
+  await expect(group('서강대학교')).toContainText('꺼짐 · 게시판 5개');
 
   // Back on, each group returns to its own state and each board to its pick.
   await toggle('서강대학교').click();
@@ -723,6 +703,6 @@ test('board groups nest by level, and a group off hides and stops its subtree bu
   await expect(pick('공과대학 일반공지')).toHaveAttribute('aria-checked', 'false');
   await picker('기계공학과').click();
   await expect(pick('기계공학과 기계 일반공지')).toHaveAttribute('aria-checked', 'true');
-  await expect(page.locator('.collect-status')).toHaveText('구독 3개');
+  await expect(group('서강대학교').locator('.board-group-count').first()).toHaveText('구독 3/5');
   expect(await callCount(page, 'archive_set_group')).toBe(4);
 });

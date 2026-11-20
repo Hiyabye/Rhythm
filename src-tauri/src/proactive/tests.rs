@@ -923,3 +923,41 @@ fn scheduled_tasks_need_the_proactive_and_owning_extensions() {
     let stored = guard.proactive_settings().unwrap();
     assert!(stored.scheduler_enabled && stored.notifications_enabled && stored.close_to_background);
 }
+
+#[test]
+fn only_cybercampus_keeps_a_scheduled_task_once_boards_come_from_the_feed() {
+    use crate::archive;
+    use crate::storage::proactive::ProactiveTaskInput;
+    use std::sync::{Arc, Mutex};
+    let (_directory, store) = crate::storage::temp_store();
+    store.catalog(&archive::definitions()).unwrap();
+    for extension in ["sogang_notices", "cybercampus", "proactive"] {
+        store.set_enabled(extension, true).unwrap();
+    }
+    store.subscribe("sogang-academic", true).unwrap();
+    store.subscribe("cybercampus", true).unwrap();
+    let mut settings = store.proactive_settings().unwrap();
+    settings.scheduler_enabled = true;
+    store.proactive_save_settings(&settings).unwrap();
+    // A v1 profile already runs its public boards on the scheduler.
+    store
+        .proactive_save_task(&ProactiveTaskInput {
+            task_id: "source:sogang-academic".into(),
+            interval_minutes: 30,
+            enabled: true,
+        })
+        .unwrap();
+    let prefs = store.proactive_effective_settings().unwrap();
+    let energy = store.settings().unwrap();
+    let store = Arc::new(Mutex::new(store));
+    scheduler::reconcile_tasks(&store, &prefs, &energy).unwrap();
+    let tasks = store.lock().unwrap().proactive_tasks().unwrap();
+    let enabled = |id: &str| tasks.iter().find(|t| t.task_id == id).unwrap().enabled;
+    assert!(enabled("source:cybercampus"));
+    // The row stays for #178 to drop, but never runs again.
+    assert!(!enabled("source:sogang-academic"));
+    assert!(tasks
+        .iter()
+        .filter(|t| t.task_id != "source:cybercampus")
+        .all(|t| !t.enabled));
+}

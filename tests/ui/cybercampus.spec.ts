@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { cybercampusTask, mockDesktop, openSettings } from './fixture';
+import { callCount, cybercampusTask, mockDesktop, openSettings, syncMode } from './fixture';
 import type { CybercampusTask } from '../../src/lib/types';
 
 const board = { id: 'cybercampus', name: '강의 공지', organization: '서강대학교 · 사이버캠퍼스', supported: true, family: 'cybercampus' };
@@ -35,6 +35,35 @@ test('the Cybercampus login is checked before it is saved and is never shown aga
   await login.getByRole('button', { name: '저장된 로그인 정보 삭제' }).click();
   await expect(login).toContainText('저장된 로그인 정보 없음');
   await expect(login.getByRole('status')).toContainText('보관한 공지와 과제는 남습니다');
+});
+
+test('Cybercampus collects only on request, reports each step, cancels and downloads its files', async ({ page }) => {
+  await mockDesktop(page, { sourceList: [{ ...board, subscribed: true }] });
+  await page.goto('/');
+  await openSettings(page, '사이버캠퍼스');
+  expect(await callCount(page, 'archive_start')).toBe(0);
+  const starts = () => page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'archive_start').map((call: any) => call.args));
+  await page.getByRole('button', { name: '새로고침', exact: true }).click();
+  await expect.poll(starts).toEqual([{ sourceIds: ['cybercampus'], mode: 'refresh' }]);
+  await expect(page.locator('.collect-status')).toContainText('새로고침 준비 중');
+  // The one job reports each step, so the label follows new notices into the backlog.
+  await syncMode(page, 'incremental');
+  await expect(page.locator('.collect-status')).toContainText('새 소식 확인 중');
+  await syncMode(page, 'historical', 2);
+  await expect(page.locator('.collect-status')).toContainText('이전 공지 가져오는 중 · 강의 공지 · 2쪽');
+  await expect(page.locator('.board-state.spinning')).toHaveCount(1);
+  await page.getByRole('button', { name: '가져오기 중단', exact: true }).click();
+  await expect(page.locator('.source-manager > .archive-feedback')).toContainText('이미 저장한 공지는 유지됩니다');
+  // The board can also be refreshed from its status popover.
+  await page.getByRole('button', { name: '서강대학교 · 사이버캠퍼스 강의 공지 상태', exact: true }).click();
+  await page.getByRole('dialog', { name: '강의 공지 상태', exact: true }).getByRole('button', { name: '새로고침', exact: true }).click();
+  await expect.poll(starts).toEqual([{ sourceIds: ['cybercampus'], mode: 'refresh' }, { sourceIds: ['cybercampus'], mode: 'refresh' }]);
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => (window as any).__fixture.completeSync());
+  await expect(page.getByRole('button', { name: '자료 모두 내려받기', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '자료 모두 내려받기', exact: true }).click();
+  await expect.poll(starts).toEqual([{ sourceIds: ['cybercampus'], mode: 'refresh' }, { sourceIds: ['cybercampus'], mode: 'refresh' }, { sourceIds: ['cybercampus'], mode: 'resources' }]);
+  await expect(page.locator('.collect-status')).toContainText('첨부 자료 모두 내려받는 중');
 });
 
 test('deadlines list what is due first and fold submitted or past items', async ({ page }) => {

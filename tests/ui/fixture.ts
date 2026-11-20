@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test';
-import type { CalendarTodo, ClockFormat, FeedStatus, NoticeDate, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation, StudiumMiniStatus, StudiumSeatLayout, StudiumSnapshot, Theme } from '../../src/lib/types';
+import type { CalendarTodo, ClockFormat, FeedBoardHealth, FeedStatus, NoticeDate, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation, StudiumMiniStatus, StudiumSeatLayout, StudiumSnapshot, Theme } from '../../src/lib/types';
 
 // Invented regular marker origins, unrelated to the school's real floor plans.
 export function syntheticStudiumLayout(total: number): StudiumSeatLayout {
@@ -57,7 +57,7 @@ export interface FixtureOptions {
   aiModelDirectoryGate?: boolean;
   aiModelStorageAvailable?: number | null;
   // Replaces the default two-board catalog.
-  sourceList?: { id: string; name: string; organization: string; supported: boolean; subscribed?: boolean; group?: string | null; family?: string; last_error?: string | null; skipped_count?: number; skipped?: { external_id: string; url: string; reason: string; skipped_at: string; archived: boolean }[] }[];
+  sourceList?: { id: string; name: string; organization: string; supported: boolean; subscribed?: boolean; group?: string | null; family?: string; last_error?: string | null; skipped_count?: number; skipped?: { external_id: string; url: string; reason: string; skipped_at: string; archived: boolean }[]; feed?: FeedBoardHealth | null }[];
   initialNotificationsEnabled?: boolean;
   capabilitiesError?: boolean;
   aiExecutionMode?: 'auto' | 'cpu' | 'gpu';
@@ -140,10 +140,10 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     let sources = [{ id: 'computing-updates', name: '소식', organization: '소프트웨어융합대학',
       description: '학교 공개 소식', url: 'https://computing.sogang.ac.kr/ko/community/news/list', family: 'computing', supported: true,
       subscribed: false, last_attempt: null, last_success: null, last_error: null, next_page: 1, history_complete: false,
-      status: 'limited', discovered: 0, archived: 0, failed: 0, skipped_count: 0, skipped: [] as unknown[] },
+      status: 'limited', discovered: 0, archived: 0, failed: 0, skipped_count: 0, skipped: [] as unknown[], feed: null as FeedBoardHealth | null },
     { id: 'unsupported-board', name: '미검증 게시판', organization: '다른 학과', description: '아직 검증되지 않은 게시판',
       url: 'https://example.invalid', family: 'cms', supported: false, subscribed: false, last_attempt: null, last_success: null,
-      last_error: null, next_page: 1, history_complete: false, status: 'idle', discovered: 0, archived: 0, failed: 0, skipped_count: 0, skipped: [] as unknown[] }];
+      last_error: null, next_page: 1, history_complete: false, status: 'idle', discovered: 0, archived: 0, failed: 0, skipped_count: 0, skipped: [] as unknown[], feed: null as FeedBoardHealth | null }];
     if (options.sourceList) {
       sources = options.sourceList.map((source) => ({ ...sources[0], family: 'computing', subscribed: false, last_error: null, ...source }));
     }
@@ -215,7 +215,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     const resourceRows: ResourceRecord[] = copy(options.resources ?? []);
     let bodyFailures = options.feedBody?.result === 'fail' ? 1 : 0;
     let feed: FeedStatus = { running: false, generated_at: '2026-11-18T03:00:00.000Z', checked_at: '2026-11-18T03:05:00.000Z', stale: false, result: 'ok', error: null, failing_boards: [], ...options.feed };
-    const board = (mode: string, page = 1, source_id = 'computing-updates'): Board => ({ source_id, mode, page, message: '공개 공지를 가져오는 중입니다.' });
+    // The board the last started job collects, as the controller reports it.
+    let syncSource = 'computing-updates';
+    const board = (mode: string, page = 1, source_id = syncSource): Board => ({ source_id, mode, page, message: '공개 공지를 가져오는 중입니다.' });
     const separator = options.windows ? '\\' : '/';
     const defaultModelDirectory = options.windows ? 'C:\\Rhythm-test\\models' : '/isolated/models';
     const chosenModelDirectory = options.windows ? 'D:\\로컬 모델\\Rhythm' : '/Volumes/로컬 모델/Rhythm';
@@ -800,7 +802,11 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             sourceGroups = sourceGroups.map((group) => group.id === args.id ? { ...group, enabled: args.enabled } : group);
             reconcile();
             return copy({ sources, groups: sourceGroups, joined: false });
-          case 'archive_start': sync = { running: true, mode: args.mode, message: '공개 공지를 가져오는 중입니다.', active: [board(args.mode)] }; return copy(sync);
+          case 'archive_start':
+            // As the command: public boards arrive through the feed (#177).
+            if (args.sourceIds?.some((id: string) => id !== 'cybercampus')) throw '학교 게시판 공지는 공지 피드로 받습니다. 공지 피드의 지금 받기를 눌러 주세요.';
+            syncSource = args.sourceIds?.[0] ?? 'cybercampus';
+            sync = { running: true, mode: args.mode, message: '공개 공지를 가져오는 중입니다.', active: [board(args.mode)] }; return copy(sync);
           case 'archive_cancel': sync = { ...sync, running: false, message: '가져오기를 중단했습니다.', active: [] }; return copy(sync);
           case 'archive_resource_image':
             await wait(options.imageDelay ?? 0);
