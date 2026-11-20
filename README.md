@@ -73,7 +73,7 @@ Rhythm은 Apple 공증을 받지 않아 처음 열 때 macOS가 "확인되지 �
 
 설치 파일에 코드 서명이 없어 Windows SmartScreen이 경고를 표시할 수 있습니다. 공식 저장소에서 받았고 체크섬이 일치할 때만 실행 여부를 직접 판단하세요. Windows 보안 기능을 끄지 마세요.
 
-AI 분류는 CPU와 NVIDIA GPU(Vulkan)를 지원하며 **설정 → AI → 고급 → AI 실행 장치**에서 자동·CPU·GPU를 고릅니다. Windows에서 분류 모델의 실행은 시험하지 않았습니다.
+Windows에서 AI 분류는 CPU로 실행합니다. Windows에서 분류 모델의 실행은 아직 시험하지 않았습니다.
 
 ## 시작하기
 

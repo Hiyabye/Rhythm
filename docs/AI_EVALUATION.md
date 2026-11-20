@@ -6,7 +6,7 @@ AI summaries (Qwen3.5 2B/4B and Gemma 4 E2B/E4B generation, optional vision proj
 
 ## Runtime
 
-Inference runs in upstream `llama-server` from llama.cpp build **b12068** (`0.8.0-dev`, commit `4402e6540`), pinned with per-archive size and SHA-256 in `scripts/llama-cpp.json`: `macos-arm64` (Metal), `win-vulkan-x64` and `win-cpu-x64`. It runs only as an embedding server (`--embedding`, with the model's pooling mode); no remote tokenizer is used. How Rhythm runs it is in [architecture](ARCHITECTURE.md#inference-process).
+Inference runs in upstream `llama-server` from llama.cpp build **b12068** (`0.8.0-dev`, commit `4402e6540`), pinned with per-archive size and SHA-256 in `scripts/llama-cpp.json`: `macos-arm64` (Metal) and `win-cpu-x64`. It runs only as an embedding server (`--embedding`, with the model's pooling mode); no remote tokenizer is used. How Rhythm runs it is in [architecture](ARCHITECTURE.md#inference-process).
 
 ## Pinned artifacts
 
@@ -50,7 +50,7 @@ Measured on one Mac (macOS 27.2, M1 Pro, 16 GiB) with the staged `llama-server`,
 | bge-m3 Q8_0 | `gpustack/bge-m3-GGUF` `2d48f17…`, 634,553,760 B | 1024 | 17/18 (`ambiguous` → wrong) | 40–58 ms | 0.84 GiB | 0.9 s |
 | multilingual-e5-small | `rodion-m/multilingual-e5-small-gguf` `a4ad957…` fp32, 476,369,248 B | 384 | 6/18 | 5–8 ms | 0.61 GiB | 0.4 s |
 
-The `cstr` and `TwinSunsLLC` Q8_0 e5-small conversions failed to load in b12068 (`bert model needs to define token type count`); only the `rodion-m` fp32 conversion loaded. Qwen3-Embedding was also run on macOS CPU (`-ngl 0 --device none`): 18/18 at title + 300 characters, 237 ms/notice, 2.2 GiB peak RSS. These are synthetic fixtures and authored prototypes, not a broad Korean accuracy rate; Windows CPU/Vulkan classification is unverified. bge-m3 and e5-small are not shipped.
+The `cstr` and `TwinSunsLLC` Q8_0 e5-small conversions failed to load in b12068 (`bert model needs to define token type count`); only the `rodion-m` fp32 conversion loaded. Qwen3-Embedding was also run on macOS CPU (`-ngl 0 --device none`): 18/18 at title + 300 characters, 237 ms/notice, 2.2 GiB peak RSS. These are synthetic fixtures and authored prototypes, not a broad Korean accuracy rate; Windows CPU classification is unverified. bge-m3 and e5-small are not shipped.
 
 To reproduce, download a candidate into an isolated directory and run:
 

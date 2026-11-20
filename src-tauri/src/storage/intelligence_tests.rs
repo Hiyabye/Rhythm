@@ -3,7 +3,7 @@ use super::*;
 use serde_json::json;
 
 #[test]
-fn execution_preference_migrates_schema_seven_and_persists_without_resetting_archive() {
+fn ai_preferences_migrate_schema_seven_and_persist_without_resetting_archive() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("db");
     populated_schema_two(&path);
@@ -23,7 +23,6 @@ fn execution_preference_migrates_schema_seven_and_persists_without_resetting_arc
     drop(connection);
     let store = Store::open(&path).unwrap();
     let mut preferences = store.ai_preferences().unwrap();
-    assert_eq!(preferences.execution_mode, "auto");
     assert_eq!(preferences.model_directory, None);
     assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
     assert_eq!(
@@ -33,34 +32,22 @@ fn execution_preference_migrates_schema_seven_and_persists_without_resetting_arc
             .unwrap(),
         1
     );
-    for mode in ["cpu", "gpu", "auto"] {
-        preferences.execution_mode = mode.into();
-        store.ai_save_preferences(&preferences).unwrap();
-        assert_eq!(store.ai_preferences().unwrap().execution_mode, mode);
-    }
-    preferences.execution_mode = "gpu".into();
+    preferences.classification_enabled = false;
     store.ai_save_preferences(&preferences).unwrap();
-    preferences.execution_mode = "invalid".into();
-    assert!(store.ai_save_preferences(&preferences).is_err());
     drop(store);
     assert_eq!(
-        Store::open(&path)
-            .unwrap()
-            .ai_preferences()
-            .unwrap()
-            .execution_mode,
-        "gpu"
+        Store::open(&path).unwrap().ai_preferences().unwrap(),
+        preferences
     );
 }
 
 #[test]
-fn execution_preference_old_payload_defaults_to_auto() {
+fn ai_preferences_old_payload_uses_defaults() {
     let preferences: AiPreferences = serde_json::from_value(json!({
         "active_model_id":null,"setup_completed":false,"processing_mode":"explicit",
         "automatic_limit":3,"max_tokens":1024
     }))
     .unwrap();
-    assert_eq!(preferences.execution_mode, "auto");
     assert_eq!(preferences.model_directory, None);
     assert_eq!(preferences.embedding_model_id, None);
     assert!(preferences.classification_enabled);
@@ -94,7 +81,14 @@ fn model_directory_migrates_schema_eight_without_relocating_models() {
     assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
     let preferences = store.ai_preferences().unwrap();
     assert_eq!(preferences.model_directory, None);
-    assert_eq!(preferences.execution_mode, "gpu");
+    // The retired Windows execution mode stays in its column, unused.
+    let mode: String = store
+        .connection
+        .query_row("SELECT execution_mode FROM ai_preferences", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(mode, "gpu");
     let old = store.ai_model("old").unwrap().unwrap();
     assert_eq!(old.storage_directory, None);
     assert_eq!(old.path, "models/old.gguf");
@@ -129,9 +123,6 @@ fn model_directory_persists_independently_from_each_models_original_location() {
     existing.resume_etag = Some("continue-this-file".into());
     store.ai_upsert_model(&existing).unwrap();
     store.ai_save_model_directory(Some(&next)).unwrap();
-    let mut preferences = store.ai_preferences().unwrap();
-    preferences.execution_mode = "cpu".into();
-    store.ai_save_preferences(&preferences).unwrap();
     drop(store);
     let reopened = Store::open(&directory.path().join("db")).unwrap();
     assert_eq!(
@@ -152,7 +143,6 @@ fn model_directory_persists_independently_from_each_models_original_location() {
     assert_eq!(retained.resume_etag, existing.resume_etag);
     reopened.ai_save_model_directory(None).unwrap();
     assert_eq!(reopened.ai_preferences().unwrap().model_directory, None);
-    assert_eq!(reopened.ai_preferences().unwrap().execution_mode, "cpu");
     assert_eq!(
         reopened.ai_models().unwrap()[0].storage_directory,
         Some(original)
@@ -191,7 +181,6 @@ fn model_directory_rejects_malformed_input_without_changing_preferences_or_inven
         assert!(store.ai_save_model_directory(Some(&invalid)).is_err());
         let mut preferences = initial.clone();
         preferences.model_directory = Some(invalid.clone());
-        preferences.execution_mode = "gpu".into();
         assert!(store.ai_save_preferences(&preferences).is_err());
         assert_eq!(store.ai_preferences().unwrap(), initial);
         existing.storage_directory = Some(invalid);
@@ -450,7 +439,6 @@ fn schema_thirty_three_retires_generation_and_remote_but_keeps_embedding_state()
     assert_eq!(
         store.ai_preferences().unwrap(),
         AiPreferences {
-            execution_mode: "cpu".into(),
             model_directory: Some("/Volumes/Models".into()),
             embedding_model_id: Some("qwen3-embedding-0-6b".into()),
             classification_enabled: false,
@@ -633,7 +621,6 @@ fn embedding_schema_upgrades_schema_fourteen_without_losing_preferences() {
     let store = Store::open(&path).unwrap();
     assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
     let preferences = store.ai_preferences().unwrap();
-    assert_eq!(preferences.execution_mode, "gpu");
     assert_eq!(preferences.embedding_model_id, None);
     assert!(preferences.classification_enabled);
     // New tables and the model role column exist and default generation.

@@ -28,7 +28,7 @@ const MAX_SOCKET_PATH: usize = 103;
 #[derive(Clone, Debug)]
 pub(super) struct Launch {
     pub executable: PathBuf,
-    /// Backend this launch targets: `metal`, `vulkan` or `cpu`.
+    /// Backend this launch targets: `metal` or `cpu`.
     pub backend: &'static str,
     pub context: u32,
     /// Model-declared pooling mode. The vector is normalized by the server, so
@@ -83,12 +83,6 @@ impl Server {
         let _ = std::fs::remove_file(&key_file);
         let mut command = Command::new(&launch.executable);
         command.arg("-m").arg(model);
-        // Resolved first so a missing GPU fails before a key file exists.
-        let device = if launch.backend == "vulkan" {
-            Some(nvidia_device(&launch.executable).await?)
-        } else {
-            None
-        };
         let key = match socket_host(&socket) {
             Some(host) => {
                 command.args(["--host", &host]);
@@ -127,9 +121,7 @@ impl Server {
             "--ubatch-size",
             "2048",
         ]);
-        if let Some(device) = &device {
-            command.args(["-ngl", "99", "--device", device]);
-        } else if launch.gpu() {
+        if launch.gpu() {
             command.args(["-ngl", "99"]);
         } else {
             command.args(["-ngl", "0", "--device", "none"]);
@@ -147,31 +139,17 @@ impl Server {
                 return Err(error);
             }
         };
-        let (loaded_backend, complete) = {
+        let loaded_backend = {
             // The observer only records log facts, so a poisoned lock still
-            // holds usable data and must not leave the child unreaped.
+            // holds usable data.
             let facts = observed.lock().unwrap_or_else(|e| e.into_inner());
             let on_gpu = facts.offloaded.is_some_and(|(done, _)| done > 0);
-            let backend = match (on_gpu, facts.device.as_deref()) {
+            match (on_gpu, facts.device.as_deref()) {
                 (true, Some(device)) if device.starts_with("MTL") => "metal",
-                (true, Some(device)) if device.starts_with("Vulkan") => "vulkan",
                 (true, _) => launch.backend,
                 (false, _) => "cpu",
-            };
-            // A GPU result is reported only after the server observed every
-            // layer on the device; a silent CPU load cannot satisfy a GPU launch.
-            (
-                backend,
-                facts
-                    .offloaded
-                    .is_some_and(|(done, total)| done > 0 && done == total),
-            )
+            }
         };
-        if launch.backend == "vulkan" && !complete {
-            reap(&mut child).await;
-            let _ = std::fs::remove_file(&socket);
-            return Err("GPU 작업 프로세스의 실제 실행 장치를 확인하지 못했습니다.".into());
-        }
         #[cfg(not(windows))]
         let () = job;
         Ok(Self {
@@ -317,29 +295,6 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .open(path)
         .and_then(|mut file| file.write_all(bytes))
         .map_err(|_| "AI 엔진 접근 키를 저장하지 못했습니다.".into())
-}
-
-/// Picks the first NVIDIA device the Vulkan build reports. Other vendors are
-/// not a supported GPU target.
-async fn nvidia_device(executable: &Path) -> Result<String, String> {
-    let mut command = Command::new(executable);
-    command
-        .arg("--list-devices")
-        .kill_on_drop(true)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null());
-    #[cfg(windows)]
-    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    let output = timeout(Duration::from_secs(30), command.output())
-        .await
-        .map_err(|_| "GPU 장치 목록을 확인하지 못했습니다.")?
-        .map_err(|_| "GPU 작업 파일을 실행하지 못했습니다.")?;
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| line.trim().split_once(": "))
-        .find(|(name, description)| name.starts_with("Vulkan") && description.contains("NVIDIA"))
-        .map(|(name, _)| name.to_owned())
-        .ok_or("NVIDIA GPU를 찾지 못했습니다.".into())
 }
 
 #[cfg(windows)]
@@ -657,30 +612,6 @@ mod tests {
         let runtime = directory.join("r".repeat(MAX_SOCKET_PATH));
         assert!(socket_host(&runtime.join("llama.sock")).is_none());
         runtime
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn a_missing_gpu_fails_before_any_key_file_is_written() {
-        let directory = tempfile::tempdir().unwrap();
-        let runtime = loopback_runtime(directory.path());
-        let launch = Launch {
-            executable: stub(directory.path(), "exit 0"),
-            backend: "vulkan",
-            context: 1024,
-            pooling: "last".into(),
-        };
-        let error = Server::start(
-            &launch,
-            Path::new("model.gguf"),
-            &runtime,
-            Duration::from_secs(5),
-        )
-        .await
-        .err()
-        .unwrap();
-        assert!(error.contains("NVIDIA"), "{error}");
-        assert!(!runtime.join("llama.key").exists());
     }
 
     #[cfg(unix)]

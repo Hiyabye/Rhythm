@@ -466,16 +466,9 @@ fn main() {
                 .resource_dir()
                 .map_err(std::io::Error::other)?
                 .join("llama");
-            let mode = store
-                .lock()
-                .map_err(|_| std::io::Error::other("설정 잠금 오류"))?
-                .ai_preferences()
-                .map_err(std::io::Error::other)?
-                .execution_mode;
             let classifier = Arc::new(intelligence::classification::Controller::new(
                 &llama,
                 &data_root.join("run").join("embedding"),
-                &mode,
             ));
             let hardware = intelligence::models::hardware(&data_root);
             let maintenance_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -610,7 +603,6 @@ fn main() {
             intelligence::commands::ai_install,
             intelligence::commands::ai_cancel_download,
             intelligence::commands::ai_remove,
-            intelligence::commands::ai_preferences,
             intelligence::commands::ai_classifications,
             intelligence::commands::ai_classification,
             intelligence::commands::ai_similar_notices,

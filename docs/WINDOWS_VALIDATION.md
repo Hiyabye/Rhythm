@@ -7,7 +7,7 @@ What has actually been observed on Windows 11 x64. Build setup is in [Windows](W
 - **Contributor PC (PR #1 and PR #2), 2026-11-02 to 2026-11-03.** One Windows 11 Home x64 PC (build 26300, Intel Core i5-10300H, 16 GB RAM, NVIDIA GTX 1650 4 GiB, driver 552.44). Most installed-app observations used the port's old identifier `app.rhythm.windows` and builds 0.9.2–0.9.4, before the merge into the shared `io.github.hiyabye.rhythm` codebase. They do not verify the current build.
 - **Contributor PC, PR #63 (`llama-server`), 2026-11-03.** The same PC. Model, socket and installed-app runs used commit `bb14e24`; workspace Clippy and tests were re-run on `8354512`, which only restricts one Metal test to macOS.
 - **Contributor PC, #36 (in-app update), 2026-11-04.** The same PC (NVIDIA driver 31.0.15.5244), commit `fa86dad`, a fresh clone with `core.autocrlf=false`. Builds used a validation identifier, a disposable updater key and a loopback manifest; the evidence archive is attached to issue #36.
-- **GitHub CI (`windows-latest`).** Every pull request and push to `main` that touches Rust runs Clippy and tests for the workspace on a hosted Windows Server runner, including GPU fallback tests against a fake `llama-server` and a lifecycle test of the staged real builds without model weights. `main` also builds the NSIS installer when packaging inputs change. CI has no NVIDIA GPU, so these tests check supervision and fallback, not inference.
+- **GitHub CI (`windows-latest`).** Every pull request and push to `main` that touches Rust runs Clippy and tests for the workspace on a hosted Windows Server runner, including supervision tests against a fake `llama-server` and a lifecycle test of the staged real CPU build without model weights. `main` also builds the NSIS installer when packaging inputs change. These tests check supervision, not inference.
 
 No second PC or VM has been tested. The only installed runs of the current codebase are the PR #63 and #36 builds under validation identifiers (see [AI on Windows](#ai-on-windows) and [In-app update](#in-app-update)).
 
@@ -35,7 +35,7 @@ No second PC or VM has been tested. The only installed runs of the current codeb
 
 ## AI on Windows
 
-Observed with the bundled `llama-server` b12068 (PR #63). Model runs used the pinned 2B/4B Q4_K_M files copied from existing local copies (size and SHA-256 matched); no weights were downloaded. Those were the generation models, retired with AI summaries (#226): the rows below show that the bundled Vulkan and CPU builds run on this PC, but the embedding classifier, the only model Rhythm runs now, has not been run on Windows.
+Observed with the bundled `llama-server` b12068 (PR #63). Model runs used the pinned 2B/4B Q4_K_M files copied from existing local copies (size and SHA-256 matched); no weights were downloaded. Those were the generation models, retired with AI summaries (#226): the rows below show that the bundled Vulkan and CPU builds ran on this PC, but the embedding classifier, the only model Rhythm runs now, has not been run on Windows. The Vulkan build and the execution-mode setting were removed in #178, so the Vulkan rows are historical; Rhythm now ships only the CPU build.
 
 | Check | Observed |
 | --- | --- |
