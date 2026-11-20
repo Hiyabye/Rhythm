@@ -179,15 +179,13 @@ pub struct SyncStatus {
     pub running: bool,
     pub mode: String,
     pub message: String,
-    /// Boards collecting now; boards on different hosts run at once.
+    /// The source collecting now, if any.
     pub active: Vec<ActiveSource>,
 }
-/// `joined` is whether a running refresh of every board collects the board.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubscribeResult {
     pub sources: Vec<SourceInfo>,
     pub groups: Vec<SourceGroup>,
-    pub joined: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActiveSource {

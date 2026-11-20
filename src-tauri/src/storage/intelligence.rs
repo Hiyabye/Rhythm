@@ -750,8 +750,10 @@ impl Store {
     }
     /// Latest revisions whose current model/config classification is missing,
     /// newest publication first. A stored vector from another config is reused
-    /// by the caller, so this query only tracks the classification row. A
-    /// notice the feed described takes the feed's vector and category instead.
+    /// by the caller, so this query only tracks the classification row. Only
+    /// Cybercampus notices are embedded locally: public notices take the feed's
+    /// vector and category, and v1 notices the feed never described keep what
+    /// was stored before (#178).
     pub fn ai_embedding_candidates(
         &self,
         model_sha256: &str,
@@ -767,14 +769,15 @@ impl Store {
                  JOIN document_revisions r ON r.id=(
                      SELECT MAX(latest.id) FROM document_revisions latest WHERE latest.document_id=d.id
                  )
-                 WHERE d.from_feed=0 AND length(trim(r.title))>0
+                 WHERE d.source_id='{}' AND length(trim(r.title))>0
                    AND NOT EXISTS(
                        SELECT 1 FROM notice_classifications c
                        WHERE c.document_id=d.id AND c.revision_id=r.id
                          AND c.model_sha256=?1 AND c.config_hash=?2
                    )
                    AND {NOT_TRASHED}
-                 ORDER BY r.collected_at DESC,r.id DESC LIMIT ?3"
+                 ORDER BY r.collected_at DESC,r.id DESC LIMIT ?3",
+                crate::archive::catalog::CYBERCAMPUS_SOURCE_ID
             ))
             .map_err(|e| e.to_string())?
             .query_map(

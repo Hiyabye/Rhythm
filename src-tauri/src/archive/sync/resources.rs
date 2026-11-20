@@ -1,36 +1,6 @@
 //! Downloading, verifying and recording notice attachments and images.
 use super::*;
 
-impl Board<'_> {
-    #[allow(clippy::too_many_arguments)]
-    pub(super) async fn pending_resources<T: Transport>(
-        &self,
-        store: &SharedStore,
-        root: &Path,
-        transport: &T,
-        policy: &Robots,
-        id: i64,
-        total: &AtomicU64,
-    ) -> Result<(), String> {
-        for resource in with_store(store, |s| s.pending_resources(id))? {
-            // A persisted resource failure is nonfatal to article/page completion.
-            // Cancellation and database failures still propagate.
-            download_resource(
-                store,
-                root,
-                transport,
-                self.cancel,
-                policy,
-                &self.controller.image_robots,
-                &resource,
-                total,
-            )
-            .await?;
-        }
-        Ok(())
-    }
-}
-
 pub(super) const BUDGET_REACHED: &str =
     "이번 실행의 첨부 자료 한도(256 MB)에 도달했습니다. 남은 자료는 다음에 이어서 내려받습니다.";
 /// The robots.txt policy of another image host, loaded once per job. A failed

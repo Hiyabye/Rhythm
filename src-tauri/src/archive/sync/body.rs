@@ -109,7 +109,7 @@ impl Bodies {
         else {
             return Err("학교 서버가 공지 본문을 보내지 않았습니다.".into());
         };
-        check_document_mime(&definition, mime.as_deref(), false)?;
+        check_document_mime(&definition, mime.as_deref())?;
         let text = std::str::from_utf8(&bytes)
             .map_err(|_| "공지 본문 문자 인코딩을 지원하지 않습니다.")?;
         let mut article = parser::article(&definition, &entry, text)?;

@@ -795,13 +795,13 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             if (!groupOn(sources.find((source) => source.id === args.id)!.group)) throw '상위 그룹을 먼저 켜 주세요.';
             sources = sources.map((source) => source.id === args.id ? { ...source, selected: args.subscribed } : source);
             reconcile();
-            return copy({ sources, groups: sourceGroups, joined: args.subscribed && sync.running && sync.mode === 'refresh' });
+            return copy({ sources, groups: sourceGroups });
           case 'archive_source_groups': return copy(sourceGroups);
           case 'archive_set_group':
             await wait(fixture.subscribeDelay);
             sourceGroups = sourceGroups.map((group) => group.id === args.id ? { ...group, enabled: args.enabled } : group);
             reconcile();
-            return copy({ sources, groups: sourceGroups, joined: false });
+            return copy({ sources, groups: sourceGroups });
           case 'archive_start':
             // As the command: public boards arrive through the feed (#177).
             if (args.sourceIds?.some((id: string) => id !== 'cybercampus')) throw '학교 게시판 공지는 공지 피드로 받습니다. 공지 피드의 지금 받기를 눌러 주세요.';

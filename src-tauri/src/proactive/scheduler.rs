@@ -32,7 +32,6 @@ pub struct Scheduler {
     store: sync::SharedStore,
     archive: Arc<Controller>,
     feed: Arc<crate::feed::Controller>,
-    network: archive::Client,
     root: PathBuf,
     app: AppHandle,
     operation_gate: Arc<AdmissionGate>,
@@ -95,7 +94,6 @@ impl Scheduler {
         store: sync::SharedStore,
         archive: Arc<Controller>,
         feed: Arc<crate::feed::Controller>,
-        network: archive::Client,
         root: PathBuf,
         app: AppHandle,
         operation_gate: Arc<AdmissionGate>,
@@ -108,7 +106,6 @@ impl Scheduler {
             store,
             archive,
             feed,
-            network,
             root,
             app,
             operation_gate,
@@ -141,7 +138,6 @@ impl Scheduler {
         let store = self.store.clone();
         let archive = self.archive.clone();
         let feed = self.feed.clone();
-        let network = self.network.clone();
         let root = self.root.clone();
         let app = self.app.clone();
         let operation_gate = self.operation_gate.clone();
@@ -169,7 +165,6 @@ impl Scheduler {
                             if let Err(error) = cycle(
                                 &store,
                                 &archive,
-                                &network,
                                 &root,
                                 &app,
                                 &mut notification_state,
@@ -383,14 +378,13 @@ pub(super) fn reconcile_tasks(
         .into_iter()
         .map(|task| (task.task_id.clone(), task))
         .collect::<std::collections::HashMap<_, _>>();
-    for source in sources
-        .into_iter()
-        .filter(|source| source.definition.supported)
-    {
+    // Only sources the app collects itself have tasks; public boards come
+    // from the feed, whose sync runs on every wake.
+    for source in sources.into_iter().filter(|source| {
+        source.definition.supported && archive::app_collected(&source.definition.id)
+    }) {
         let task_id = format!("source:{}", source.definition.id);
-        // Public boards come from the feed, so their old tasks stay disabled.
         let enabled = prefs.scheduler_enabled
-            && archive::app_collected(&source.definition.id)
             && extension_enabled.contains(&source.definition.id)
             && active.contains(&source.definition.id);
         if current
@@ -491,11 +485,11 @@ async fn wait_scheduled_job(
     }
 }
 
-pub(super) async fn run_scheduled_task<T: sync::Transport + Clone + 'static>(
+pub(super) async fn run_scheduled_task<H: archive::cybercampus::client::Http + 'static>(
     store: &sync::SharedStore,
     archive: &Arc<Controller>,
     root: &Path,
-    transport: &T,
+    http: &Arc<H>,
     task: &ProactiveTask,
     stop: &mut watch::Receiver<bool>,
 ) -> Result<ProactiveOutcome, String> {
@@ -507,7 +501,7 @@ pub(super) async fn run_scheduled_task<T: sync::Transport + Clone + 'static>(
         match archive.start_tracked_with_transport(
             store.clone(),
             root.to_path_buf(),
-            transport.clone(),
+            http.clone(),
             Some(vec![source_id.to_string()]),
             "incremental".into(),
         ) {
@@ -557,7 +551,6 @@ async fn run_feed(store: &sync::SharedStore, feed: &crate::feed::Controller, roo
 async fn cycle(
     store: &sync::SharedStore,
     archive: &Arc<Controller>,
-    network: &archive::Client,
     root: &Path,
     app: &AppHandle,
     notifications: &mut NotificationState,
@@ -570,6 +563,7 @@ async fn cycle(
     reconcile_tasks(store, &prefs, &energy)?;
     if prefs.scheduler_enabled && !prefs.scheduler_paused {
         let due = with_store(store, |store| store.proactive_due_tasks())?;
+        let http = Arc::new(archive::cybercampus::client::Reqwest);
         let mut failures = 0;
         let mut successes = 0;
         let mut cancelled = 0;
@@ -586,7 +580,7 @@ async fn cycle(
                 .to_string();
             let mut task_stop = stop.clone();
             let (outcome, discovery_error) = wait_for_scheduled_task_and_notifications(
-                run_scheduled_task(store, archive, root, network, task, &mut task_stop),
+                run_scheduled_task(store, archive, root, &http, task, &mut task_stop),
                 store,
                 app,
                 notifications,
