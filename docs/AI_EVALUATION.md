@@ -73,7 +73,7 @@ Measured on one Mac (macOS 27.2, M1 Pro, 16 GiB) with the staged `llama-server`,
 | bge-m3 Q8_0 | `gpustack/bge-m3-GGUF` `2d48f17…`, 634,553,760 B | 1024 | 17/18 (`ambiguous` → wrong) | 40–58 ms | 0.84 GiB | 0.9 s |
 | multilingual-e5-small | `rodion-m/multilingual-e5-small-gguf` `a4ad957…` fp32, 476,369,248 B | 384 | 6/18 | 5–8 ms | 0.61 GiB | 0.4 s |
 
-The `cstr` and `TwinSunsLLC` Q8_0 e5-small conversions failed to load in b12068 (`bert model needs to define token type count`); only the `rodion-m` fp32 conversion loaded. Qwen3-Embedding was also run on macOS CPU (`-ngl 0 --device none`): 18/18 at title + 300 characters, 237 ms/notice, 2.2 GiB peak RSS. These are synthetic fixtures and authored prototypes, not a broad Korean accuracy rate; Windows CPU classification is unverified. bge-m3 and e5-small are not shipped.
+The `cstr` and `TwinSunsLLC` Q8_0 e5-small conversions failed to load in b12068 (`bert model needs to define token type count`); only the `rodion-m` fp32 conversion loaded. Qwen3-Embedding was also run on macOS CPU (`-ngl 0 --device none`): 18/18 at title + 300 characters, 237 ms/notice, 2.2 GiB peak RSS. These are synthetic fixtures and authored prototypes, not a broad Korean accuracy rate. Windows CPU classification ran once on one PC (36 Cybercampus notices, #271, [Windows validation](WINDOWS_VALIDATION.md#v2-feed-cpu-classifier-and-release-build-271)); its accuracy was not measured. bge-m3 and e5-small are not shipped.
 
 To reproduce, download a candidate into an isolated directory and run:
 
@@ -97,7 +97,7 @@ Search queries are compared with the stored classifier vectors, so the query ins
 | The classifier instruction | 0.826 | 11/12 |
 | None | 0.764 | 9/12 |
 
-Relevant and irrelevant scores overlap (shipped instruction: relevant median 0.31, irrelevant 90th percentile 0.37), so no absolute threshold separates them. Keeping hits within 0.08 of the best score and at least 0.20 kept a relevant notice for all 12 queries, 20 of 23 relevant pairs and 30 irrelevant ones (about 2.5 per query). Through the store's fused ranking (`archive_ranked_query`), a relevant fixture was in the top five for 12/12 queries, against 1/12 for text-only ranking, where 11 queries matched no text. Broad queries still bring in loosely related notices (up to eight hits within the margin). These are synthetic notices and queries; ranking quality on the real archive, on Windows and with other embedding models is unverified.
+Relevant and irrelevant scores overlap (shipped instruction: relevant median 0.31, irrelevant 90th percentile 0.37), so no absolute threshold separates them. Keeping hits within 0.08 of the best score and at least 0.20 kept a relevant notice for all 12 queries, 20 of 23 relevant pairs and 30 irrelevant ones (about 2.5 per query). Through the store's fused ranking (`archive_ranked_query`), a relevant fixture was in the top five for 12/12 queries, against 1/12 for text-only ranking, where 11 queries matched no text. Broad queries still bring in loosely related notices (up to eight hits within the margin). These are synthetic notices and queries; ranking quality on the real archive, on Windows (where one paraphrase query returned meaning-only results, #271) and with other embedding models is unverified.
 
 ```sh
 RHYTHM_EMBEDDING_EVAL_MODEL=/tmp/qwen3-embedding-0.6b.gguf RHYTHM_EMBEDDING_EVAL_REPORT=/tmp/search.json \
