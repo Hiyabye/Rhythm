@@ -15,22 +15,16 @@ use std::sync::OnceLock;
 pub const PRODUCTION_IDENTIFIER: &str = "io.github.hiyabye.rhythm";
 pub const PRODUCTION_PRODUCT_NAME: &str = "Rhythm";
 pub const PRODUCTION_PROTOCOL_SCHEME: &str = "rhythm-win";
-pub const PRODUCTION_AUTOSTART_NAME: &str = "Rhythm.io.github.hiyabye.rhythm";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WindowsIdentity {
-    pub identifier: String,
-    pub product_name: String,
     pub aumid: String,
     pub shortcut_filename: String,
-    pub protocol_scheme: String,
-    pub autostart_name: String,
     pub notification_prefix: String,
     pub studium_prefix: String,
     pub reminder_prefix: String,
     pub protocol_reg_key: String,
     pub protocol_command_reg_key: String,
-    pub aumid_reg_key: String,
 }
 
 static CURRENT: OnceLock<WindowsIdentity> = OnceLock::new();
@@ -38,6 +32,7 @@ static CURRENT: OnceLock<WindowsIdentity> = OnceLock::new();
 /// Initialize the process-wide Windows identity from Tauri's resolved config.
 /// Call once at the start of `main()` before registering the process AUMID or
 /// handling single-instance protocol arguments.
+#[cfg(windows)]
 pub fn init(identifier: &str, product_name: Option<&str>) {
     let _ = CURRENT.set(WindowsIdentity::from_config(identifier, product_name));
 }
@@ -50,23 +45,19 @@ pub fn current() -> &'static WindowsIdentity {
     })
 }
 
-fn sanitize_identifier(identifier: &str, lowercase: bool, fallback: &str) -> String {
+fn sanitize_scheme_suffix(identifier: &str) -> String {
     let cleaned: String = identifier
         .chars()
         .map(|character| {
             if character.is_ascii_alphanumeric() || matches!(character, '-' | '.') {
-                if lowercase {
-                    character.to_ascii_lowercase()
-                } else {
-                    character
-                }
+                character.to_ascii_lowercase()
             } else {
                 '-'
             }
         })
         .collect();
     if cleaned.trim_matches(['-', '.']).is_empty() {
-        fallback.into()
+        "test-build".into()
     } else {
         cleaned
     }
@@ -82,18 +73,8 @@ pub fn protocol_scheme(identifier: &str) -> String {
     if identifier == PRODUCTION_IDENTIFIER {
         return PRODUCTION_PROTOCOL_SCHEME.into();
     }
-    let suffix = sanitize_identifier(identifier, true, "test-build");
+    let suffix = sanitize_scheme_suffix(identifier);
     format!("{PRODUCTION_PROTOCOL_SCHEME}.{suffix}")
-}
-
-/// Windows per-user `Run` / `StartupApproved` value name for `identifier`.
-/// Matches `core::lifecycle::autostart_name` on Windows and
-/// `RHYTHM_AUTOSTART_NAME` in `scripts/installer-hooks.nsh`.
-pub fn windows_autostart_name(identifier: &str) -> String {
-    if identifier == PRODUCTION_IDENTIFIER {
-        return PRODUCTION_AUTOSTART_NAME.into();
-    }
-    sanitize_identifier(identifier, false, "Rhythm-test-build")
 }
 
 impl WindowsIdentity {
@@ -101,35 +82,27 @@ impl WindowsIdentity {
         let product_name = product_name
             .map(str::trim)
             .filter(|name| !name.is_empty())
-            .unwrap_or(PRODUCTION_PRODUCT_NAME)
-            .to_string();
+            .unwrap_or(PRODUCTION_PRODUCT_NAME);
         let aumid = identifier.to_string();
         let shortcut_filename = format!("{product_name}.lnk");
-        let protocol_scheme = protocol_scheme(identifier);
-        let autostart_name = windows_autostart_name(identifier);
-        let notification_prefix = format!("{protocol_scheme}://notification/");
-        let studium_prefix = format!("{protocol_scheme}://studium/");
-        let reminder_prefix = format!("{protocol_scheme}://reminder/");
-        let protocol_reg_key = format!("Software\\Classes\\{protocol_scheme}");
-        let protocol_command_reg_key =
-            format!("Software\\Classes\\{protocol_scheme}\\shell\\open\\command");
-        let aumid_reg_key = format!("Software\\Classes\\AppUserModelId\\{aumid}");
+        let scheme = protocol_scheme(identifier);
+        let notification_prefix = format!("{scheme}://notification/");
+        let studium_prefix = format!("{scheme}://studium/");
+        let reminder_prefix = format!("{scheme}://reminder/");
+        let protocol_reg_key = format!("Software\\Classes\\{scheme}");
+        let protocol_command_reg_key = format!("Software\\Classes\\{scheme}\\shell\\open\\command");
         Self {
-            identifier: identifier.to_string(),
-            product_name,
             aumid,
             shortcut_filename,
-            protocol_scheme,
-            autostart_name,
             notification_prefix,
             studium_prefix,
             reminder_prefix,
             protocol_reg_key,
             protocol_command_reg_key,
-            aumid_reg_key,
         }
     }
 
+    #[cfg(any(windows, test))]
     pub fn notification_token_from_uri<'a>(&self, uri: &'a str) -> Option<&'a str> {
         let token = uri.strip_prefix(self.notification_prefix.as_str())?;
         crate::storage::notification_activation::valid_token(token).then_some(token)
@@ -155,8 +128,7 @@ mod tests {
         let id = WindowsIdentity::from_config(PRODUCTION_IDENTIFIER, Some("Rhythm"));
         assert_eq!(id.aumid, "io.github.hiyabye.rhythm");
         assert_eq!(id.shortcut_filename, "Rhythm.lnk");
-        assert_eq!(id.protocol_scheme, "rhythm-win");
-        assert_eq!(id.autostart_name, "Rhythm.io.github.hiyabye.rhythm");
+        assert_eq!(protocol_scheme(PRODUCTION_IDENTIFIER), "rhythm-win");
         assert_eq!(id.notification_prefix, "rhythm-win://notification/");
         assert_eq!(id.studium_prefix, "rhythm-win://studium/");
         assert_eq!(id.reminder_prefix, "rhythm-win://reminder/");
@@ -164,10 +136,6 @@ mod tests {
         assert_eq!(
             id.protocol_command_reg_key,
             r"Software\Classes\rhythm-win\shell\open\command"
-        );
-        assert_eq!(
-            id.aumid_reg_key,
-            r"Software\Classes\AppUserModelId\io.github.hiyabye.rhythm"
         );
     }
 
@@ -182,26 +150,18 @@ mod tests {
         assert_eq!(val.aumid, "io.github.hiyabye.rhythm.validation");
         assert_eq!(val.shortcut_filename, "Rhythm Validation.lnk");
         assert_eq!(
-            val.protocol_scheme,
+            protocol_scheme("io.github.hiyabye.rhythm.validation"),
             "rhythm-win.io.github.hiyabye.rhythm.validation"
         );
-        assert_eq!(val.autostart_name, "io.github.hiyabye.rhythm.validation");
         assert_eq!(
             val.protocol_reg_key,
             r"Software\Classes\rhythm-win.io.github.hiyabye.rhythm.validation"
         );
-        assert_eq!(
-            val.aumid_reg_key,
-            r"Software\Classes\AppUserModelId\io.github.hiyabye.rhythm.validation"
-        );
 
         assert_ne!(val.aumid, prod.aumid);
         assert_ne!(val.shortcut_filename, prod.shortcut_filename);
-        assert_ne!(val.protocol_scheme, prod.protocol_scheme);
-        assert_ne!(val.autostart_name, prod.autostart_name);
         assert_ne!(val.protocol_reg_key, prod.protocol_reg_key);
         assert_ne!(val.protocol_command_reg_key, prod.protocol_command_reg_key);
-        assert_ne!(val.aumid_reg_key, prod.aumid_reg_key);
 
         let token = "ab".repeat(32);
         let prod_notif = format!("{}{token}", prod.notification_prefix);

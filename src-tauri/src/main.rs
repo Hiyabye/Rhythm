@@ -327,13 +327,15 @@ const RESTORE_FAILED_NOTE: &str =
 
 fn main() {
     let context = tauri::generate_context!();
-    core::windows_identity::init(
-        &context.config().identifier,
-        context.config().product_name.as_deref(),
-    );
     #[cfg(windows)]
-    if let Err(error) = proactive::windows_notification::initialize_process_identity() {
-        eprintln!("Windows 알림 프로세스 식별자를 설정하지 못했습니다: {error}");
+    {
+        core::windows_identity::init(
+            &context.config().identifier,
+            context.config().product_name.as_deref(),
+        );
+        if let Err(error) = proactive::windows_notification::initialize_process_identity() {
+            eprintln!("Windows 알림 프로세스 식별자를 설정하지 못했습니다: {error}");
+        }
     }
     let mut builder = tauri::Builder::default()
         // The single-instance check runs before windows, the data lock and every

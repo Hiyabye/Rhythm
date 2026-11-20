@@ -1,6 +1,7 @@
 pub mod lifecycle;
 #[cfg(windows)]
 mod windows_autostart;
+#[cfg(any(windows, test))]
 pub mod windows_identity;
 
 /// Own the application-data directory before recovering interrupted jobs. OS
