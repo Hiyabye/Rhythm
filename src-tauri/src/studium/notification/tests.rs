@@ -454,14 +454,15 @@ async fn maintenance_and_shutdown_drain_callbacks_and_recovery_does_not_replay()
 #[test]
 fn seat_activation_uris_are_a_separate_exact_capability_namespace() {
     let token = "ab".repeat(32);
-    let uri = format!("{TOKEN_PREFIX}{token}");
+    let prefix = token_prefix();
+    let uri = format!("{prefix}{token}");
     assert_eq!(token_from_uri(&uri), Some(token.as_str()));
     for invalid in [
         format!("rhythm-win://notification/{token}"),
         format!("{uri}?x=1"),
         format!("{uri}#fragment"),
-        format!("{TOKEN_PREFIX}{}", token.to_uppercase()),
-        format!("{TOKEN_PREFIX}../{token}"),
+        format!("{prefix}{}", token.to_uppercase()),
+        format!("{prefix}../{token}"),
     ] {
         assert!(token_from_uri(&invalid).is_none());
     }

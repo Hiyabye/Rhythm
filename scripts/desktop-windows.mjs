@@ -10,6 +10,46 @@ const { join, resolve } = win32;
 
 const realFiles = { readdir: readdirSync, read: readFileSync, write: writeFileSync, remove: rmSync };
 
+const PRODUCTION_IDENTIFIER = 'io.github.hiyabye.rhythm';
+const PRODUCTION_PRODUCT_NAME = 'Rhythm';
+
+// Extract effective top-level metadata from tauri.conf.json plus any --config
+// / -c overrides so validation installers can be guarded before staging and
+// published under their own productName.
+export function resolveBuildIdentity({ cwd, extra, files }) {
+  const base = JSON.parse(files.read(join(cwd, 'src-tauri', 'tauri.conf.json'), 'utf8'));
+  const effective = {
+    identifier: base.identifier ?? PRODUCTION_IDENTIFIER,
+    productName: base.productName ?? PRODUCTION_PRODUCT_NAME,
+    version: base.version,
+  };
+  for (let i = 0; i < extra.length; i++) {
+    const arg = extra[i];
+    let raw = null;
+    if (arg === '--config' || arg === '-c') raw = extra[++i];
+    else if (arg.startsWith('--config=')) raw = arg.slice('--config='.length);
+    else if (arg.startsWith('-c=')) raw = arg.slice('-c='.length);
+    if (!raw) continue;
+    let parsed = null;
+    if (raw.trimStart().startsWith('{')) {
+      parsed = JSON.parse(raw);
+    } else {
+      try {
+        const text = files.read(resolve(cwd, raw), 'utf8');
+        parsed = JSON.parse(typeof text === 'string' ? text : text.toString('utf8'));
+      } catch {
+        // Non-JSON or unreadable config paths are left for Tauri to report.
+      }
+    }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      if (typeof parsed.identifier === 'string') effective.identifier = parsed.identifier;
+      if (typeof parsed.productName === 'string') effective.productName = parsed.productName;
+      if (typeof parsed.version === 'string') effective.version = parsed.version;
+    }
+  }
+  return effective;
+}
+
 // Windows 11 x64 build: Microsoft VC runtime staging, the pinned llama.cpp
 // CPU build, and the per-user NSIS installer. Every external
 // effect is injectable so the orchestration is testable on any host.
@@ -32,7 +72,12 @@ export function desktop({ platform = process.platform, arch = process.arch, env 
   const target = run('rustc', ['-vV'], true).stdout.match(/^host: (.+)$/m)?.[1]?.trim();
   if (target !== 'x86_64-pc-windows-msvc') throw new Error('Install the x86_64-pc-windows-msvc Rust toolchain.');
   const release = mode === 'build' && !extra.includes('--debug');
+  const bundles = mode === 'build' && !extra.includes('--no-bundle');
   const distribute = release && !extra.some((arg) => arg === '--no-bundle' || arg.startsWith('--bundles') || arg === '-b');
+  const identity = resolveBuildIdentity({ cwd, extra, files });
+  if (bundles && identity.identifier !== PRODUCTION_IDENTIFIER && identity.productName === PRODUCTION_PRODUCT_NAME) {
+    throw new Error('Non-production Windows installers must set a distinct productName (not "Rhythm") so they cannot overwrite a production installation.');
+  }
   // Checked before staging so a half-configured key fails fast.
   const signing = distribute ? updaterSigningArgs(env) : null;
   const buildEnv = release ? releaseEnv(env, cwd, home) : env;
@@ -52,7 +97,7 @@ export function desktop({ platform = process.platform, arch = process.arch, env 
   if (distribute) files.remove(join(targetDir, 'release', 'bundle'), { recursive: true, force: true });
   // Direct JS invocation preserves argument boundaries without npm.cmd/shell quoting.
   run(process.execPath, [join(cwd, 'node_modules', '@tauri-apps', 'cli', 'tauri.js'), mode, ...extra, ...(signing ?? [])], false, buildEnv);
-  if (distribute) publishInstaller({ cwd, targetDir, files, copy, mkdir, signed: Boolean(signing) });
+  if (distribute) publishInstaller({ identity, targetDir, files, copy, mkdir, signed: Boolean(signing) });
 }
 
 // Release binaries embed source paths in panic locations; map the builder's
@@ -67,9 +112,8 @@ function releaseEnv(env, cwd, home) {
 
 // The distribution folder holds exactly the installer and its checksum, plus
 // the installer's updater signature when the build was signed.
-function publishInstaller({ cwd, targetDir, files, copy, mkdir, signed }) {
-  const { version } = JSON.parse(files.read(join(cwd, 'src-tauri', 'tauri.conf.json'), 'utf8'));
-  const name = `Rhythm_${version}_x64-setup.exe`;
+function publishInstaller({ identity, targetDir, files, copy, mkdir, signed }) {
+  const name = `${identity.productName}_${identity.version}_x64-setup.exe`;
   const bundle = join(targetDir, 'release', 'bundle', 'nsis');
   const installers = files.readdir(bundle).filter((file) => file.endsWith('.exe'));
   if (installers.length !== 1 || installers[0] !== name) {

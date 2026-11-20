@@ -174,3 +174,145 @@ test('both bundles ship every license notice; NSIS and VC runtime notices are Wi
   assert.deepEqual(bundled(windows.bundle.resources), ['../LICENSE', ...licenses].sort());
   assert.equal(windows.bundle.resources['binaries/llama/'], 'llama/');
 });
+
+// Minimal NSIS preprocessor for scripts/installer-hooks.nsh: expands macros,
+// !if / !ifndef / !else / !endif, !define, !error and ${VAR} substitutions.
+function expandNsisHooks(source, initialDefines) {
+  const macros = new Map();
+  let current = null;
+  for (const rawLine of source.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const start = line.match(/^!macro\s+(\w+)$/);
+    if (start) {
+      current = [];
+      macros.set(start[1], current);
+      continue;
+    }
+    if (line === '!macroend') {
+      current = null;
+      continue;
+    }
+    if (current) current.push(line);
+  }
+  const defines = new Map(Object.entries(initialDefines));
+  const substitute = (text) => text.replace(/\$\{(\w+)\}/g, (match, name) => (defines.has(name) ? defines.get(name) : match));
+  const output = [];
+  function runLines(lines) {
+    const stack = [];
+    const active = () => stack.every((frame) => frame.active);
+    for (const raw of lines) {
+      if (!raw || raw.startsWith(';')) continue;
+      if (raw === '!else') {
+        const top = stack.at(-1);
+        top.active = top.parentActive && !top.matched;
+        top.matched = true;
+        continue;
+      }
+      if (raw === '!endif') {
+        stack.pop();
+        continue;
+      }
+      const ifndef = raw.match(/^!ifndef\s+(\w+)$/);
+      if (ifndef) {
+        const parentActive = active();
+        const cond = parentActive && !defines.has(ifndef[1]);
+        stack.push({ parentActive, active: cond, matched: cond });
+        continue;
+      }
+      const ifMatch = raw.match(/^!if\s+"([^"]*)"\s*(==|!=)\s*"([^"]*)"$/);
+      if (ifMatch) {
+        const parentActive = active();
+        const left = substitute(ifMatch[1]);
+        const right = substitute(ifMatch[3]);
+        const cond = parentActive && (ifMatch[2] === '==' ? left === right : left !== right);
+        stack.push({ parentActive, active: cond, matched: cond });
+        continue;
+      }
+      if (!active()) continue;
+      const errMatch = raw.match(/^!error\s+"([^"]*)"$/);
+      if (errMatch) throw new Error(substitute(errMatch[1]));
+      const defMatch = raw.match(/^!define\s+(\w+)\s+"([^"]*)"$/);
+      if (defMatch) {
+        defines.set(defMatch[1], substitute(defMatch[2]));
+        continue;
+      }
+      const callMatch = raw.match(/^!insertmacro\s+(\w+)$/);
+      if (callMatch && macros.has(callMatch[1])) {
+        runLines(macros.get(callMatch[1]));
+        continue;
+      }
+      output.push(substitute(raw));
+    }
+  }
+  for (const name of ['RHYTHM_CHECK_PROTOCOL_OWNER', 'RHYTHM_CHECK_AUMID_OWNER', 'NSIS_HOOK_POSTINSTALL', 'NSIS_HOOK_POSTUNINSTALL']) {
+    runLines(macros.get(name));
+  }
+  return output.join('\n');
+}
+
+test('non-production Windows installer hooks write no production registry keys', () => {
+  const source = readFileSync(new URL('../scripts/installer-hooks.nsh', import.meta.url), 'utf8');
+
+  const prod = expandNsisHooks(source, {
+    BUNDLEID: 'io.github.hiyabye.rhythm',
+    PRODUCTNAME: 'Rhythm',
+    MAINBINARYNAME: 'rhythm',
+  });
+  assert.match(prod, /WriteRegStr HKCU "Software\\Classes\\AppUserModelId\\io\.github\.hiyabye\.rhythm" "DisplayName" "Rhythm"/);
+  assert.match(prod, /WriteRegStr HKCU "Software\\Classes\\rhythm-win" "URL Protocol" ""/);
+  assert.match(prod, /WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "Rhythm\.io\.github\.hiyabye\.rhythm"/);
+
+  const val = expandNsisHooks(source, {
+    BUNDLEID: 'io.github.hiyabye.rhythm.validation',
+    PRODUCTNAME: 'Rhythm Validation',
+    MAINBINARYNAME: 'rhythm',
+  });
+  assert.match(val, /WriteRegStr HKCU "Software\\Classes\\AppUserModelId\\io\.github\.hiyabye\.rhythm\.validation" "DisplayName" "Rhythm Validation"/);
+  assert.match(val, /WriteRegStr HKCU "Software\\Classes\\rhythm-win\.io\.github\.hiyabye\.rhythm\.validation" "URL Protocol" ""/);
+  assert.match(val, /WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "io\.github\.hiyabye\.rhythm\.validation"/);
+
+  // Assert zero references to production keys/values.
+  assert.doesNotMatch(val, /AppUserModelId\\io\.github\.hiyabye\.rhythm"/);
+  assert.doesNotMatch(val, /Software\\Classes\\rhythm-win["\\]/);
+  assert.doesNotMatch(val, /"Rhythm\.io\.github\.hiyabye\.rhythm"/);
+  assert.doesNotMatch(val, /"DisplayName" "Rhythm"/);
+
+  // Non-production identifier with production productName must fail at NSIS compile time.
+  assert.throws(() => expandNsisHooks(source, {
+    BUNDLEID: 'io.github.hiyabye.rhythm.validation',
+    PRODUCTNAME: 'Rhythm',
+    MAINBINARYNAME: 'rhythm',
+  }), /distinct productName/);
+});
+
+test('non-production installer build refuses production productName before staging', () => {
+  const commands = [];
+  const config = JSON.stringify({ identifier: 'io.github.hiyabye.rhythm.validation' });
+  assert.throws(() => build({
+    args: ['build', '--config', config],
+    spawn: (command) => {
+      commands.push(command);
+      return { status: 0, stdout: 'host: x86_64-pc-windows-msvc\n' };
+    },
+  }), /distinct productName/);
+  assert.deepEqual(commands, ['rustc']);
+});
+
+test('non-production --no-bundle build is allowed without overriding productName', () => {
+  const config = JSON.stringify({ identifier: 'io.github.hiyabye.rhythm.validation' });
+  const { calls, copies } = build({ args: ['build', '--debug', '--no-bundle', '--config', config] });
+  assert.equal(calls.length, 4);
+  assert.equal(copies.length, 0);
+});
+
+test('validation installer with distinct productName publishes under that name', () => {
+  const config = JSON.stringify({ identifier: 'io.github.hiyabye.rhythm.validation', productName: 'Rhythm Validation' });
+  const { copies, files } = build({
+    args: ['build', '--config', config],
+    files: memoryFiles(['Rhythm Validation_9.8.7_x64-setup.exe']),
+  });
+  const output = join(resolve('D:\\test folder 한글', 'target'), 'release', 'distribution');
+  assert.equal(copies.at(-1)[1], join(output, 'Rhythm Validation_9.8.7_x64-setup.exe'));
+  const checksum = files.written.get(join(output, 'Rhythm Validation_9.8.7_x64-setup.exe.sha256'));
+  assert.match(checksum, /^[0-9a-f]{64}  Rhythm Validation_9\.8\.7_x64-setup\.exe\n$/);
+});

@@ -6,7 +6,9 @@ param(
     [string] $ExpectedAppSha256,
     [ValidatePattern('^[0-9a-fA-F]{64}$')]
     [string] $ExpectedCpuServerSha256,
-    [string] $ExpectedVcRuntimeDir
+    [string] $ExpectedVcRuntimeDir,
+    [string] $ProductName = 'Rhythm',
+    [string] $Identifier = 'io.github.hiyabye.rhythm'
 )
 
 # Read-only inspection. Hashes are compared when their expected values are
@@ -109,7 +111,8 @@ try {
         [Microsoft.Win32.RegistryHive]::CurrentUser,
         [Microsoft.Win32.RegistryView]::Registry64
     )
-    $uninstallKey = $registry.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Uninstall\Rhythm', $false)
+    $protocolScheme = if ($Identifier -ceq 'io.github.hiyabye.rhythm') { 'rhythm-win' } else { "rhythm-win.$Identifier" }
+    $uninstallKey = $registry.OpenSubKey("Software\Microsoft\Windows\CurrentVersion\Uninstall\$ProductName", $false)
     if ($null -eq $uninstallKey) {
         $problems.Add('The current-user uninstall registration is missing.')
     } else {
@@ -140,8 +143,8 @@ try {
         }
     }
 
-    $protocolKey = $registry.OpenSubKey('Software\Classes\rhythm-win', $false)
-    $commandKey = $registry.OpenSubKey('Software\Classes\rhythm-win\shell\open\command', $false)
+    $protocolKey = $registry.OpenSubKey("Software\Classes\$protocolScheme", $false)
+    $commandKey = $registry.OpenSubKey("Software\Classes\$protocolScheme\shell\open\command", $false)
     if ($null -eq $protocolKey -or $null -eq $commandKey) {
         $problems.Add('The current-user notification protocol registration is missing.')
     } else {
@@ -159,14 +162,14 @@ try {
             $problems.Add('The notification protocol does not target this executable with the expected quoting.')
         }
     }
-    $identityKey = $registry.OpenSubKey('Software\Classes\AppUserModelId\io.github.hiyabye.rhythm', $false)
+    $identityKey = $registry.OpenSubKey("Software\Classes\AppUserModelId\$Identifier", $false)
     if ($null -eq $identityKey) {
         $problems.Add('The current-user notification identity is missing.')
     } else {
         $name = [string] $identityKey.GetValue('DisplayName', $null, 'DoNotExpandEnvironmentNames')
         $owner = [string] $identityKey.GetValue('RhythmInstallPath', $null, 'DoNotExpandEnvironmentNames')
         $report.notification_identity = [ordered]@{ display_name = $name; install_path = $owner }
-        if ($name -cne 'Rhythm' -or $owner -ine $resolvedDir) {
+        if ($name -cne $ProductName -or $owner -ine $resolvedDir) {
             $problems.Add('The notification identity does not belong to this installation.')
         }
     }
@@ -183,14 +186,15 @@ try {
 try {
     $programs = [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
     if ([string]::IsNullOrWhiteSpace($programs)) { throw 'Current-user Programs folder is unavailable.' }
-    $shortcutPath = Join-Path $programs 'Rhythm.lnk'
+    $shortcutName = "$ProductName.lnk"
+    $shortcutPath = Join-Path $programs $shortcutName
     if (-not (Test-Path -LiteralPath $shortcutPath -PathType Leaf)) {
         $problems.Add('The required current-user Start Menu shortcut is missing.')
     } else {
         $shell = New-Object -ComObject Shell.Application
         $folder = $shell.Namespace($programs)
         if ($null -eq $folder) { throw 'Could not open the Programs shell folder.' }
-        $item = $folder.ParseName('Rhythm.lnk')
+        $item = $folder.ParseName($shortcutName)
         if ($null -eq $item -or -not $item.IsLink) { throw 'The Start Menu item is not a Shell shortcut.' }
         $target = [string] $item.GetLink.Path
         $aumid = [string] $item.ExtendedProperty('System.AppUserModel.ID')
@@ -199,7 +203,7 @@ try {
         if ([string]::IsNullOrWhiteSpace($target) -or [System.IO.Path]::GetFullPath($target) -ine $appPath) {
             $problems.Add('The Start Menu shortcut targets a different executable.')
         }
-        if ($aumid -cne 'io.github.hiyabye.rhythm') {
+        if ($aumid -cne $Identifier) {
             $problems.Add('The Start Menu shortcut AUMID is missing or incorrect.')
         }
         $parsedActivator = [guid]::Empty
