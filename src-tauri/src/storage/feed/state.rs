@@ -12,7 +12,7 @@ use serde::Serialize;
 const STALE_AFTER: chrono::Duration = chrono::Duration::hours(3);
 /// Consecutive collector failures before a board is listed as failing (user
 /// decision, 2026-11-18): about 1.5 hours of failed runs.
-const FAILING_AFTER: u32 = 3;
+pub(crate) const FAILING_AFTER: u32 = 3;
 
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct FeedState {

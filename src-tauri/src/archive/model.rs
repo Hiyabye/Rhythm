@@ -34,6 +34,18 @@ pub struct SourceInfo {
     /// Archived notices of this source not yet read.
     #[serde(default)]
     pub unread: u64,
+    /// The collector's health for this board from the last accepted feed
+    /// manifest; `None` for Cybercampus and before the first sync.
+    #[serde(default)]
+    pub feed: Option<FeedBoardHealth>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FeedBoardHealth {
+    pub last_success_at: Option<String>,
+    pub consecutive_failures: u32,
+    /// Listed as failing in the feed pane (`storage::feed::state::FAILING_AFTER`).
+    pub failing: bool,
+    pub history_complete: bool,
 }
 /// A notice whose fetched response could not be archived; see `skipped_articles`.
 #[derive(Clone, Debug, Serialize, Deserialize)]

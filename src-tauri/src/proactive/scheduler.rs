@@ -358,7 +358,7 @@ fn settings(store: &sync::SharedStore) -> Result<(ProactiveSettings, Settings), 
     })
 }
 
-fn reconcile_tasks(
+pub(super) fn reconcile_tasks(
     store: &sync::SharedStore,
     prefs: &ProactiveSettings,
     energy: &Settings,
@@ -388,7 +388,9 @@ fn reconcile_tasks(
         .filter(|source| source.definition.supported)
     {
         let task_id = format!("source:{}", source.definition.id);
+        // Public boards come from the feed, so their old tasks stay disabled.
         let enabled = prefs.scheduler_enabled
+            && archive::app_collected(&source.definition.id)
             && extension_enabled.contains(&source.definition.id)
             && active.contains(&source.definition.id);
         if current

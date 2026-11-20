@@ -178,7 +178,7 @@
       <div class="settings-row"><span class="row-label">로그인 후 창 숨기기<Hint label="로그인 후 창 숨기기">로그인으로 실행될 때만 적용됩니다. 직접 앱을 열면 창이 보입니다.</Hint></span><button class="switch" class:on={lifecycle.start_hidden} role="switch" aria-label="로그인 후 창 숨기기" aria-checked={lifecycle.start_hidden} disabled={busy || !lifecycle.autostart_enabled} onclick={() => setLifecycle('lifecycle_set_start_hidden', !lifecycle?.start_hidden)}><span></span></button></div>
     </div>
 
-    <div class="settings-group-title"><h3>자동 동기화</h3><Hint label="자동 동기화">앱이 실행 중일 때만 새 공지를 확인합니다. 앱을 종료하면 멈추고, 잠자기 중에는 확인하지 않습니다. 전원 모드 기본값은 절전 60분, 균형 30분, 성능 15분이며, 간격을 직접 고르면 전원 모드와 관계없이 그 간격을 지킵니다.</Hint></div>
+    <div class="settings-group-title"><h3>자동 동기화</h3><Hint label="자동 동기화">앱이 실행 중일 때만 사이버캠퍼스의 새 공지와 과제를 확인합니다. 학교 게시판 공지는 이 설정과 관계없이 공지 피드로 30분마다 받습니다. 앱을 종료하면 멈추고, 잠자기 중에는 확인하지 않습니다. 전원 모드 기본값은 절전 60분, 균형 30분, 성능 15분이며, 간격을 직접 고르면 전원 모드와 관계없이 그 간격을 지킵니다.</Hint></div>
     <div class="settings-group">
       <div class="settings-row"><span class="row-label">새 공지 자동 확인</span><button class="switch" class:on={data.settings.scheduler_enabled} role="switch" aria-label="자동 동기화" aria-checked={data.settings.scheduler_enabled} disabled={busy} onclick={() => save({ scheduler_enabled: !data?.settings.scheduler_enabled, scheduler_paused: false })}><span></span></button></div>
       {#if !compact}<div class="settings-row"><span class="row-label">일시 중지</span><button class="switch" class:on={data.settings.scheduler_paused} role="switch" aria-label="자동 동기화 일시 중지" aria-checked={data.settings.scheduler_paused} disabled={busy || !data.settings.scheduler_enabled} onclick={() => save({ scheduler_paused: !data?.settings.scheduler_paused })}><span></span></button></div>{/if}

@@ -633,6 +633,31 @@ fn the_status_reports_feed_age_and_subscribed_failing_boards() {
         ["one"]
     );
     assert!(store.feed_status(at("2026-11-18T15:00:01Z")).unwrap().stale);
+    // Each board row carries the same health, whether subscribed or not.
+    let health = |id: &str| store.source(id).unwrap().feed;
+    let one = health("one").unwrap();
+    assert_eq!(
+        (one.consecutive_failures, one.failing, one.history_complete),
+        (3, true, true)
+    );
+    let two = health("two").unwrap();
+    assert_eq!((two.consecutive_failures, two.failing), (2, false));
+    assert!(
+        health("campus").is_none(),
+        "the feed never describes Cybercampus"
+    );
+    store.subscribe("one", false).unwrap();
+    assert!(health("one").unwrap().failing);
+    assert_eq!(
+        store
+            .sources()
+            .unwrap()
+            .iter()
+            .filter(|s| s.feed.is_some())
+            .count(),
+        2
+    );
+    store.subscribe("one", true).unwrap();
 
     // A failure keeps the last success time; an older manifest is refused.
     let checked = fresh.checked_at;

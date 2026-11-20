@@ -10,7 +10,11 @@ use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, Row};
 use sha2::{Digest, Sha256};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
-const SOURCE_COLUMNS: &str = "id,name,organization,description,url,family,supported,subscribed,selected,group_id,last_attempt,last_success,last_error,next_page,history_complete,status,discovered,archived,failed,(SELECT COUNT(*) FROM skipped_articles k WHERE k.source_id=sources.id),(SELECT extension_id FROM source_extensions se WHERE se.source_id=sources.id),(SELECT COUNT(*) FROM documents d LEFT JOIN document_state u ON u.document_id=d.id WHERE d.source_id=sources.id AND COALESCE(u.is_read,0)=0 AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id))";
+const SOURCE_COLUMNS: &str = "id,name,organization,description,url,family,supported,subscribed,selected,group_id,last_attempt,last_success,last_error,next_page,history_complete,status,discovered,archived,failed,(SELECT COUNT(*) FROM skipped_articles k WHERE k.source_id=sources.id),(SELECT extension_id FROM source_extensions se WHERE se.source_id=sources.id),(SELECT COUNT(*) FROM documents d LEFT JOIN document_state u ON u.document_id=d.id WHERE d.source_id=sources.id AND COALESCE(u.is_read,0)=0 AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)),\
+EXISTS(SELECT 1 FROM feed_boards b WHERE b.source_id=sources.id),\
+(SELECT last_success_at FROM feed_boards b WHERE b.source_id=sources.id),\
+(SELECT consecutive_failures FROM feed_boards b WHERE b.source_id=sources.id),\
+(SELECT history_complete FROM feed_boards b WHERE b.source_id=sources.id)";
 macro_rules! item_columns {
     ($snippet:literal) => {
         concat!("d.id,d.source_id,s.name,d.title,d.author,d.category,d.published_at,d.collected_at,COALESCE(u.is_read,0),COALESCE(u.saved,0),d.historical,", $snippet, ",CASE WHEN EXISTS(SELECT 1 FROM resources a WHERE a.document_id=d.id AND a.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id) AND a.status<>'downloaded') THEN 'missing_resources' ELSE 'archived' END,EXISTS(SELECT 1 FROM trashed_documents t WHERE t.document_id=d.id)")
@@ -90,6 +94,17 @@ fn source_row(row: &Row<'_>) -> rusqlite::Result<SourceInfo> {
         skipped: Vec::new(),
         extension: row.get(20)?,
         unread: row.get::<_, i64>(21)? as u64,
+        feed: if row.get(22)? {
+            let consecutive_failures = row.get(24)?;
+            Some(FeedBoardHealth {
+                last_success_at: row.get(23)?,
+                consecutive_failures,
+                failing: consecutive_failures >= super::feed::state::FAILING_AFTER,
+                history_complete: row.get(25)?,
+            })
+        } else {
+            None
+        },
     })
 }
 /// Bounds the notices listed per source; the count covers all of them.
