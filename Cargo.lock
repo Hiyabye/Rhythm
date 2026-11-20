@@ -3936,7 +3936,6 @@ dependencies = [
  "mac-usernotifications",
  "minisign-verify",
  "objc2-user-notifications",
- "pdf-extract",
  "reqwest 0.12.28",
  "rhythm-embed",
  "rhythm-feed",
