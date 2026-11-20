@@ -1,5 +1,8 @@
 //! Deterministic candidate retrieval, scoring and recommendation reasons.
 use super::*;
+use crate::storage::intelligence::{
+    cosine, decode_vector, vector_join, FEED_MODEL, HAS_VECTOR, LATEST_REVISION, VECTOR_COLUMNS,
+};
 use crate::storage::trash::NOT_TRASHED;
 
 pub(super) fn matches_term(document: &str, term: &str) -> bool {
@@ -69,6 +72,9 @@ pub(super) struct Candidate {
     source_organization: String,
     last_revision_at: Option<String>,
     full_text_matches: u32,
+    /// Latest-revision vector, filled by `Store::attach_vectors` only while the
+    /// similarity term is active.
+    vector: Option<Vec<f32>>,
 }
 
 pub(super) const ACTIVE_SOURCES_SQL: &str = "SELECT s.id FROM sources s WHERE
@@ -164,6 +170,7 @@ pub(super) fn map_candidate(
         last_revision_at: row.get(17)?,
         full_text_matches,
         feedback_updated_at,
+        vector: None,
     })
 }
 
@@ -175,6 +182,65 @@ pub(super) struct ScoringContext {
     terms: Vec<String>,
     term_indices: HashMap<String, usize>,
     has_preferences: bool,
+    /// `None` while the AI extension is off or no saved/interested notice has
+    /// a vector; ranking is then the lexical score alone.
+    similarity: Option<Similarity>,
+}
+
+/// The notices a candidate's vector is compared with: the feed's vectors,
+/// plus the local model's (`local_model`, its SHA-256) while one is installed.
+pub(super) struct Similarity {
+    local_model: Option<String>,
+    liked: Vec<Anchor>,
+    disliked: Vec<Anchor>,
+}
+
+pub(super) struct Anchor {
+    document_id: i64,
+    title: String,
+    vector: Vec<f32>,
+}
+
+/// Cosine at which the similarity term starts, the one that already marks a
+/// similar notice in the reader.
+const SIMILARITY_FLOOR: f32 = 0.75;
+/// Cosine span over which the term grows linearly to its cap.
+const SIMILARITY_SPAN: f32 = 0.20;
+/// Like a learned topic: below saved (+8) and any explicit topic, and with
+/// freshness and a subscription (6 + 2) still short of Important (18).
+const SIMILARITY_CAP: i32 = 6;
+const SIMILARITY_TITLE_CHARS: usize = 30;
+
+/// The closest anchor other than the candidate itself; an earlier (more
+/// recent) anchor wins a tie.
+fn closest<'a>(
+    anchors: &'a [Anchor],
+    document_id: i64,
+    vector: &[f32],
+) -> Option<(&'a Anchor, f32)> {
+    anchors
+        .iter()
+        .filter(|anchor| anchor.document_id != document_id)
+        .filter_map(|anchor| cosine(&anchor.vector, vector).map(|score| (anchor, score)))
+        .fold(None, |best, (anchor, score)| match best {
+            Some((_, best_score)) if best_score >= score => best,
+            _ => Some((anchor, score)),
+        })
+}
+
+impl Similarity {
+    /// Points and the anchor they come from. No points when a not-interested
+    /// notice is at least as close as the closest saved/interested one.
+    fn term(&self, document_id: i64, vector: &[f32]) -> Option<(i32, &Anchor)> {
+        let (anchor, score) = closest(&self.liked, document_id, vector)?;
+        if closest(&self.disliked, document_id, vector).is_some_and(|(_, other)| other >= score) {
+            return None;
+        }
+        let amount = (((score - SIMILARITY_FLOOR) / SIMILARITY_SPAN) * SIMILARITY_CAP as f32)
+            .floor()
+            .min(SIMILARITY_CAP as f32) as i32;
+        (amount > 0).then_some((amount, anchor))
+    }
 }
 
 pub(super) struct ScoredCandidate {
@@ -312,6 +378,16 @@ pub(super) fn score_candidate(context: &ScoringContext, candidate: &Candidate) -
             reasons.push("프로필 정보와 일치".into());
         }
     }
+    if let (Some(similarity), Some(vector)) = (&context.similarity, &candidate.vector) {
+        if let Some((amount, anchor)) = similarity.term(item.id, vector) {
+            score += amount;
+            let mut title: String = anchor.title.chars().take(SIMILARITY_TITLE_CHARS).collect();
+            if anchor.title.chars().count() > SIMILARITY_TITLE_CHARS {
+                title.push('…');
+            }
+            reasons.push(format!("저장하거나 관심 표시한 ‘{title}’ 공지와 비슷함"));
+        }
+    }
     if negative_feedback {
         // Recent corrections lower this item without permanently hiding it.
         score = score.min(-negative_feedback_penalty);
@@ -397,12 +473,121 @@ impl Store {
             .enumerate()
             .map(|(index, term)| (term.clone(), index))
             .collect::<HashMap<_, _>>();
+        let similarity = if self.enabled(crate::extensions::AI)? {
+            self.similarity_anchors()?
+        } else {
+            None
+        };
         Ok(ScoringContext {
             snapshot,
             terms,
             term_indices,
             has_preferences,
+            similarity,
         })
+    }
+    /// Latest-revision vectors of the most recent saved or interested notices
+    /// and, separately, of not-interested ones. Feedback counts while it still
+    /// scores (365 days); a not-interested notice is never a liked anchor.
+    fn similarity_anchors(&self) -> Result<Option<Similarity>, String> {
+        let local_model = self.ai_embedding_model_sha()?;
+        let anchors = |condition: &str, order: &str| -> Result<Vec<Anchor>, String> {
+            self.connection
+                .prepare(&format!(
+                    "SELECT d.id,d.title,{VECTOR_COLUMNS} FROM documents d
+                     LEFT JOIN document_state u ON u.document_id=d.id
+                     LEFT JOIN personalization_feedback f ON f.document_id=d.id
+                     {}
+                     WHERE {HAS_VECTOR} AND {NOT_TRASHED} AND ({condition})
+                     ORDER BY {order},d.id DESC LIMIT {SIMILARITY_ANCHOR_LIMIT}",
+                    vector_join(LATEST_REVISION)
+                ))
+                .map_err(|e| e.to_string())?
+                .query_map(params![FEED_MODEL, local_model], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, Vec<u8>>(4)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?
+                .map(|row| row.map_err(|e| e.to_string()))
+                // A damaged vector only drops that notice, as in semantic search.
+                .filter_map(|row| match row {
+                    Ok((document_id, title, dim, bytes)) => {
+                        decode_vector(dim, &bytes).ok().map(|vector| {
+                            Ok(Anchor {
+                                document_id,
+                                title,
+                                vector,
+                            })
+                        })
+                    }
+                    Err(error) => Some(Err(error)),
+                })
+                .collect()
+        };
+        let liked = anchors(
+            "f.value IS NOT 'not_interested' AND (u.saved=1
+               OR (f.value='interested' AND f.updated_at>=date('now','-365 days')))",
+            "max(COALESCE(u.saved_at,''),COALESCE(f.updated_at,'')) DESC",
+        )?;
+        if liked.is_empty() {
+            return Ok(None);
+        }
+        let disliked = anchors(
+            "f.value='not_interested' AND f.updated_at>=date('now','-365 days')",
+            "f.updated_at DESC",
+        )?;
+        Ok(Some(Similarity {
+            local_model,
+            liked,
+            disliked,
+        }))
+    }
+    /// Loads the candidates' latest-revision vectors when the similarity term
+    /// is active, through the same feed/local choice as the anchors.
+    fn attach_vectors(
+        &self,
+        context: &ScoringContext,
+        candidates: &mut [Candidate],
+    ) -> Result<(), String> {
+        let Some(similarity) = &context.similarity else {
+            return Ok(());
+        };
+        if candidates.is_empty() {
+            return Ok(());
+        }
+        let ids = serde_json::to_string(&candidates.iter().map(|c| c.item.id).collect::<Vec<_>>())
+            .map_err(|e| e.to_string())?;
+        let mut vectors = HashMap::with_capacity(candidates.len());
+        for row in self
+            .connection
+            .prepare(&format!(
+                "SELECT d.id,{VECTOR_COLUMNS} FROM documents d {}
+                 WHERE d.id IN (SELECT value FROM json_each(?)) AND {HAS_VECTOR}",
+                vector_join(LATEST_REVISION)
+            ))
+            .map_err(|e| e.to_string())?
+            .query_map(params![FEED_MODEL, similarity.local_model, ids], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+        {
+            let (document_id, dim, bytes) = row.map_err(|e| e.to_string())?;
+            if let Ok(vector) = decode_vector(dim, &bytes) {
+                vectors.insert(document_id, vector);
+            }
+        }
+        for candidate in candidates {
+            candidate.vector = vectors.remove(&candidate.item.id);
+        }
+        Ok(())
     }
     pub fn personalization_recommendations(
         &self,
@@ -593,7 +778,7 @@ impl Store {
         );
         let mut statement = self.connection.prepare(&sql).map_err(|e| e.to_string())?;
         let term_count = context.terms.len();
-        let candidates = if context.terms.is_empty() {
+        let mut candidates = if context.terms.is_empty() {
             statement
                 .query_map([], |row| map_candidate(row, term_count))
                 .map_err(|e| e.to_string())?
@@ -610,6 +795,7 @@ impl Store {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?
         };
+        self.attach_vectors(&context, &mut candidates)?;
         let mut ranked = Vec::with_capacity(candidates.len());
         for candidate in candidates {
             let signals = score_candidate(&context, &candidate);
@@ -759,14 +945,16 @@ impl Store {
         );
         let mut statement = self.connection.prepare(&sql).map_err(|e| e.to_string())?;
         let term_count = context.terms.len();
-        let mut scored = HashMap::with_capacity(unique.len());
-        for row in statement
+        let mut candidates = statement
             .query_map(rusqlite::params_from_iter(parameters), |row| {
                 map_candidate(row, term_count)
             })
             .map_err(|e| e.to_string())?
-        {
-            let candidate = row.map_err(|e| e.to_string())?;
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        self.attach_vectors(&context, &mut candidates)?;
+        let mut scored = HashMap::with_capacity(unique.len());
+        for candidate in candidates {
             let document_id = candidate.item.id;
             let signals = score_candidate(&context, &candidate);
             scored.insert(document_id, (candidate.feedback, signals));

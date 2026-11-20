@@ -18,6 +18,9 @@ const SAVED_CANDIDATE_LIMIT: i64 = 100;
 const FEEDBACK_CANDIDATE_LIMIT: i64 = 100;
 const FTS_CANDIDATE_LIMIT: i64 = 250;
 const SOURCE_CANDIDATE_LIMIT: i64 = 250;
+/// Most recent saved/interested (and, separately, not-interested) notices
+/// whose vectors the similarity term compares a candidate with.
+const SIMILARITY_ANCHOR_LIMIT: i64 = 50;
 const EVIDENCE_RETENTION_DAYS: i64 = 180;
 const MAX_EVIDENCE_TOPICS_PER_ACTION: usize = 32;
 const MAX_MATCH_TERMS: usize = 32;

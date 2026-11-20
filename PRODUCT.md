@@ -25,7 +25,7 @@ Success: the user trusts Rhythm to bring forward what matters, at the right time
 ## Positioning
 
 - **Local-first by construction.** No account, cloud database or telemetry. Classification runs on the device in a bundled llama.cpp server that only Rhythm starts and can reach; notice text never leaves the device for AI.
-- **Explainable, not oracular.** Recommendations are ranked by deterministic score signals, never by a model. Today keeps each pick to one line, so the signals are not shown there (user decision, 2026-11-07). AI output is optional, labeled, and never drives ranking, urgency or notifications.
+- **Explainable, not oracular.** Recommendations are ranked by deterministic score signals, never by a model. Today keeps each pick to one line, so the signals are not shown there (user decision, 2026-11-07). AI output is optional and labeled. Its only effect on ranking is a small, capped bonus for notices similar to ones the user saved or marked interested, shown as a reason and off while AI is off; it never creates urgency.
 - **User decides.** Subscriptions, collection, model installs, background sync and notifications are all off until the user turns them on. Learned preferences can be inspected, edited and deleted.
 - **Archive, not a feed.** Notices are preserved with meaningful revision history, local attachments and offline reading. Fetch/parse failures never erase good content.
 

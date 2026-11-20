@@ -1845,3 +1845,144 @@ fn trashed_notices_are_not_recommended_until_restored() {
     store.restore_documents(&[1]).unwrap();
     assert!(ids(&store).contains(&1));
 }
+
+/// Stores `document`'s latest-revision feed vector: `cos` × e0 + √(1−cos²) ×
+/// e1, so its cosine with a pure e0 vector is `cos` up to int8 rounding.
+fn feed_vector(store: &Store, document: i64, cos: f32) {
+    let mut values = vec![0.0f32; rhythm_feed::DIMENSIONS];
+    values[0] = cos;
+    values[1] = (1.0 - cos * cos).sqrt();
+    let vector = rhythm_feed::vector::encode(&[rhythm_feed::vector::quantize(&values).unwrap()]);
+    store
+        .connection
+        .execute("UPDATE documents SET from_feed=1 WHERE id=?1", [document])
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO feed_embeddings(document_id,revision_id,scope,vector)
+             VALUES(?1,(SELECT MAX(id) FROM document_revisions WHERE document_id=?1),?2,?3)",
+            params![
+                document,
+                format!("{}#test", crate::storage::intelligence::FEED_MODEL),
+                vector
+            ],
+        )
+        .unwrap();
+}
+
+fn notification_score(store: &Store, document: i64) -> (i32, Vec<String>) {
+    let score = store
+        .personalization_notification_score(document)
+        .unwrap()
+        .unwrap();
+    (score.score, score.reasons)
+}
+
+#[test]
+fn similarity_to_saved_notices_adds_a_bounded_named_term_only_with_ai_on() {
+    let (_directory, store) = store();
+    for id in 4..6 {
+        add_document(
+            &store,
+            id,
+            &format!("공지 {id}"),
+            "기타",
+            "2020-01-01",
+            "2020-01-01T12:00:00Z",
+            true,
+        );
+    }
+    store.set_document_state(1, None, Some(true)).unwrap();
+    // Cosines with the saved notice 1: 0.87 → floor(0.12 / 0.20 × 6) = 3,
+    // 0.70 → below the floor, 1.0 → the cap of 6.
+    for (id, cos) in [(1, 1.0), (2, 0.87), (3, 0.70), (4, 1.0)] {
+        feed_vector(&store, id, cos);
+    }
+    let baseline: Vec<_> = (1..=5).map(|id| notification_score(&store, id)).collect();
+    store.set_enabled(crate::extensions::AI, true).unwrap();
+    let reason = "저장하거나 관심 표시한 ‘인공지능 연구 공지’ 공지와 비슷함".to_string();
+    for (id, points) in [(1, 0), (2, 3), (3, 0), (4, 6), (5, 0)] {
+        let (score, reasons) = notification_score(&store, id);
+        let (base_score, base_reasons) = &baseline[id as usize - 1];
+        assert_eq!(score - base_score, points, "document {id}");
+        let mut expected = base_reasons.clone();
+        if points > 0 {
+            expected.push(reason.clone());
+        }
+        assert_eq!(reasons, expected, "document {id}");
+    }
+    let listed = store.personalization_recommendations(10).unwrap();
+    let two = listed.items.iter().find(|item| item.item.id == 2).unwrap();
+    assert!(two.reasons.contains(&reason));
+
+    store.set_enabled(crate::extensions::AI, false).unwrap();
+    assert_eq!(notification_score(&store, 4), baseline[3]);
+}
+
+#[test]
+fn similarity_anchors_skip_disliked_trashed_and_expired_feedback() {
+    let (_directory, store) = store();
+    for id in 4..7 {
+        add_document(
+            &store,
+            id,
+            &format!("공지 {id}"),
+            "기타",
+            "2020-01-01",
+            "2020-01-01T12:00:00Z",
+            true,
+        );
+    }
+    store.set_enabled(crate::extensions::AI, true).unwrap();
+    for (id, cos) in [
+        (1, 1.0),
+        (2, 0.99),
+        (3, 0.99),
+        (4, 0.99),
+        (5, 0.99),
+        (6, 1.0),
+    ] {
+        feed_vector(&store, id, cos);
+    }
+    let points = |store: &Store, id: i64| {
+        notification_score(store, id)
+            .1
+            .iter()
+            .any(|reason| reason.ends_with("공지와 비슷함"))
+    };
+    // A recent "interested" notice is an anchor; one older than 365 days is not.
+    store
+        .personalization_set_feedback(1, Some("interested"))
+        .unwrap();
+    assert!(points(&store, 2));
+    store
+        .connection
+        .execute(
+            "UPDATE personalization_feedback SET updated_at='2020-01-01T00:00:00Z' WHERE document_id=1",
+            [],
+        )
+        .unwrap();
+    assert!(!points(&store, 2));
+
+    // A not-interested notice at least as close cancels the term.
+    store.set_document_state(1, None, Some(true)).unwrap();
+    store.personalization_set_feedback(1, None).unwrap();
+    assert!(points(&store, 2));
+    store
+        .personalization_set_feedback(6, Some("not_interested"))
+        .unwrap();
+    assert!(!points(&store, 2));
+    store.personalization_set_feedback(6, None).unwrap();
+
+    // A saved notice marked not interested, or moved to 휴지통, is no anchor.
+    store
+        .personalization_set_feedback(1, Some("not_interested"))
+        .unwrap();
+    assert!(!points(&store, 2));
+    store.personalization_set_feedback(1, None).unwrap();
+    store.trash_documents(&[1]).unwrap();
+    assert!(!points(&store, 2));
+    store.restore_documents(&[1]).unwrap();
+    assert!(points(&store, 2));
+}
