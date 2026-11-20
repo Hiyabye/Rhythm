@@ -20,7 +20,7 @@
   import { fade, fly, slide } from './lib/motion';
   import { archiveError as message, archiveDay, groupScope, localDayKey, openTask, organizationLabel, scopeGroup, timeOptions } from './lib/archive-format';
   import { clock } from './lib/clock.svelte';
-  import type { ArchiveSummary, AutoTrashMonths, ClockFormat, EnergyProfile, Settings, Snapshot, SourceGroup, SourceInfo, SyncStatus, Theme, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusTask, TodoPrefill } from './lib/types';
+  import type { ArchiveSummary, AutoTrashMonths, ClockFormat, EnergyProfile, Settings, Snapshot, SourceGroup, SourceInfo, SyncStatus, FeedStatus, Theme, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusTask, TodoPrefill } from './lib/types';
 
   const themes: { id: Theme; label: string; icon: string }[] = [
     { id: 'light', label: '라이트', icon: 'today' },
@@ -140,7 +140,20 @@
       : id === 'trash' ? summary && { count: summary.trashed, label: '휴지통의 공지' } : null;
     return entry?.count ? entry : null;
   }
-  let lastChecked = $derived(boards.reduce<string | null>((latest, item) => !item.last_success || (latest && latest >= item.last_success) ? latest : item.last_success, null));
+  // Public boards arrive through the feed, so its last successful check stands for them (#274);
+  // Cybercampus keeps its own last run. Reloaded on each context refresh, which follows every finished feed sync.
+  let feedChecked = $state<string | null>(null);
+  $effect(() => {
+    void sources;
+    if (!desktop || !enabled.has('sogang_notices')) { feedChecked = null; return; }
+    let current = true;
+    void invoke<FeedStatus>('feed_status').then((value) => { if (current) feedChecked = value.checked_at; }).catch(() => { /* The feed pane reports failures. */ });
+    return () => { current = false; };
+  });
+  let lastChecked = $derived([
+    ...boards.filter((item) => item.id === 'cybercampus').map((item) => item.last_success),
+    boards.some((item) => item.id !== 'cybercampus') ? feedChecked : null,
+  ].reduce<string | null>((latest, value) => !value || (latest && latest >= value) ? latest : value, null));
 
   $effect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';

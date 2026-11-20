@@ -1,6 +1,6 @@
-//! What the feed sync remembers between runs (migration 038): the feed's base
-//! URL, the last accepted manifest's `generated_at` and board health, and how
-//! the last attempt ended.
+//! What the feed sync remembers between runs (migrations 038 and 041): the
+//! feed's base URL, the last two accepted manifests' `generated_at`, board
+//! health, and how the last attempt ended.
 use super::super::Store;
 use chrono::{DateTime, Utc};
 use rhythm_feed::Manifest;
@@ -105,9 +105,13 @@ impl Store {
         {
             return Err("받은 공지 피드가 이미 반영한 것보다 오래되었습니다.".into());
         }
+        // A new manifest moves the last one into `previous_generated_at`, the
+        // line between what the previous sync brought and what this one did.
         transaction
             .execute(
-                "UPDATE feed_state SET generated_at=?1,base=?2 WHERE id=1",
+                "UPDATE feed_state SET previous_generated_at=CASE WHEN generated_at IS ?1
+                   THEN previous_generated_at ELSE generated_at END,generated_at=?1,base=?2
+                 WHERE id=1",
                 params![manifest.generated_at, base],
             )
             .map_err(|e| e.to_string())?;

@@ -57,7 +57,7 @@ export interface FixtureOptions {
   aiModelDirectoryGate?: boolean;
   aiModelStorageAvailable?: number | null;
   // Replaces the default two-board catalog.
-  sourceList?: { id: string; name: string; organization: string; supported: boolean; subscribed?: boolean; group?: string | null; family?: string; last_error?: string | null; skipped_count?: number; skipped?: { external_id: string; url: string; reason: string; skipped_at: string; archived: boolean }[]; feed?: FeedBoardHealth | null }[];
+  sourceList?: { id: string; name: string; organization: string; supported: boolean; subscribed?: boolean; group?: string | null; family?: string; last_success?: string | null; last_error?: string | null; skipped_count?: number; skipped?: { external_id: string; url: string; reason: string; skipped_at: string; archived: boolean }[]; feed?: FeedBoardHealth | null }[];
   initialNotificationsEnabled?: boolean;
   capabilitiesError?: boolean;
   aiModelDirectory?: string;

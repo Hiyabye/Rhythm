@@ -114,7 +114,8 @@ Rust owns persistence; browser previews never substitute localStorage or simulat
 | `037_feed_mirror` | The feed mirror (#177): `documents.revision_hash`, `body_state`, `body_pending` (the body is the feed's excerpt until opened), `from_feed` and `removed_at`; `document_revisions.revision_hash`; `feed_state` (cursor, last accepted `generated_at`), `feed_embeddings` (int8 vector per notice) and `feed_classifications`, both tied to the revision they describe |
 | `038_feed_sync` | Feed sync state (#177): `feed_state.base` (the feed URL after a signed `moved_to`), `checked_at` (last sync without an error), `result`/`error` (how the last attempt ended), and `feed_boards` (board health from the last accepted manifest) |
 | `039_revision_body_hash` | `document_revisions.body_hash` (#177): `rhythm_feed::body_hash` of the revision's full body text, from the feed record or computed when a body is archived; NULL on older revisions |
-| `040_board_crawl_state` | Data only (#178): resets the last-attempt fields of public boards (`status` idle, `last_attempt`/`last_error` cleared, counters 0) and deletes their `skipped_articles` and `proactive_tasks` rows; Cybercampus keeps all of it. Inert public checkpoints and `last_success`/`previous_success` (still read by the last-checked time and the new-since-sync count) stay |
+| `040_board_crawl_state` | Data only (#178): resets the last-attempt fields of public boards (`status` idle, `last_attempt`/`last_error` cleared, counters 0) and deletes their `skipped_articles` and `proactive_tasks` rows; Cybercampus keeps all of it. Inert public checkpoints and `last_success`/`previous_success` stay; since 041 only Cybercampus' are read |
+| `041_feed_previous_manifest` | `feed_state.previous_generated_at` (#274): the manifest accepted before the latest one, which bounds the feed notices counted as new since sync; set to the current `generated_at` on upgrade so the count starts at zero |
 
 ### Archive tables
 
@@ -125,7 +126,7 @@ Rust owns persistence; browser previews never substitute localStorage or simulat
 | `document_revisions` | Append-only meaningful snapshots, including the original fetched JSON/HTML, reader content and hash |
 | `document_state` | Read/saved flags and timestamps, independent of content |
 | `resources` | Per-revision image/attachment metadata, download state, local path, size, MIME, SHA-256 |
-| `feed_state` | The last applied feed seq, the `generated_at` and base URL of the last accepted manifest, the last successful check and the last attempt's result |
+| `feed_state` | The last applied feed seq, the `generated_at` and base URL of the last accepted manifest, the `generated_at` of the one before it, the last successful check and the last attempt's result |
 | `feed_boards` | Each board's collector health (`last_success_at`, `consecutive_failures`, `history_complete`) from the last accepted manifest |
 | `feed_embeddings`, `feed_classifications` | The feed's vector (as published: f32 scale + 1,024 int8) and category of a notice's current revision, read for notices with `from_feed`; the local model's tables cover every other notice |
 

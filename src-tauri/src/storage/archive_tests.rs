@@ -107,7 +107,7 @@ fn studium_interval_upgrade_preserves_released_trash_state_and_settings() {
         .connection
         .execute_batch(
             &format!("INSERT INTO deleted_notices(source_id,external_id) VALUES('one','removed');
-             {UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_INTERVAL}
+             {UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_INTERVAL}
              PRAGMA user_version=26;"),
         )
         .unwrap();
@@ -324,7 +324,8 @@ fn revisions_deduplicate_content_but_preserve_changes_and_user_state() {
     let other_revision = store.document(other, None).unwrap().revision_id;
     assert!(store.document(id, Some(other_revision)).is_err());
     assert_eq!(store.archive_summary().unwrap().documents, 2);
-    assert_eq!(store.archive_summary().unwrap().new_since_sync, 1);
+    // Public boards count only feed arrivals (#274), never crawled notices.
+    assert_eq!(store.archive_summary().unwrap().new_since_sync, 0);
     // Each board counts only its own unread notices: "one" holds the read one.
     let unread = |id: &str| {
         store
@@ -1701,7 +1702,7 @@ fn schema_ten_upgrade_keeps_archive_and_adds_skipped_articles() {
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 {UNDO_GROUPS}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
+                 {UNDO_GROUPS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
                  PRAGMA user_version=10;"
             ))
             .unwrap();
@@ -1753,7 +1754,7 @@ fn schema_eleven_upgrade_retries_mislabeled_and_newly_allowed_resources() {
                  ALTER TABLE ai_preferences DROP COLUMN classification_enabled;
                  DROP TABLE IF EXISTS cybercampus_tasks; DROP TABLE IF EXISTS cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 {UNDO_GROUPS}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
+                 {UNDO_GROUPS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
                  PRAGMA user_version=11;"
             ))
             .unwrap();
@@ -1786,7 +1787,7 @@ fn retired_eng_newsletter_row_is_removed_but_archived_data_is_kept() {
             .execute_batch(
                 &format!("DROP TABLE cybercampus_tasks; DROP TABLE cybercampus_courses;
                  ALTER TABLE settings DROP COLUMN onboarding_completed;
-                 {UNDO_GROUPS}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
+                 {UNDO_GROUPS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
                  PRAGMA user_version=16"),
             )
             .unwrap();
@@ -2031,7 +2032,7 @@ fn schema_twenty_upgrade_keeps_every_subscription_with_groups_on() {
         store
             .connection
             .execute_batch(
-                &format!("{UNDO_GROUPS}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
+                &format!("{UNDO_GROUPS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
                  PRAGMA user_version=20;"),
             )
             .unwrap();
@@ -2398,7 +2399,7 @@ fn schema_thirty_upgrade_keeps_todos_without_links() {
     store
         .connection
         .execute_batch(&format!(
-            "{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}
+            "{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODO_DOCUMENT}
              PRAGMA user_version=30;"
         ))
         .unwrap();
@@ -2649,7 +2650,7 @@ fn schema_thirty_one_upgrade_backfills_dates_and_rolls_back_on_failure() {
         .unwrap();
     store.set_document_state(id, None, Some(true)).unwrap();
     let rollback = &format!(
-        "{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}
+        "{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}
                     PRAGMA user_version=31;"
     );
     store.connection.execute_batch(rollback).unwrap();
@@ -2744,7 +2745,7 @@ fn schema_40_clears_public_board_crawl_state_and_keeps_cybercampus() {
             .unwrap();
         store
             .connection
-            .execute_batch("PRAGMA user_version=39;")
+            .execute_batch(&format!("{UNDO_PREVIOUS_MANIFEST}PRAGMA user_version=39;"))
             .unwrap();
     }
     // A failing 040 leaves the schema-39 profile as it was.
@@ -2780,7 +2781,7 @@ fn schema_40_clears_public_board_crawl_state_and_keeps_cybercampus() {
         ),
         ("idle", 0, true, true, 0)
     );
-    // The last-checked time and the new-since-sync count still read these.
+    // Kept, though since #274 nothing reads them for a public board.
     assert!(public.last_success.is_some());
     let own = store.source("cybercampus").unwrap();
     assert_eq!(
