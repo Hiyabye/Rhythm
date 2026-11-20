@@ -161,7 +161,7 @@ async fn actual_embedding_classification_evaluation() {
     let cases = cases();
     let runtime =
         std::env::temp_dir().join(format!("rhythm-embedding-eval-{}", std::process::id()));
-    let mut configured = Worker::configured(&llama, &runtime, "auto", &pooling);
+    let mut configured = Worker::configured(&llama, &runtime, &pooling);
     if std::env::var("RHYTHM_EMBEDDING_EVAL_FORCE_CPU").as_deref() == Ok("1") {
         configured.force_cpu();
     }
@@ -316,7 +316,7 @@ async fn actual_semantic_search_evaluation() {
     assert!(model.is_file(), "missing model: {}", model.display());
     let cases = cases();
     let runtime = std::env::temp_dir().join(format!("rhythm-search-eval-{}", std::process::id()));
-    let worker = AsyncMutex::new(Worker::configured(&llama, &runtime, "auto", "last"));
+    let worker = AsyncMutex::new(Worker::configured(&llama, &runtime, "last"));
     // Notices are embedded exactly as the production classifier stores them.
     let notices = cases
         .iter()

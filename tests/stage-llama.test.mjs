@@ -12,7 +12,6 @@ const pins = {
   build: 'b1',
   assets: {
     metal: { file: 'llama-b1-bin-macos-arm64.tar.gz', ...pinFor(archive) },
-    vulkan: { file: 'llama-b1-bin-win-vulkan-x64.zip', ...pinFor(archive) },
     cpu: { file: 'llama-b1-bin-win-cpu-x64.zip', ...pinFor(archive) },
   },
 };
@@ -39,7 +38,7 @@ function stage(options) {
 
 test('only the supported hosts have llama.cpp builds', () => {
   assert.deepEqual(variantsFor('darwin', 'arm64'), ['metal']);
-  assert.deepEqual(variantsFor('win32', 'x64'), ['vulkan', 'cpu']);
+  assert.deepEqual(variantsFor('win32', 'x64'), ['cpu']);
   for (const [platform, arch] of [['darwin', 'x64'], ['linux', 'x64'], ['win32', 'arm64']]) {
     assert.throws(() => variantsFor(platform, arch), /macOS Apple Silicon and Windows 11 x64/);
   }
@@ -132,22 +131,22 @@ test('downloads stop after five attempts, and client errors are not retried', as
   }
 });
 
-test('Windows stages both builds with every DLL except other tools and the VC runtime beside each', async () => {
-  const { cwd, promise, cleanup } = stage({ platform: 'win32', readdir: (directory) => readdirSync(directory),
+test('Windows stages the CPU build with every DLL except other tools, and the VC runtime beside it', async () => {
+  const { cwd, fetched, promise, cleanup } = stage({ platform: 'win32', readdir: (directory) => readdirSync(directory),
     archiveFiles: ['llama-server.exe', 'LICENSE-LLVM-OpenMP', 'llama-server-impl.dll', 'llama-cli-impl.dll',
-      'llama-bench-impl.dll', 'ggml.dll', 'ggml-cpu-haswell.dll', 'ggml-vulkan.dll', 'llama-cli.exe'] });
+      'llama-bench-impl.dll', 'ggml.dll', 'ggml-cpu-haswell.dll', 'llama-cli.exe'] });
   mkdirSync(join(cwd, 'src-tauri/binaries/vc-runtime'), { recursive: true });
   for (const name of ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']) {
     writeFileSync(join(cwd, 'src-tauri/binaries/vc-runtime', name), name);
   }
   try {
     await promise;
-    for (const variant of ['vulkan', 'cpu']) {
-      assert.deepEqual(readdirSync(join(cwd, 'src-tauri/binaries/llama', variant)).sort(), [
-        'LICENSE-LLVM-OpenMP', 'ggml-cpu-haswell.dll', 'ggml-vulkan.dll', 'ggml.dll', 'llama-server-impl.dll',
-        'llama-server.exe', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll',
-      ]);
-    }
+    assert.deepEqual(fetched, ['https://github.com/ggml-org/llama.cpp/releases/download/b1/llama-b1-bin-win-cpu-x64.zip']);
+    assert.deepEqual(readdirSync(join(cwd, 'src-tauri/binaries/llama')), ['cpu']);
+    assert.deepEqual(readdirSync(join(cwd, 'src-tauri/binaries/llama/cpu')).sort(), [
+      'LICENSE-LLVM-OpenMP', 'ggml-cpu-haswell.dll', 'ggml.dll', 'llama-server-impl.dll',
+      'llama-server.exe', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll',
+    ]);
   } finally {
     cleanup();
   }

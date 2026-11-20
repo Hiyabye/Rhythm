@@ -6,8 +6,6 @@ param(
     [string] $ExpectedAppSha256,
     [ValidatePattern('^[0-9a-fA-F]{64}$')]
     [string] $ExpectedCpuServerSha256,
-    [ValidatePattern('^[0-9a-fA-F]{64}$')]
-    [string] $ExpectedGpuServerSha256,
     [string] $ExpectedVcRuntimeDir
 )
 
@@ -21,7 +19,6 @@ $report = [ordered]@{
     expected_version = $ExpectedVersion
     app = $null
     cpu_server = $null
-    gpu_server = $null
     vc_runtime = $null
     runtime_hashes_verified = $false
     uninstall = $null
@@ -79,9 +76,7 @@ function Read-Executable([string] $Path, [string] $ExpectedHash, [string] $Label
 }
 
 $report.app = Read-Executable $appPath $ExpectedAppSha256 'Rhythm'
-# Both bundled llama.cpp builds ship with every installer.
 $report.cpu_server = Read-Executable (Join-Path $resolvedDir 'llama\cpu\llama-server.exe') $ExpectedCpuServerSha256 'CPU llama-server'
-$report.gpu_server = Read-Executable (Join-Path $resolvedDir 'llama\vulkan\llama-server.exe') $ExpectedGpuServerSha256 'Vulkan llama-server'
 try {
     . (Join-Path $PSScriptRoot 'vc-runtime.ps1')
     $report.vc_runtime = @(Get-RhythmVcRuntime $resolvedDir)
@@ -102,7 +97,6 @@ try {
 }
 $report.hashes_verified = $null -ne $report.app -and $report.app.hash_verified -eq $true -and
     $null -ne $report.cpu_server -and $report.cpu_server.hash_verified -eq $true -and
-    $null -ne $report.gpu_server -and $report.gpu_server.hash_verified -eq $true -and
     $report.runtime_hashes_verified
 
 $registry = $null

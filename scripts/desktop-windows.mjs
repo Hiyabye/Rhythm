@@ -11,7 +11,7 @@ const { join, resolve } = win32;
 const realFiles = { readdir: readdirSync, read: readFileSync, write: writeFileSync, remove: rmSync };
 
 // Windows 11 x64 build: Microsoft VC runtime staging, the pinned llama.cpp
-// Vulkan and CPU builds, and the per-user NSIS installer. Every external
+// CPU build, and the per-user NSIS installer. Every external
 // effect is injectable so the orchestration is testable on any host.
 export function desktop({ platform = process.platform, arch = process.arch, env = process.env,
   args = process.argv.slice(2), cwd = process.cwd(), spawn = spawnSync,
@@ -46,7 +46,7 @@ export function desktop({ platform = process.platform, arch = process.arch, env 
   } catch (cause) {
     throw new Error(`Microsoft VC runtime staging failed using ${powershell}. Set RHYTHM_POWERSHELL to the intended PowerShell executable if needed. The selected host's execution policy is unchanged.`, { cause });
   }
-  // The llama.cpp DLLs need the VC runtime staged above beside each build.
+  // The llama.cpp DLLs need the VC runtime staged above beside the build.
   run(process.execPath, [join(cwd, 'scripts', 'stage-llama.mjs')]);
   // Earlier installers (other versions, validation builds) must not sit next to the new one.
   if (distribute) files.remove(join(targetDir, 'release', 'bundle'), { recursive: true, force: true });

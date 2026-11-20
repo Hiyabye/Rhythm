@@ -18,7 +18,6 @@
     "allow-ai-classifications",
     "allow-ai-duplicate-notices",
     "allow-ai-install",
-    "allow-ai-preferences",
     "allow-ai-remove",
     "allow-ai-reset-model-directory",
     "allow-ai-similar-notices",

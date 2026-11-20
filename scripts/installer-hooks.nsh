@@ -139,6 +139,9 @@
       ${EndIf}
     ${EndIf}
   ${EndIf}
+  ; Releases before 2.0 also shipped a Vulkan build. A passive update skips the
+  ; old uninstaller, so remove that build's files here.
+  RMDir /r "$INSTDIR\llama\vulkan"
 !macroend
 !macro NSIS_HOOK_POSTUNINSTALL
   ; A manual upgrade keeps this preference; an ordinary uninstall removes only

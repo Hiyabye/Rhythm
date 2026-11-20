@@ -210,11 +210,10 @@ test('managed model removal can keep files after an inaccessible folder error an
   expect(await removals(page)).toEqual([{ id: 'qwen35-4b', confirmed: true }, { id: 'qwen35-4b', confirmed: true, keepFiles: true }]);
 });
 
-test('macOS hides the Windows execution device and keeps a chosen model folder for new downloads', async ({ page }) => {
+test('a chosen model folder applies to new downloads', async ({ page }) => {
   await mockDesktop(page, {}); await page.goto('/');
   await openSettings(page, 'AI');
   await advanced(page);
-  await expect(page.getByLabel('AI 실행 장치', { exact: true })).toHaveCount(0);
   await expect(page.getByPlaceholder('/전체/경로/model.gguf')).toHaveCount(0);
   const storage = page.getByRole('group', { name: '모델 설치 폴더', exact: true });
   await expect(storage.getByText('/isolated/models', { exact: true })).toBeVisible();
@@ -222,5 +221,4 @@ test('macOS hides the Windows execution device and keeps a chosen model folder f
   await expect(storage.getByText('/Volumes/로컬 모델/Rhythm', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '분류 모델 설치', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__fixture.ai.models[0]?.path)).toBe('/Volumes/로컬 모델/Rhythm/qwen3-embedding-0-6b.gguf');
-  expect(await callCount(page, 'ai_preferences')).toBe(0);
 });

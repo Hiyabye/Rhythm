@@ -74,7 +74,6 @@ fn main() {
         "ai_install",
         "ai_cancel_download",
         "ai_remove",
-        "ai_preferences",
         "ai_classifications",
         "ai_classification",
         "ai_similar_notices",

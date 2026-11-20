@@ -171,7 +171,7 @@ jobs:
       - name: Stage verified app-local Microsoft runtime files
         run: ./scripts/stage-vc-runtime.ps1
       # The llama.cpp DLLs need the VC runtime staged above beside each build.
-      - name: Stage the pinned llama.cpp Vulkan and CPU builds
+      - name: Stage the pinned llama.cpp CPU build
         run: node scripts/stage-llama.mjs
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace

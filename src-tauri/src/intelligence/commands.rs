@@ -179,48 +179,6 @@ pub async fn ai_remove(
     )
     .await
 }
-/// Changes the Windows execution mode. Model folder, model selection and the
-/// classification switch each have their own command.
-#[tauri::command]
-pub async fn ai_preferences(
-    state: tauri::State<'_, AppState>,
-    preferences: AiPreferences,
-) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
-    let _gate = state.ai_gate.lock().await;
-    check_open(&state)?;
-    let old = with_store(&state, |s| s.ai_preferences())?;
-    if old.model_directory != preferences.model_directory {
-        return Err("모델 설치 폴더는 폴더 선택 기능으로 변경해 주세요.".into());
-    }
-    if old.embedding_model_id != preferences.embedding_model_id
-        || old.classification_enabled != preferences.classification_enabled
-    {
-        return Err("공지 분류 설정은 분류 설정 기능으로 변경해 주세요.".into());
-    }
-    if old.execution_mode == preferences.execution_mode {
-        return Ok(());
-    }
-    if !super::valid_execution_mode(&preferences.execution_mode) {
-        return Err("AI 실행 장치를 확인해 주세요.".into());
-    }
-    // Keep the batch paused through reap, configuration and persistence so the
-    // old backend cannot restart between these steps.
-    let _paused = state.classifier.quiesce().await;
-    check_open(&state)?;
-    state
-        .classifier
-        .set_execution_mode(&preferences.execution_mode)
-        .await?;
-    if let Err(error) = with_store(&state, |s| s.ai_save_preferences(&preferences)) {
-        state
-            .classifier
-            .set_execution_mode(&old.execution_mode)
-            .await?;
-        return Err(error);
-    }
-    Ok(())
-}
 /// The only command that changes automatic classification. It quiesces the
 /// running batch so the saved preference and the worker cannot disagree.
 #[tauri::command]

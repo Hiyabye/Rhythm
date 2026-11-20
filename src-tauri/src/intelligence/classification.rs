@@ -103,14 +103,13 @@ fn select_model(preferences: &AiPreferences, model: Option<AiModel>) -> Option<(
 }
 
 impl Controller {
-    /// `mode` is the saved execution mode; it applies only on Windows.
-    pub fn new(llama: &Path, runtime: &Path, mode: &str) -> Self {
+    pub fn new(llama: &Path, runtime: &Path) -> Self {
         let pooling = catalog()
             .into_iter()
             .find(|entry| entry.kind == "embedding")
             .and_then(|entry| entry.pooling)
             .unwrap_or_else(|| "last".into());
-        Self::with_worker(Worker::configured(llama, runtime, mode, &pooling))
+        Self::with_worker(Worker::configured(llama, runtime, &pooling))
     }
 
     fn with_worker(worker: Worker) -> Self {
@@ -183,20 +182,6 @@ impl Controller {
         let result = self.worker.lock().await.stop_confirmed().await;
         self.invalidate();
         result
-    }
-
-    /// Applies a saved execution mode. The caller must hold a `PauseGuard`;
-    /// the running process is reaped so the next batch starts on the new build.
-    pub async fn set_execution_mode(&self, mode: &str) -> Result<(), String> {
-        let mut worker = self.worker.lock().await;
-        if worker.execution_mode() == mode {
-            return Ok(());
-        }
-        worker.stop_confirmed().await?;
-        worker.set_execution_mode(mode)?;
-        drop(worker);
-        self.invalidate();
-        Ok(())
     }
 
     pub async fn shutdown(&self) {
@@ -601,7 +586,6 @@ mod tests {
 
     fn preferences() -> AiPreferences {
         AiPreferences {
-            execution_mode: "auto".into(),
             model_directory: None,
             embedding_model_id: Some("embed".into()),
             classification_enabled: true,

@@ -1,9 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { AiModel, AiPreferences, AiSnapshot } from './types';
+  import type { AiModel, AiSnapshot } from './types';
   import { archiveError, archiveSize } from './archive-format';
-  import { isWindows } from './platform';
   import Hint from './Hint.svelte';
   import Progress from './Progress.svelte';
   import { fade } from './motion';
@@ -17,7 +16,6 @@
   let controlsBusy = $derived(busy || Boolean(data?.busy));
   let feedback = $state('');
   let removal = $state<string | null>(null);
-  let executionMode = $state<AiPreferences['execution_mode']>('auto');
   let advancedOpen = $state(false);
   let disposed = false;
   let refreshing = false;
@@ -43,7 +41,7 @@
     refreshing = true;
     try {
       const next = await invoke<AiSnapshot>('ai_snapshot');
-      if (!disposed) { data = next; fetchError = ''; executionMode = next.preferences.execution_mode ?? 'auto'; }
+      if (!disposed) { data = next; fetchError = ''; }
     }
     catch (reason) { if (!disposed) fetchError = archiveError(reason); }
     finally { refreshing = false; }
@@ -147,17 +145,7 @@
     <details class="advanced" bind:open={advancedOpen}>
       <summary>고급</summary>
       <div class="settings-group">
-        <div class="settings-row"><span class="row-label">이 기기<Hint label="이 기기">물리 메모리는 지금 쓸 수 있는 메모리와 다릅니다. 다른 앱 사용량에 따라 분류 모델을 불러오지 못할 수 있습니다. 추론 백엔드: {data.hardware.backend}. NVIDIA GPU는 Vulkan으로 실행하며 모든 기종에서 검증된 것은 아닙니다.</Hint><span class="row-detail">{data.hardware.os} · {data.hardware.arch} · 물리 메모리 {data.hardware.ram_bytes ? archiveSize(data.hardware.ram_bytes) : '확인하지 못함'} · 현재 남은 저장 공간 {data.hardware.disk_available_bytes ? archiveSize(data.hardware.disk_available_bytes) : '확인하지 못함'}</span></span></div>
-        {#if isWindows}
-          <div class="settings-row">
-            <span class="row-label"><label for="ai-execution-mode">AI 실행 장치</label><Hint label="AI 실행 장치">바꾸면 실행 중인 분류 모델을 멈추고 다음 분류부터 적용합니다. GPU 전용은 GPU를 쓸 수 없을 때 오류를 알립니다.</Hint></span>
-            <select id="ai-execution-mode" bind:value={executionMode} disabled={controlsBusy} onchange={(event) => action('ai_preferences', { preferences: { ...data!.preferences, execution_mode: event.currentTarget.value as AiPreferences['execution_mode'] } }, 'AI 실행 장치를 저장했습니다.')}>
-              <option value="auto">자동 · NVIDIA GPU 우선, 사용할 수 없으면 CPU</option>
-              <option value="cpu">CPU만 사용</option>
-              <option value="gpu">NVIDIA GPU만 사용</option>
-            </select>
-          </div>
-        {/if}
+        <div class="settings-row"><span class="row-label">이 기기<Hint label="이 기기">물리 메모리는 지금 쓸 수 있는 메모리와 다릅니다. 다른 앱 사용량에 따라 분류 모델을 불러오지 못할 수 있습니다. 추론 백엔드: {data.hardware.backend}.</Hint><span class="row-detail">{data.hardware.os} · {data.hardware.arch} · 물리 메모리 {data.hardware.ram_bytes ? archiveSize(data.hardware.ram_bytes) : '확인하지 못함'} · 현재 남은 저장 공간 {data.hardware.disk_available_bytes ? archiveSize(data.hardware.disk_available_bytes) : '확인하지 못함'}</span></span></div>
       </div>
 
       <h3 class="settings-group-title">모델 설치 폴더</h3>

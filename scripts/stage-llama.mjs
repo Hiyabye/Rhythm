@@ -10,9 +10,8 @@ import { pathToFileURL } from 'node:url';
 import { sha256Hex } from './release-common.mjs';
 
 const pinned = JSON.parse(readFileSync(new URL('./llama-cpp.json', import.meta.url), 'utf8'));
-// macOS ships one build (Metal with CPU fallback); Windows ships Vulkan for
-// NVIDIA GPUs and an independent CPU build.
-const hostVariants = { 'darwin-arm64': ['metal'], 'win32-x64': ['vulkan', 'cpu'] };
+// macOS ships one build (Metal with CPU fallback); Windows ships the CPU build.
+const hostVariants = { 'darwin-arm64': ['metal'], 'win32-x64': ['cpu'] };
 // Windows llama.cpp DLLs import the VC runtime, which is not in the archives.
 const vcRuntime = ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'];
 

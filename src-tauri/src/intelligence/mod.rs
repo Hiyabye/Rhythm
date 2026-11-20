@@ -4,8 +4,6 @@ pub mod commands;
 mod embedding_evaluation;
 #[cfg(test)]
 mod evaluation;
-#[cfg(all(test, windows))]
-mod gpu_tests;
 pub(crate) mod model_storage;
 pub mod models;
 mod server;
@@ -90,16 +88,11 @@ fn parse_embeddings(value: &Value, count: usize) -> Result<Vec<Vec<f32>>, String
         .ok_or_else(|| "AI 엔진의 임베딩 응답이 완전하지 않습니다.".into())
 }
 
-pub(crate) fn valid_execution_mode(mode: &str) -> bool {
-    matches!(mode, "auto" | "cpu" | "gpu")
-}
-
 fn backend_name(backend: Option<&str>) -> &str {
     match backend {
         Some("cpu") => "CPU",
         Some("metal") => "Metal",
         Some("cuda") => "CUDA",
-        Some("vulkan") => "NVIDIA GPU (Vulkan)",
         _ => "미확인",
     }
 }
@@ -174,7 +167,7 @@ const EMBED_CONTEXT: u32 = 8192;
 
 /// Bundled `llama-server` builds below the `llama/` resource directory.
 /// macOS ships one Metal build that can also run entirely on CPU; Windows
-/// ships a Vulkan build for NVIDIA GPUs and an independent CPU build.
+/// ships a CPU build only.
 fn bundled(llama: &Path, pooling: &str) -> (Option<Launch>, Launch) {
     let name = format!("llama-server{}", std::env::consts::EXE_SUFFIX);
     let launch = |executable: PathBuf, backend| Launch {
@@ -184,10 +177,7 @@ fn bundled(llama: &Path, pooling: &str) -> (Option<Launch>, Launch) {
         pooling: pooling.to_owned(),
     };
     if cfg!(windows) {
-        (
-            Some(launch(llama.join("vulkan").join(&name), "vulkan")),
-            launch(llama.join("cpu").join(&name), "cpu"),
-        )
+        (None, launch(llama.join("cpu").join(&name), "cpu"))
     } else {
         let executable = llama.join("metal").join(&name);
         (
@@ -203,7 +193,6 @@ pub struct Worker {
     gpu: Option<Launch>,
     cpu: Launch,
     runtime: PathBuf,
-    execution_mode: String,
     active_gpu: bool,
     fallback_reason: Option<String>,
     server: Option<Server>,
@@ -212,59 +201,30 @@ pub struct Worker {
 impl Worker {
     /// `llama` is the bundled resource directory; `runtime` is the private
     /// app-data directory that holds the socket or access key.
-    pub fn configured(llama: &Path, runtime: &Path, mode: &str, pooling: &str) -> Self {
+    pub fn configured(llama: &Path, runtime: &Path, pooling: &str) -> Self {
         let (gpu, cpu) = bundled(llama, pooling);
-        Self::with_launches(gpu, cpu, runtime, mode)
+        Self::with_launches(gpu, cpu, runtime)
     }
 
-    fn with_launches(gpu: Option<Launch>, cpu: Launch, runtime: &Path, mode: &str) -> Self {
-        let mut worker = Self {
+    fn with_launches(gpu: Option<Launch>, cpu: Launch, runtime: &Path) -> Self {
+        let active_gpu = gpu
+            .as_ref()
+            .is_some_and(|launch| launch.executable.is_file());
+        Self {
             gpu,
             cpu,
             runtime: runtime.to_owned(),
-            execution_mode: mode.to_owned(),
-            active_gpu: false,
+            active_gpu,
             fallback_reason: None,
             server: None,
             status: WorkerStatus::unavailable(STOPPED),
-        };
-        worker.select_initial_backend();
-        worker
-    }
-
-    /// Windows lets the user pick the device. Other platforms ship one build
-    /// that tries Metal first and falls back to CPU, so the mode does not apply.
-    fn mode(&self) -> &str {
-        if cfg!(windows) {
-            &self.execution_mode
-        } else {
-            "auto"
         }
     }
 
-    fn select_initial_backend(&mut self) {
-        let gpu_file = self
-            .gpu
-            .as_ref()
-            .is_some_and(|launch| launch.executable.is_file());
-        self.active_gpu = match self.mode() {
-            "cpu" => false,
-            "gpu" => true,
-            _ => gpu_file,
-        };
-        if self.mode() == "auto" && cfg!(windows) && !gpu_file {
-            self.fallback_reason = Some("GPU 작업 파일이 없어 CPU를 사용합니다.".into());
-        }
-    }
-
-    /// The build in use: the Windows executable chosen for the current mode,
-    /// or the single Metal-capable build elsewhere, even when it ran on CPU.
+    /// The build in use: the single Metal-capable macOS build, even when it
+    /// ran on CPU, or the Windows CPU build.
     fn build_backend(&self) -> &'static str {
-        match (&self.gpu, cfg!(windows)) {
-            (Some(gpu), false) => gpu.backend,
-            (Some(gpu), true) if self.active_gpu => gpu.backend,
-            _ => self.cpu.backend,
-        }
+        self.gpu.as_ref().unwrap_or(&self.cpu).backend
     }
 
     fn selected_launch(&self) -> Result<Launch, String> {
@@ -273,23 +233,6 @@ impl Worker {
         } else {
             Ok(self.cpu.clone())
         }
-    }
-
-    pub fn execution_mode(&self) -> &str {
-        &self.execution_mode
-    }
-
-    pub fn set_execution_mode(&mut self, mode: &str) -> Result<(), String> {
-        if !valid_execution_mode(mode) {
-            return Err("AI 실행 방식이 올바르지 않습니다.".into());
-        }
-        if self.server.is_some() {
-            return Err("실행 방식을 바꾸기 전에 AI 작업을 종료해야 합니다.".into());
-        }
-        self.execution_mode = mode.into();
-        self.fallback_reason = None;
-        self.select_initial_backend();
-        Ok(())
     }
 
     fn add_fallback_detail(&mut self) {
@@ -306,7 +249,7 @@ impl Worker {
     }
 
     fn can_fall_back(&self) -> bool {
-        self.active_gpu && self.mode() == "auto"
+        self.active_gpu
     }
 
     /// Starts the server for `path` unless it is already running.
@@ -466,7 +409,7 @@ impl Worker {
             context: 4096,
             pooling: "last".into(),
         };
-        Self::with_launches(None, cpu, &test_runtime(), "auto")
+        Self::with_launches(None, cpu, &test_runtime())
     }
 }
 
@@ -702,7 +645,7 @@ mod tests {
     }
 
     // macOS ships one Metal-capable build, reported as the build even when it
-    // runs on CPU. Windows reports the build in use (`gpu_tests`).
+    // runs on CPU.
     #[cfg(not(windows))]
     #[tokio::test]
     async fn failed_metal_load_retries_on_cpu_and_reports_both_backends() {
@@ -715,12 +658,8 @@ mod tests {
             context: 4096,
             pooling: "last".into(),
         };
-        let mut worker = Worker::with_launches(
-            Some(launch("metal")),
-            launch("cpu"),
-            &test_runtime(),
-            "auto",
-        );
+        let mut worker =
+            Worker::with_launches(Some(launch("metal")), launch("cpu"), &test_runtime());
         worker.embed(&model, &one()).await.unwrap();
         let detail = worker.status().detail.unwrap();
         assert!(detail.contains("빌드 백엔드: Metal"), "{detail}");
@@ -729,12 +668,8 @@ mod tests {
         worker.shutdown().await;
 
         std::fs::write(directory.path().join("mode"), "ok").unwrap();
-        let mut worker = Worker::with_launches(
-            Some(launch("metal")),
-            launch("cpu"),
-            &test_runtime(),
-            "auto",
-        );
+        let mut worker =
+            Worker::with_launches(Some(launch("metal")), launch("cpu"), &test_runtime());
         worker.embed(&model, &one()).await.unwrap();
         let detail = worker.status().detail.unwrap();
         assert!(detail.contains("실제 불러온 백엔드: Metal"), "{detail}");
@@ -771,7 +706,7 @@ mod tests {
             context: 4096,
             pooling: "last".into(),
         };
-        let mut worker = Worker::with_launches(None, cpu, &runtime, "auto");
+        let mut worker = Worker::with_launches(None, cpu, &runtime);
         assert_eq!(worker.embed(&model, &one()).await.unwrap().len(), 1);
         assert!(!runtime.join("llama.key").exists());
         assert!(!runtime.join("llama.sock").exists());
@@ -787,7 +722,7 @@ mod tests {
             return;
         };
         let directory = tempfile::tempdir().unwrap();
-        let mut worker = Worker::configured(&llama, &test_runtime(), "auto", "last");
+        let mut worker = Worker::configured(&llama, &test_runtime(), "last");
         // An invalid model makes the real server exit; it must be reaped.
         let bogus = directory.path().join("bogus.gguf");
         std::fs::write(&bogus, b"not a model").unwrap();

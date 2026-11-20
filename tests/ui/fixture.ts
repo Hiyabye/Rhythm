@@ -60,8 +60,6 @@ export interface FixtureOptions {
   sourceList?: { id: string; name: string; organization: string; supported: boolean; subscribed?: boolean; group?: string | null; family?: string; last_error?: string | null; skipped_count?: number; skipped?: { external_id: string; url: string; reason: string; skipped_at: string; archived: boolean }[]; feed?: FeedBoardHealth | null }[];
   initialNotificationsEnabled?: boolean;
   capabilitiesError?: boolean;
-  aiExecutionMode?: 'auto' | 'cpu' | 'gpu';
-  aiExecutionError?: boolean;
   aiModelDirectory?: string;
   aiModelDirectoryChoice?: string | null;
   aiModelDirectoryError?: boolean;
@@ -225,7 +223,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     const modelNames: Record<string, string> = { 'qwen35-4b': 'Qwen3.5 4B', 'qwen35-9b': 'Qwen3.5 9B', 'qwen3-embedding-0-6b': 'Qwen3-Embedding 0.6B' };
     const model = (id = 'qwen35-4b', kind: 'generation' | 'embedding' = 'generation') => ({ id, catalog_id: id, name: modelNames[id] ?? id, ownership: 'managed', kind, path: `models/${id}.gguf`, storage_directory: null as string | null, sha256: 'a'.repeat(64), expected_sha256: 'a'.repeat(64), expected_bytes: kind === 'embedding' ? 639150592 : 2740937888, bytes: kind === 'embedding' ? 639150592 : 2740937888, source_revision: 'pinned-revision', source_filename: `${id}.gguf`, status: 'installed', downloaded_bytes: kind === 'embedding' ? 639150592 : 2740937888, resume_etag: null, error: null as string | null, created_at: '2026-10-24 12:00:00', updated_at: '2026-10-24 12:00:00' });
     const embeddingCatalog = { id: 'qwen3-embedding-0-6b', kind: 'embedding', name: 'Qwen3-Embedding 0.6B', parameters: '0.6B', quantization: 'Q8_0', bytes: 639150592, memory_bytes: 2147483648, description: '공지 분류용 임베딩 모델', use_case: '공지 주제 분류', repository: 'Qwen/Qwen3-Embedding-0.6B-GGUF', revision: 'pinned-revision', filename: 'Qwen3-Embedding-0.6B-Q8_0.gguf', sha256: 'd'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null, pooling: 'last', embedding_dim: 1024 };
-    const ai = { model_storage: modelStorage, catalog: [embeddingCatalog], models: [...(options.aiInstalled ? [model()] : []), ...(options.aiRetiredModel ? [model('qwen35-9b')] : []), ...(options.aiEmbeddingInstalled ? [model('qwen3-embedding-0-6b', 'embedding')] : [])], preferences: { execution_mode: options.aiExecutionMode ?? 'auto', model_directory: options.aiModelDirectory ?? null as string | null, embedding_model_id: options.aiEmbeddingInstalled ? 'qwen3-embedding-0-6b' : null as string | null, classification_enabled: true }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: 17179869184, disk_available_bytes: 27000000000, backend: 'cpu' }, busy: false, classification: { state: options.aiEmbeddingInstalled ? 'idle' : 'disabled', processed: 0 } };
+    const ai = { model_storage: modelStorage, catalog: [embeddingCatalog], models: [...(options.aiInstalled ? [model()] : []), ...(options.aiRetiredModel ? [model('qwen35-9b')] : []), ...(options.aiEmbeddingInstalled ? [model('qwen3-embedding-0-6b', 'embedding')] : [])], preferences: { model_directory: options.aiModelDirectory ?? null as string | null, embedding_model_id: options.aiEmbeddingInstalled ? 'qwen3-embedding-0-6b' : null as string | null, classification_enabled: true }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: 17179869184, disk_available_bytes: 27000000000, backend: 'cpu' }, busy: false, classification: { state: options.aiEmbeddingInstalled ? 'idle' : 'disabled', processed: 0 } };
     const classifications = entries.filter((item) => options.aiCategoryOf?.[item.id] !== null).map((item) => ({
       document_id: item.id, revision_id: 1, category: options.aiCategoryOf?.[item.id] ?? '장학',
       low_confidence: Boolean(options.aiClassificationLow),
@@ -677,10 +675,6 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             ai.preferences.model_directory = null;
             Object.assign(ai.model_storage, { directory: defaultModelDirectory, custom: false, error: null });
             return null;
-          case 'ai_preferences':
-            if (args.preferences.model_directory !== ai.preferences.model_directory) throw '모델 설치 폴더는 폴더 선택 명령으로 변경해 주세요.';
-            if (args.preferences.execution_mode !== ai.preferences.execution_mode && options.aiExecutionError) throw '실행 장치를 저장하지 못했습니다. 다시 시도해 주세요.';
-            Object.assign(ai.preferences, args.preferences); return null;
           case 'ai_remove':
             if (options.aiRemoveError && !args.keepFiles && ai.models.find((model) => model.id === args.id)?.ownership === 'managed') throw '모델 폴더에 접근할 수 없습니다.';
             ai.models = ai.models.filter((model) => model.id !== args.id); if (ai.preferences.embedding_model_id === args.id) ai.preferences.embedding_model_id = null; return null;

@@ -23,11 +23,10 @@ pub fn refresh_disk_space(mut hardware: Hardware, root: &Path) -> Hardware {
     hardware.disk_available_bytes = available_space(root).unwrap_or(0);
     hardware
 }
-// Main-process features cannot prove which backend the bundled `llama-server` uses;
-// on Windows the runtime status separately confirms the device actually used.
+// Windows ships only the CPU build. On macOS the main process cannot prove
+// whether the bundled `llama-server` loads on Metal; the runtime status does.
 #[cfg(windows)]
-pub(super) const BACKEND_LABEL: &str =
-    "CPU · NVIDIA GPU (Vulkan) · 실제 실행 장치는 엔진 상태에서 확인";
+pub(super) const BACKEND_LABEL: &str = "CPU";
 #[cfg(not(windows))]
 pub(super) const BACKEND_LABEL: &str = "작업 프로세스 빌드에 따름 · 가속 사용 여부 미확인";
 #[cfg(target_os = "macos")]

@@ -6,7 +6,7 @@ import { callCount, mockDesktop, openSettings, permission } from './fixture';
 // WebView user agent; WebView2 reports "Windows NT". Only the IPC boundary is mocked.
 test.use({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0' });
 
-// Opens the AI pane with its 고급 section expanded, where the device and folder controls live.
+// Opens the AI pane with its 고급 section expanded, where the folder controls live.
 async function openAiAdvanced(page: Page) {
   await openSettings(page, 'AI');
   await page.getByText('고급', { exact: true }).click();
@@ -24,34 +24,6 @@ test('Windows build offers manual installer updates without invoking updater com
   expect(await callCount(page, 'updater_check')).toBe(0);
 });
 
-test('execution device selection persists across settings remount', async ({ page }) => {
-  await mockDesktop(page, { windows: true, aiEmbeddingInstalled: true }); await page.goto('/');
-  await openAiAdvanced(page);
-  const mode = page.getByLabel('AI 실행 장치', { exact: true });
-  await expect(mode).toHaveValue('auto');
-  await mode.selectOption('cpu');
-  await expect(page.getByText('AI 실행 장치를 저장했습니다.', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
-  await openAiAdvanced(page);
-  await expect(mode).toHaveValue('cpu');
-  await mode.selectOption('gpu');
-  await expect(mode).toHaveValue('gpu');
-  const saved = await page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'ai_preferences').map((call: any) => call.args.preferences));
-  expect(saved).toEqual([
-    { execution_mode: 'cpu', model_directory: null, embedding_model_id: 'qwen3-embedding-0-6b', classification_enabled: true },
-    { execution_mode: 'gpu', model_directory: null, embedding_model_id: 'qwen3-embedding-0-6b', classification_enabled: true },
-  ]);
-});
-test('execution device save failure restores the persisted choice', async ({ page }) => {
-  await mockDesktop(page, { windows: true, aiExecutionMode: 'auto', aiExecutionError: true });
-  await page.goto('/');
-  await openAiAdvanced(page);
-  const mode = page.getByLabel('AI 실행 장치', { exact: true });
-  await mode.selectOption('gpu');
-  await expect(page.getByText('실행 장치를 저장하지 못했습니다. 다시 시도해 주세요.', { exact: true })).toBeVisible();
-  await expect(mode).toHaveValue('auto');
-  expect(await callCount(page, 'ai_install')).toBe(0);
-});
 test('model installation folder changes persist and only new downloads use the chosen location', async ({ page }) => {
   const directory = 'D:\\로컬 모델\\Rhythm';
   await mockDesktop(page, { windows: true, aiInstalled: true, aiModelDirectoryChoice: directory, aiDelay: 10000 });
@@ -75,7 +47,6 @@ test('model installation folder changes persist and only new downloads use the c
   await storage.getByRole('button', { name: '기본 위치로 되돌리기', exact: true }).click();
   await expect(storage.getByText('C:\\Rhythm-test\\models', { exact: true })).toBeVisible();
   expect((await models())[1]).toEqual(['qwen3-embedding-0-6b', `${directory}\\qwen3-embedding-0-6b.gguf`, directory]);
-  expect(await callCount(page, 'ai_preferences')).toBe(0);
   expect(await callCount(page, 'ai_reset_model_directory')).toBe(1);
 });
 test('cancelling the model installation folder picker preserves the selected folder', async ({ page }) => {
@@ -89,7 +60,6 @@ test('cancelling the model installation folder picker preserves the selected fol
   await expect(storage.getByText(directory, { exact: true })).toBeVisible();
   await expect(page.getByText('새 모델을 설치할 폴더를 바꿨습니다.', { exact: false })).toHaveCount(0);
   expect(await callCount(page, 'ai_choose_model_directory')).toBe(1);
-  expect(await callCount(page, 'ai_preferences')).toBe(0);
   expect(await callCount(page, 'ai_install')).toBe(0);
 });
 
@@ -106,7 +76,6 @@ test('model installation folder save and reset errors leave the previous locatio
   await expect(storage.getByText(directory, { exact: true })).toBeVisible();
   await expect(storage.getByRole('button', { name: '기본 위치로 되돌리기', exact: true })).toBeEnabled();
   expect(await callCount(page, 'ai_reset_model_directory')).toBe(1);
-  expect(await callCount(page, 'ai_preferences')).toBe(0);
 });
 
 test('model installation folder changes explain and preserve a cancelled download location when resuming', async ({ page }) => {

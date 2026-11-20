@@ -293,7 +293,6 @@ export interface AiModel {
   downloaded_bytes: number; resume_etag: string | null; error: string | null; created_at: string; updated_at: string;
 }
 export interface AiPreferences {
-  execution_mode: 'auto' | 'cpu' | 'gpu';
   model_directory: string | null;
   embedding_model_id: string | null;
   classification_enabled: boolean;

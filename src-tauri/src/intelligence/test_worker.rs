@@ -88,8 +88,7 @@ pub fn fake_engine(directory: &Path, mode: &str) -> (PathBuf, PathBuf) {
 }
 
 /// Modes: `ok`, `exit` (fails to load), `gpu-fails` (fails only with GPU
-/// layers), `silent-cpu` (never offloads), `no-nvidia` (no Vulkan device),
-/// `bad-json`, `crash-on-embed`. A launch without the embedding flags exits.
+/// layers), `bad-json`, `crash-on-embed`. A launch without the embedding flags exits.
 /// Control files: `load-delay`/`embed-delay` hang only the first load/request;
 /// `delay` hangs every request while it exists; each request writes `entered`
 /// and appends a line to `requests` and its body to `embedding-bodies`;
@@ -104,20 +103,14 @@ fn main() {
     let dir = std::env::current_exe().unwrap().parent().unwrap().to_owned();
     let mode = std::fs::read_to_string(dir.join("mode")).unwrap_or_else(|_| "ok".into());
     let value = |flag: &str| args.iter().position(|a| a == flag).map(|i| args[i + 1].clone());
-    if args.iter().any(|a| a == "--list-devices") {
-        println!("Available devices:");
-        if mode != "no-nvidia" { println!("  Vulkan0: NVIDIA GeForce GTX 1650 (4096 MiB, 3500 MiB free)"); }
-        return;
-    }
     if !args.iter().any(|a| a == "--embedding") || value("--pooling").is_none() {
         eprintln!("error: not an embedding launch");
         std::process::exit(2);
     }
     let gpu = value("-ngl").as_deref() != Some("0");
     if mode == "exit" || (mode == "gpu-fails" && gpu) { eprintln!("error: failed to load model"); std::process::exit(1); }
-    let device = if value("--device").is_some_and(|d| d.starts_with("Vulkan")) { "Vulkan0" } else { "MTL0" };
-    eprintln!("I llama_prepare_model_devices: using device {device} (Fake) - 4096 MiB free");
-    eprintln!("I load_tensors: offloaded {}/4 layers to GPU", if gpu && mode != "silent-cpu" { 4 } else { 0 });
+    eprintln!("I llama_prepare_model_devices: using device MTL0 (Fake) - 4096 MiB free");
+    eprintln!("I load_tensors: offloaded {}/4 layers to GPU", if gpu { 4 } else { 0 });
     if dir.join("load-delay").exists() && !dir.join("entered").exists() {
         std::fs::write(dir.join("entered"), b"entered").unwrap();
         std::thread::sleep(std::time::Duration::from_secs(60));

@@ -54,9 +54,6 @@ pub struct AiProjector {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiPreferences {
-    /// Windows device choice for the embedding process; ignored elsewhere.
-    #[serde(default = "default_execution_mode")]
-    pub execution_mode: String,
     #[serde(default)]
     pub model_directory: Option<String>,
     #[serde(default)]
@@ -113,10 +110,6 @@ pub struct ClassificationWrite<'a> {
 pub struct StoredEmbedding {
     pub dim: u32,
     pub vector: Vec<f32>,
-}
-
-fn default_execution_mode() -> String {
-    "auto".into()
 }
 
 const PROJECTOR_COLUMNS: &str = "model_id,path,sha256,expected_sha256,expected_bytes,bytes,status,downloaded_bytes,resume_etag,error";
@@ -698,14 +691,13 @@ impl Store {
     pub fn ai_preferences(&self) -> Result<AiPreferences, String> {
         self.connection
             .query_row(
-                "SELECT execution_mode,model_directory,embedding_model_id,classification_enabled FROM ai_preferences WHERE id=1",
+                "SELECT model_directory,embedding_model_id,classification_enabled FROM ai_preferences WHERE id=1",
                 [],
                 |r| {
                     Ok(AiPreferences {
-                        execution_mode: r.get(0)?,
-                        model_directory: r.get(1)?,
-                        embedding_model_id: r.get(2)?,
-                        classification_enabled: r.get(3)?,
+                        model_directory: r.get(0)?,
+                        embedding_model_id: r.get(1)?,
+                        classification_enabled: r.get(2)?,
                     })
                 },
             )
@@ -721,14 +713,10 @@ impl Store {
                 return Err("설치가 완료된 분류 모델을 선택해 주세요.".into());
             }
         }
-        if !crate::intelligence::valid_execution_mode(&preferences.execution_mode) {
-            return Err("AI 처리 설정을 확인해 주세요.".into());
-        }
         self.connection
             .execute(
-                "UPDATE ai_preferences SET execution_mode=?1,model_directory=?2,embedding_model_id=?3,classification_enabled=?4 WHERE id=1",
+                "UPDATE ai_preferences SET model_directory=?1,embedding_model_id=?2,classification_enabled=?3 WHERE id=1",
                 params![
-                    preferences.execution_mode,
                     preferences.model_directory,
                     preferences.embedding_model_id,
                     preferences.classification_enabled
