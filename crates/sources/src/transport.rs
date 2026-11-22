@@ -1,18 +1,18 @@
 //! Constrained HTTPS transport for automatic fetches: exact approved routes,
-//! pinned public DNS answers, per-host pacing, bounded retries and sizes, and
+//! pinned public DNS answers, per-server pacing, bounded retries and sizes, and
 //! redirects returned to the caller instead of followed.
 use reqwest::{header, StatusCode};
 use std::{
     collections::HashMap,
     future::Future,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
     time::{Duration, Instant},
 };
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, OwnedMutexGuard, Semaphore};
 use url::Url;
 
 pub use crate::policy::{public_ip, validate_url};
@@ -33,9 +33,11 @@ pub enum Access {
 }
 /// Hosts a job collects from at once, and so requests one client has in flight.
 pub const MAX_HOSTS: usize = 3;
-/// Time of the last request to each host. Requests to one host stay 650 ms
-/// apart; different hosts do not wait for each other.
-type Gates = std::sync::Mutex<HashMap<String, Arc<Mutex<Instant>>>>;
+/// Time of the last request to each server, keyed by `server_key`. One server
+/// gets one request at a time, started at least 650 ms after the previous one,
+/// whatever hostnames it answers for; different servers do not wait for each
+/// other (#80, user decision 2026-11-22).
+type Gates = std::sync::Mutex<HashMap<IpAddr, Arc<Mutex<Instant>>>>;
 #[derive(Clone)]
 pub struct Client {
     user_agent: &'static str,
@@ -146,20 +148,25 @@ impl Client {
         }
         unreachable!()
     }
-    /// Waits until 650 ms have passed since the last request to `host`.
-    async fn pace(&self, host: &str, cancel: &AtomicBool) -> Result<(), Failure> {
+    /// Waits until `server` has no request in flight and 650 ms have passed
+    /// since the last one started. The returned guard keeps the server busy.
+    async fn pace(
+        &self,
+        server: IpAddr,
+        cancel: &AtomicBool,
+    ) -> Result<OwnedMutexGuard<Instant>, Failure> {
         let gate = self
             .gates
             .lock()
             .map_err(|_| Failure::Fatal("요청 간격을 확인하지 못했습니다.".into()))?
-            .entry(host.to_owned())
+            .entry(server)
             .or_insert_with(|| Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1))))
             .clone();
-        let mut last = gate.lock().await;
+        let mut last = tokio::select! {last=gate.lock_owned()=>last,_=cancelled(cancel)=>return Err(Failure::Fatal("사용자가 동기화를 중단했습니다.".into()))};
         let delay = Duration::from_millis(650).saturating_sub(last.elapsed());
         tokio::select! {_=tokio::time::sleep(delay)=>{},_=cancelled(cancel)=>return Err(Failure::Fatal("사용자가 동기화를 중단했습니다.".into()))};
         *last = Instant::now();
-        Ok(())
+        Ok(last)
     }
     async fn resolve(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, Failure> {
         #[cfg(all(test, feature = "studium"))]
@@ -205,11 +212,9 @@ impl Client {
             .port_or_known_default()
             .ok_or_else(|| Failure::Fatal(BLOCKED.into()))?;
         let addresses = self.resolve(host, port).await?;
-        if addresses.is_empty() || addresses.iter().any(|address| !public_ip(address.ip())) {
-            return Err(Failure::Fatal(
-                "공개 인터넷 주소가 아닌 다운로드 요청을 차단했습니다.".into(),
-            ));
-        }
+        let server = server_key(&addresses).ok_or_else(|| {
+            Failure::Fatal("공개 인터넷 주소가 아닌 다운로드 요청을 차단했습니다.".into())
+        })?;
         // Resolve once, validate every answer, and pin this connection to those
         // answers. Automatic redirects/proxies must not bypass the same policy.
         // The seat server offers only TLS 1.2 CBC cipher suites, which rustls
@@ -244,7 +249,9 @@ impl Client {
             .user_agent(self.user_agent)
             .build()
             .map_err(|_| Failure::Fatal("안전한 HTTPS 연결을 준비하지 못했습니다.".into()))?;
-        self.pace(host, cancel).await?;
+        // Held until the response headers arrive, so the server sees one
+        // request at a time; the body streams without it.
+        let gate = self.pace(server, cancel).await?;
         let mut request = client.get(url.clone()).header(
             header::ACCEPT,
             if url.path() == "/robots.txt" {
@@ -270,7 +277,9 @@ impl Client {
                 }
             }
         }
-        let mut response = self.send(request).await?;
+        let response = self.send(request).await;
+        drop(gate);
+        let mut response = response?;
         let status = response.status();
         if [301, 302, 307, 308].contains(&status.as_u16()) || status.as_u16() == 303 {
             if is_studium(access) {
@@ -439,9 +448,24 @@ pub fn validate(url: &Url, access: Access) -> Result<(), String> {
         Err(BLOCKED.into())
     }
 }
+/// The server a host's addresses belong to: the lowest address, so hostnames
+/// with the same DNS answers share one key. `None` when any address is not
+/// public (such a request is refused).
+pub fn server_key(addresses: &[SocketAddr]) -> Option<IpAddr> {
+    if addresses.iter().any(|address| !public_ip(address.ip())) {
+        return None;
+    }
+    addresses.iter().map(SocketAddr::ip).min()
+}
 /// The request boundary the sync and seat checks use; tests replace it with
 /// scripted responses.
 pub trait Transport: Send + Sync {
+    /// The server `host` resolves to (`server_key`), so a caller can keep one
+    /// server's work together. `None` when unknown: the caller falls back to
+    /// the hostname. Fakes keep the default.
+    fn server<'a>(&'a self, _host: &'a str) -> impl Future<Output = Option<IpAddr>> + Send + 'a {
+        std::future::ready(None)
+    }
     fn fetch<'a>(
         &'a self,
         url: &'a Url,
@@ -452,6 +476,9 @@ pub trait Transport: Send + Sync {
     ) -> impl Future<Output = Result<Fetch, FetchError>> + Send + 'a;
 }
 impl Transport for Client {
+    async fn server(&self, host: &str) -> Option<IpAddr> {
+        server_key(&self.resolve(host, 443).await.ok()?)
+    }
     async fn fetch(
         &self,
         url: &Url,
@@ -718,21 +745,60 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn requests_are_paced_per_host() {
+    async fn requests_are_paced_per_server() {
         let client = Client::new(TEST_AGENT).unwrap();
         let cancel = AtomicBool::new(false);
+        let first: IpAddr = "163.239.3.91".parse().unwrap();
+        let second: IpAddr = "163.239.1.17".parse().unwrap();
         let start = Instant::now();
-        assert!(client.pace("www.sogang.ac.kr", &cancel).await.is_ok());
-        assert!(client.pace("eng.sogang.ac.kr", &cancel).await.is_ok());
+        drop(client.pace(first, &cancel).await.ok().unwrap());
+        drop(client.pace(second, &cancel).await.ok().unwrap());
         assert!(
             start.elapsed() < Duration::from_millis(300),
-            "another host does not wait"
+            "another server does not wait"
         );
-        assert!(client.pace("www.sogang.ac.kr", &cancel).await.is_ok());
+        drop(client.pace(first, &cancel).await.ok().unwrap());
         assert!(
             start.elapsed() >= Duration::from_millis(650),
-            "the same host waits"
+            "the same server waits"
         );
+    }
+    #[tokio::test]
+    async fn a_server_gets_one_request_at_a_time() {
+        let client = Client::new(TEST_AGENT).unwrap();
+        let cancel = AtomicBool::new(false);
+        let server: IpAddr = "163.239.3.91".parse().unwrap();
+        let busy = client.pace(server, &cancel).await.ok().unwrap();
+        // Still in flight a second later: the next request waits for it.
+        let waiting =
+            tokio::time::timeout(Duration::from_millis(1000), client.pace(server, &cancel));
+        assert!(waiting.await.is_err());
+        drop(busy);
+        let start = Instant::now();
+        drop(client.pace(server, &cancel).await.ok().unwrap());
+        assert!(
+            start.elapsed() < Duration::from_millis(300),
+            "the gap has passed"
+        );
+    }
+    #[test]
+    fn hostnames_with_the_same_answers_share_a_server() {
+        let address = |ip: &str| SocketAddr::new(ip.parse().unwrap(), 443);
+        let ee = [address("115.68.52.186")];
+        let sse = [address("115.68.52.186")];
+        assert_eq!(server_key(&ee), server_key(&sse));
+        let round_robin = [address("163.239.3.92"), address("163.239.3.91")];
+        assert_eq!(
+            server_key(&round_robin),
+            Some("163.239.3.91".parse().unwrap())
+        );
+        assert_ne!(server_key(&ee), server_key(&round_robin));
+        assert_eq!(server_key(&[address("127.0.0.1")]), None);
+        assert_eq!(
+            server_key(&[address("163.239.3.91"), address("10.0.0.1")]),
+            None
+        );
+        assert_eq!(server_key(&[]), None);
     }
     #[tokio::test]
     async fn cancelled_request_never_starts_network_work() {

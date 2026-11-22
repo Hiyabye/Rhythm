@@ -1,11 +1,13 @@
 //! One bounded collector run: crawls every public board into the state file.
 //!
-//! Usage: `rhythm-collector <state.sqlite3> [--r2 <prefix> [--init] [--publish <prefix> [--reset-feed]]] [--embed [--reset-canary]] [--pages N] [--articles N]`
+//! Usage: `rhythm-collector <state.sqlite3> [--r2 <prefix> [--init] [--publish <prefix> [--reset-feed]]] [--embed [--reset-canary]] [--pages N] [--articles N] [--history-minutes N]`
 //!
 //! The budgets bound each pass of each board; history resumes from its
-//! checkpoint on the next run. A failed board is recorded in its health row and
-//! printed, and does not fail the run: only a run that cannot use its state
-//! exits with an error.
+//! checkpoint on the next run. Every board's new notices come first; with
+//! `--history-minutes`, the history backlog then runs in turns until that many
+//! minutes after the crawl started (`crawl::run_boards`). A failed board is
+//! recorded in its health row and printed, and does not fail the run: only a
+//! run that cannot use its state exits with an error.
 //!
 //! With `--r2`, the state file is a new working copy of the newest version
 //! under that prefix in the private state bucket (credentials from the
@@ -36,14 +38,18 @@ use rhythm_collector::{
 };
 use rhythm_sources::transport::Client;
 use std::{
-    ffi::OsString, path::PathBuf, process::ExitCode, sync::atomic::AtomicBool, time::SystemTime,
+    ffi::OsString,
+    path::PathBuf,
+    process::ExitCode,
+    sync::atomic::AtomicBool,
+    time::{Duration, Instant, SystemTime},
 };
 
 const USAGE: &str = "usage: rhythm-collector <state.sqlite3> [--r2 <prefix> [--init] \
-     [--publish <prefix> [--reset-feed]]] [--embed [--reset-canary]] [--pages N] [--articles N]";
+     [--publish <prefix> [--reset-feed]]] [--embed [--reset-canary]] [--pages N] [--articles N] [--history-minutes N]";
 
 /// The v1 client's user agent (#166 O16): Sogang sees one identity for
-/// Rhythm, with the same robots and per-host pacing.
+/// Rhythm, with the same robots and per-server pacing.
 const USER_AGENT: &str = concat!(
     "Rhythm/",
     env!("CARGO_PKG_VERSION"),
@@ -53,6 +59,7 @@ const USER_AGENT: &str = concat!(
 struct Args {
     state: PathBuf,
     budget: Budget,
+    history_minutes: Option<u32>,
     r2: Option<String>,
     init: bool,
     publish: Option<String>,
@@ -64,6 +71,7 @@ struct Args {
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut state = None;
     let mut budget = Budget::default();
+    let mut history_minutes = None;
     let mut r2 = None;
     let mut init = false;
     let mut publish = None;
@@ -74,6 +82,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         let limit = match arg.as_str() {
             "--pages" => &mut budget.pages,
             "--articles" => &mut budget.articles,
+            "--history-minutes" if history_minutes.is_none() => &mut history_minutes,
             "--r2" if r2.is_none() => {
                 let prefix = args.next().ok_or("--r2 needs a prefix")?;
                 remote::validate_prefix(&prefix)?;
@@ -131,6 +140,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     Ok(Args {
         state: state.ok_or("missing state file")?,
         budget,
+        history_minutes,
         r2,
         init,
         publish,
@@ -142,7 +152,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
 
 /// The crawl, then the embeddings when enabled.
 async fn work(state: &State, args: &Args, ai: Option<&WorkersAi>) -> Result<(), String> {
-    crawl(state, args.budget).await?;
+    crawl(state, args.budget, args.history_minutes).await?;
     let Some(ai) = ai else {
         return Ok(());
     };
@@ -174,13 +184,18 @@ async fn work(state: &State, args: &Args, ai: Option<&WorkersAi>) -> Result<(), 
     Ok(())
 }
 
-async fn crawl(state: &State, budget: Budget) -> Result<(), String> {
+async fn crawl(
+    state: &State,
+    mut budget: Budget,
+    history_minutes: Option<u32>,
+) -> Result<(), String> {
     let client = Client::new(USER_AGENT)?;
     let boards = crawl::public_boards();
-    let outcomes =
-        crawl::run_boards(state, &client, &boards, budget, &AtomicBool::new(false)).await;
+    budget.history_until = history_minutes
+        .map(|minutes| Instant::now() + Duration::from_secs(u64::from(minutes) * 60));
+    let report = crawl::run_boards(state, &client, &boards, budget, &AtomicBool::new(false)).await;
     let mut failed = 0;
-    for (id, outcome) in outcomes {
+    for (id, outcome) in report.outcomes {
         match outcome {
             Ok(()) => println!("{id}: ok"),
             Err(error) => {
@@ -190,6 +205,12 @@ async fn crawl(state: &State, budget: Budget) -> Result<(), String> {
         }
     }
     println!("{} boards, {failed} failed", boards.len());
+    println!(
+        "new notices took {}s, history {}s; {} boards still owe history",
+        report.incremental.as_secs(),
+        report.history.as_secs(),
+        report.history_owed
+    );
     // Notices stored before the current extractor version get their dates now.
     println!(
         "dates extracted for {} older notices",
@@ -287,13 +308,24 @@ mod tests {
 
     #[test]
     fn parses_the_state_path_and_budgets() {
-        let parsed = args(&["--pages", "2", "state.sqlite3", "--articles", "5"]).unwrap();
+        let parsed = args(&[
+            "--pages",
+            "2",
+            "state.sqlite3",
+            "--articles",
+            "5",
+            "--history-minutes",
+            "15",
+        ])
+        .unwrap();
         assert_eq!(parsed.state, PathBuf::from("state.sqlite3"));
         assert_eq!(parsed.budget.pages, Some(2));
         assert_eq!(parsed.budget.articles, Some(5));
+        assert_eq!(parsed.history_minutes, Some(15));
         let unbounded = args(&["state.sqlite3"]).unwrap();
         assert_eq!(unbounded.budget.pages, None);
         assert_eq!(unbounded.budget.articles, None);
+        assert_eq!(unbounded.history_minutes, None);
         assert_eq!(unbounded.r2, None);
         assert!(!unbounded.init);
         let remote = args(&["work.sqlite3", "--r2", "state/", "--init"]).unwrap();
@@ -312,6 +344,15 @@ mod tests {
         assert!(args(&["state.sqlite3", "--pages", "two"]).is_err());
         assert!(args(&["a.sqlite3", "b.sqlite3"]).is_err());
         assert!(args(&["state.sqlite3", "--deadline", "1"]).is_err());
+        assert!(args(&["state.sqlite3", "--history-minutes", "-1"]).is_err());
+        assert!(args(&[
+            "state.sqlite3",
+            "--history-minutes",
+            "1",
+            "--history-minutes",
+            "2"
+        ])
+        .is_err());
         assert!(args(&["state.sqlite3", "--init"]).is_err());
         assert!(args(&["state.sqlite3", "--reset-canary"]).is_err());
         assert!(args(&["state.sqlite3", "--publish", "feed/"]).is_err());

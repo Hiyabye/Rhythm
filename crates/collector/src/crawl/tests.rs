@@ -8,6 +8,12 @@ use std::{
     sync::{atomic::AtomicU64, Mutex},
 };
 
+/// 공지사항 (`sogang-general`, board 1): the second main-site board. The fake
+/// serves it the same pages with IDs offset by `GENERAL_IDS`, so a detail
+/// request (`pkId` only) names its board.
+const GENERAL: &str = "sogang-general";
+const GENERAL_IDS: u64 = 1_000_000_000;
+
 const MAIN: &str = "sogang-academic";
 const MECHANICAL: &str = "me-general";
 const MECHANICAL_SITEMAP: &str = "https://me.sogang.ac.kr/sitemap.xml";
@@ -29,6 +35,8 @@ struct Fake {
     /// URLs answered with HTTP 404.
     not_found: Mutex<HashSet<String>>,
     calls: Mutex<Vec<(String, Validators)>>,
+    /// `Transport::server` answers by host; others are unknown.
+    servers: Mutex<HashMap<String, IpAddr>>,
 }
 impl Fake {
     fn new(pages: Vec<Vec<u64>>) -> Self {
@@ -44,6 +52,7 @@ impl Fake {
             extra: Mutex::default(),
             not_found: Mutex::default(),
             calls: Mutex::default(),
+            servers: Mutex::default(),
         }
     }
     fn paths(&self) -> Vec<String> {
@@ -61,6 +70,7 @@ impl Fake {
         .unwrap();
         let data = &mut value["data"];
         data["pkId"] = json!(id);
+        data["configPkId"] = json!(if id >= GENERAL_IDS { 1 } else { 2 });
         data["title"] = json!(format!("장학금 AI 연구 공지 {id}"));
         data["content"] = json!(self
             .changed
@@ -74,7 +84,8 @@ impl Fake {
         data["viewCount"] = json!(self.views.load(Ordering::Acquire));
         value.to_string()
     }
-    fn list(&self, page: usize) -> Result<String, FetchError> {
+    fn list(&self, page: usize, config: u64) -> Result<String, FetchError> {
+        let offset = if config == 1 { GENERAL_IDS } else { 0 };
         let pages = self.pages.lock().unwrap();
         let ids = pages.get(page - 1).ok_or("없는 목록 페이지")?;
         let mut value: Value = serde_json::from_str(include_str!(
@@ -86,8 +97,9 @@ impl Fake {
             .iter()
             .map(|id| {
                 let mut row = template.clone();
-                row["pkId"] = json!(id);
-                row["title"] = json!(format!("장학금 AI 연구 공지 {id}"));
+                row["pkId"] = json!(id + offset);
+                row["configId"] = json!(config);
+                row["title"] = json!(format!("장학금 AI 연구 공지 {}", id + offset));
                 row["isTop"] = json!(if *id == 1 { "Y" } else { "N" });
                 row
             })
@@ -108,6 +120,9 @@ impl Fake {
     }
 }
 impl Transport for Fake {
+    async fn server(&self, host: &str) -> Option<IpAddr> {
+        self.servers.lock().unwrap().get(host).copied()
+    }
     async fn fetch(
         &self,
         url: &Url,
@@ -147,7 +162,10 @@ impl Transport for Fake {
         };
         if url.path().ends_with("/boardList") {
             return body(
-                self.list(query("pageNum").parse().unwrap())?,
+                self.list(
+                    query("pageNum").parse().unwrap(),
+                    query("bbsConfigFk").parse().unwrap(),
+                )?,
                 "application/json",
                 None,
             );
@@ -180,6 +198,33 @@ impl Transport for Fake {
         }
         Err(format!("unexpected fake request: {url}").into())
     }
+}
+
+/// Serves the mechanical board: a sitemap with one notice changed at
+/// `lastmod`, and that notice.
+fn serve_mechanical(fake: &Fake, lastmod: &str) {
+    let sitemap = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+         <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\
+         <url><loc>{MECHANICAL_DETAIL}</loc><lastmod>{lastmod}</lastmod></url>\
+         </urlset>"
+    );
+    let detail = format!(
+        "<!doctype html><html><head><link rel=\"canonical\" href=\"{MECHANICAL_DETAIL}\"/></head>\
+         <body><article class=\"container-site py-14 max-w-4xl\">\
+         <header class=\"border-b-2 border-sg-ink pb-7\">\
+         <span class=\"eyebrow\">일반공지</span><h1 class=\"mt-3\">기계공학과 공지</h1>\
+         <div class=\"mt-5 flex\"><span>작성자 · 기계공학과</span>\
+         <span>날짜 · 2026.09.28</span><span>조회 · 1</span></div></header>\
+         <div class=\"prose-sg mt-8 min-h-[120px]\"><p>본문입니다.</p></div>\
+         </article></body></html>"
+    );
+    let mut extra = fake.extra.lock().unwrap();
+    extra.insert(
+        MECHANICAL_SITEMAP.into(),
+        (sitemap, "application/xml".into()),
+    );
+    extra.insert(MECHANICAL_DETAIL.into(), (detail, "text/html".into()));
 }
 
 fn definition(id: &str) -> SourceDefinition {
@@ -405,35 +450,8 @@ async fn a_conditional_recheck_sends_the_saved_validator_and_keeps_the_notice() 
 async fn sitemap_entries_are_skipped_until_their_change_time_moves() {
     let state = State::open_in_memory().unwrap();
     let fake = Fake::new(vec![]);
-    let sitemap = |lastmod: &str| {
-        format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
-             <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\
-             <url><loc>{MECHANICAL_DETAIL}</loc><lastmod>{lastmod}</lastmod></url>\
-             </urlset>"
-        )
-    };
-    let detail = format!(
-        "<!doctype html><html><head><link rel=\"canonical\" href=\"{MECHANICAL_DETAIL}\"/></head>\
-         <body><article class=\"container-site py-14 max-w-4xl\">\
-         <header class=\"border-b-2 border-sg-ink pb-7\">\
-         <span class=\"eyebrow\">일반공지</span><h1 class=\"mt-3\">기계공학과 공지</h1>\
-         <div class=\"mt-5 flex\"><span>작성자 · 기계공학과</span>\
-         <span>날짜 · 2026.09.28</span><span>조회 · 1</span></div></header>\
-         <div class=\"prose-sg mt-8 min-h-[120px]\"><p>본문입니다.</p></div>\
-         </article></body></html>"
-    );
-    let serve_sitemap = |lastmod: &str| {
-        fake.extra.lock().unwrap().insert(
-            MECHANICAL_SITEMAP.into(),
-            (sitemap(lastmod), "application/xml".into()),
-        );
-    };
-    serve_sitemap("2026-09-28T15:31:48.462Z");
-    fake.extra
-        .lock()
-        .unwrap()
-        .insert(MECHANICAL_DETAIL.into(), (detail, "text/html".into()));
+    serve_mechanical(&fake, "2026-09-28T15:31:48.462Z");
+    let serve_sitemap = |lastmod: &str| serve_mechanical(&fake, lastmod);
     let detail_requests = |fake: &Fake| {
         fake.paths()
             .iter()
@@ -470,7 +488,7 @@ async fn bounded_budgets_never_claim_complete_history() {
     let fake = Fake::new(vec![vec![1, 2], vec![3]]);
     let articles = Budget {
         articles: Some(1),
-        pages: None,
+        ..Budget::default()
     };
     historical(&state, &fake, articles).await;
     let board = state.board(MAIN).unwrap();
@@ -479,8 +497,8 @@ async fn bounded_budgets_never_claim_complete_history() {
     assert_eq!(notices(&state).len(), 1);
 
     let pages = Budget {
-        articles: None,
         pages: Some(1),
+        ..Budget::default()
     };
     historical(&state, &fake, pages).await;
     let board = state.board(MAIN).unwrap();
@@ -644,15 +662,19 @@ async fn a_page_of_only_pins_is_not_a_known_frontier() {
 }
 
 /// Answers every request slowly with a failure, recording how many requests
-/// are in flight per host and in total.
+/// are in flight per server (its host unless `servers` names one) and in total.
 #[derive(Default)]
 struct Slow {
     inflight: Mutex<HashMap<String, usize>>,
     host_peak: AtomicU64,
     total_peak: AtomicU64,
     requests: AtomicU64,
+    servers: HashMap<String, IpAddr>,
 }
 impl Transport for Slow {
+    async fn server(&self, host: &str) -> Option<IpAddr> {
+        self.servers.get(host).copied()
+    }
     async fn fetch(
         &self,
         url: &Url,
@@ -662,6 +684,10 @@ impl Transport for Slow {
         _access: Access,
     ) -> Result<Fetch, FetchError> {
         let host = url.host_str().unwrap().to_owned();
+        let host = self
+            .servers
+            .get(&host)
+            .map_or(host, |server| server.to_string());
         {
             let mut inflight = self.inflight.lock().unwrap();
             let count = inflight.entry(host.clone()).or_default();
@@ -689,7 +715,8 @@ async fn boards_run_three_hosts_at_once_and_one_board_per_host() {
         Budget::default(),
         &AtomicBool::new(false),
     )
-    .await;
+    .await
+    .outcomes;
     let ids: Vec<_> = outcomes.iter().map(|(id, _)| id.as_str()).collect();
     let expected: Vec<_> = boards.iter().map(|board| board.id.as_str()).collect();
     assert_eq!(ids, expected);
@@ -710,9 +737,209 @@ async fn a_cancelled_run_starts_no_further_board() {
         Budget::default(),
         &AtomicBool::new(true),
     )
-    .await;
+    .await
+    .outcomes;
     assert!(outcomes.is_empty());
     assert_eq!(slow.requests.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test]
+async fn boards_on_one_server_share_one_worker_whatever_their_hostnames() {
+    let state = State::open_in_memory().unwrap();
+    let shared: IpAddr = "163.239.3.91".parse().unwrap();
+    let slow = Slow {
+        servers: [
+            "ee.sogang.ac.kr",
+            "sse.sogang.ac.kr",
+            "new-cms.sogang.ac.kr",
+        ]
+        .into_iter()
+        .map(|host| (host.to_owned(), shared))
+        .collect(),
+        ..Slow::default()
+    };
+    let report = run_boards(
+        &state,
+        &slow,
+        &public_boards(),
+        Budget::default(),
+        &AtomicBool::new(false),
+    )
+    .await;
+    assert_eq!(report.outcomes.len(), public_boards().len());
+    assert_eq!(slow.host_peak.load(Ordering::Acquire), 1);
+    assert_eq!(slow.total_peak.load(Ordering::Acquire), 3);
+}
+
+/// Two main boards whose history is owed after their first incremental pass:
+/// the seed stops at page 3 of 6, one notice per page.
+fn owing_history() -> (State, Fake, Vec<SourceDefinition>) {
+    let fake = Fake::new((5..=10).rev().map(|id| vec![id]).collect());
+    (
+        State::open_in_memory().unwrap(),
+        fake,
+        vec![definition(MAIN), definition(GENERAL)],
+    )
+}
+/// Detail requests in order, as (board config, notice ID).
+fn details(fake: &Fake) -> Vec<(u64, u64)> {
+    fake.paths()
+        .iter()
+        .filter_map(|url| {
+            url.split_once("pkId=")
+                .map(|(_, id)| id.parse::<u64>().unwrap())
+        })
+        .map(|id| match id >= GENERAL_IDS {
+            true => (1, id - GENERAL_IDS),
+            false => (2, id),
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn new_notices_on_every_board_come_before_any_history() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new((5..=10).rev().map(|id| vec![id]).collect());
+    serve_mechanical(&fake, "2026-09-28T15:31:48.462Z");
+    // One server: one worker takes both boards in turn.
+    let server: IpAddr = "163.239.1.17".parse().unwrap();
+    for host in ["www.sogang.ac.kr", "me.sogang.ac.kr"] {
+        fake.servers.lock().unwrap().insert(host.into(), server);
+    }
+    let boards = [definition(MAIN), definition(MECHANICAL)];
+    let report = run_boards(
+        &state,
+        &fake,
+        &boards,
+        Budget::default(),
+        &AtomicBool::new(false),
+    )
+    .await;
+    assert!(report.outcomes.iter().all(|(_, outcome)| outcome.is_ok()));
+    let paths = fake.paths();
+    let position = |url: &str| paths.iter().position(|path| path == url).unwrap();
+    // Notice 7 is on page 4, past the seed: only the history pass reaches it.
+    assert!(position(MECHANICAL_SITEMAP) < position(&main_detail(7)));
+    assert_eq!(report.history_owed, 0);
+    assert!(state.board(MAIN).unwrap().history_complete);
+}
+
+#[tokio::test]
+async fn the_deadline_stops_history_but_never_new_notices() {
+    let (state, fake, boards) = owing_history();
+    let past = Budget {
+        history_until: Some(Instant::now()),
+        ..Budget::default()
+    };
+    let report = run_boards(&state, &fake, &boards, past, &AtomicBool::new(false)).await;
+    assert!(report.outcomes.iter().all(|(_, outcome)| outcome.is_ok()));
+    assert_eq!(report.history_owed, 2);
+    // Each board's seed (pages 1 to 3) and nothing beyond it.
+    let mut fetched = details(&fake);
+    fetched.sort_unstable();
+    assert_eq!(fetched, [(1, 8), (1, 9), (1, 10), (2, 8), (2, 9), (2, 10)]);
+
+    // A history turn the deadline stops is limited, never a failure.
+    run_board(
+        &state,
+        &fake,
+        &definition(MAIN),
+        past,
+        &AtomicBool::new(false),
+    )
+    .await
+    .unwrap();
+    let board = state.board(MAIN).unwrap();
+    assert_eq!(board.status, "limited");
+    assert_eq!(board.last_error.as_deref(), Some(HISTORY_DEADLINE));
+    assert_eq!(board.consecutive_failures, 0);
+    assert_eq!(board.next_page, 1);
+    assert!(!board.history_complete);
+}
+
+#[tokio::test]
+async fn history_takes_turns_until_the_deadline_least_progress_first() {
+    let (state, fake, boards) = owing_history();
+    let turns = Budget {
+        articles: Some(1),
+        history_until: Some(Instant::now() + Duration::from_secs(60)),
+        ..Budget::default()
+    };
+    let report = run_boards(&state, &fake, &boards, turns, &AtomicBool::new(false)).await;
+    assert!(report.outcomes.iter().all(|(_, outcome)| outcome.is_ok()));
+    assert_eq!(report.history_owed, 0);
+    assert!(state.board(MAIN).unwrap().history_complete);
+    assert!(state.board(GENERAL).unwrap().history_complete);
+    // One notice per turn, alternating between the boards (equal progress,
+    // then source ID), instead of one board's whole backlog first.
+    let history: Vec<_> = details(&fake)
+        .into_iter()
+        .filter(|(_, id)| *id < 10)
+        .collect();
+    assert_eq!(
+        history,
+        [
+            (2, 9),
+            (1, 9),
+            (2, 8),
+            (1, 8),
+            (2, 7),
+            (1, 7),
+            (2, 6),
+            (1, 6),
+            (2, 5),
+            (1, 5)
+        ]
+    );
+}
+
+#[tokio::test]
+async fn every_server_gets_history_turns_before_the_deadline() {
+    // Five servers with endless backlogs, three workers, room for 15 turns.
+    let groups = (0..5)
+        .map(|server| {
+            vec![Turn {
+                page: 1,
+                id: format!("board-{server}"),
+                index: server,
+            }]
+        })
+        .collect();
+    let taken = Mutex::new(Vec::new());
+    take_turns(
+        groups,
+        || taken.lock().unwrap().len() >= 15,
+        |index| {
+            let taken = &taken;
+            async move {
+                taken.lock().unwrap().push(index);
+                tokio::task::yield_now().await;
+                Some(2)
+            }
+        },
+    )
+    .await;
+    let taken = taken.into_inner().unwrap();
+    for server in 0..5 {
+        let turns = taken.iter().filter(|index| **index == server).count();
+        assert!(turns >= 2, "server {server} got {turns} turns: {taken:?}");
+    }
+}
+
+#[tokio::test]
+async fn without_a_deadline_each_board_gets_one_history_turn() {
+    let (state, fake, boards) = owing_history();
+    let once = Budget {
+        articles: Some(1),
+        ..Budget::default()
+    };
+    let report = run_boards(&state, &fake, &boards, once, &AtomicBool::new(false)).await;
+    assert_eq!(report.history_owed, 2);
+    let history: Vec<_> = details(&fake)
+        .into_iter()
+        .filter(|(_, id)| *id < 10)
+        .collect();
+    assert_eq!(history, [(2, 9), (1, 9)]);
 }
 
 fn main_detail(id: u64) -> String {
