@@ -11,7 +11,7 @@ use rhythm_sources::{
     transport::{self as network, Access, Fetch, FetchError, Transport},
 };
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     future::Future,
     net::IpAddr,
     sync::{
@@ -114,36 +114,38 @@ pub async fn run_boards<T: Transport>(
                 .collect()
         })
         .unwrap_or_default();
-    let history_groups = groups
-        .into_iter()
-        .map(|group| group.into_iter().filter(|i| ready.contains(i)).collect())
-        .collect();
-    in_workers(history_groups, |group: Vec<usize>| async {
+    let mut history_groups = Vec::new();
+    for group in groups.into_iter().rev() {
         let mut turns = Vec::new();
-        for index in group {
+        for index in group.into_iter().filter(|i| ready.contains(i)) {
             match state.board(&boards[index].id) {
-                Ok(board) if !board.history_complete => turns.push((board.next_page, index)),
+                Ok(board) if !board.history_complete => turns.push(Turn {
+                    page: board.next_page,
+                    id: boards[index].id.clone(),
+                    index,
+                }),
                 Ok(_) => {}
                 Err(error) => record(index, Err(error)),
             }
         }
-        while !turns.is_empty() && !stopped(cancel, budget) {
-            turns.sort_by(|a, b| (a.0, &boards[a.1].id).cmp(&(b.0, &boards[b.1].id)));
-            let mut next = Vec::new();
-            for (_, index) in turns {
-                if stopped(cancel, budget) {
-                    break;
-                }
-                match run_history(state, transport, &boards[index], budget, cancel).await {
-                    // Without a deadline each board gets one turn, as before.
-                    Ok(Some(page)) if budget.history_until.is_some() => next.push((page, index)),
-                    Ok(_) => {}
-                    Err(error) => record(index, Err(error)),
+        if !turns.is_empty() {
+            history_groups.push(turns);
+        }
+    }
+    take_turns(
+        history_groups,
+        || stopped(cancel, budget),
+        |index| async move {
+            match run_history(state, transport, &boards[index], budget, cancel).await {
+                // Without a deadline each board gets one turn, as before.
+                Ok(page) => page.filter(|_| budget.history_until.is_some()),
+                Err(error) => {
+                    record(index, Err(error));
+                    None
                 }
             }
-            turns = next;
-        }
-    })
+        },
+    )
     .await;
     let mut outcomes = outcomes.into_inner().unwrap_or_default();
     outcomes.sort_by_key(|(index, _)| *index);
@@ -222,6 +224,51 @@ where
     };
     tokio::join!(worker(), worker(), worker());
     const _: () = assert!(network::MAX_HOSTS == 3, "one worker per crawling server");
+}
+
+/// A board waiting for a history turn: its next history page, for ordering.
+struct Turn {
+    page: u32,
+    id: String,
+    index: usize,
+}
+
+/// The history phase's scheduler. Each server group, in the given order, gets
+/// one round (one turn per board, least progress first, then source ID) and
+/// goes back to the end of the queue while `turn` still returns a next page,
+/// so every server gets turns before `stop` and one server never holds a
+/// worker for the whole window. One group is with at most one worker, so a
+/// server still sees one board at a time.
+async fn take_turns<S, F, Fut>(groups: Vec<Vec<Turn>>, stop: S, turn: F)
+where
+    S: Fn() -> bool,
+    F: Fn(usize) -> Fut,
+    Fut: Future<Output = Option<u32>>,
+{
+    let queue = Mutex::new(VecDeque::from(groups));
+    let worker = || async {
+        while !stop() {
+            let Some(mut group) = queue.lock().ok().and_then(|mut queue| queue.pop_front()) else {
+                return;
+            };
+            group.sort_by(|a, b| (a.page, &a.id).cmp(&(b.page, &b.id)));
+            let mut next = Vec::new();
+            for board in group {
+                if stop() {
+                    return;
+                }
+                if let Some(page) = turn(board.index).await {
+                    next.push(Turn { page, ..board });
+                }
+            }
+            if !next.is_empty() {
+                if let Ok(mut queue) = queue.lock() {
+                    queue.push_back(next);
+                }
+            }
+        }
+    };
+    tokio::join!(worker(), worker(), worker());
 }
 
 fn stopped(cancel: &AtomicBool, budget: Budget) -> bool {

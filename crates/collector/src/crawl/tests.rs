@@ -894,6 +894,39 @@ async fn history_takes_turns_until_the_deadline_least_progress_first() {
 }
 
 #[tokio::test]
+async fn every_server_gets_history_turns_before_the_deadline() {
+    // Five servers with endless backlogs, three workers, room for 15 turns.
+    let groups = (0..5)
+        .map(|server| {
+            vec![Turn {
+                page: 1,
+                id: format!("board-{server}"),
+                index: server,
+            }]
+        })
+        .collect();
+    let taken = Mutex::new(Vec::new());
+    take_turns(
+        groups,
+        || taken.lock().unwrap().len() >= 15,
+        |index| {
+            let taken = &taken;
+            async move {
+                taken.lock().unwrap().push(index);
+                tokio::task::yield_now().await;
+                Some(2)
+            }
+        },
+    )
+    .await;
+    let taken = taken.into_inner().unwrap();
+    for server in 0..5 {
+        let turns = taken.iter().filter(|index| **index == server).count();
+        assert!(turns >= 2, "server {server} got {turns} turns: {taken:?}");
+    }
+}
+
+#[tokio::test]
 async fn without_a_deadline_each_board_gets_one_history_turn() {
     let (state, fake, boards) = owing_history();
     let once = Budget {
