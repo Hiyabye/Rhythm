@@ -26,6 +26,12 @@ const ITEM_COLUMNS: &str = item_columns!("d.body_text");
 /// more is enough to tell whether it was cut. Avoids loading every full body.
 const ITEM_PREVIEW_COLUMNS: &str = item_columns!("substr(d.body_text,1,241)");
 const ITEM_FROM: &str = "documents d JOIN sources s ON s.id=d.source_id LEFT JOIN document_state u ON u.document_id=d.id";
+/// The AI categories the 기회 page lists (user decision, #87).
+pub(crate) const OPPORTUNITY_CATEGORIES: [&str; 4] =
+    ["공모전·대회", "인턴·채용", "교육·프로그램", "행사·활동"];
+/// A notice's nearest deadline on or after the bound day, as `day` + `T` +
+/// time (an untimed deadline sorts after timed ones on its day).
+const NEXT_DEADLINE: &str = "SELECT MIN(n.day||'T'||COALESCE(n.time,'24:00')) FROM notice_dates n WHERE n.document_id=d.id AND n.kind='deadline' AND n.day>=?";
 const RESOURCE_COLUMNS: &str = "id,url,filename,kind,status,mime,bytes,local_path,sha256,error";
 
 /// `off`: every group that is off itself or lies under a group that is off.
@@ -881,6 +887,29 @@ impl Store {
             values.extend(self.classification_scope()?);
             values.push(category.clone().into());
         }
+        if query.opportunities {
+            // Like the AI 분류 chips, the page shows AI output only while the extension is on.
+            if !self.enabled(crate::extensions::AI)? {
+                return Err("AI 분류를 켜야 기회를 볼 수 있습니다.".into());
+            }
+            if query
+                .ai_category
+                .as_deref()
+                .is_some_and(|category| !OPPORTUNITY_CATEGORIES.contains(&category))
+            {
+                return Err("AI 분류를 확인해 주세요.".into());
+            }
+            let marks = vec!["?"; OPPORTUNITY_CATEGORIES.len()].join(",");
+            filters.push(format!("({CURRENT_CATEGORY}) IN ({marks})"));
+            values.extend(self.classification_scope()?);
+            values.extend(OPPORTUNITY_CATEGORIES.map(|category| Value::from(category.to_owned())));
+            if !query.include_closed {
+                // Closed: every deadline found in the text lies before today.
+                // A notice without a deadline stays.
+                filters.push("COALESCE((SELECT MAX(n.day) FROM notice_dates n WHERE n.document_id=d.id AND n.kind='deadline'),'9999')>=?".into());
+                values.push(local_today().into());
+            }
+        }
         if query.saved_only {
             filters.push("COALESCE(u.saved,0)=1".into());
         }
@@ -902,14 +931,25 @@ impl Store {
                 |r| r.get::<_, i64>(0).map(|count| count as u64),
             )
             .map_err(|e| e.to_string())?;
-        let order = if query.ascending { "ASC" } else { "DESC" };
+        let today = local_today();
+        let order = if query.opportunities {
+            // Display order only: dates never enter ranking or notifications.
+            values.push(today.clone().into());
+            format!("({NEXT_DEADLINE}) ASC NULLS LAST,d.published_at DESC,d.id DESC")
+        } else if query.ascending {
+            "d.published_at ASC,d.id ASC".to_owned()
+        } else {
+            "d.published_at DESC,d.id DESC".to_owned()
+        };
         let limit = query.limit.unwrap_or(30).clamp(1, 100);
         let columns = if terms.is_empty() {
             ITEM_PREVIEW_COLUMNS
         } else {
             ITEM_COLUMNS
         };
-        let sql=format!("SELECT {columns} FROM {ITEM_FROM} WHERE {condition} ORDER BY d.published_at {order},d.id {order} LIMIT ? OFFSET ?");
+        let sql = format!(
+            "SELECT {columns} FROM {ITEM_FROM} WHERE {condition} ORDER BY {order} LIMIT ? OFFSET ?"
+        );
         values.push(i64::from(limit).into());
         values.push(i64::from(query.offset).into());
         let mut statement = self.connection.prepare(&sql).map_err(|e| e.to_string())?;
@@ -921,6 +961,11 @@ impl Store {
         for item in &mut items {
             item.snippet = excerpt(&item.snippet, &terms);
         }
+        let deadlines = if query.opportunities {
+            self.item_deadlines(&items, &today)?
+        } else {
+            Vec::new()
+        };
         Ok(ArchivePage {
             items,
             total,
@@ -928,7 +973,57 @@ impl Store {
             meaning_only: Vec::new(),
             semantic: false,
             ai_categories: self.ai_category_counts(query, &terms)?,
+            deadlines,
         })
+    }
+    /// Each item's nearest deadline on or after `today`, else its latest passed one.
+    fn item_deadlines(
+        &self,
+        items: &[DocumentItem],
+        today: &str,
+    ) -> Result<Vec<ItemDeadline>, String> {
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids = items.iter().map(|item| item.id).collect::<Vec<_>>();
+        let mut statement = self
+            .connection
+            .prepare(&format!(
+                "SELECT document_id,day,time FROM notice_dates WHERE kind='deadline' AND document_id IN ({})
+                 ORDER BY document_id,day,COALESCE(time,'24:00')",
+                id_list(&ids)
+            ))
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        let mut chosen = std::collections::HashMap::<i64, ItemDeadline>::new();
+        for (document_id, day, time) in rows {
+            let closed = day.as_str() < today;
+            // Rows ascend, so the first open row is the nearest and a later
+            // closed row only replaces an earlier closed one.
+            if chosen.get(&document_id).is_some_and(|found| !found.closed) {
+                continue;
+            }
+            chosen.insert(
+                document_id,
+                ItemDeadline {
+                    document_id,
+                    day,
+                    time,
+                    closed,
+                },
+            );
+        }
+        Ok(ids.iter().filter_map(|id| chosen.remove(id)).collect())
     }
     /// Notices per AI category under the query's other filters and text terms.
     /// Relevance search may add notices found by meaning; they are not counted.
@@ -1218,6 +1313,7 @@ impl Store {
                 .collect(),
             semantic: semantic.is_some(),
             ai_categories: self.ai_category_counts(query, &terms)?,
+            deadlines: Vec::new(),
         })
     }
     /// `new_since_sync` counts what the latest sync brought: Cybercampus
@@ -1451,4 +1547,9 @@ impl Store {
         }
         require_changed(self.connection.execute("UPDATE resources SET status=?2,mime=?3,bytes=?4,local_path=?5,sha256=?6,error=?7 WHERE id=?1",params![id,status,mime,bytes.map(|value|value as i64),local_path,hash,error]).map_err(|e|e.to_string())?)
     }
+}
+
+/// The local calendar day; `notice_dates` holds local wall-clock days.
+fn local_today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
 }

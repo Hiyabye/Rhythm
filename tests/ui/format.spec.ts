@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { archiveError, archiveDate, archiveDay, isStaleObservation, localDayKey, noticeDateMark, noticeDateOn, noticeDateSpan, noticeDateTodo, organizationLabel, studiumStateLabel, taskTodo, wallTime } from '../../src/lib/archive-format';
+import { archiveError, archiveDate, archiveDay, deadlineLabel, isStaleObservation, localDayKey, noticeDateMark, noticeDateOn, noticeDateSpan, noticeDateTodo, organizationLabel, studiumStateLabel, taskTodo, wallTime } from '../../src/lib/archive-format';
 import type { StudiumRoomState, StudiumSeatData } from '../../src/lib/types';
 
 test('storage failures have actionable Korean feedback rather than raw database diagnostics', () => {
@@ -92,4 +92,16 @@ test('seat observations are stale after five minutes, a minute in the future or 
   expect(isStaleObservation('2026-11-15T12:01:00Z', now)).toBe(false);
   expect(isStaleObservation('2026-11-15T12:01:01Z', now)).toBe(true);
   expect(isStaleObservation('잘못된 시각', now)).toBe(true);
+});
+
+test('기회 deadlines count days across months and years and follow the clock setting', () => {
+  const at = (day: string, time: string | null = null, closed = false) => ({ document_id: 1, day, time, closed });
+  expect(deadlineLabel(at('2026-11-22'), '2026-11-22', '12h')).toBe('오늘 마감');
+  expect(deadlineLabel(at('2026-11-22', '24:00'), '2026-11-22', '12h')).toBe('오늘 마감 밤 12:00');
+  expect(deadlineLabel(at('2026-12-01', '18:00'), '2026-11-22', '12h')).toBe('마감 12월 1일 오후 6:00 · D-9');
+  expect(deadlineLabel(at('2026-12-01', '18:00'), '2026-11-22', '24h')).toBe('마감 12월 1일 18:00 · D-9');
+  expect(deadlineLabel(at('2027-01-02'), '2026-12-30', '12h')).toBe('마감 2027년 1월 2일 · D-3');
+  // A DST-free day count: March has 31 days.
+  expect(deadlineLabel(at('2026-04-01'), '2026-03-01', '12h')).toBe('마감 4월 1일 · D-31');
+  expect(deadlineLabel(at('2026-11-20', '18:00', true), '2026-11-22', '12h')).toBe('마감 지남 · 11월 20일');
 });

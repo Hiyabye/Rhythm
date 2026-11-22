@@ -1,4 +1,4 @@
-import type { ClockFormat, CybercampusTask, NoticeDate, StudiumRoomState, TodoPrefill } from './types';
+import type { ClockFormat, CybercampusTask, ItemDeadline, NoticeDate, StudiumRoomState, TodoPrefill } from './types';
 
 export function archiveError(reason: unknown): string {
   if (typeof reason !== 'string') return '작업을 완료하지 못했습니다. 다시 시도해 주세요.';
@@ -111,6 +111,17 @@ export function taskTodo(task: CybercampusTask & { due_at: string }): TodoPrefil
     todo: { title: todoTitle(task.title), day: task.due_at.slice(0, 10), time: task.due_at.length > 10 ? task.due_at.slice(11, 16) : null, memo: task.course_name, document_id: null },
     caution: '사이버캠퍼스 마감을 옮겨 적은 할 일입니다. 마감이 바뀌어도 이 할 일은 그대로이니 과제·마감에서 확인하세요.',
   };
+}
+
+/** "마감 11월 30일 오후 6:00 · D-8" for a 기회 row; `today` is a local `YYYY-MM-DD`. */
+export function deadlineLabel(deadline: ItemDeadline, today: string, format: ClockFormat): string {
+  const [year, month, date] = deadline.day.split('-').map(Number);
+  const day = `${year === Number(today.slice(0, 4)) ? '' : `${year}년 `}${month}월 ${date}일`;
+  if (deadline.closed) return `마감 지남 · ${day}`;
+  const time = deadline.time ? ` ${deadline.time === '24:00' && format === '12h' ? '밤 12:00' : wallTime(deadline.time, format)}` : '';
+  if (deadline.day === today) return `오늘 마감${time}`;
+  const days = Math.round((Date.UTC(year, month - 1, date) - Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 1, Number(today.slice(8, 10)))) / 86_400_000);
+  return `마감 ${day}${time} · D-${days}`;
 }
 
 export function localDayKey(date: Date): string {

@@ -205,6 +205,7 @@ Navigation is a macOS source list. The four primary views **오늘 · 받은 소
 | 받은 소식 | Full paginated chronological archive with unread/source/date/original-category filters and save controls. Recommendations never silently replace the inbox. |
 | 탐색 | Explicit local title/body search, mixed Korean/English/numeric terms, plain-text snippets and highlighted matches. Defaults to 관련도순; with the local classifier, notices similar in meaning join the results with a quiet `검색어는 없지만 뜻이 비슷한 공지` note. |
 | 보관함 | User-saved notices, independent of extension enablement. Saving contributes only bounded local evidence and does not make attachments available automatically. |
+| 기회 | Added by AI 분류. Notices classified as 공모전·대회, 인턴·채용, 교육·프로그램 or 행사·활동, nearest open deadline first, then those without one. Each row's meta line ends with the deadline label (`마감 12월 1일 오후 6:00 · D-9`, `오늘 마감`, `마감 지남 · …`): semibold secondary text, danger colour within three days, muted when closed; the words carry the meaning, not the colour. No sort select; AI 분류 chips narrow to one category and **마감 지난 공지도 보기** adds closed notices. |
 | 설정 | Six panes, one at a time: 일반 (theme, power mode, 초기 설정 다시 실행, start/close, automatic sync), 게시판 (extension switch, nested board groups, collection), AI (공지 분류, retired models, 고급), 개인화 (profile, interest chips, learning, reset), 알림 (switch, OS permission, sensitivity, quiet hours, history) and 데이터 및 정보 (local data, backup/restore, about and updates). |
 
 Sidebar structure, top to bottom:

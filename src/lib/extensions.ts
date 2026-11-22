@@ -10,6 +10,8 @@ export const navigation: { id: string; label: string; extension?: string }[] = [
   { id: 'inbox', label: '받은 소식', extension: 'sogang_notices' },
   { id: 'search', label: '탐색', extension: 'search' },
   { id: 'bookmark', label: '보관함', extension: 'saved' },
+  // AI categories with the deadlines found in each notice (#87).
+  { id: 'opportunities', label: '기회', extension: 'ai' },
   { id: 'tasks', label: '과제·마감', extension: 'cybercampus' },
   { id: 'calendar', label: '캘린더', extension: 'calendar' },
   { id: 'studium', label: '열람실', extension: 'studium' },

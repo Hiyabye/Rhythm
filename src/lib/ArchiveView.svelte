@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import type { AiSnapshot, ArchivePage, ArchiveQuery, ArchiveSummary, AiClassification, CalendarNoticeDates, CalendarTodo, CybercampusTask, NoticeDate, TodoPrefill, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceGroup, SourceInfo, SyncStatus, FeedStatus } from './types';
-  import { archiveDate, archiveDay, archiveError, groupScope, kstInstant, localDayKey, noticeDateMark, noticeDateMeta, noticeDateOn, scopeGroup, wallTime } from './archive-format';
+  import { archiveDate, archiveDay, archiveError, deadlineLabel, groupScope, kstInstant, localDayKey, noticeDateMark, noticeDateMeta, noticeDateOn, scopeGroup, wallTime } from './archive-format';
   import { clock } from './clock.svelte';
   import { confirmAction } from './confirm';
   import CalendarView from './CalendarView.svelte';
@@ -58,6 +58,8 @@
   // Local AI category; the chips show only with the AI extension and an installed model.
   let aiCategory = $state('');
   let unread = $state(false);
+  // 기회: also list notices whose deadlines have all passed.
+  let includeClosed = $state(false);
   // Relevance is offered only on the search page; it needs a query.
   let sort = $state<'newest' | 'oldest' | 'relevance'>('newest');
   let offset = $state(0);
@@ -98,6 +100,7 @@
     category = '';
     aiCategory = '';
     unread = false;
+    includeClosed = false;
     selecting = false;
     chosen = new Set();
     sort = currentPage === 'search' ? 'relevance' : 'newest';
@@ -126,7 +129,8 @@
   $effect(() => {
     const scopedGroup = scopeGroup(source);
     const filters = { query, source_id: scopedGroup ? null : source || null, group_id: scopedGroup, category: category || null,
-      ai_category: ai ? aiCategory || null : null, saved_only: page === 'bookmark', unread_only: unread, trashed: page === 'trash', ascending: sort === 'oldest', offset, limit: pageSize };
+      ai_category: ai ? aiCategory || null : null, saved_only: page === 'bookmark', unread_only: unread, trashed: page === 'trash', ascending: sort === 'oldest',
+      opportunities: page === 'opportunities', include_closed: page === 'opportunities' && includeClosed, offset, limit: pageSize };
     const ranked = page === 'search' && sort === 'relevance' && query !== '';
     void revision;
     // The calendar shows no notice list; it uses only deadlines and AI dates.
@@ -476,6 +480,11 @@
   let chipGroup = $derived(groups.find((group) => group.id === (scopeGroup(source) ?? sources.find((item) => item.id === source)?.group)) ?? null);
   let chipBoards = $derived(chipGroup ? sources.filter((item) => item.group === chipGroup.id && ((item.supported && item.subscribed) || item.id === source)) : []);
   let aiCounts = $derived(ai ? result.ai_categories ?? null : null);
+  let deadlines = $derived(new Map((result.deadlines ?? []).map((deadline) => [deadline.document_id, deadline])));
+  // Read when the list renders, so a page left open past midnight relabels on its next refresh.
+  let listToday = $derived.by(() => { void result; return localDayKey(new Date()); });
+  // Deadlines up to three days ahead stand out.
+  let soonDay = $derived.by(() => { void result; const now = new Date(); return localDayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 3)); });
   // Empty categories are left out, except the one chosen.
   let aiChips = $derived(aiCounts ? aiCounts.counts.filter((row) => row.count > 0 || row.category === aiCategory) : []);
   function chooseAiCategory(value: string) {
@@ -666,7 +675,7 @@
       <div class="archive-filters">
         <label>정보원<select value={source} onchange={(event) => chooseScope(event.currentTarget.value)} disabled={!desktop}><option value="">모든 정보원</option>{#each scopeOptions as { group, boards } (group.id)}<optgroup label={group.name}><option value={groupScope(group.id)}>{group.name} 전체</option>{#each boards as item (item.id)}<option value={item.id}>{item.name}</option>{/each}</optgroup>{/each}{#each ungroupedSources as item (item.id)}<option value={item.id}>{item.organization} · {item.name}</option>{/each}</select></label>
         <label>게시판 분류<select bind:value={category} onchange={() => offset = 0} disabled={!desktop}><option value="">모든 분류</option>{#each result.categories as value}<option value={value}>{value}</option>{/each}</select></label>
-        <label>정렬<select bind:value={sort} onchange={() => offset = 0} disabled={!desktop}>{#if page === 'search'}<option value="relevance">관련도순</option>{/if}<option value="newest">게시일 최신순</option><option value="oldest">게시일 오래된순</option></select></label>
+        {#if page !== 'opportunities'}<label>정렬<select bind:value={sort} onchange={() => offset = 0} disabled={!desktop}>{#if page === 'search'}<option value="relevance">관련도순</option>{/if}<option value="newest">게시일 최신순</option><option value="oldest">게시일 오래된순</option></select></label>{/if}
       </div>
       {#if page === 'inbox' && chipGroup && chipBoards.length > 1}
         <div class="board-chips" role="group" aria-label={`${chipGroup.name} 게시판`}>
@@ -682,6 +691,7 @@
         </div>
       {/if}
       {#if page === 'inbox'}<label class="archive-checkbox"><input type="checkbox" bind:checked={unread} onchange={() => offset = 0} disabled={!desktop} /> 읽지 않은 공지만</label>{/if}
+      {#if page === 'opportunities'}<label class="archive-checkbox"><input type="checkbox" bind:checked={includeClosed} onchange={() => offset = 0} disabled={!desktop} /> 마감 지난 공지도 보기</label>{/if}
     </div>
     {#if page === 'inbox' && feedNotice}
       <div class="banner" class:error={feedNotice.result === 'update_required'} role="status" transition:slide><Icon name="info" /><div>
@@ -690,8 +700,9 @@
         {:else}<strong>공지 피드가 {archiveDate(feedNotice.generated_at, clock.format)} 이후 갱신되지 않았습니다</strong><p>서버에서 3시간 넘게 새 피드를 만들지 못했습니다. 받은 공지는 그대로 볼 수 있고, 갱신되면 자동으로 받습니다.</p>{/if}
       </div><button class="text-button" onclick={() => onsettings('boards')}>상태 보기</button></div>
     {/if}
-    <div class="collection-heading archive-list-heading"><h2 bind:this={listHeading} tabindex="-1">{page === 'trash' ? '휴지통' : page === 'bookmark' ? '저장한 공지' : query ? '검색 결과' : '보관된 공지'} <span class="muted">{result.total.toLocaleString('ko-KR')}</span></h2><div class="heading-actions">{#if result.items.length}<button class="text-button" aria-pressed={selecting} disabled={!desktop} onclick={() => selecting ? stopSelecting() : selecting = true}>{selecting ? '선택 끝내기' : '선택'}</button>{/if}{#if page === 'trash' && result.total}<button class="text-button danger" disabled={!desktop || trashBusy} onclick={() => void deletePermanently(null)}>휴지통 비우기</button>{/if}<button class="text-button" disabled={!desktop || loading} onclick={() => { revision++; void refreshContext(); }}>목록 새로고침</button></div></div>
+    <div class="collection-heading archive-list-heading"><h2 bind:this={listHeading} tabindex="-1">{page === 'trash' ? '휴지통' : page === 'bookmark' ? '저장한 공지' : page === 'opportunities' ? '기회 공지' : query ? '검색 결과' : '보관된 공지'} <span class="muted">{result.total.toLocaleString('ko-KR')}</span></h2><div class="heading-actions">{#if result.items.length}<button class="text-button" aria-pressed={selecting} disabled={!desktop} onclick={() => selecting ? stopSelecting() : selecting = true}>{selecting ? '선택 끝내기' : '선택'}</button>{/if}{#if page === 'trash' && result.total}<button class="text-button danger" disabled={!desktop || trashBusy} onclick={() => void deletePermanently(null)}>휴지통 비우기</button>{/if}<button class="text-button" disabled={!desktop || loading} onclick={() => { revision++; void refreshContext(); }}>목록 새로고침</button></div></div>
     {#if aiCounts && aiCategory && aiCounts.unclassified}<p class="footnote">아직 분류되지 않은 공지 {aiCounts.unclassified.toLocaleString('ko-KR')}건은 이 목록에 없습니다.</p>{/if}
+    {#if page === 'opportunities'}<p class="footnote">AI 분류가 공모전·대회, 인턴·채용, 교육·프로그램, 행사·활동으로 나눈 공지를 마감이 가까운 순서로 보여 줍니다. 마감을 찾지 못한 공지는 그 뒤에 최신순으로 놓입니다. 마감은 본문에서 찾은 날짜라 틀릴 수 있으니 원문에서 확인하세요.</p>{/if}
     {#if page === 'trash'}<p class="footnote">휴지통의 공지는 직접 비우기 전까지 이 기기에 보관되며 목록, 검색, 추천과 알림에는 나타나지 않습니다. 영구 삭제한 공지는 학교 사이트에 남아 있어도 다시 가져오지 않습니다.</p>{/if}
     {#if selecting && result.items.length}
       <div class="bulk-bar" role="group" aria-label="선택한 공지 작업">
@@ -717,7 +728,7 @@
             {#if selecting}<input class="notice-select" type="checkbox" aria-label={`${item.title} 선택`} checked={chosen.has(item.id)} onchange={() => choose(item.id)} />{/if}
             <button class="notice-open" id={`notice-${item.id}`} onclick={() => open(item)}>
               <span class="notice-title"><span class="notice-read-dot" aria-hidden="true"></span><Highlighted text={item.title} {query} /><span class="sr-only">{item.is_read ? '읽음' : '읽지 않음'}{hiddenUnread ? `, 접힌 같은 공지 ${hiddenUnread}건 읽지 않음` : ''}</span></span>
-              <span class="notice-meta"><span>{item.source_name}</span><time datetime={item.published_at}>{archiveDate(item.published_at)}</time>{#if item.category}<span>{item.category}</span>{/if}</span>
+              <span class="notice-meta"><span>{item.source_name}</span><time datetime={item.published_at}>{archiveDate(item.published_at)}</time>{#if item.category}<span>{item.category}</span>{/if}{#if deadlines.get(item.id)}{@const deadline = deadlines.get(item.id)!}<span class="notice-deadline" class:closed={deadline.closed} class:soon={!deadline.closed && deadline.day <= soonDay}>{deadlineLabel(deadline, listToday, clock.format)}</span>{/if}</span>
               {#if labels[item.id] && page !== 'search'}<span class="notice-ai-preview"><span class="ai-tag">분류 · {labels[item.id].category}{labels[item.id].low_confidence ? ' · 확신 낮음' : ''}</span></span>{/if}
               {#if result.meaning_only?.includes(item.id)}<span class="notice-meaning-note">검색어는 없지만 뜻이 비슷한 공지</span>{/if}
               {#if groupedCopies[item.id]?.length}<span class="notice-duplicate-note">같은 공지 {groupedCopies[item.id].length}건 · {duplicateBoards(item)}</span>{/if}
@@ -736,7 +747,7 @@
       </ul>
       <nav class="archive-pagination" aria-label="공지 목록 페이지"><button class="button secondary small" disabled={offset === 0 || loading} onclick={() => paginate(-1)}>이전</button><span aria-live="polite">{offset + 1}–{Math.min(offset + pageSize, result.total)} / {result.total}</span><button class="button secondary small" disabled={offset + pageSize >= result.total || loading} onclick={() => paginate(1)}>다음</button></nav>
     {:else if !loading && !error}
-      <div class="empty-state archive-empty"><span class="empty-icon"><Icon name={page === 'trash' ? 'trash' : page === 'bookmark' ? 'bookmark' : page === 'search' ? 'search' : 'inbox'} size={30} /></span><h2>{query || source || category || (ai && aiCategory) || unread ? '조건에 맞는 공지가 없습니다' : page === 'trash' ? '휴지통이 비어 있습니다' : page === 'bookmark' ? '아직 저장한 공지가 없습니다' : '아직 보관된 공지가 없습니다'}</h2><p>{query || source || category || (ai && aiCategory) || unread ? '검색어 또는 필터를 바꿔 보세요. 이미 보관한 내용만 검색하며 인터넷 연결은 필요하지 않습니다.' : page === 'trash' ? '공지 옆의 휴지통 버튼이나 선택 기능으로 필요 없는 공지를 옮기면 여기에 모입니다. 비우기 전까지 언제든 복원할 수 있습니다.' : page === 'bookmark' ? '공지 옆의 저장 버튼으로 중요한 정보를 모아 보세요. 확장 기능을 꺼도 보관함은 유지됩니다.' : '설정에서 정보원을 구독하고 공개된 공지를 가져오세요. 한 번 보관한 본문은 오프라인에서도 읽을 수 있습니다.'}</p>{#if page !== 'bookmark' && page !== 'trash' && !query}<button class="button secondary" onclick={() => onsettings()}>정보원 설정하기 <Icon name="arrow" size={16} /></button>{/if}</div>
+      <div class="empty-state archive-empty"><span class="empty-icon"><Icon name={page === 'trash' ? 'trash' : page === 'bookmark' ? 'bookmark' : page === 'search' ? 'search' : page === 'opportunities' ? 'opportunities' : 'inbox'} size={30} /></span><h2>{query || source || category || (ai && aiCategory) || unread ? '조건에 맞는 공지가 없습니다' : page === 'trash' ? '휴지통이 비어 있습니다' : page === 'bookmark' ? '아직 저장한 공지가 없습니다' : page === 'opportunities' ? includeClosed ? '기회로 분류된 공지가 없습니다' : '마감이 남은 기회가 없습니다' : '아직 보관된 공지가 없습니다'}</h2><p>{query || source || category || (ai && aiCategory) || unread ? '검색어 또는 필터를 바꿔 보세요. 이미 보관한 내용만 검색하며 인터넷 연결은 필요하지 않습니다.' : page === 'trash' ? '공지 옆의 휴지통 버튼이나 선택 기능으로 필요 없는 공지를 옮기면 여기에 모입니다. 비우기 전까지 언제든 복원할 수 있습니다.' : page === 'bookmark' ? '공지 옆의 저장 버튼으로 중요한 정보를 모아 보세요. 확장 기능을 꺼도 보관함은 유지됩니다.' : page === 'opportunities' ? '공모전·대회, 인턴·채용, 교육·프로그램, 행사·활동으로 분류된 공지가 여기에 모입니다. 마감이 지난 공지는 위에서 마감 지난 공지도 보기를 켜면 볼 수 있습니다.' : '설정에서 정보원을 구독하고 공개된 공지를 가져오세요. 한 번 보관한 본문은 오프라인에서도 읽을 수 있습니다.'}</p>{#if page !== 'bookmark' && page !== 'trash' && !query}<button class="button secondary" onclick={() => onsettings()}>정보원 설정하기 <Icon name="arrow" size={16} /></button>{/if}</div>
     {/if}
     {/if}
   </section>
