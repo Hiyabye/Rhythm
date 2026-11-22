@@ -703,6 +703,8 @@ fn list_preview_marks_only_bodies_longer_than_the_excerpt() {
             unread_only: false,
             trashed: false,
             ascending: false,
+            opportunities: false,
+            include_closed: false,
             offset: 0,
             limit: None,
         })

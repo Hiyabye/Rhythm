@@ -326,6 +326,10 @@ export interface ArchiveQuery {
   /** Lists 휴지통 instead of the notices outside it. */
   trashed: boolean;
   ascending: boolean;
+  /** The 기회 page: opportunity categories only, nearest open deadline first; `ascending` is ignored. */
+  opportunities?: boolean;
+  /** With `opportunities`, also lists notices whose deadlines have all passed. */
+  include_closed?: boolean;
   offset: number;
   limit: number | null;
 }
@@ -339,7 +343,11 @@ export interface ArchivePage {
   semantic?: boolean;
   /** AI category counts under the other filters; absent without the AI extension or an installed model. */
   ai_categories?: AiCategoryCounts | null;
+  /** `opportunities` only: each listed notice's nearest open deadline, or its latest passed one. */
+  deadlines?: ItemDeadline[];
 }
+/** A deadline found in a notice's text, shown on the 기회 page. */
+export interface ItemDeadline { document_id: number; day: string; time: string | null; closed: boolean }
 /** `counts` follows the classifier's category order and includes zeros. */
 export interface AiCategoryCounts {
   counts: { category: string; count: number }[];

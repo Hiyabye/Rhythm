@@ -6,6 +6,7 @@
     inbox: 'M4 4h16v16H4V4Zm0 10h5l1 3h4l1-3h5',
     search: 'm21 21-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z',
     bookmark: 'M6 3h12v18l-6-4-6 4V3Z',
+    opportunities: 'M5 21V4m0 0h12l-2.5 4.5L17 13H5',
     settings: 'M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm-3-5h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1 1-3Z',
     arrow: 'M4 12h16m-6-6 6 6-6 6',
     check: 'm5 12 4 4L19 6',

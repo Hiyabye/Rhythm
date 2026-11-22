@@ -700,9 +700,25 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             const terms = query.query.trim().split(/\s+/).filter(Boolean);
             const passes = (entry: DocumentItem) => entry.trashed === Boolean(query.trashed) && (!query.saved_only || entry.saved) && (!query.unread_only || !entry.is_read)
               && (!query.source_id || entry.source_id === query.source_id)
-              && (!query.group_id || sources.find((source) => source.id === entry.source_id)?.group === query.group_id) && (!query.category || entry.category === query.category);
+              && (!query.group_id || sources.find((source) => source.id === entry.source_id)?.group === query.group_id) && (!query.category || entry.category === query.category)
+              && opportunity(entry);
             const matchesText = (entry: DocumentItem) => terms.every((term: string) => `${entry.title} ${entry.snippet}`.toLowerCase().includes(term.toLowerCase()));
             if (query.ai_category && !aiCategoryNames.includes(query.ai_category)) throw 'AI 분류를 확인해 주세요.';
+            // Mirrors storage/archive.rs: the 기회 page lists four AI categories, nearest open deadline first.
+            const opportunityNames = ['공모전·대회', '인턴·채용', '교육·프로그램', '행사·활동'];
+            const now = new Date();
+            const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+            // Byte order like SQLite; localeCompare would put '~' before digits.
+            const byBytes = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+            const deadlineRows = (entry: DocumentItem) => noticeDates.filter((date) => date.document_id === entry.id && date.kind === 'deadline')
+              .sort((a, b) => byBytes(`${a.day}T${a.time ?? '24:00'}`, `${b.day}T${b.time ?? '24:00'}`));
+            const nextDeadline = (entry: DocumentItem) => deadlineRows(entry).find((date) => date.day >= today) ?? null;
+            if (query.opportunities) {
+              if (!snapshot.extensions.some((extension) => extension.id === 'ai' && extension.enabled)) throw 'AI 분류를 켜야 기회를 볼 수 있습니다.';
+              if (query.ai_category && !opportunityNames.includes(query.ai_category)) throw 'AI 분류를 확인해 주세요.';
+            }
+            const opportunity = (entry: DocumentItem) => !query.opportunities || (opportunityNames.includes(aiCategoryOf(entry) ?? '')
+              && (query.include_closed || !deadlineRows(entry).length || nextDeadline(entry) !== null));
             // Counts follow every filter except the AI category itself.
             const counted = entries.filter((entry) => passes(entry) && matchesText(entry));
             const aiOn = snapshot.extensions.some((extension) => extension.id === 'ai' && extension.enabled) && Boolean(ai.preferences.embedding_model_id);
@@ -714,13 +730,22 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             const semantic = command === 'archive_ranked_query' && Boolean(options.aiSemanticSearch && options.aiEmbeddingInstalled);
             const meaning = semantic ? copy(entries.filter((entry) => passes(entry) && (!query.ai_category || aiCategoryOf(entry) === query.ai_category) && !filtered.some((item) => item.id === entry.id)).slice(0, 1)) : [];
             const ranked = [...meaning, ...filtered];
+            if (query.opportunities) {
+              const key = (entry: DocumentItem) => { const next = nextDeadline(entry); return next ? `${next.day}T${next.time ?? '24:00'}` : '~'; };
+              ranked.sort((a, b) => byBytes(key(a), key(b)) || byBytes(b.published_at, a.published_at) || b.id - a.id);
+            }
+            const page = ranked.slice(query.offset, query.offset + query.limit);
+            const deadlines = query.opportunities ? page.flatMap((entry) => {
+              const found = nextDeadline(entry) ?? deadlineRows(entry).at(-1);
+              return found ? [{ document_id: entry.id, day: found.day, time: found.time, closed: found.day < today }] : [];
+            }) : [];
             if (options.queryGate) {
               const { promise, resolve } = Promise.withResolvers<void>();
               fixture.queryResolvers.push(resolve);
               await promise;
             } else await wait(options.queryDelay ?? 0);
-            return { items: ranked.slice(query.offset, query.offset + query.limit), total: ranked.length, categories: ['장학', '학사'],
-              meaning_only: meaning.map((item) => item.id), semantic, ai_categories };
+            return { items: page, total: ranked.length, categories: ['장학', '학사'],
+              meaning_only: meaning.map((item) => item.id), semantic, ai_categories, deadlines };
           }
           case 'archive_document': {
             const item = entries.find((entry) => entry.id === args.id);

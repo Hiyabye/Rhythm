@@ -1822,6 +1822,18 @@ select:focus-visible {
   line-height: 1.5;
   font-variant-numeric: tabular-nums;
 }
+.notice-deadline {
+  color: var(--text-2);
+  font-weight: 600;
+}
+/* The label carries the meaning (D-day, 마감 지남); color only adds emphasis. */
+.notice-deadline.soon {
+  color: var(--danger);
+}
+.notice-deadline.closed {
+  color: var(--muted);
+  font-weight: 400;
+}
 .notice-snippet {
   color: var(--secondary);
   font-size: 12px;

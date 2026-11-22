@@ -133,6 +133,13 @@ pub struct ArchiveQuery {
     pub trashed: bool,
     #[serde(default)]
     pub ascending: bool,
+    /// The 기회 page: only notices in `OPPORTUNITY_CATEGORIES`, the nearest
+    /// open deadline first. Needs the AI extension; `ascending` is ignored.
+    #[serde(default)]
+    pub opportunities: bool,
+    /// With `opportunities`, also lists notices whose deadlines have all passed.
+    #[serde(default)]
+    pub include_closed: bool,
     #[serde(default)]
     pub offset: u32,
     pub limit: Option<u32>,
@@ -152,6 +159,18 @@ pub struct ArchivePage {
     /// on and an embedding model is installed.
     #[serde(default)]
     pub ai_categories: Option<AiCategoryCounts>,
+    /// `opportunities` only: each listed notice's nearest open deadline, or
+    /// its latest passed one (`closed`). Notices without a deadline are absent.
+    #[serde(default)]
+    pub deadlines: Vec<ItemDeadline>,
+}
+/// A deadline found in a notice's text (`notice_dates`), for display only.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ItemDeadline {
+    pub document_id: i64,
+    pub day: String,
+    pub time: Option<String>,
+    pub closed: bool,
 }
 /// `counts` follows the classifier's category order and includes zeros.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

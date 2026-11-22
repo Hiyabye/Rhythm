@@ -1383,3 +1383,137 @@ fn a_feed_revision_of_a_crawled_notice_compares_with_the_crawled_body() {
     );
     assert_eq!(take_candidates(&store), [("v1".to_string(), Revision)]);
 }
+
+#[test]
+fn opportunities_list_open_deadlines_first_within_their_categories() {
+    let (_directory, store) = database();
+    let day = |offset: i64| {
+        (chrono::Local::now().date_naive() + chrono::Duration::days(offset))
+            .format("%Y-%m-%d")
+            .to_string()
+    };
+    let deadline = |offset: i64, time: Option<&str>| NoticeDate {
+        day: day(offset),
+        time: time.map(Into::into),
+        end_day: None,
+        end_time: None,
+        label: "신청 마감".into(),
+        kind: DateKind::Deadline,
+    };
+    let opportunity = |id: &str, published: &str, dates: Vec<NoticeDate>| {
+        let mut notice = feed_notice(id, "모집 안내");
+        notice.published_at = published.into();
+        notice.dates = dates;
+        notice
+    };
+    let notices = [
+        opportunity("soon", "2026-11-01", vec![deadline(3, None)]),
+        // The nearest of several deadlines counts.
+        opportunity(
+            "sooner",
+            "2026-11-01",
+            vec![deadline(10, None), deadline(1, Some("18:00"))],
+        ),
+        opportunity("today", "2026-11-01", vec![deadline(0, None)]),
+        opportunity("undated", "2026-11-02", vec![]),
+        opportunity("closed", "2026-11-03", vec![deadline(-1, None)]),
+        opportunity("scholarship", "2026-11-01", vec![deadline(2, None)]),
+        opportunity("unclassified", "2026-11-01", vec![deadline(2, None)]),
+    ];
+    let categories = [
+        ("soon", "공모전·대회"),
+        ("sooner", "인턴·채용"),
+        ("today", "교육·프로그램"),
+        ("undated", "행사·활동"),
+        ("closed", "공모전·대회"),
+        ("scholarship", "장학"),
+    ];
+    let mut entries: Vec<Entry> = notices
+        .iter()
+        .enumerate()
+        .map(|(index, notice)| upsert(index as u64 + 1, notice))
+        .collect();
+    for (index, (id, category)) in categories.iter().enumerate() {
+        let notice = notices.iter().find(|n| n.external_id == *id).unwrap();
+        entries.push(classification(20 + index as u64, notice, category));
+    }
+    store.feed_apply_snapshot(40, &entries, &[]).unwrap();
+    let query = |include_closed: bool, ai_category: Option<&str>| ArchiveQuery {
+        opportunities: true,
+        include_closed,
+        ai_category: ai_category.map(Into::into),
+        ..ArchiveQuery::default()
+    };
+
+    // The page shows AI output, so it needs the AI extension.
+    assert!(store.archive_query(&query(false, None)).is_err());
+    store.set_enabled(crate::extensions::AI, true).unwrap();
+
+    let ids = |page: &ArchivePage| {
+        page.items
+            .iter()
+            .map(|item| item.title.trim_start_matches("공지 ").to_owned())
+            .collect::<Vec<_>>()
+    };
+    let page = store.archive_query(&query(false, None)).unwrap();
+    assert_eq!(ids(&page), ["today", "sooner", "soon", "undated"]);
+    assert_eq!(page.total, 4);
+    let id = |external: &str| document(&store, external);
+    assert_eq!(
+        page.deadlines,
+        vec![
+            ItemDeadline {
+                document_id: id("today"),
+                day: day(0),
+                time: None,
+                closed: false
+            },
+            ItemDeadline {
+                document_id: id("sooner"),
+                day: day(1),
+                time: Some("18:00".into()),
+                closed: false
+            },
+            ItemDeadline {
+                document_id: id("soon"),
+                day: day(3),
+                time: None,
+                closed: false
+            },
+        ]
+    );
+    let counts = page.ai_categories.unwrap();
+    let count = |category: &str| {
+        counts
+            .counts
+            .iter()
+            .find(|row| row.category == category)
+            .unwrap()
+            .count
+    };
+    assert_eq!(
+        (count("공모전·대회"), count("장학"), counts.unclassified),
+        (1, 0, 0)
+    );
+
+    // Closed notices follow the open ones, newest first among the undated.
+    let page = store.archive_query(&query(true, None)).unwrap();
+    assert_eq!(ids(&page), ["today", "sooner", "soon", "closed", "undated"]);
+    assert!(page.deadlines.contains(&ItemDeadline {
+        document_id: id("closed"),
+        day: day(-1),
+        time: None,
+        closed: true
+    }));
+
+    let page = store
+        .archive_query(&query(false, Some("인턴·채용")))
+        .unwrap();
+    assert_eq!(ids(&page), ["sooner"]);
+    assert!(store.archive_query(&query(false, Some("장학"))).is_err());
+
+    // The ordinary list keeps its order and carries no deadlines.
+    let page = store.archive_query(&ArchiveQuery::default()).unwrap();
+    assert_eq!(page.total, 7);
+    assert!(page.deadlines.is_empty());
+}

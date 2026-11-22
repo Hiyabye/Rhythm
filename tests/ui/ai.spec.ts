@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { callCount, mockDesktop, openSettings } from './fixture';
+import { localDayKey } from '../../src/lib/archive-format';
 
 async function advanced(page: import('@playwright/test').Page) {
   await page.getByText('고급', { exact: true }).click();
@@ -221,4 +222,44 @@ test('a chosen model folder applies to new downloads', async ({ page }) => {
   await expect(storage.getByText('/Volumes/로컬 모델/Rhythm', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '분류 모델 설치', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__fixture.ai.models[0]?.path)).toBe('/Volumes/로컬 모델/Rhythm/qwen3-embedding-0-6b.gguf');
+});
+
+test('기회 lists opportunity categories by nearest open deadline and can show closed ones', async ({ page }) => {
+  const day = (offset: number) => { const now = new Date(); return localDayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset)); };
+  const deadline = (document_id: number, offset: number, time: string | null = null) => ({ document_id, ordinal: 0, title: `한국어 공지 0${document_id}`, day: day(offset), time, label: '신청 마감', kind: 'deadline' as const });
+  await mockDesktop(page, { count: 6, aiEmbeddingInstalled: true,
+    aiCategoryOf: { 1: '공모전·대회', 2: '인턴·채용', 3: '교육·프로그램', 4: '행사·활동', 5: '공모전·대회', 6: '장학' },
+    noticeDates: [deadline(1, 5), deadline(2, 1, '18:00'), deadline(3, 0), deadline(5, -1), deadline(6, 2)] });
+  await page.goto('/');
+  await page.getByRole('button', { name: '기회', exact: true }).click();
+  const rows = page.locator('.notice-list > li');
+  // Nearest open deadline first, then the notice without one; closed and other categories stay out.
+  await expect(rows.locator('.notice-title')).toHaveText([/한국어 공지 03/, /한국어 공지 02/, /한국어 공지 01/, /한국어 공지 04/]);
+  await expect(page.locator('#notice-3 .notice-deadline')).toHaveText('오늘 마감');
+  await expect(page.locator('#notice-2 .notice-deadline')).toHaveText(/^마감 .+ 오후 6:00 · D-1$/);
+  await expect(page.locator('#notice-2 .notice-deadline')).toHaveClass(/soon/);
+  await expect(page.locator('#notice-1 .notice-deadline')).toHaveText(/ · D-5$/);
+  await expect(page.locator('#notice-1 .notice-deadline')).not.toHaveClass(/soon/);
+  await expect(page.locator('#notice-4 .notice-deadline')).toHaveCount(0);
+  await expect(page.getByLabel('정렬')).toHaveCount(0);
+  const lastQuery = () => page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'archive_query').at(-1).args.query);
+  expect(await lastQuery()).toMatchObject({ opportunities: true, include_closed: false, offset: 0 });
+  // The chips narrow within the four categories only.
+  const chips = page.getByRole('group', { name: 'AI 분류' });
+  await expect(chips.getByRole('button')).toHaveText(['전체', '공모전·대회 1', '인턴·채용 1', '교육·프로그램 1', '행사·활동 1']);
+  await chips.getByRole('button', { name: '인턴·채용 1' }).click();
+  await expect(rows).toHaveCount(1);
+  await chips.getByRole('button', { name: '전체' }).click();
+
+  await page.getByLabel('마감 지난 공지도 보기').check();
+  await expect(rows).toHaveCount(5);
+  await expect(page.locator('#notice-5 .notice-deadline')).toHaveText(/^마감 지남 · /);
+  await expect(page.locator('#notice-5 .notice-deadline')).toHaveClass(/closed/);
+  expect(await lastQuery()).toMatchObject({ opportunities: true, include_closed: true });
+});
+
+test('기회 is offered only with the AI extension', async ({ page }) => {
+  await mockDesktop(page, { extensions: { ai: false } }); await page.goto('/');
+  await expect(page.getByRole('button', { name: '받은 소식', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '기회', exact: true })).toHaveCount(0);
 });
