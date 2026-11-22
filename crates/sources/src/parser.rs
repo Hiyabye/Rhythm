@@ -104,16 +104,88 @@ fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String>
         .filter(|v| !v.trim().is_empty())
         .ok_or_else(|| PARSER_ERROR.into())
 }
-pub fn main_canonical(external: &str) -> Url {
+/// A board of www.sogang.ac.kr's BbsData API (family `main`). `config` is its
+/// `bbsConfigFk`; the rest is the query the site's own list puts on detail
+/// links, so a notice's canonical URL is the one the site shows (#80).
+pub struct MainBoard {
+    pub source_id: &'static str,
+    pub config: u64,
+    namepage: &'static str,
+    text: &'static str,
+    /// The site adds `data=%5B%5D` on some boards only.
+    data: bool,
+    title: Option<&'static str>,
+    redirect: &'static str,
+}
+pub const MAIN_BOARDS: [MainBoard; 5] = [
+    MainBoard {
+        source_id: "sogang-academic",
+        config: 2,
+        namepage: "AcademicNotice",
+        text: "학사 지원",
+        data: true,
+        title: Some("학부 학사공지"),
+        redirect: "/ko/academic-support/notices",
+    },
+    MainBoard {
+        source_id: "sogang-general",
+        config: 1,
+        namepage: "StoryNotificationGeneral",
+        text: "서강 Story",
+        data: false,
+        title: Some("일반공지"),
+        redirect: "/ko/story/notification-general",
+    },
+    MainBoard {
+        source_id: "sogang-scholarship",
+        config: 141,
+        namepage: "ScholarshipNotice",
+        text: "학사 지원",
+        data: true,
+        title: Some("장학공지"),
+        redirect: "/ko/scholarship-notice",
+    },
+    MainBoard {
+        source_id: "sogang-events",
+        config: 142,
+        namepage: "StoryNotificationEvent",
+        text: "서강 Story",
+        data: false,
+        title: Some("행사특강"),
+        redirect: "/ko/story/notification-event",
+    },
+    MainBoard {
+        source_id: "sogang-student",
+        config: 34,
+        namepage: "CampusStudentSupportGeneralNotice",
+        text: "캠퍼스 생활",
+        data: false,
+        title: None,
+        redirect: "/ko/campus/student-support/notice",
+    },
+];
+pub fn main_board(source_id: &str) -> Option<&'static MainBoard> {
+    MAIN_BOARDS
+        .iter()
+        .find(|board| board.source_id == source_id)
+}
+pub fn main_canonical(board: &MainBoard, external: &str) -> Url {
     let mut url = Url::parse(&format!("https://www.sogang.ac.kr/ko/detail/{external}")).unwrap();
-    url.query_pairs_mut().extend_pairs([
-        ("bbsConfigFk", "2"),
-        ("namepage", "AcademicNotice"),
-        ("text", "학사 지원"),
-        ("data", "%5B%5D"),
-        ("title", "학부 학사공지"),
-        ("redirect", "/ko/academic-support/notices"),
+    let config = board.config.to_string();
+    let mut query = url.query_pairs_mut();
+    query.extend_pairs([
+        ("bbsConfigFk", config.as_str()),
+        ("namepage", board.namepage),
+        ("text", board.text),
     ]);
+    if board.data {
+        query.append_pair("data", "%5B%5D");
+    }
+    if let Some(title) = board.title {
+        query.append_pair("title", title);
+    }
+    query.append_pair("redirect", board.redirect);
+    drop(query);
     url
 }
 pub fn list_url(source: &SourceDefinition, page: u32) -> Result<Url, String> {
@@ -128,13 +200,13 @@ pub fn list_url(source: &SourceDefinition, page: u32) -> Result<Url, String> {
         "semiconductor" => return semiconductor::list_url(source, page),
         _ => {}
     }
-    if source.id == "sogang-academic" {
+    if let Some(board) = main_board(&source.id) {
         let mut url =
             Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData/boardList").unwrap();
         url.query_pairs_mut().extend_pairs([
             ("pageNum", page.to_string().as_str()),
             ("pageSize", "50"),
-            ("bbsConfigFk", "2"),
+            ("bbsConfigFk", board.config.to_string().as_str()),
             ("category", ""),
             ("introPkId", ""),
             ("title", ""),
@@ -164,11 +236,11 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
         "semiconductor" => return semiconductor::detail_url(source, entry),
         _ => {}
     }
-    if source.id == "sogang-academic" {
+    if let Some(board) = main_board(&source.id) {
         let mut url = Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData").unwrap();
         url.query_pairs_mut()
             .append_pair("pkId", &entry.external_id);
-        if entry.url != main_canonical(&entry.external_id).as_str() {
+        if entry.url != main_canonical(board, &entry.external_id).as_str() {
             return invalid();
         }
         Ok(url)
@@ -216,11 +288,13 @@ pub fn listing(source: &SourceDefinition, page: u32, body: &str) -> Result<Listi
         "dormitory" => dormitory::listing(source, page, body),
         "mechanical" => mechanical::listing(source, page, body),
         "semiconductor" => semiconductor::listing(source, page, body),
-        _ if source.id == "sogang-academic" => main_listing(page, body),
-        _ => computing_listing(source, page, body),
+        _ => match main_board(&source.id) {
+            Some(board) => main_listing(board, page, body),
+            None => computing_listing(source, page, body),
+        },
     }
 }
-fn main_listing(page: u32, body: &str) -> Result<ListingPage, String> {
+fn main_listing(board: &MainBoard, page: u32, body: &str) -> Result<ListingPage, String> {
     let value: Value = serde_json::from_str(body).map_err(|_| PARSER_ERROR)?;
     if value["statusCode"].as_u64() != Some(200) {
         return invalid();
@@ -248,7 +322,7 @@ fn main_listing(page: u32, body: &str) -> Result<ListingPage, String> {
     let mut seen = HashMap::new();
     let mut entries = Vec::new();
     for row in rows {
-        if row["configId"].as_u64() != Some(2) {
+        if row["configId"].as_u64() != Some(board.config) {
             return invalid();
         }
         let external_id = id(&row["pkId"])?;
@@ -266,7 +340,7 @@ fn main_listing(page: u32, body: &str) -> Result<ListingPage, String> {
             }
         } else {
             entries.push(ListingEntry {
-                url: main_canonical(&external_id).into(),
+                url: main_canonical(board, &external_id).into(),
                 external_id,
                 pinned,
                 modified_at: None,
@@ -438,7 +512,7 @@ pub fn article(
         _ => {}
     }
     let (title, author, category, published_at, modified_at, content, mut resources) =
-        if source.id == "sogang-academic" {
+        if let Some(board) = main_board(&source.id) {
             let value: Value = serde_json::from_str(body).map_err(|_| PARSER_ERROR)?;
             let data = &value["data"];
             // The public API returns secret="Y" even for publicly linked 551637.
@@ -446,7 +520,7 @@ pub fn article(
             // is used; denied or missing content fails without any workaround.
             if value["statusCode"].as_u64() != Some(200)
                 || id(&data["pkId"])? != entry.external_id
-                || data["configPkId"].as_u64() != Some(2)
+                || data["configPkId"].as_u64() != Some(board.config)
                 || data["del"].as_str() == Some("Y")
             {
                 return invalid();
@@ -539,7 +613,7 @@ pub fn article(
         };
     let (mut body_html, mut body_text, inline) = sanitize(&content, &entry.url)?;
     merge_inline_resources(&mut resources, inline);
-    let unsupported_iframe_body = source.id == "sogang-academic"
+    let unsupported_iframe_body = main_board(&source.id).is_some()
         && body_text.is_empty()
         && !resources.iter().any(|r| r.kind == "image")
         && iframe_only(&content);

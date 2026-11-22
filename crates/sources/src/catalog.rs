@@ -65,6 +65,24 @@ pub fn definitions() -> Vec<SourceDefinition> {
         "https://www.sogang.ac.kr/ko/academic-support/notices".into(),
         true,
     );
+    // Other boards of the same BbsData API (#80); `parser::MAIN_BOARDS` holds
+    // their board IDs. 보도자료 is left out: its list marks every row pinned.
+    for (id, name, path) in [
+        ("general", "공지사항", "story/notification-general"),
+        ("scholarship", "장학공지", "scholarship-notice"),
+        ("events", "행사특강", "story/notification-event"),
+        ("student", "학생 일반공지", "campus/student-support/notice"),
+    ] {
+        add(
+            &format!("sogang-{id}"),
+            name,
+            "서강대학교",
+            "main",
+            "sogang",
+            format!("https://www.sogang.ac.kr/ko/{path}"),
+            true,
+        );
+    }
     for (id, board, name) in [
         ("academic", "academicNotice", "학사 공지"),
         ("graduate", "graduateNotice", "대학원 공지"),
