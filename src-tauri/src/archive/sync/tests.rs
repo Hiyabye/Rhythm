@@ -221,7 +221,7 @@ fn mirror(store: &SharedStore, seq: u64, id: u64, page: &str) -> i64 {
     }];
     with_store(store, |s| match s.feed_cursor()? {
         None => s.feed_apply_snapshot(seq, &records, &[]),
-        Some(_) => s.feed_apply_segment(seq, seq, &records, &[], false),
+        Some(_) => s.feed_apply_segment(seq, seq, &records, &[], false, &Default::default()),
     })
     .unwrap();
     with_store(store, |s| s.document_id(MAIN, &external))

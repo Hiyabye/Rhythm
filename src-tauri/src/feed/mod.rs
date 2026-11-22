@@ -9,6 +9,7 @@ use crate::{
 };
 use rhythm_feed::{record, FileRef, Manifest};
 use std::{
+    collections::HashSet,
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -187,6 +188,65 @@ async fn manifest(
     ))
 }
 
+/// Downloads one step's records and, if listed, vectors.
+async fn fetch(
+    transport: &impl Transport,
+    base: &Base,
+    step: &Step<'_>,
+    cancel: &AtomicBool,
+) -> Result<(Vec<u8>, Vec<u8>), Failure> {
+    if cancel.load(Ordering::Acquire) {
+        return Err(FetchError::Cancelled.into());
+    }
+    let (records, vectors) = match step {
+        Step::Snapshot(s) => (&s.records, &s.vectors),
+        Step::Segment(s) => (&s.records, &s.vectors),
+    };
+    let records = download(transport, base, records, cancel).await?;
+    let vectors = match vectors {
+        Some(file) => download(transport, base, file, cancel).await?,
+        None => Vec::new(),
+    };
+    Ok((records, vectors))
+}
+
+/// Brings in `boards`, whose records earlier syncs skipped because the
+/// catalog did not have them yet (#80): their records from the snapshot path
+/// (the snapshot and every segment after it), while the cursor and the other
+/// boards stay as they are.
+async fn backfill(
+    store: &SharedStore,
+    data_root: &Path,
+    transport: &impl Transport,
+    base: &Base,
+    manifest: &Manifest,
+    boards: &HashSet<String>,
+    cancel: &AtomicBool,
+) -> Result<Summary, Failure> {
+    let mut summary = Summary::default();
+    for step in plan(manifest, None).0 {
+        let (records, vectors) = fetch(transport, base, &step, cancel).await?;
+        let (entries, after) = match step {
+            Step::Snapshot(s) => (record::decode_snapshot(&records, s.through_seq), 0),
+            Step::Segment(s) => (
+                record::decode_segment(&records, s.from_seq, s.to_seq),
+                manifest.snapshot.through_seq,
+            ),
+        };
+        let entries = entries.map_err(feed_error)?;
+        let applied = with_store(store, |s| {
+            s.feed_backfill(boards, after, &entries, &vectors)
+        })?;
+        for path in &applied.orphaned {
+            let _ = tokio::fs::remove_file(data_root.join(path)).await;
+        }
+        summary.files += 1;
+        summary.revised += applied.revised;
+        summary.removed += applied.removed;
+    }
+    Ok(summary)
+}
+
 /// One sync. Orphaned resource files are deleted under `data_root` after the
 /// store lock is released, as 휴지통's permanent deletion does.
 pub(crate) async fn sync(
@@ -197,6 +257,11 @@ pub(crate) async fn sync(
     cancel: &AtomicBool,
 ) -> Result<Summary, Failure> {
     let state = with_store(store, |s| s.feed_state())?;
+    // A first sync takes the snapshot path, which covers every board.
+    let new_boards = match state.cursor {
+        Some(_) => with_store(store, |s| s.feed_new_boards())?,
+        None => HashSet::new(),
+    };
     // A stored base that no longer parses falls back to the app's own.
     let base = state
         .base
@@ -206,20 +271,26 @@ pub(crate) async fn sync(
     let (base, manifest) = manifest(transport, base, trusted, cancel).await?;
     with_store(store, |s| s.feed_accept(&manifest, base.as_str()))?;
     let (steps, quiet) = plan(&manifest, state.cursor);
-    let mut summary = Summary::default();
+    // The cursor path leaves the backfilled boards out: their records up to
+    // the newest seq are applied already, and an older revision must not
+    // follow a newer one.
+    let (mut summary, skip) = if quiet || new_boards.is_empty() {
+        (Summary::default(), HashSet::new())
+    } else {
+        let summary = backfill(
+            store,
+            data_root,
+            transport,
+            &base,
+            &manifest,
+            &new_boards,
+            cancel,
+        )
+        .await?;
+        (summary, new_boards)
+    };
     for step in steps {
-        if cancel.load(Ordering::Acquire) {
-            return Err(FetchError::Cancelled.into());
-        }
-        let (records, vectors) = match step {
-            Step::Snapshot(s) => (&s.records, &s.vectors),
-            Step::Segment(s) => (&s.records, &s.vectors),
-        };
-        let records = download(transport, &base, records, cancel).await?;
-        let vectors = match vectors {
-            Some(file) => download(transport, &base, file, cancel).await?,
-            None => Vec::new(),
-        };
+        let (records, vectors) = fetch(transport, &base, &step, cancel).await?;
         let applied = match step {
             Step::Snapshot(snapshot) => {
                 let entries =
@@ -238,6 +309,7 @@ pub(crate) async fn sync(
                         &entries,
                         &vectors,
                         quiet,
+                        &skip,
                     )
                 })?
             }
@@ -250,6 +322,8 @@ pub(crate) async fn sync(
         summary.revised += applied.revised;
         summary.removed += applied.removed;
     }
+    // Only now: a sync that stopped early backfills the same boards again.
+    with_store(store, |s| s.feed_remember_boards())?;
     Ok(summary)
 }
 
