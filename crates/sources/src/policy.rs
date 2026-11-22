@@ -39,7 +39,17 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
         "www.sogang.ac.kr" => {
             path == "/api/api/v1/mainKo/BbsData"
                 || path == "/api/api/v1/mainKo/BbsData/boardList"
-                || path.starts_with("/file-fe-prd/board/2/")
+                // Attachments of the catalogued BbsData boards only.
+                || {
+                    let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+                    // Deeper paths stay allowed, as the earlier board-2 prefix rule did.
+                    parts.len() >= 4
+                        && parts[..2] == ["file-fe-prd", "board"]
+                        && crate::parser::MAIN_BOARDS
+                            .iter()
+                            .any(|board| parts[2] == board.config.to_string())
+                        && !parts[3].is_empty()
+                }
                 || path.starts_with("/file-fe-prd/editor/")
                 || path.starts_with("/file-fe-prd/upload/")
                 // Inline notice images (user decision, #78), e.g.
@@ -333,6 +343,23 @@ pub fn public_ip(address: IpAddr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn main_site_attachments_are_limited_to_catalogued_boards() {
+        for board in [1, 2, 34, 141, 142] {
+            let url =
+                format!("https://www.sogang.ac.kr/file-fe-prd/board/{board}/551882_1.pdf?sg=a.pdf");
+            assert!(validate_url(&Url::parse(&url).unwrap()).is_ok(), "{url}");
+        }
+        for path in [
+            "/file-fe-prd/board/104/551415_1.pdf",
+            "/file-fe-prd/board/3/1_1.pdf",
+            "/file-fe-prd/board/141/",
+            "/file-fe-prd/board/x/1.pdf",
+        ] {
+            let url = format!("https://www.sogang.ac.kr{path}");
+            assert!(validate_url(&Url::parse(&url).unwrap()).is_err(), "{url}");
+        }
+    }
     #[test]
     fn address_policy_rejects_private_redirect_targets_and_unverified_domains() {
         for value in [

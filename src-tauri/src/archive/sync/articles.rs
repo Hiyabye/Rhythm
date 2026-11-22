@@ -29,7 +29,7 @@ pub(super) fn check_document_mime(
 ) -> Result<(), String> {
     // A different content type is more likely a block or error page than the
     // notice itself.
-    let expected = if source.id == "sogang-academic" {
+    let expected = if crate::archive::parser::main_board(&source.id).is_some() {
         mime == Some("application/json")
     } else {
         matches!(mime, Some("text/html" | "application/xhtml+xml"))

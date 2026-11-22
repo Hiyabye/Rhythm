@@ -201,11 +201,15 @@ Results have deterministic publication-date/ID order, source/category and saved/
 
 ## Sources and parsers
 
-`crates/sources/src/catalog.rs` (re-exported as `archive::catalog`) has 35 stable source identities: 34 public boards and the `cybercampus` connector (below). **Catalog presence is not support.** All 34 boards have verified list and detail extraction, resource handling and offline reopen:
+`crates/sources/src/catalog.rs` (re-exported as `archive::catalog`) has 39 stable source identities: 38 public boards and the `cybercampus` connector (below). **Catalog presence is not support.** All 38 boards have verified list and detail extraction, resource handling and offline reopen:
 
 | Source ID | Board |
 | --- | --- |
 | `sogang-academic` | 서강대학교 학부 학사공지 (main API board 2) |
+| `sogang-general` | 서강대학교 공지사항 (main API board 1) |
+| `sogang-scholarship` | 서강대학교 장학공지 (main API board 141) |
+| `sogang-events` | 서강대학교 행사특강 (main API board 142) |
+| `sogang-student` | 서강대학교 학생 일반공지 (main API board 34) |
 | `computing-academic` | 소프트웨어융합대학 학사 공지 |
 | `computing-graduate` | 소프트웨어융합대학 대학원 공지 |
 | `computing-external` | 소프트웨어융합대학 대외정보 |
@@ -242,7 +246,7 @@ Results have deterministic publication-date/ID order, source/category and saved/
 
 The catalog has no unsupported entries left. The 공과대학 e뉴스레터 (`eng-newsletter`) was retired (#93); migration 17 deletes its unused source row, and a row that still holds archived notices or skipped entries is kept so that stored data opens.
 
-`parser.rs` validates board/article identity, metadata, dates, pagination and response structure. The main board uses public paginated JSON list/detail endpoints; HTML error pages are not accepted as JSON, and listings must agree on size, total, page, pins and duplicates. Computing uses desktop `.board-list table` rows (so mobile pin copies don't distort pagination), extracts `article.board-detail`, and reads attachment metadata from a restricted subset of serialized Nuxt data without running JavaScript; its public route ID, internal `DETAIL.SN` and file path must all agree, and inline image roles win when an attachment shares the URL. `engineering.rs` validates the current SSR canonical/form/board/pagination identity, ordinals, full title and body, attachment names and visible Korean time against machine UTC. Unexpected structure is an explicit source failure, never an empty success. Fixture provenance is in `crates/sources/src/fixtures/README.md`.
+`parser.rs` validates board/article identity, metadata, dates, pagination and response structure. The main-site boards share public paginated JSON list/detail endpoints, told apart by `bbsConfigFk` (`parser::MAIN_BOARDS`); a list row or detail of another board is rejected, and each notice's canonical URL is the detail link the site itself builds for that board; HTML error pages are not accepted as JSON, and listings must agree on size, total, page, pins and duplicates. Computing uses desktop `.board-list table` rows (so mobile pin copies don't distort pagination), extracts `article.board-detail`, and reads attachment metadata from a restricted subset of serialized Nuxt data without running JavaScript; its public route ID, internal `DETAIL.SN` and file path must all agree, and inline image roles win when an attachment shares the URL. `engineering.rs` validates the current SSR canonical/form/board/pagination identity, ordinals, full title and body, attachment names and visible Korean time against machine UTC. Unexpected structure is an explicit source failure, never an empty success. Fixture provenance is in `crates/sources/src/fixtures/README.md`.
 
 The dormitory calendar menu (`/sgdormitory/6558/subview.do`) is deliberately not a
 source: it is a month grid of schedule entries (title and time only, fetched per month)

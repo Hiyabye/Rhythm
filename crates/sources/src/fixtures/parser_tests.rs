@@ -67,11 +67,11 @@ fn cases() -> Vec<(
 #[test]
 fn catalog_has_exact_stable_source_identities_and_honest_support() {
     let sources = catalog::definitions();
-    assert_eq!(sources.len(), 35);
-    assert_eq!(sources.iter().filter(|s| s.supported).count(), 35);
+    assert_eq!(sources.len(), 39);
+    assert_eq!(sources.iter().filter(|s| s.supported).count(), 39);
     assert_eq!(
         sources.iter().map(|s| &s.id).collect::<HashSet<_>>().len(),
-        35
+        39
     );
     for s in sources {
         assert!(Url::parse(&s.url).is_ok());
@@ -108,6 +108,110 @@ fn main_list_pagination_and_full_original_article_are_verified() {
     let second = listing(&source, 2, include_str!("main-page2.json")).unwrap();
     assert_eq!(second.entries.len(), 50);
     assert!(second.has_next);
+}
+#[test]
+fn other_main_site_boards_share_the_api_with_their_own_board_id() {
+    let cases = [
+        (
+            "sogang-general",
+            1,
+            include_str!("main-general-list.json"),
+            70,
+            "551892",
+            include_str!("main-general-detail-551892.json"),
+            "강사",
+            4,
+        ),
+        (
+            "sogang-scholarship",
+            141,
+            include_str!("main-scholarship-list.json"),
+            52,
+            "551882",
+            include_str!("main-scholarship-detail-551882.json"),
+            "국가근로",
+            2,
+        ),
+        (
+            "sogang-events",
+            142,
+            include_str!("main-events-list.json"),
+            29,
+            "551374",
+            include_str!("main-events-detail-551374.json"),
+            "부르디외",
+            1,
+        ),
+        (
+            "sogang-student",
+            34,
+            include_str!("main-student-list.json"),
+            34,
+            "551671",
+            include_str!("main-student-detail-551671.json"),
+            "인파사고",
+            1,
+        ),
+    ];
+    for (id, config, list, pages, external, detail, word, files) in cases {
+        let board = source(id);
+        assert_eq!(board.family, "main");
+        assert!(list_url(&board, 1)
+            .unwrap()
+            .as_str()
+            .contains(&format!("bbsConfigFk={config}&")));
+        let page = listing(&board, 1, list).unwrap();
+        assert_eq!(page.total_pages, pages, "{id}");
+        assert!(page.has_next, "{id}");
+        let entry = page
+            .entries
+            .iter()
+            .find(|e| e.external_id == external)
+            .unwrap_or_else(|| panic!("{id} lists {external}"));
+        // The canonical URL is the site's own detail link for that board.
+        assert!(entry.url.starts_with(&format!(
+            "https://www.sogang.ac.kr/ko/detail/{external}?bbsConfigFk={config}&"
+        )));
+        assert!(detail_url(&board, entry)
+            .unwrap()
+            .as_str()
+            .ends_with(&format!("BbsData?pkId={external}")));
+        let parsed = article(&board, entry, detail).unwrap();
+        assert!(
+            parsed.title.contains(word) || parsed.body_text.contains(word),
+            "{id}"
+        );
+        let attachments: Vec<_> = parsed
+            .resources
+            .iter()
+            .filter(|r| r.kind == "attachment")
+            .collect();
+        assert_eq!(attachments.len(), files, "{id}");
+        for resource in attachments {
+            assert!(
+                resource.url.starts_with(&format!(
+                    "https://www.sogang.ac.kr/file-fe-prd/board/{config}/"
+                )),
+                "{id}: {}",
+                resource.url
+            );
+            assert!(crate::policy::validate_url(&Url::parse(&resource.url).unwrap()).is_ok());
+        }
+        // Another board's list or detail is never accepted under this source.
+        let academic = source("sogang-academic");
+        assert!(listing(&academic, 1, list).is_err(), "{id}");
+        let foreign = ListingEntry {
+            url: main_canonical(&MAIN_BOARDS[0], external).into(),
+            ..entry.clone()
+        };
+        assert!(article(&academic, &foreign, detail).is_err(), "{id}");
+        assert!(detail_url(&board, &foreign).is_err(), "{id}");
+    }
+    // The academic canonical URL is unchanged, so archived notices keep theirs.
+    assert_eq!(
+        main_canonical(&MAIN_BOARDS[0], "551637").as_str(),
+        "https://www.sogang.ac.kr/ko/detail/551637?bbsConfigFk=2&namepage=AcademicNotice&text=%ED%95%99%EC%82%AC+%EC%A7%80%EC%9B%90&data=%255B%255D&title=%ED%95%99%EB%B6%80+%ED%95%99%EC%82%AC%EA%B3%B5%EC%A7%80&redirect=%2Fko%2Facademic-support%2Fnotices"
+    );
 }
 #[test]
 fn computing_five_boards_have_scoped_pins_full_text_metadata_and_real_resources() {
@@ -258,7 +362,7 @@ fn iframe_only_main_articles_are_explicitly_empty_but_other_empty_results_fail()
     let source = source("sogang-academic");
     let entry = ListingEntry {
         external_id: "551681".into(),
-        url: main_canonical("551681").to_string(),
+        url: main_canonical(&MAIN_BOARDS[0], "551681").to_string(),
         pinned: false,
         modified_at: None,
     };
@@ -390,7 +494,7 @@ fn an_attachment_also_used_inline_retains_its_image_role() {
     let source = source("sogang-academic");
     let entry = ListingEntry {
         external_id: "551637".into(),
-        url: main_canonical("551637").into(),
+        url: main_canonical(&MAIN_BOARDS[0], "551637").into(),
         pinned: true,
         modified_at: None,
     };
@@ -419,7 +523,7 @@ fn wrapped_iframe_body_is_iframe_only_but_wrapped_text_is_not() {
     let source = source("sogang-academic");
     let entry = ListingEntry {
         external_id: "551377".into(),
-        url: main_canonical("551377").to_string(),
+        url: main_canonical(&MAIN_BOARDS[0], "551377").to_string(),
         pinned: false,
         modified_at: None,
     };
@@ -486,7 +590,7 @@ fn pdf_viewer_body_references_its_pdf_and_takes_the_pdf_text() {
     let source = source("sogang-academic");
     let entry = ListingEntry {
         external_id: "551680".into(),
-        url: main_canonical("551680").to_string(),
+        url: main_canonical(&MAIN_BOARDS[0], "551680").to_string(),
         pinned: false,
         modified_at: None,
     };

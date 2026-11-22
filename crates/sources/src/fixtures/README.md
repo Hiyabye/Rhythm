@@ -8,6 +8,11 @@ its original rights; Rhythm's GPL-3.0-or-later license does not relicense it.
 - `main-list-exact.json`, `main-page2.json`: pages 1 and 2 of
   `https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData/boardList`, with
   `pageSize=50&bbsConfigFk=2` and the reference collector's empty filter parameters.
+- `main-{general,scholarship,events,student}-list.json` (2026-11-22, #80): page 1 of the
+  same list endpoint with `pageSize=50` and `bbsConfigFk` 1, 141, 142 and 34, unchanged.
+- `main-general-detail-551892.json`, `main-scholarship-detail-551882.json`,
+  `main-events-detail-551374.json`, `main-student-detail-551671.json` (2026-11-22): the
+  unchanged public JSON details of one listed notice with attachments on each board.
 - `main-detail.json`: public JSON detail for `pkId=551637`; original HTML body,
   author, category references, publication date, and volatile view-count metadata.
 - `computing-*-list.html`: only the original `.board-lnb` and `.board-content`

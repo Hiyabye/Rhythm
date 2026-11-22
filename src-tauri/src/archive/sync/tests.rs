@@ -174,7 +174,7 @@ fn mirror(store: &SharedStore, seq: u64, id: u64, page: &str) -> i64 {
     let definition = with_store(store, |s| s.source(MAIN)).unwrap().definition;
     let entry = ListingEntry {
         external_id: external.clone(),
-        url: parser::main_canonical(&external).to_string(),
+        url: parser::main_canonical(&parser::MAIN_BOARDS[0], &external).to_string(),
         pinned: false,
         modified_at: None,
     };
@@ -976,7 +976,7 @@ async fn a_retried_viewer_pdf_becomes_the_body_of_a_metadata_only_notice() {
     // Archived by an earlier version that did not recognize the viewer PDF.
     let entry = ListingEntry {
         external_id: "551680".into(),
-        url: parser::main_canonical("551680").to_string(),
+        url: parser::main_canonical(&parser::MAIN_BOARDS[0], "551680").to_string(),
         pinned: false,
         modified_at: None,
     };
