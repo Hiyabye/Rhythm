@@ -211,6 +211,17 @@ async fn crawl(
         report.history.as_secs(),
         report.history_owed
     );
+    for group in &report.groups {
+        println!(
+            "new notices on {} ({} boards): started at {}s, took {}s, slowest {} {}s",
+            group.hosts.join(", "),
+            group.boards,
+            group.started.as_secs(),
+            group.took.as_secs(),
+            group.slowest.0,
+            group.slowest.1.as_secs()
+        );
+    }
     // Notices stored before the current extractor version get their dates now.
     println!(
         "dates extracted for {} older notices",

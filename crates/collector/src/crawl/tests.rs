@@ -769,6 +769,23 @@ async fn boards_on_one_server_share_one_worker_whatever_their_hostnames() {
     assert_eq!(report.outcomes.len(), public_boards().len());
     assert_eq!(slow.host_peak.load(Ordering::Acquire), 1);
     assert_eq!(slow.total_peak.load(Ordering::Acquire), 3);
+    // The log names each server group once, with all three hostnames together
+    // in catalog order.
+    let boards: usize = report.groups.iter().map(|group| group.boards).sum();
+    assert_eq!(boards, public_boards().len());
+    let shared = report
+        .groups
+        .iter()
+        .find(|group| group.hosts.iter().any(|host| host == "sse.sogang.ac.kr"))
+        .unwrap();
+    assert_eq!(
+        shared.hosts,
+        [
+            "new-cms.sogang.ac.kr",
+            "ee.sogang.ac.kr",
+            "sse.sogang.ac.kr"
+        ]
+    );
 }
 
 /// Two main boards whose history is owed after their first incremental pass:

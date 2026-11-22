@@ -52,6 +52,20 @@ pub struct Report {
     pub history: Duration,
     /// Boards that ended the run with history still owed.
     pub history_owed: usize,
+    /// Each server group's incremental phase, in the order the groups finished.
+    pub groups: Vec<GroupTime>,
+}
+
+/// How long one server group's incremental passes took, to find a slow server.
+pub struct GroupTime {
+    /// The group's host names, in board order.
+    pub hosts: Vec<String>,
+    pub boards: usize,
+    /// When a worker took the group, from the start of the crawl.
+    pub started: Duration,
+    pub took: Duration,
+    /// The group's slowest board and its time.
+    pub slowest: (String, Duration),
 }
 
 /// The boards the collector crawls: every supported public board. Cybercampus
@@ -90,15 +104,37 @@ pub async fn run_boards<T: Transport>(
             }
         }
     };
+    let times = Mutex::new(Vec::new());
     in_workers(groups.clone(), |group| async {
+        let started = start.elapsed();
+        let mut hosts: Vec<String> = Vec::new();
+        let mut slowest = (String::new(), Duration::ZERO);
+        let size = group.len();
         for index in group {
             if cancel.load(Ordering::Acquire) {
-                return;
+                break;
             }
+            let host = host(&boards[index]);
+            if !hosts.contains(&host) {
+                hosts.push(host);
+            }
+            let board_start = Instant::now();
             record(
                 index,
                 run_incremental(state, transport, &boards[index], budget, cancel).await,
             );
+            if board_start.elapsed() >= slowest.1 {
+                slowest = (boards[index].id.clone(), board_start.elapsed());
+            }
+        }
+        if let Ok(mut times) = times.lock() {
+            times.push(GroupTime {
+                hosts,
+                boards: size,
+                started,
+                took: start.elapsed() - started,
+                slowest,
+            });
         }
     })
     .await;
@@ -166,6 +202,7 @@ pub async fn run_boards<T: Transport>(
         incremental,
         history: start.elapsed() - incremental,
         history_owed,
+        groups: times.into_inner().unwrap_or_default(),
     }
 }
 
@@ -184,10 +221,7 @@ async fn server_groups<T: Transport>(
     let mut hosts: Vec<(String, Key)> = Vec::new();
     let mut groups: Vec<(Key, Vec<usize>)> = Vec::new();
     for (index, board) in boards.iter().enumerate() {
-        let host = Url::parse(&board.url)
-            .ok()
-            .and_then(|url| url.host_str().map(str::to_owned))
-            .unwrap_or_else(|| board.id.clone());
+        let host = host(board);
         let key = match hosts.iter().find(|(name, _)| *name == host) {
             Some((_, key)) => key.clone(),
             None => {
@@ -207,6 +241,14 @@ async fn server_groups<T: Transport>(
     let mut groups: Vec<Vec<usize>> = groups.into_iter().map(|(_, group)| group).collect();
     groups.sort_by_key(Vec::len);
     groups
+}
+
+/// A board's host name, or its ID when its URL has none.
+fn host(board: &SourceDefinition) -> String {
+    Url::parse(&board.url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| board.id.clone())
 }
 
 /// Runs `work` on each group with `network::MAX_HOSTS` workers, taking groups
