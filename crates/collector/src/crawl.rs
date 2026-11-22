@@ -12,15 +12,20 @@ use rhythm_sources::{
 };
 use std::{
     collections::HashSet,
+    future::Future,
+    net::IpAddr,
     sync::{
         atomic::{AtomicBool, Ordering},
         Mutex,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use url::Url;
 
 const ARTICLE_LIMIT: usize = 4 * 1024 * 1024;
+/// A history turn stopped by the run's deadline: normal, not a failure.
+const HISTORY_DEADLINE: &str =
+    "이번 실행의 이력 시간을 다 써서 멈췄습니다. 다음 실행에서 이어서 가져옵니다.";
 /// Deletion-audit fetches per board and run (user decision).
 const AUDIT_PER_RUN: usize = 3;
 /// Skipped-notice retries per board and run (user decision).
@@ -29,8 +34,24 @@ const RETRIES_PER_RUN: usize = 3;
 /// Limits for one bounded run; history continues from the checkpoint next run.
 #[derive(Clone, Copy, Default)]
 pub struct Budget {
+    /// Listing pages per pass.
     pub pages: Option<u32>,
+    /// Notices per pass; in the history phase, per board and turn.
     pub articles: Option<u32>,
+    /// When the history phase stops starting work (`--history-minutes`). With
+    /// none, each board gets one history turn per run.
+    pub history_until: Option<Instant>,
+}
+
+/// One run's outcomes and timings, for the run log.
+pub struct Report {
+    /// Each board's outcome in input order; after cancellation, boards not yet
+    /// started have none.
+    pub outcomes: Vec<(String, Result<(), String>)>,
+    pub incremental: Duration,
+    pub history: Duration,
+    /// Boards that ended the run with history still owed.
+    pub history_owed: usize,
 }
 
 /// The boards the collector crawls: every supported public board. Cybercampus
@@ -42,68 +63,192 @@ pub fn public_boards() -> Vec<SourceDefinition> {
         .collect()
 }
 
-/// Crawls the boards with at most `network::MAX_HOSTS` hosts at once and one
-/// board per host, so each host keeps its own pacing, as in the app's
-/// Controller. Each worker takes every board of one host in turn, the host
-/// with the most boards first. Returns each board's outcome in input order;
-/// after cancellation, boards not yet started have none.
+/// Crawls the boards in two phases (#80, user decisions 2026-11-22). First
+/// every board's incremental pass and upkeep, so new notices never wait for a
+/// backfill; then the history backlog until `budget.history_until`, boards
+/// taking turns of at most `budget.articles` notices, least progress first.
+///
+/// Boards are grouped by the server their host resolves to: at most
+/// `network::MAX_HOSTS` servers at once and one board per server, so the
+/// transport's per-server pacing is the only limit a server sees. Each worker
+/// takes every board of one server, the server with the most boards first.
 pub async fn run_boards<T: Transport>(
     state: &State,
     transport: &T,
     boards: &[SourceDefinition],
     budget: Budget,
     cancel: &AtomicBool,
-) -> Vec<(String, Result<(), String>)> {
-    let mut hosts: Vec<Vec<usize>> = Vec::new();
-    let mut names: Vec<String> = Vec::new();
+) -> Report {
+    let start = Instant::now();
+    let groups = server_groups(transport, boards).await;
+    let outcomes = Mutex::new(Vec::<(usize, Result<(), String>)>::new());
+    let record = |index: usize, outcome: Result<(), String>| {
+        if let Ok(mut outcomes) = outcomes.lock() {
+            match outcomes.iter_mut().find(|(i, _)| *i == index) {
+                Some(entry) => entry.1 = outcome,
+                None => outcomes.push((index, outcome)),
+            }
+        }
+    };
+    in_workers(groups.clone(), |group| async {
+        for index in group {
+            if cancel.load(Ordering::Acquire) {
+                return;
+            }
+            record(
+                index,
+                run_incremental(state, transport, &boards[index], budget, cancel).await,
+            );
+        }
+    })
+    .await;
+    let incremental = start.elapsed();
+    // History only for boards whose incremental pass succeeded.
+    let ready: HashSet<usize> = outcomes
+        .lock()
+        .map(|outcomes| {
+            outcomes
+                .iter()
+                .filter(|(_, outcome)| outcome.is_ok())
+                .map(|(index, _)| *index)
+                .collect()
+        })
+        .unwrap_or_default();
+    let history_groups = groups
+        .into_iter()
+        .map(|group| group.into_iter().filter(|i| ready.contains(i)).collect())
+        .collect();
+    in_workers(history_groups, |group: Vec<usize>| async {
+        let mut turns = Vec::new();
+        for index in group {
+            match state.board(&boards[index].id) {
+                Ok(board) if !board.history_complete => turns.push((board.next_page, index)),
+                Ok(_) => {}
+                Err(error) => record(index, Err(error)),
+            }
+        }
+        while !turns.is_empty() && !stopped(cancel, budget) {
+            turns.sort_by(|a, b| (a.0, &boards[a.1].id).cmp(&(b.0, &boards[b.1].id)));
+            let mut next = Vec::new();
+            for (_, index) in turns {
+                if stopped(cancel, budget) {
+                    break;
+                }
+                match run_history(state, transport, &boards[index], budget, cancel).await {
+                    // Without a deadline each board gets one turn, as before.
+                    Ok(Some(page)) if budget.history_until.is_some() => next.push((page, index)),
+                    Ok(_) => {}
+                    Err(error) => record(index, Err(error)),
+                }
+            }
+            turns = next;
+        }
+    })
+    .await;
+    let mut outcomes = outcomes.into_inner().unwrap_or_default();
+    outcomes.sort_by_key(|(index, _)| *index);
+    let history_owed = outcomes
+        .iter()
+        .filter(|(index, outcome)| {
+            outcome.is_ok()
+                && state
+                    .board(&boards[*index].id)
+                    .is_ok_and(|board| !board.history_complete)
+        })
+        .count();
+    Report {
+        outcomes: outcomes
+            .into_iter()
+            .map(|(index, outcome)| (boards[index].id.clone(), outcome))
+            .collect(),
+        incremental,
+        history: start.elapsed() - incremental,
+        history_owed,
+    }
+}
+
+/// Board indices grouped by server, largest group last (workers pop from the
+/// end). A host the transport cannot place keeps a group of its own, keyed
+/// by its name.
+async fn server_groups<T: Transport>(
+    transport: &T,
+    boards: &[SourceDefinition],
+) -> Vec<Vec<usize>> {
+    #[derive(Clone, PartialEq)]
+    enum Key {
+        Server(IpAddr),
+        Host(String),
+    }
+    let mut hosts: Vec<(String, Key)> = Vec::new();
+    let mut groups: Vec<(Key, Vec<usize>)> = Vec::new();
     for (index, board) in boards.iter().enumerate() {
         let host = Url::parse(&board.url)
             .ok()
             .and_then(|url| url.host_str().map(str::to_owned))
             .unwrap_or_else(|| board.id.clone());
-        match names.iter().position(|name| *name == host) {
-            Some(group) => hosts[group].push(index),
+        let key = match hosts.iter().find(|(name, _)| *name == host) {
+            Some((_, key)) => key.clone(),
             None => {
-                names.push(host);
-                hosts.push(vec![index]);
+                let key = match transport.server(&host).await {
+                    Some(address) => Key::Server(address),
+                    None => Key::Host(host.clone()),
+                };
+                hosts.push((host, key.clone()));
+                key
             }
+        };
+        match groups.iter_mut().find(|(server, _)| *server == key) {
+            Some((_, group)) => group.push(index),
+            None => groups.push((key, vec![index])),
         }
     }
-    // Popped from the end: the longest groups go first.
-    hosts.sort_by_key(Vec::len);
-    let queue = Mutex::new(hosts);
-    let outcomes = Mutex::new(Vec::new());
+    let mut groups: Vec<Vec<usize>> = groups.into_iter().map(|(_, group)| group).collect();
+    groups.sort_by_key(Vec::len);
+    groups
+}
+
+/// Runs `work` on each group with `network::MAX_HOSTS` workers, taking groups
+/// from the end of the list.
+async fn in_workers<F, Fut>(groups: Vec<Vec<usize>>, work: F)
+where
+    F: Fn(Vec<usize>) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let queue = Mutex::new(groups);
     let worker = || async {
-        loop {
-            let Some(group) = queue.lock().ok().and_then(|mut queue| queue.pop()) else {
-                return;
-            };
-            for index in group {
-                if cancel.load(Ordering::Acquire) {
-                    return;
-                }
-                let board = &boards[index];
-                let outcome = run_board(state, transport, board, budget, cancel).await;
-                if let Ok(mut outcomes) = outcomes.lock() {
-                    outcomes.push((index, board.id.clone(), outcome));
-                }
-            }
+        while let Some(group) = queue.lock().ok().and_then(|mut queue| queue.pop()) {
+            work(group).await;
         }
     };
     tokio::join!(worker(), worker(), worker());
-    const _: () = assert!(network::MAX_HOSTS == 3, "one worker per crawling host");
-    let mut outcomes = outcomes.into_inner().unwrap_or_default();
-    outcomes.sort_by_key(|(index, ..)| *index);
-    outcomes
-        .into_iter()
-        .map(|(_, id, outcome)| (id, outcome))
-        .collect()
+    const _: () = assert!(network::MAX_HOSTS == 3, "one worker per crawling server");
 }
 
-/// Crawls one board: new notices and recent edits first, then the unfinished
-/// history backlog. Each pass persists its own progress, so a failure or
-/// cancellation between them keeps what the first pass saved.
+fn stopped(cancel: &AtomicBool, budget: Budget) -> bool {
+    cancel.load(Ordering::Acquire) || past(budget.history_until)
+}
+fn past(deadline: Option<Instant>) -> bool {
+    deadline.is_some_and(|deadline| Instant::now() >= deadline)
+}
+
+/// Crawls one board completely: the incremental pass and upkeep, then one
+/// history turn.
 pub async fn run_board<T: Transport>(
+    state: &State,
+    transport: &T,
+    definition: &SourceDefinition,
+    budget: Budget,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    run_incremental(state, transport, definition, budget, cancel).await?;
+    run_history(state, transport, definition, budget, cancel)
+        .await
+        .map(drop)
+}
+
+/// The first phase for one board: new notices and recent edits, then the
+/// deletion audit and skipped retries.
+async fn run_incremental<T: Transport>(
     state: &State,
     transport: &T,
     definition: &SourceDefinition,
@@ -123,31 +268,67 @@ pub async fn run_board<T: Transport>(
         cancel,
         budget,
     };
-    let mut listed = None;
-    let mut outcome = crawl
-        .pass(definition, &mut board, Pass::Incremental)
-        .await
-        .map(|complete| listed = complete);
-    if outcome.is_ok() && !board.history_complete {
-        outcome = match active(cancel) {
-            Ok(()) => crawl
-                .pass(definition, &mut board, Pass::Historical)
-                .await
-                .map(drop),
-            Err(error) => Err(error),
-        };
-    }
+    let mut outcome = crawl.pass(definition, &mut board, Pass::Incremental).await;
     // The mechanical sitemap lists every current notice, so the audit there is
     // the set difference; other boards audit their recent notices.
-    if definition.family != "mechanical" {
-        listed = None;
+    if let Ok(listed) = outcome.as_mut() {
+        if definition.family != "mechanical" {
+            *listed = None;
+        }
     }
-    if outcome.is_ok() {
-        outcome = match active(cancel) {
+    let outcome = match outcome {
+        Ok(listed) => match active(cancel) {
             Ok(()) => crawl.upkeep(definition, listed.as_ref()).await,
             Err(error) => Err(error),
-        };
+        },
+        Err(error) => Err(error),
+    };
+    fail(state, &board, outcome, cancel)
+}
+
+/// One history turn for one board. Returns the next history page when the
+/// turn stopped at a budget after making progress, so another turn can follow.
+async fn run_history<T: Transport>(
+    state: &State,
+    transport: &T,
+    definition: &SourceDefinition,
+    budget: Budget,
+    cancel: &AtomicBool,
+) -> Result<Option<u32>, String> {
+    let mut board = state.board(&definition.id)?;
+    if board.history_complete {
+        return Ok(None);
     }
+    let before = (board.next_page, board.discovered);
+    if let Err(error) = active(cancel) {
+        return fail(state, &board, Err(error), cancel).map(|()| None);
+    }
+    let crawl = Crawl {
+        state,
+        transport,
+        cancel,
+        budget,
+    };
+    let outcome = crawl
+        .pass(definition, &mut board, Pass::Historical)
+        .await
+        .map(drop);
+    fail(state, &board, outcome, cancel)?;
+    let after = state.board(&definition.id)?;
+    let progressed = (after.next_page, after.discovered) != before;
+    Ok(
+        (!after.history_complete && after.status == "limited" && progressed)
+            .then_some(after.next_page),
+    )
+}
+
+/// Records a failed or cancelled pass on the board and passes the outcome on.
+fn fail(
+    state: &State,
+    board: &Board,
+    outcome: Result<(), String>,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
     let Err(error) = outcome else {
         return Ok(());
     };
@@ -156,7 +337,7 @@ pub async fn run_board<T: Transport>(
     } else {
         "failed"
     };
-    state.progress(&board, status, Some(&error), false)?;
+    state.progress(board, status, Some(&error), false)?;
     Err(error)
 }
 
@@ -202,6 +383,10 @@ impl<T: Transport> Crawl<'_, T> {
         let mut processed = 0;
         loop {
             active(self.cancel)?;
+            if historical && past(self.budget.history_until) {
+                state.progress(board, "limited", Some(HISTORY_DEADLINE), false)?;
+                return Ok(None);
+            }
             if page > 100_000 {
                 state.progress(
                     board,
@@ -270,11 +455,17 @@ impl<T: Transport> Crawl<'_, T> {
                         continue;
                     }
                 }
-                if self.budget.articles.is_some_and(|max| processed >= max) {
+                let deadline = historical && past(self.budget.history_until);
+                if deadline || self.budget.articles.is_some_and(|max| processed >= max) {
                     if !errors.is_empty() {
                         return Err(page_failure(&errors));
                     }
-                    state.progress(board, "limited", Some("실행 제한으로 일부만 가져왔습니다. 전체 이력은 아직 완료되지 않았습니다."), false)?;
+                    let reason = if deadline {
+                        HISTORY_DEADLINE
+                    } else {
+                        "실행 제한으로 일부만 가져왔습니다. 전체 이력은 아직 완료되지 않았습니다."
+                    };
+                    state.progress(board, "limited", Some(reason), false)?;
                     return Ok(None);
                 }
                 if !exists {
