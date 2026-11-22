@@ -203,7 +203,9 @@ fn a_snapshot_then_segments_mirror_the_feed() {
     let (_directory, store) = database();
     assert_eq!(store.feed_cursor().unwrap(), None);
     // Without a snapshot there is no cursor to continue from.
-    assert!(store.feed_apply_segment(1, 1, &[], &[], false).is_err());
+    assert!(store
+        .feed_apply_segment(1, 1, &[], &[], false, &Default::default())
+        .is_err());
 
     let first = feed_notice("1", &"가".repeat(400));
     let second = feed_notice("2", "둘째 본문");
@@ -264,6 +266,7 @@ fn a_snapshot_then_segments_mirror_the_feed() {
             ],
             &vectors(1),
             false,
+            &Default::default(),
         )
         .unwrap();
     assert_eq!(
@@ -286,8 +289,12 @@ fn a_snapshot_then_segments_mirror_the_feed() {
         "notice 1's vector left with it"
     );
     // A segment that does not continue from the cursor is refused.
-    assert!(store.feed_apply_segment(10, 11, &[], &[], false).is_err());
-    assert!(store.feed_apply_segment(3, 8, &[], &[], false).is_err());
+    assert!(store
+        .feed_apply_segment(10, 11, &[], &[], false, &Default::default())
+        .is_err());
+    assert!(store
+        .feed_apply_segment(3, 8, &[], &[], false, &Default::default())
+        .is_err());
 }
 
 #[test]
@@ -347,7 +354,14 @@ fn a_snapshot_removes_only_notices_that_came_from_the_feed() {
 
     // Listed again, the saved notice is no longer marked removed.
     store
-        .feed_apply_segment(9, 10, &[upsert(10, &saved)], &[], false)
+        .feed_apply_segment(
+            9,
+            10,
+            &[upsert(10, &saved)],
+            &[],
+            false,
+            &Default::default(),
+        )
         .unwrap();
     assert_eq!(row(&store, "saved").unwrap().3, None);
 }
@@ -471,7 +485,7 @@ fn a_populated_profile_upgrades_and_a_failed_upgrade_rolls_back() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}PRAGMA user_version=36;"
+                "{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}PRAGMA user_version=36;"
             ))
             .unwrap();
     }
@@ -491,7 +505,7 @@ fn a_populated_profile_upgrades_and_a_failed_upgrade_rolls_back() {
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}CREATE TABLE feed_state(id INTEGER); PRAGMA user_version=36;"
+            "{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}CREATE TABLE feed_state(id INTEGER); PRAGMA user_version=36;"
         ))
         .unwrap();
     assert!(Store::open(&path).is_err());
@@ -652,7 +666,7 @@ fn a_schema_37_profile_upgrades_and_a_failed_upgrade_rolls_back() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}PRAGMA user_version=37;"
+                "{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}PRAGMA user_version=37;"
             ))
             .unwrap();
     }
@@ -667,7 +681,7 @@ fn a_schema_37_profile_upgrades_and_a_failed_upgrade_rolls_back() {
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}CREATE TABLE feed_boards(id INTEGER); PRAGMA user_version=37;"
+            "{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}CREATE TABLE feed_boards(id INTEGER); PRAGMA user_version=37;"
         ))
         .unwrap();
     assert!(Store::open(&path).is_err());
@@ -737,7 +751,7 @@ fn an_opened_notice_fills_its_feed_revision_in_place() {
     // The feed's next record of the same revision keeps the body, and a second
     // fill (another open finishing later) changes nothing.
     store
-        .feed_apply_segment(2, 2, &[upsert(2, &notice)], &[], false)
+        .feed_apply_segment(2, 2, &[upsert(2, &notice)], &[], false, &Default::default())
         .unwrap();
     assert_eq!(row(&store, "1").unwrap().0, body);
     let filled = store
@@ -802,7 +816,7 @@ fn a_revised_school_text_takes_its_own_hash() {
         kind: ResourceKind::Image,
     }];
     store
-        .feed_apply_segment(2, 2, &[upsert(2, &later)], &[], false)
+        .feed_apply_segment(2, 2, &[upsert(2, &later)], &[], false, &Default::default())
         .unwrap();
     let (text, pending, _, _, revisions) = row(&store, "2").unwrap();
     assert_eq!((text.as_str(), pending, revisions), ("고친 본문", false, 1));
@@ -824,7 +838,14 @@ fn only_pending_feed_notices_are_fetched_and_a_pdf_body_keeps_the_feed_hash() {
         .set_document_state(saved_id, None, Some(true))
         .unwrap();
     store
-        .feed_apply_segment(3, 3, &[removal(3, "saved")], &[], false)
+        .feed_apply_segment(
+            3,
+            3,
+            &[removal(3, "saved")],
+            &[],
+            false,
+            &Default::default(),
+        )
         .unwrap();
     // A v1 body is here, and the school deleted the saved notice.
     assert!(store
@@ -893,6 +914,7 @@ fn a_backfill_starts_read_and_later_arrivals_stay_unread() {
             &[upsert(2, &feed_notice("caught-up", "본문"))],
             &[],
             true,
+            &Default::default(),
         )
         .unwrap();
     // Later syncs: a new notice, and one the collector's history import found.
@@ -909,6 +931,7 @@ fn a_backfill_starts_read_and_later_arrivals_stay_unread() {
             ],
             &[],
             false,
+            &Default::default(),
         )
         .unwrap();
     assert!(read(&store, "old") && read(&store, "caught-up") && read(&store, "backlog"));
@@ -1209,7 +1232,9 @@ fn a_schema_40_profile_starts_counting_at_the_next_manifest() {
         segment(&store, 2, &[seen_at("2", "2026-11-18T12:10:00.000Z")]);
         store
             .connection
-            .execute_batch(&format!("{UNDO_PREVIOUS_MANIFEST}PRAGMA user_version=40;"))
+            .execute_batch(&format!(
+                "{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}PRAGMA user_version=40;"
+            ))
             .unwrap();
     }
     let store = Store::open(&path).unwrap();
@@ -1247,7 +1272,7 @@ fn segment(store: &Store, from: u64, notices: &[Notice]) {
         .collect();
     let to = from + notices.len() as u64 - 1;
     store
-        .feed_apply_segment(from, to, &entries, &[], false)
+        .feed_apply_segment(from, to, &entries, &[], false, &Default::default())
         .unwrap();
 }
 
@@ -1516,4 +1541,53 @@ fn opportunities_list_open_deadlines_first_within_their_categories() {
     let page = store.archive_query(&ArchiveQuery::default()).unwrap();
     assert_eq!(page.total, 7);
     assert!(page.deadlines.is_empty());
+}
+
+#[test]
+fn a_schema_41_profile_knows_the_boards_of_its_old_catalog() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    {
+        let store = Store::open(&path).unwrap();
+        store.catalog(&[definition("one", "main")]).unwrap();
+        store
+            .feed_apply_snapshot(3, &[upsert(1, &feed_notice("1", "본문"))], &[])
+            .unwrap();
+        store
+            .connection
+            .execute_batch(&format!("{UNDO_KNOWN_BOARDS}PRAGMA user_version=41;"))
+            .unwrap();
+    }
+    // The migration records the catalog it finds; the new one arrives after it.
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
+    assert!(store.feed_new_boards().unwrap().is_empty());
+    store
+        .catalog(&[definition("one", "main"), definition("two", "main")])
+        .unwrap();
+    assert_eq!(
+        store.feed_new_boards().unwrap(),
+        std::collections::HashSet::from(["two".to_string()])
+    );
+    store.feed_remember_boards().unwrap();
+    assert!(store.feed_new_boards().unwrap().is_empty());
+    drop(store);
+
+    // A table left behind makes 042 fail; the open changes nothing.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("PRAGMA user_version=41;")
+        .unwrap();
+    assert!(Store::open(&path).is_err());
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let (version, cursor, known): (i64, Option<i64>, i64) = connection
+        .query_row(
+            "SELECT (SELECT user_version FROM pragma_user_version),
+                    (SELECT cursor FROM feed_state WHERE id=1),
+                    (SELECT COUNT(*) FROM feed_known_boards)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!((version, cursor, known), (41, Some(3), 2));
 }

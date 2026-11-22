@@ -142,6 +142,7 @@ A vectors file holds whole vectors and nothing else (#166 O19a). Each vector is 
 
 Further rules:
 
-- **Notifications:** a first sync, and any notice marked `historical`, never notifies.
+- **New boards:** a client skips records of boards it does not know, and its cursor moves past them. When an update adds a board, the client applies that board's records from the snapshot and every segment after it, then continues from its cursor for the other boards without those records again. Records that board already had would otherwise never arrive.
+- **Notifications:** a first sync, a new board's backfill, and any notice marked `historical`, never notify.
 - **Removals:** a removal deletes the notice and everything derived from it. A saved notice keeps its row with a "원문 삭제됨" note (#166 client behavior).
 - **Plain text:** all text in the feed is plain text. The app escapes it and never renders it as HTML.

@@ -489,3 +489,181 @@ fn the_compiled_key_is_the_production_feed_key() {
         "7fdf378f071d58dc"
     );
 }
+
+fn notice_on(board: &str, id: &str, title: &str) -> Record {
+    let mut record = notice(id, title);
+    if let Record::Notice(notice) = &mut record {
+        notice.source_id = board.into();
+    }
+    record
+}
+fn unread_titles(store: &SharedStore) -> Vec<String> {
+    let page = store
+        .lock()
+        .unwrap()
+        .archive_query(&crate::archive::model::ArchiveQuery {
+            unread_only: true,
+            ..Default::default()
+        })
+        .unwrap();
+    let mut titles: Vec<String> = page.items.into_iter().map(|i| i.title).collect();
+    titles.sort();
+    titles
+}
+
+#[tokio::test]
+async fn a_board_the_catalog_gains_is_backfilled_from_the_snapshot_path() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(&directory.path().join("rhythm.sqlite3")).unwrap();
+    store.catalog(&[definition("one")]).unwrap();
+    let store: SharedStore = Arc::new(Mutex::new(store));
+    let fake = Fake::default();
+    let feed = Feed {
+        fake: &fake,
+        base: BASE.into(),
+    };
+    let snapshot = Snapshot {
+        through_seq: 2,
+        records: feed.records(
+            SNAPSHOT,
+            &[
+                (1, notice_on("one", "1", "첫 공지")),
+                (2, notice_on("two", "a", "새 게시판 원본")),
+            ],
+        ),
+        vectors: None,
+    };
+    let mut manifest = manifest(
+        "2026-11-18T12:00:00.000Z",
+        snapshot,
+        vec![segment(
+            &feed,
+            3,
+            4,
+            &[
+                (3, notice_on("two", "a", "새 게시판 수정")),
+                (4, notice_on("two", "b", "새 게시판 둘째")),
+            ],
+        )],
+    );
+    feed.publish(&manifest, &signer());
+    let controller = Controller::default();
+    run(&controller, &store, directory.path(), &fake).await;
+    // Board "two" is not in this catalog yet, so its records are skipped.
+    assert_eq!(titles(&store), ["첫 공지"]);
+    assert!(store.lock().unwrap().feed_new_boards().unwrap().is_empty());
+
+    // An update adds the board; the next segment brings news on both boards.
+    store
+        .lock()
+        .unwrap()
+        .catalog(&[definition("one"), definition("two")])
+        .unwrap();
+    assert_eq!(
+        store.lock().unwrap().feed_new_boards().unwrap(),
+        HashSet::from(["two".to_string()])
+    );
+    manifest.generated_at = "2026-11-18T12:30:00.000Z".into();
+    manifest.segments.push(segment(
+        &feed,
+        5,
+        8,
+        &[
+            (5, notice_on("one", "5", "기존 게시판 새 공지")),
+            (6, notice_on("two", "c", "새 게시판 셋째")),
+            (7, notice_on("two", "a", "새 게시판 재수정")),
+            (8, notice_on("two", "a", "새 게시판 최종")),
+        ],
+    ));
+    feed.publish(&manifest, &signer());
+    fake.take_requests();
+    run(&controller, &store, directory.path(), &fake).await;
+    assert_eq!(
+        fake.take_requests(),
+        [
+            format!("{BASE}manifest.json"),
+            format!("{BASE}manifest.json.sig"),
+            format!("{BASE}{SNAPSHOT}"),
+            format!("{BASE}segments/run-3-4.jsonl.zst"),
+            format!("{BASE}segments/run-5-8.jsonl.zst"),
+            format!("{BASE}segments/run-5-8.jsonl.zst"),
+        ]
+    );
+    // The board's latest state, its revised notice once, and nothing older after it.
+    assert_eq!(
+        titles(&store),
+        [
+            "기존 게시판 새 공지",
+            "새 게시판 둘째",
+            "새 게시판 셋째",
+            "새 게시판 최종",
+            "첫 공지"
+        ]
+    );
+    {
+        let guard = store.lock().unwrap();
+        assert_eq!(guard.feed_cursor().unwrap(), Some(8));
+        // Its four revisions in order, none replayed by the cursor path.
+        let revised = guard.document_id("two", "a").unwrap().unwrap();
+        assert_eq!(guard.document(revised, None).unwrap().revisions.len(), 4);
+        // The backfill is history: read and silent. The existing board still notifies.
+        assert_eq!(
+            guard
+                .proactive_candidates(10)
+                .unwrap()
+                .iter()
+                .map(|c| c.title.as_str())
+                .collect::<Vec<_>>(),
+            ["기존 게시판 새 공지"]
+        );
+        assert!(guard.feed_new_boards().unwrap().is_empty());
+    }
+    assert_eq!(unread_titles(&store), ["기존 게시판 새 공지"]);
+
+    // Once known, the board follows the cursor like the others.
+    run(&controller, &store, directory.path(), &fake).await;
+    assert_eq!(
+        fake.take_requests(),
+        [
+            format!("{BASE}manifest.json"),
+            format!("{BASE}manifest.json.sig")
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_backfill_that_stops_early_runs_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(&directory.path().join("rhythm.sqlite3")).unwrap();
+    store.catalog(&[definition("one")]).unwrap();
+    let store: SharedStore = Arc::new(Mutex::new(store));
+    let fake = Fake::default();
+    let manifest = first_feed(&fake);
+    let controller = Controller::default();
+    run(&controller, &store, directory.path(), &fake).await;
+    store
+        .lock()
+        .unwrap()
+        .catalog(&[definition("one"), definition("two")])
+        .unwrap();
+    // The snapshot is unreachable: the sync fails and the board stays new.
+    fake.fail(&format!("{BASE}{SNAPSHOT}"), FetchError::Offline);
+    run(&controller, &store, directory.path(), &fake).await;
+    assert_eq!(status(&store).result.as_deref(), Some("offline"));
+    assert_eq!(
+        store.lock().unwrap().feed_new_boards().unwrap(),
+        HashSet::from(["two".to_string()])
+    );
+    let feed = Feed {
+        fake: &fake,
+        base: BASE.into(),
+    };
+    feed.records(
+        SNAPSHOT,
+        &[(1, notice("1", "첫 공지")), (2, notice("2", "둘째 공지"))],
+    );
+    feed.publish(&manifest, &signer());
+    run(&controller, &store, directory.path(), &fake).await;
+    assert_eq!(status(&store).result.as_deref(), Some("ok"));
+    assert!(store.lock().unwrap().feed_new_boards().unwrap().is_empty());
+}

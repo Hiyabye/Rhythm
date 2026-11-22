@@ -102,13 +102,14 @@ impl Store {
             }
         }
         proactive::advance_baseline(&transaction)?;
-        self.finish(transaction, through_seq, applied)
+        self.finish(transaction, Some(through_seq), applied)
     }
 
     /// Applies a segment from `from_seq` to `to_seq`, skipping the seqs the
     /// cursor already covers. The cursor must lie inside it or at its start.
     /// `quiet` (a sync that began from the snapshot) keeps its notices out of
     /// notifications and unread counts too, so a first sync never notifies.
+    /// Records of the `skip` boards are left out: this sync backfilled them.
     pub(crate) fn feed_apply_segment(
         &self,
         from_seq: u64,
@@ -116,6 +117,7 @@ impl Store {
         entries: &[Entry],
         vectors: &[u8],
         quiet: bool,
+        skip: &HashSet<String>,
     ) -> Result<Applied, String> {
         let cursor = self
             .feed_cursor()?
@@ -129,33 +131,105 @@ impl Store {
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
         let mut applied = Applied::default();
-        for entry in entries.iter().filter(|e| e.seq > cursor) {
+        for entry in entries
+            .iter()
+            .filter(|e| e.seq > cursor && !record_source(e).is_some_and(|s| skip.contains(s)))
+        {
             apply(&transaction, entry, &vectors, quiet, &mut applied)?;
         }
         if quiet {
             proactive::advance_baseline(&transaction)?;
         }
-        self.finish(transaction, to_seq, applied)
+        self.finish(transaction, Some(to_seq), applied)
+    }
+
+    /// Applies the records of `boards` with a seq above `after` from one file
+    /// of the snapshot path (the snapshot, then each later segment), leaving
+    /// the cursor and every other board alone. It brings in boards the catalog
+    /// gained after earlier syncs skipped their records (#80): like a first
+    /// sync, what it adds starts read and never becomes a notification.
+    pub(crate) fn feed_backfill(
+        &self,
+        boards: &HashSet<String>,
+        after: u64,
+        entries: &[Entry],
+        vectors: &[u8],
+    ) -> Result<Applied, String> {
+        let vectors = chunks(vectors)?;
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let mut applied = Applied::default();
+        for entry in entries
+            .iter()
+            .filter(|e| e.seq > after && record_source(e).is_some_and(|s| boards.contains(s)))
+        {
+            apply(&transaction, entry, &vectors, true, &mut applied)?;
+        }
+        proactive::advance_baseline(&transaction)?;
+        self.finish(transaction, None, applied)
+    }
+
+    /// Public boards in the catalog that the mirror did not know at its last
+    /// complete sync.
+    pub(crate) fn feed_new_boards(&self) -> Result<HashSet<String>, String> {
+        self.connection
+            .prepare(
+                "SELECT id FROM sources WHERE supported=1 AND family<>'cybercampus'
+                   AND id NOT IN (SELECT source_id FROM feed_known_boards)",
+            )
+            .and_then(|mut statement| statement.query_map([], |r| r.get(0))?.collect())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Records the catalog's public boards as known, after a sync that
+    /// applied every file it planned.
+    pub(crate) fn feed_remember_boards(&self) -> Result<(), String> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        transaction
+            .execute_batch(
+                "DELETE FROM feed_known_boards;
+                 INSERT INTO feed_known_boards(source_id)
+                   SELECT id FROM sources WHERE supported=1 AND family<>'cybercampus';",
+            )
+            .map_err(|e| e.to_string())?;
+        transaction.commit().map_err(|e| e.to_string())
     }
 
     fn finish(
         &self,
         transaction: Transaction,
-        cursor: u64,
+        cursor: Option<u64>,
         mut applied: Applied,
     ) -> Result<Applied, String> {
-        transaction
-            .execute(
-                "UPDATE feed_state SET cursor=?1 WHERE id=1",
-                [cursor as i64],
-            )
-            .map_err(|e| e.to_string())?;
+        if let Some(cursor) = cursor {
+            transaction
+                .execute(
+                    "UPDATE feed_state SET cursor=?1 WHERE id=1",
+                    [cursor as i64],
+                )
+                .map_err(|e| e.to_string())?;
+        }
         applied.orphaned = unused(&transaction, std::mem::take(&mut applied.orphaned))?;
         transaction.commit().map_err(|e| e.to_string())?;
         if applied.removed > 0 {
             self.recompute_learned()?;
         }
         Ok(applied)
+    }
+}
+
+/// The board a record belongs to; `None` for a record kind of a newer minor version.
+fn record_source(entry: &Entry) -> Option<&str> {
+    match entry.record.as_ref()? {
+        Record::Notice(notice) => Some(&notice.source_id),
+        Record::Embedding(embedding) => Some(&embedding.source_id),
+        Record::Classification(classification) => Some(&classification.source_id),
+        Record::Remove(removal) => Some(&removal.source_id),
     }
 }
 
