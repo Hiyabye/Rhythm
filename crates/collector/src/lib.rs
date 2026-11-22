@@ -7,6 +7,7 @@
 //! removed (#178), so a crawl-rule fix in the meantime belongs in both.
 pub mod crawl;
 pub mod embedding;
+pub mod measured;
 pub mod publish;
 pub mod r2;
 pub mod remote;

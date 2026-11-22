@@ -30,6 +30,7 @@
 use rhythm_collector::{
     crawl::{self, Budget},
     embedding::{self, Limits},
+    measured::Measured,
     publish,
     r2::{self, R2},
     remote,
@@ -189,7 +190,7 @@ async fn crawl(
     mut budget: Budget,
     history_minutes: Option<u32>,
 ) -> Result<(), String> {
-    let client = Client::new(USER_AGENT)?;
+    let client = Measured::new(Client::new(USER_AGENT)?);
     let boards = crawl::public_boards();
     budget.history_until = history_minutes
         .map(|minutes| Instant::now() + Duration::from_secs(u64::from(minutes) * 60));
@@ -221,6 +222,9 @@ async fn crawl(
             group.slowest.0,
             group.slowest.1.as_secs()
         );
+    }
+    for line in client.lines() {
+        println!("{line}");
     }
     // Notices stored before the current extractor version get their dates now.
     println!(
