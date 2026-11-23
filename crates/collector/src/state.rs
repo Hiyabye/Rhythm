@@ -12,13 +12,14 @@ use std::{collections::HashSet, path::Path, sync::Mutex};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 /// Ordered schema migrations; index `n` upgrades `user_version` n to n+1.
-const MIGRATIONS: [&str; 6] = [
+const MIGRATIONS: [&str; 7] = [
     include_str!("../migrations/001_initial.sql"),
     include_str!("../migrations/002_notice_dates.sql"),
     include_str!("../migrations/003_deletions.sql"),
     include_str!("../migrations/004_embeddings.sql"),
     include_str!("../migrations/005_classifications.sql"),
     include_str!("../migrations/006_feed.sql"),
+    include_str!("../migrations/007_transient_failures.sql"),
 ];
 /// A second "not found" removes a notice only this long after the first.
 const MISSING_CONFIRM: &str = "-1 day";
@@ -29,6 +30,9 @@ const AUDIT_WINDOW: &str = "-90 days";
 /// A skipped notice is retried at most once a day, this many times per collector version.
 const SKIPPED_INTERVAL: &str = "-1 day";
 pub const SKIPPED_ATTEMPTS: i64 = 7;
+/// Failures closer together than this count as one run. A notice is fetched
+/// at most once per pass, so this only guards against counting a run twice.
+const TRANSIENT_RUN_GAP: &str = "-10 minutes";
 
 /// A UTC time in the stored form, `modifier` from now (`-1 day`).
 fn ago(modifier: &str) -> String {
@@ -423,6 +427,10 @@ impl State {
         }
         self.with(|c| {
             c.execute(
+                "DELETE FROM transient_failures WHERE source_id=?1 AND external_id=?2",
+                params![source_id, entry.external_id],
+            )?;
+            c.execute(
                 &format!(
                     "INSERT INTO skipped(source_id,external_id,url,historical,reason,response_sha256,
                        recorded_at,attempts,collector_version)
@@ -447,14 +455,51 @@ impl State {
         })
         .map(drop)
     }
+    /// Forgets a notice's skip and its transient failures: it was archived,
+    /// confirmed unchanged or reported missing.
     pub fn clear_skipped(&self, source_id: &str, external_id: &str) -> Result<(), String> {
         self.with(|c| {
             c.execute(
                 "DELETE FROM skipped WHERE source_id=?1 AND external_id=?2",
                 params![source_id, external_id],
+            )?;
+            c.execute(
+                "DELETE FROM transient_failures WHERE source_id=?1 AND external_id=?2",
+                params![source_id, external_id],
             )
         })
         .map(drop)
+    }
+    pub fn is_skipped(&self, source_id: &str, external_id: &str) -> Result<bool, String> {
+        self.with(|c| {
+            c.query_row(
+                "SELECT 1 FROM skipped WHERE source_id=?1 AND external_id=?2",
+                params![source_id, external_id],
+                |_| Ok(()),
+            )
+            .optional()
+        })
+        .map(|row| row.is_some())
+    }
+    /// Records a transient fetch failure and returns on how many runs in a row
+    /// the notice has failed.
+    pub fn record_transient(&self, source_id: &str, external_id: &str) -> Result<i64, String> {
+        self.with(|c| {
+            c.query_row(
+                &format!(
+                    "INSERT INTO transient_failures(source_id,external_id,runs,last_failed_at)
+                     VALUES(?1,?2,1,{NOW})
+                     ON CONFLICT(source_id,external_id) DO UPDATE SET
+                       runs=runs+(last_failed_at<={gap}),
+                       last_failed_at=CASE WHEN last_failed_at<={gap}
+                         THEN excluded.last_failed_at ELSE last_failed_at END
+                     RETURNING runs",
+                    gap = ago(TRANSIENT_RUN_GAP)
+                ),
+                params![source_id, external_id],
+                |row| row.get(0),
+            )
+        })
     }
 
     /// Skipped notices due for a retry: last tried a day ago or more, with
@@ -989,10 +1034,10 @@ mod tests {
         assert_eq!((board.next_page, board.history_complete), (4, true));
         assert!(state.seed_complete("sogang-academic").unwrap());
         state
-            .with(|c| c.execute_batch("PRAGMA user_version=7;"))
+            .with(|c| c.execute_batch("PRAGMA user_version=8;"))
             .unwrap();
         drop(state);
-        assert!(State::open(&path).err().unwrap().contains("version 7"));
+        assert!(State::open(&path).err().unwrap().contains("version 8"));
     }
 
     #[test]

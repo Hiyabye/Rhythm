@@ -31,6 +31,11 @@ const HISTORY_DEADLINE: &str =
 const AUDIT_PER_RUN: usize = 3;
 /// Skipped-notice retries per board and run (user decision).
 const RETRIES_PER_RUN: usize = 3;
+/// A notice whose fetch fails transiently on this many runs in a row is
+/// skipped instead of holding its page (user decision 2026-11-23): from the
+/// GitHub runner, a few large pages timed out on every run and stopped their
+/// boards for good.
+const TRANSIENT_RUNS: i64 = 3;
 /// The incremental edit window: known notices are re-fetched for edits only
 /// within the first three pages and the first this many regular rows (user
 /// decision, #80). Ten-row boards keep three pages; the main site's 50-row
@@ -580,6 +585,11 @@ impl<T: Transport> Crawl<'_, T> {
                 {
                     continue;
                 }
+                // A skipped notice is retried by `upkeep` once a day, not on
+                // every pass that lists it.
+                if state.is_skipped(&definition.id, &entry.external_id)? {
+                    continue;
+                }
                 // A sitemap-backed listing carries the site's own change time.
                 // Skip the request while the stored notice already matches it.
                 if let (true, Some(modified_at)) = (exists, entry.modified_at.as_deref()) {
@@ -641,16 +651,38 @@ impl<T: Transport> Crawl<'_, T> {
                         if exists {
                             state.mark_missing(&definition.id, &entry.external_id)?;
                         }
+                        // Ends a run of transient failures (passes never reach
+                        // a skipped notice).
+                        state.clear_skipped(&definition.id, &entry.external_id)?;
                     }
                     Err(ArticleError::Transient(error)) => {
                         active(self.cancel)?;
-                        board.failed += 1;
                         // The server asked to slow down; the rest of the page
                         // would only repeat the refusal.
                         if error == network::RATE_LIMITED {
+                            board.failed += 1;
                             return Err(error);
                         }
-                        errors.push(error);
+                        ensure_active(self.cancel)?;
+                        if state.record_transient(&definition.id, &entry.external_id)?
+                            >= TRANSIENT_RUNS
+                        {
+                            state.record_skipped(
+                                &definition.id,
+                                &entry,
+                                historical || seed,
+                                &skip_reason(
+                                    &format!(
+                                        "{TRANSIENT_RUNS}번의 실행에서 연이어 내려받지 못했습니다."
+                                    ),
+                                    &error,
+                                ),
+                                &crate::sha256_hex(b""),
+                            )?;
+                        } else {
+                            board.failed += 1;
+                            errors.push(error);
+                        }
                     }
                 }
                 state.progress(board, "running", None, false)?;
@@ -719,11 +751,12 @@ impl<T: Transport> Crawl<'_, T> {
         }
         let initial = parser::list_url(definition, 1)?;
         let policy = Robots::load(self.transport, &initial, self.cancel, Access::Source).await?;
-        let work = audits
-            .into_iter()
-            .map(|entry| (entry, false))
-            .chain(retries);
-        for (entry, historical) in work {
+        let work = audits.into_iter().map(|entry| (entry, false, false)).chain(
+            retries
+                .into_iter()
+                .map(|(entry, historical)| (entry, historical, true)),
+        );
+        for (entry, historical, retry) in work {
             active(self.cancel)?;
             let existing_id = state.notice_id(&definition.id, &entry.external_id)?;
             match self
@@ -754,9 +787,20 @@ impl<T: Transport> Crawl<'_, T> {
                 }
                 Err(ArticleError::Transient(error)) => {
                     active(self.cancel)?;
-                    // Tried again in a later run.
                     if error == network::RATE_LIMITED {
                         return Err(error);
+                    }
+                    // A failed retry uses one of its attempts and waits a day;
+                    // an audit is tried again in a later run.
+                    if retry {
+                        ensure_active(self.cancel)?;
+                        state.record_skipped(
+                            &definition.id,
+                            &entry,
+                            historical,
+                            &skip_reason("다시 시도했지만 내려받지 못했습니다.", &error),
+                            &crate::sha256_hex(b""),
+                        )?;
                     }
                 }
             }
@@ -878,6 +922,17 @@ impl From<&str> for ArticleError {
     fn from(error: &str) -> Self {
         Self::Transient(error.into())
     }
+}
+
+/// A skipped reason within the state's 1,024-byte limit.
+fn skip_reason(summary: &str, error: &str) -> String {
+    let mut reason = format!("{summary} {error}");
+    let mut end = reason.len().min(1024);
+    while !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    reason.truncate(end);
+    reason
 }
 
 fn page_failure(errors: &[String]) -> String {

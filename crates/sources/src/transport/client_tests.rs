@@ -8,6 +8,39 @@ enum Reply {
     Http(u16),
     ConnectionFailure,
     Pending,
+    /// A 200 whose body arrives as `chunks` blocks of `CHUNK` bytes, one
+    /// every `every`.
+    Trickle {
+        chunks: usize,
+        every: Duration,
+    },
+}
+
+static CHUNK: [u8; 64 * 1024] = [b'a'; 64 * 1024];
+
+struct Trickle {
+    left: usize,
+    every: Duration,
+    sleep: std::pin::Pin<Box<tokio::time::Sleep>>,
+}
+
+impl http_body::Body for Trickle {
+    type Data = &'static [u8];
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        if self.left == 0 {
+            return std::task::Poll::Ready(None);
+        }
+        std::task::ready!(self.sleep.as_mut().poll(cx));
+        self.left -= 1;
+        let next = tokio::time::Instant::now() + self.every;
+        self.sleep.as_mut().reset(next);
+        std::task::Poll::Ready(Some(Ok(http_body::Frame::data(&CHUNK[..]))))
+    }
 }
 
 pub(super) struct Script {
@@ -56,6 +89,16 @@ impl Script {
                 .into()),
             Reply::ConnectionFailure => Err(Failure::Retry(CONNECTION_FAILED.into())),
             Reply::Pending => std::future::pending().await,
+            Reply::Trickle { chunks, every } => Ok(http::Response::builder()
+                .status(200)
+                .header("Content-Type", "text/html")
+                .body(reqwest::Body::wrap(Trickle {
+                    left: chunks,
+                    every,
+                    sleep: Box::pin(tokio::time::sleep(every)),
+                }))
+                .unwrap()
+                .into()),
         }
     }
 
@@ -199,7 +242,7 @@ async fn studium_client_deadline_ends_a_hung_attempt_without_retry() {
         .unwrap_err()
         .message
         .contains("응답 시간이 초과"));
-    assert_eq!(started.elapsed(), Duration::from_secs(25));
+    assert_eq!(started.elapsed(), HEADER_WAIT);
     script.assert_one_request(&status_url());
 }
 
@@ -225,5 +268,46 @@ async fn studium_client_cancellation_stops_a_hung_attempt_without_retry() {
     cancel.store(true, Ordering::Release);
     tokio::time::advance(Duration::from_millis(100)).await;
     assert!(task.await.unwrap().unwrap_err().message.contains("중단"));
+    script.assert_one_request(&status_url());
+}
+
+async fn get_large(client: &Client, url: &Url) -> Result<Fetch, FetchError> {
+    client
+        .get(url, None, 4 << 20, &AtomicBool::new(false), Access::Studium)
+        .await
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_slow_body_within_its_deadline_completes() {
+    // 1.25 MB over 60 s: what the collector's runner saw on se.sogang.ac.kr,
+    // past the old 20 s total timeout.
+    let (client, script) = Script::client(
+        public_addresses(),
+        vec![Reply::Trickle {
+            chunks: 20,
+            every: Duration::from_secs(3),
+        }],
+    );
+    match get_large(&client, &status_url()).await.unwrap() {
+        Fetch::Body { bytes, .. } => assert_eq!(bytes.len(), 20 * CHUNK.len()),
+        _ => panic!("a slow body must still arrive"),
+    }
+    script.assert_one_request(&status_url());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_body_past_its_deadline_is_reported_as_a_timeout() {
+    let (client, script) = Script::client(
+        public_addresses(),
+        vec![Reply::Trickle {
+            // Under the byte limit, but it would take 120 s.
+            chunks: 60,
+            every: Duration::from_secs(2),
+        }],
+    );
+    let started = tokio::time::Instant::now();
+    let error = get_large(&client, &status_url()).await.unwrap_err();
+    assert_eq!(error.message, TIMED_OUT);
+    assert_eq!(started.elapsed(), BODY_WAIT);
     script.assert_one_request(&status_url());
 }
