@@ -329,8 +329,27 @@ pub(super) fn article(
         if !filepath.is_some_and(|value| !value.is_empty() && value.len() <= 2048) {
             return invalid();
         }
-        let filename = filename.ok_or(PARSER_ERROR)?;
-        if !attachment_name(&filename) || normalize(&text(link)) != normalize(&filename) {
+        // The board writes names raw into the href, so a `+` in a name is a
+        // literal plus that form decoding would turn into a space (se notice
+        // 29). The page shows the name; take whichever reading matches it.
+        let literal = url::form_urlencoded::parse(
+            target
+                .query()
+                .unwrap_or_default()
+                .replace('+', "%2B")
+                .as_bytes(),
+        )
+        .find(|(key, _)| key == "filename")
+        .map(|(_, value)| value.into_owned());
+        let shown = normalize(&text(link));
+        let Some(filename) = [filename, literal]
+            .into_iter()
+            .flatten()
+            .find(|name| normalize(name) == shown)
+        else {
+            return invalid();
+        };
+        if !attachment_name(&filename) {
             return invalid();
         }
         resources.push(ResourceInput {
