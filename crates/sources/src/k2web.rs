@@ -343,6 +343,7 @@ impl Rows<'_> {
         Ok(())
     }
 }
+const PRIVATE_POST: &str = "비공개된 게시물입니다.";
 fn table_rows(list: ElementRef<'_>, rows: &mut Rows<'_>) -> Result<(), String> {
     let table = one(list, "table.board-table")?;
     let cells: Vec<_> = table.select(selector("tbody tr")).collect();
@@ -352,7 +353,19 @@ fn table_rows(list: ElementRef<'_>, rows: &mut Rows<'_>) -> Result<(), String> {
     for row in cells {
         let number = one(row, "td.td-num")?;
         date(&text(one(row, "td.td-date")?).replace('.', "-"))?;
-        let anchor = one(row, "td.td-title a")?;
+        // A private post keeps its ordinal but shows no link, only this text
+        // and a `clsdr` marker (gradsch 1244), so there is nothing to archive.
+        let cell = one(row, "td.td-title")?;
+        if cell.select(selector("a")).next().is_none()
+            && !row.value().classes().any(|class| class == "notice")
+        {
+            if text(one(cell, "span.clsdr")?) != "clsdr" || own_text(cell) != PRIVATE_POST {
+                return invalid();
+            }
+            rows.count(text(number).parse::<u32>().map_err(|_| PARSER_ERROR)?)?;
+            continue;
+        }
+        let anchor = one(cell, "a")?;
         // A board with categories prints `[category]` beside the `strong`
         // title, which is the title the article page confirms.
         let title = match anchor.select(selector("strong")).count() {

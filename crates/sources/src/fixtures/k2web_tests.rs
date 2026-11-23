@@ -696,6 +696,41 @@ fn a_link_post_keeps_its_ordinal_but_is_not_this_boards_notice() {
     }
 }
 
+#[test]
+fn a_private_post_keeps_its_ordinal_without_a_link() {
+    // gradsch 1244 page 3: ordinal 770 is `비공개된 게시물입니다.` with no link.
+    let list = include_str!("k2web-gradsch-page3.html");
+    let page = listing(board("gradsch-notice"), 3, list).unwrap();
+    assert_eq!((page.total_pages, page.has_next), (80, true));
+    let regular: Vec<_> = page
+        .entries
+        .iter()
+        .filter(|entry| !entry.pinned)
+        .map(|entry| entry.external_id.as_str())
+        .collect();
+    assert_eq!(
+        regular,
+        ["388559", "388560", "388561", "388562", "388564", "388566", "388568", "388570"]
+    );
+    // 388569 is listed as ordinal 766 and is also a pin.
+    assert!(page
+        .entries
+        .iter()
+        .any(|e| e.external_id == "388569" && e.pinned));
+
+    // Only the exact private marker stands in for a link.
+    for (from, to) in [
+        ("비공개된 게시물입니다.", "다른 문구"),
+        ("<span class=\"clsdr\">clsdr</span>", ""),
+    ] {
+        assert_eq!(list.matches(from).count(), 1, "{from}");
+        assert!(
+            listing(board("gradsch-notice"), 3, &list.replace(from, to)).is_err(),
+            "{from}"
+        );
+    }
+}
+
 /// The collector skips a known notice while its list title equals the archived
 /// one (#80 step 3), so a list row must show exactly the title the article
 /// page yields, including a board whose category sits beside the title.

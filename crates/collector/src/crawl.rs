@@ -562,7 +562,12 @@ impl<T: Transport> Crawl<'_, T> {
                 .map(|e| e.external_id.as_str())
                 .collect::<Vec<_>>()
                 .join(",");
-            if listing.has_next && (!page_hashes.insert(fingerprint) || listing.entries.is_empty())
+            // A page of pins only repeats legitimately (sociology-news: the
+            // newest notices are all pinned, so pages 1 and 2 list the same
+            // pins); paging stays bounded by the declared total.
+            let pins_only = listing.entries.iter().all(|entry| entry.pinned);
+            if listing.has_next
+                && ((!pins_only && !page_hashes.insert(fingerprint)) || listing.entries.is_empty())
             {
                 return Err("학교 목록이 반복되어 가져오기를 중단했습니다. 전체 이력을 완료하지 않았습니다.".into());
             }
