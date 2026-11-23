@@ -6,52 +6,10 @@ fn board(id: &str) -> &'static K2webBoard {
         .find(|board| board.source_id == id)
         .unwrap()
 }
-/// A k2web board captured for these fixtures but not in the catalog (#80 step 2).
-const fn other(
-    name: &'static str,
-    site: &'static str,
-    menu: u32,
-    bbs: u32,
-    rows: u32,
-    skin: Skin,
-) -> K2webBoard {
-    K2webBoard {
-        source_id: "test",
-        name,
-        organization: "test",
-        group: "test",
-        site,
-        menu,
-        bbs,
-        rows,
-        skin,
-    }
+/// An editable copy of a catalogued board, for tampering tests.
+fn copy(board: &K2webBoard) -> K2webBoard {
+    K2webBoard { ..*board }
 }
-const GSOT: K2webBoard = other("공지사항", "gsot", 3208, 908, 12, Skin::Table);
-const SOCIOLOGY: K2webBoard = other("학술행사", "sociology", 4375, 2778, 10, Skin::Table);
-const SBS: K2webBoard = other("학부", "sbs", 2088, 649, 10, Skin::Table);
-/// `board-table horizon4`: the same cells in another column order.
-const SCIENCE: K2webBoard = other("뉴스레터", "science", 10414, 2740, 12, Skin::Table);
-const GSINFO: K2webBoard = other("공지사항", "gsinfo", 4539, 2465, 10, Skin::Table);
-const LIBERALARTS: K2webBoard = other(
-    "포스터 게시판",
-    "liberalarts",
-    4007,
-    1722,
-    12,
-    Skin::Gallery,
-);
-/// Five posts on one page, so any page size of five or more fits.
-const INNOV: K2webBoard = other("호수별 보기", "innov", 10558, 3184, 10, Skin::Gallery);
-const OUTBOUND: K2webBoard = other(
-    "파견교환/방문학생 선발",
-    "outbound",
-    1918,
-    617,
-    10,
-    Skin::Table,
-);
-
 fn entry_of(page: &ListingPage, external_id: &str) -> ListingEntry {
     page.entries
         .iter()
@@ -123,7 +81,7 @@ fn three_boards_parse_official_list_and_detail_pages() {
 #[test]
 fn the_catalog_and_parser_dispatch_use_the_board_table() {
     let definitions = crate::catalog::definitions();
-    for board in &K2WEB_BOARDS {
+    for board in K2WEB_BOARDS {
         let source = definitions
             .iter()
             .find(|source| source.id == board.source_id)
@@ -184,23 +142,48 @@ fn repeated_pins_do_not_distort_regular_rows_or_duplicate_entries() {
 fn table_boards_of_other_sites_page_through_their_history() {
     // 1,129 notices at 12 rows: 95 pages, eight pins repeated on each page,
     // some of them also among the regular rows.
-    let first = listing(&GSOT, 1, include_str!("k2web-gsot-list.html")).unwrap();
+    let first = listing(
+        board("gsot-notice"),
+        1,
+        include_str!("k2web-gsot-list.html"),
+    )
+    .unwrap();
     assert_eq!((first.total_pages, first.has_next), (95, true));
     assert_eq!((pins(&first), first.entries.len()), (8, 15));
-    let second = listing(&GSOT, 2, include_str!("k2web-gsot-page2.html")).unwrap();
+    let second = listing(
+        board("gsot-notice"),
+        2,
+        include_str!("k2web-gsot-page2.html"),
+    )
+    .unwrap();
     assert_eq!((pins(&second), second.entries.len()), (8, 17));
-    let last = listing(&GSOT, 95, include_str!("k2web-gsot-last.html")).unwrap();
+    let last = listing(
+        board("gsot-notice"),
+        95,
+        include_str!("k2web-gsot-last.html"),
+    )
+    .unwrap();
     assert_eq!((last.total_pages, last.has_next), (95, false));
     // Ordinal 1 is the only regular row on the last page.
     assert_eq!((pins(&last), last.entries.len()), (8, 9));
 
     // 52 pins; nine of the ten regular rows are pins too.
-    let gsinfo = listing(&GSINFO, 1, include_str!("k2web-gsinfo-list.html")).unwrap();
+    let gsinfo = listing(
+        board("gsinfo-notice"),
+        1,
+        include_str!("k2web-gsinfo-list.html"),
+    )
+    .unwrap();
     assert_eq!(
         (gsinfo.total_pages, pins(&gsinfo), gsinfo.entries.len()),
         (59, 52, 53)
     );
-    let sociology = listing(&SOCIOLOGY, 1, include_str!("k2web-sociology-list.html")).unwrap();
+    let sociology = listing(
+        board("sociology-events"),
+        1,
+        include_str!("k2web-sociology-list.html"),
+    )
+    .unwrap();
     assert_eq!(
         (
             sociology.total_pages,
@@ -209,17 +192,27 @@ fn table_boards_of_other_sites_page_through_their_history() {
         ),
         (7, 13, 13)
     );
-    let sbs = listing(&SBS, 1, include_str!("k2web-sbs-list.html")).unwrap();
+    let sbs = listing(board("sbs-notice"), 1, include_str!("k2web-sbs-list.html")).unwrap();
     assert_eq!(
         (sbs.total_pages, pins(&sbs), sbs.entries.len()),
         (37, 3, 13)
     );
-    let science = listing(&SCIENCE, 1, include_str!("k2web-science-list.html")).unwrap();
+    let science = listing(
+        board("science-newsletter"),
+        1,
+        include_str!("k2web-science-list.html"),
+    )
+    .unwrap();
     assert_eq!(
         (science.total_pages, pins(&science), science.entries.len()),
         (3, 0, 12)
     );
-    let outbound = listing(&OUTBOUND, 1, include_str!("k2web-outbound-list.html")).unwrap();
+    let outbound = listing(
+        board("outbound-selection"),
+        1,
+        include_str!("k2web-outbound-list.html"),
+    )
+    .unwrap();
     assert_eq!(
         (
             outbound.total_pages,
@@ -230,14 +223,19 @@ fn table_boards_of_other_sites_page_through_their_history() {
     );
 
     // A wrong page size disagrees with the declared page count.
-    let mut wrong = GSOT;
+    let mut wrong = copy(board("gsot-notice"));
     wrong.rows = 10;
     assert!(listing(&wrong, 1, include_str!("k2web-gsot-list.html")).is_err());
 }
 
 #[test]
 fn gallery_boards_read_cards_and_their_ordinals() {
-    let first = listing(&LIBERALARTS, 1, include_str!("k2web-liberalarts-list.html")).unwrap();
+    let first = listing(
+        board("liberalarts-posters"),
+        1,
+        include_str!("k2web-liberalarts-list.html"),
+    )
+    .unwrap();
     assert_eq!(
         (first.total_pages, first.has_next, first.entries.len()),
         (24, true, 12)
@@ -248,14 +246,14 @@ fn gallery_boards_read_cards_and_their_ordinals() {
         "https://new-cms.sogang.ac.kr/bbs/liberalarts/1722/425315/artclView.do"
     );
     let second = listing(
-        &LIBERALARTS,
+        board("liberalarts-posters"),
         2,
         include_str!("k2web-liberalarts-page2.html"),
     )
     .unwrap();
     assert_eq!(second.entries.len(), 12);
     let last = listing(
-        &LIBERALARTS,
+        board("liberalarts-posters"),
         24,
         include_str!("k2web-liberalarts-last.html"),
     )
@@ -263,7 +261,12 @@ fn gallery_boards_read_cards_and_their_ordinals() {
     assert_eq!((last.has_next, last.entries.len()), (false, 11));
 
     // The webzine variant: `NO. 5` and labels without classes.
-    let innov = listing(&INNOV, 1, include_str!("k2web-innov-list.html")).unwrap();
+    let innov = listing(
+        board("innov-newsletter"),
+        1,
+        include_str!("k2web-innov-list.html"),
+    )
+    .unwrap();
     assert_eq!(
         (innov.total_pages, innov.has_next, innov.entries.len()),
         (1, false, 5)
@@ -294,10 +297,10 @@ fn gallery_boards_read_cards_and_their_ordinals() {
         ),
     ] {
         assert_ne!(changed, list);
-        assert!(listing(&LIBERALARTS, 1, &changed).is_err());
+        assert!(listing(board("liberalarts-posters"), 1, &changed).is_err());
     }
     // A table board's page is not a gallery, and the other way round.
-    let mut table = LIBERALARTS;
+    let mut table = copy(board("liberalarts-posters"));
     table.skin = Skin::Table;
     assert!(listing(&table, 1, list).is_err());
 }
@@ -316,7 +319,7 @@ fn beyond_the_last_page_is_rejected_even_though_the_site_serves_pins() {
     )
     .is_err());
     // Same page title and page size, another site.
-    let mut other_site = GSOT;
+    let mut other_site = copy(board("gsot-notice"));
     other_site.site = "gsinfo";
     assert!(listing(&other_site, 1, include_str!("k2web-gsot-list.html")).is_err());
 }
@@ -329,7 +332,7 @@ fn list_urls_and_detail_urls_are_exact() {
         "https://new-cms.sogang.ac.kr/sgdormitory/6975/subview.do?page=3"
     );
     assert_eq!(
-        list_url(&GSOT, 1).unwrap().as_str(),
+        list_url(board("gsot-notice"), 1).unwrap().as_str(),
         "https://new-cms.sogang.ac.kr/gsot/3208/subview.do?page=1"
     );
     let page = listing(general, 1, include_str!("dormitory-general-list.html")).unwrap();
@@ -415,11 +418,12 @@ fn detail_variants_of_other_sites_parse() {
         ),
         pinned: false,
         modified_at: None,
+        title: None,
     };
     // `분류` is an extra label; the category stays the board name.
     let gsot = article(
-        &GSOT,
-        &entry(&GSOT, "420698"),
+        board("gsot-notice"),
+        &entry(board("gsot-notice"), "420698"),
         include_str!("k2web-gsot-detail-420698.html"),
     )
     .unwrap();
@@ -441,13 +445,18 @@ fn detail_variants_of_other_sites_parse() {
         detail[label..].replacen("일반", "학사", 1)
     );
     assert_ne!(wrong_class, detail);
-    assert!(article(&GSOT, &entry(&GSOT, "420698"), &wrong_class).is_err());
+    assert!(article(
+        board("gsot-notice"),
+        &entry(board("gsot-notice"), "420698"),
+        &wrong_class
+    )
+    .is_err());
     assert!(gsot.resources.is_empty());
 
     // No `작성자` item.
     let sbs = article(
-        &SBS,
-        &entry(&SBS, "425296"),
+        board("sbs-notice"),
+        &entry(board("sbs-notice"), "425296"),
         include_str!("k2web-sbs-detail-425296.html"),
     )
     .unwrap();
@@ -469,9 +478,14 @@ fn detail_variants_of_other_sites_parse() {
     // `og:url` is the literal `?` on this site; the list form and hidden title
     // still bind the page.
     let detail = include_str!("k2web-sociology-detail-352078.html");
-    let sociology = article(&SOCIOLOGY, &entry(&SOCIOLOGY, "352078"), detail).unwrap();
+    let sociology = article(
+        board("sociology-events"),
+        &entry(board("sociology-events"), "352078"),
+        detail,
+    )
+    .unwrap();
     assert_eq!(sociology.published_at, "2026-04-17");
-    let mut other_board = SOCIOLOGY;
+    let mut other_board = copy(board("sociology-events"));
     other_board.bbs = 2779;
     assert!(article(&other_board, &entry(&other_board, "352078"), detail).is_err());
 
@@ -481,11 +495,16 @@ fn detail_variants_of_other_sites_parse() {
         r#"<div class="not-attachment">"#,
     );
     assert_ne!(without, detail);
-    assert!(article(&SOCIOLOGY, &entry(&SOCIOLOGY, "352078"), &without).is_ok());
+    assert!(article(
+        board("sociology-events"),
+        &entry(board("sociology-events"), "352078"),
+        &without
+    )
+    .is_ok());
 
     let science = article(
-        &SCIENCE,
-        &entry(&SCIENCE, "347256"),
+        board("science-newsletter"),
+        &entry(board("science-newsletter"), "347256"),
         include_str!("k2web-science-detail-347256.html"),
     )
     .unwrap();
@@ -495,8 +514,8 @@ fn detail_variants_of_other_sites_parse() {
     );
 
     let gsinfo = article(
-        &GSINFO,
-        &entry(&GSINFO, "374796"),
+        board("gsinfo-notice"),
+        &entry(board("gsinfo-notice"), "374796"),
         include_str!("k2web-gsinfo-detail-374796.html"),
     )
     .unwrap();
@@ -511,8 +530,8 @@ fn detail_variants_of_other_sites_parse() {
 
     // A poster post: its body is images in the site's own folder.
     let poster = article(
-        &LIBERALARTS,
-        &entry(&LIBERALARTS, "425315"),
+        board("liberalarts-posters"),
+        &entry(board("liberalarts-posters"), "425315"),
         include_str!("k2web-liberalarts-detail-425315.html"),
     )
     .unwrap();
@@ -531,8 +550,8 @@ fn detail_variants_of_other_sites_parse() {
     );
 
     let innov = article(
-        &INNOV,
-        &entry(&INNOV, "405464"),
+        board("innov-newsletter"),
+        &entry(board("innov-newsletter"), "405464"),
         include_str!("k2web-innov-detail-405464.html"),
     )
     .unwrap();
@@ -555,8 +574,9 @@ fn a_login_only_post_is_a_permanent_failure_not_a_missing_notice() {
         url: "https://new-cms.sogang.ac.kr/bbs/outbound/617/420716/artclView.do".into(),
         pinned: false,
         modified_at: None,
+        title: None,
     };
-    let error = article(&OUTBOUND, &entry, page).unwrap_err();
+    let error = article(board("outbound-selection"), &entry, page).unwrap_err();
     assert_ne!(error, PARSER_ERROR);
     assert!(error.contains("로그인"), "{error}");
     assert!(!missing(page));
@@ -652,7 +672,7 @@ fn a_link_post_keeps_its_ordinal_but_is_not_this_boards_notice() {
     assert_eq!(list.matches(original).count(), 1);
     let linked = |href: &str| list.replace(original, href);
     let page = listing(
-        &LIBERALARTS,
+        board("liberalarts-posters"),
         1,
         &linked("https://oisa.sogang.ac.kr/oisa/1386/subview.do?enc=Zm5jdDF8QEB8"),
     )
@@ -669,6 +689,97 @@ fn a_link_post_keeps_its_ordinal_but_is_not_this_boards_notice() {
         "http://oisa.sogang.ac.kr/oisa/1386/subview.do?enc=Zm5jdDF8QEB8",
         "https://oisa.sogang.ac.kr/oisa/1386/list.do?enc=Zm5jdDF8QEB8",
     ] {
-        assert!(listing(&LIBERALARTS, 1, &linked(href)).is_err(), "{href}");
+        assert!(
+            listing(board("liberalarts-posters"), 1, &linked(href)).is_err(),
+            "{href}"
+        );
+    }
+}
+
+/// The collector skips a known notice while its list title equals the archived
+/// one (#80 step 3), so a list row must show exactly the title the article
+/// page yields, including a board whose category sits beside the title.
+#[test]
+fn list_titles_match_the_archived_article_titles() {
+    let cases: [(&K2webBoard, &str, &str, &str); 10] = [
+        (
+            board("dorm-general"),
+            include_str!("dormitory-general-list.html"),
+            include_str!("dormitory-general-detail-313348.html"),
+            "313348",
+        ),
+        (
+            board("dorm-admission"),
+            include_str!("dormitory-admission-list.html"),
+            include_str!("dormitory-admission-detail-283698.html"),
+            "283698",
+        ),
+        (
+            board("dorm-menu"),
+            include_str!("dormitory-menu-list.html"),
+            include_str!("dormitory-menu-detail-374772.html"),
+            "374772",
+        ),
+        (
+            board("gsot-notice"),
+            include_str!("k2web-gsot-list.html"),
+            include_str!("k2web-gsot-detail-420698.html"),
+            "420698",
+        ),
+        (
+            board("sbs-notice"),
+            include_str!("k2web-sbs-list.html"),
+            include_str!("k2web-sbs-detail-425296.html"),
+            "425296",
+        ),
+        (
+            board("science-newsletter"),
+            include_str!("k2web-science-list.html"),
+            include_str!("k2web-science-detail-347256.html"),
+            "347256",
+        ),
+        (
+            board("gsinfo-notice"),
+            include_str!("k2web-gsinfo-list.html"),
+            include_str!("k2web-gsinfo-detail-374796.html"),
+            "374796",
+        ),
+        (
+            board("sociology-events"),
+            include_str!("k2web-sociology-list.html"),
+            include_str!("k2web-sociology-detail-352078.html"),
+            "352078",
+        ),
+        (
+            board("liberalarts-posters"),
+            include_str!("k2web-liberalarts-list.html"),
+            include_str!("k2web-liberalarts-detail-425315.html"),
+            "425315",
+        ),
+        (
+            board("innov-newsletter"),
+            include_str!("k2web-innov-list.html"),
+            include_str!("k2web-innov-detail-405464.html"),
+            "405464",
+        ),
+    ];
+    for (board, list, detail, external) in cases {
+        let page = listing(board, 1, list).unwrap();
+        assert!(
+            page.entries.iter().all(|entry| entry
+                .title
+                .as_deref()
+                .is_some_and(|title| !title.is_empty())),
+            "{}",
+            board.site
+        );
+        let entry = entry_of(&page, external);
+        let archived = article(board, &entry, detail).unwrap();
+        assert_eq!(
+            entry.title.as_deref(),
+            Some(archived.title.as_str()),
+            "{}",
+            board.site
+        );
     }
 }

@@ -606,6 +606,9 @@ mod tests {
             "/sites/sgdormitory/atchmnfl/bbs/2231/temp_1795392463736100.png",
             "/sites/sgdormitory/images/migrated/bbs/884755_1.JPG",
             "/sites/sgdormitory/%EB%B0%94%EB%A1%9C.png",
+            "/gsot/3208/subview.do",
+            "/bbs/gsot/908/420698/artclView.do",
+            "/sites/gsot/atchmnfl/bbs/908/image.png",
             "/robots.txt",
         ] {
             assert!(
@@ -626,10 +629,18 @@ mod tests {
             "/CrossEditor/binary/images/000035/nested/image.png",
             "/CrossEditor/binary/other/000035/image.png",
             "/Web-home/_UI/css/common/jquery-ui.css",
-            // Another k2web site that is not in the catalog.
-            "/gsot/3208/subview.do",
-            "/bbs/gsot/908/420698/artclView.do",
-            "/sites/gsot/atchmnfl/bbs/908/image.png",
+            // A k2web site that is not in the catalog, and a left-out board
+            // (시설 관련) of a catalogued site.
+            "/sgarmy/6887/subview.do",
+            "/bbs/sgarmy/2001/420698/artclView.do",
+            "/sites/sgarmy/atchmnfl/bbs/2001/image.png",
+            "/sgdormitory/3945/subview.do",
+            "/bbs/sgdormitory/1646/313348/artclView.do",
+            // A catalogued site with a menu or board id the catalog does not list,
+            // and one site's menu under another site.
+            "/history/3208/subview.do",
+            "/gsot/3209/subview.do",
+            "/bbs/gsot/909/420698/artclView.do",
             // Site folders hold only images the policy approves.
             "/sites/sgdormitory/atchmnfl/bbs/2231/file.pdf",
             "/sites/sgdormitory/a/b/c/d/e/f/image.png",

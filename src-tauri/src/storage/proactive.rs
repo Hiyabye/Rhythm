@@ -532,7 +532,7 @@ impl Store {
         let limit = limit.clamp(1, MAX_CANDIDATES) as i64;
         let mut statement = self
             .connection
-            .prepare(
+            .prepare(concat!(
                 "WITH baseline(value) AS (
                    SELECT baseline_revision_id FROM proactive_baseline WHERE id=1
                  ),
@@ -560,7 +560,7 @@ impl Store {
                  ) AS (
                    SELECT r.document_id,r.id,
                      CASE WHEN f.revision_id=r.id THEN 'new' ELSE 'revision' END,
-                    r.title,d.source_id,s.name,d.category,d.published_at,
+                    r.title,d.source_id,", source_label!(), ",d.category,d.published_at,
                     r.collected_at,d.historical,
                     CASE WHEN s.supported=1 AND s.subscribed=1 AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id) AND (
                       NOT EXISTS(SELECT 1 FROM source_extensions se WHERE se.source_id=s.id)
@@ -588,8 +588,8 @@ impl Store {
                    WHERE dd.document_id=c.document_id AND dd.revision_id=c.revision_id
                      AND dd.event_type=c.event_type
                  )
-                 ORDER BY c.revision_id LIMIT ?1",
-            )
+                 ORDER BY c.revision_id LIMIT ?1"
+            ))
             .map_err(|e| e.to_string())?;
         let rows = statement
             .query_map([limit], candidate_row)
@@ -604,8 +604,8 @@ impl Store {
         match self
             .connection
             .query_row(
-                "SELECT e.document_id,e.revision_id,e.event_type,r.title,d.source_id,
-                        s.name,d.category,d.published_at,r.collected_at,d.historical,
+                concat!("SELECT e.document_id,e.revision_id,e.event_type,r.title,d.source_id,
+                        ", source_label!(), ",d.category,d.published_at,r.collected_at,d.historical,
                         CASE WHEN s.supported=1 AND s.subscribed=1 AND NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id) AND (
                           NOT EXISTS(SELECT 1 FROM source_extensions se WHERE se.source_id=s.id)
                           OR EXISTS(
@@ -619,7 +619,7 @@ impl Store {
                  JOIN sources s ON s.id=d.source_id
                  JOIN document_revisions r
                    ON r.id=e.revision_id AND r.document_id=e.document_id
-                 WHERE e.id=?1",
+                 WHERE e.id=?1"),
                 [id],
                 candidate_row,
             )

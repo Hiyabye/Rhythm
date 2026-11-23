@@ -345,6 +345,7 @@ fn main_listing(board: &MainBoard, page: u32, body: &str) -> Result<ListingPage,
                 external_id,
                 pinned,
                 modified_at: None,
+                title: None,
             });
         }
     }
@@ -482,6 +483,7 @@ fn computing_listing(
             url: format!("https://computing.sogang.ac.kr{prefix}{external_id}"),
             pinned,
             modified_at: None,
+            title: None,
         });
     }
     let start = regular.saturating_sub((page - 1) * 10);

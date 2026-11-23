@@ -1012,7 +1012,7 @@ fn candidates_are_bounded_filtered_and_dedupe_aware() {
     assert_eq!(candidates[0].event_type, ProactiveEventKind::New);
     assert_eq!(candidates[0].title, "공지 1 v0");
     assert_eq!(candidates[0].source_id, "one");
-    assert_eq!(candidates[0].source_name, "테스트 정보원");
+    assert_eq!(candidates[0].source_name, "기관 · 테스트 정보원");
     assert!(!candidates[0].historical);
 
     let update = add_revision(&store, 1, 1);
@@ -1460,7 +1460,7 @@ fn event_candidate_returns_archive_metadata() {
     assert_eq!(candidate.event_type, ProactiveEventKind::New);
     assert_eq!(candidate.title, "공지 1 v0");
     assert_eq!(candidate.source_id, "one");
-    assert_eq!(candidate.source_name, "테스트 정보원");
+    assert_eq!(candidate.source_name, "기관 · 테스트 정보원");
     assert!(!candidate.historical);
     assert!(store.proactive_event_candidate(9999).is_err());
 }

@@ -889,7 +889,7 @@ fn similar_notices_flag_only_exact_cross_posts_and_isolate_model_hashes() {
             .collect::<Vec<_>>(),
         vec![true, false, false]
     );
-    assert_eq!(similar[0].source_name, "공과대학");
+    assert_eq!(similar[0].source_name, "서강 · 공과대학");
     assert_eq!(similar[0].title, " 2026학년도  장학금 신청 안내");
 
     // Duplicates are symmetric and come first even when a non-duplicate scores

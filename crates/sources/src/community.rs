@@ -319,6 +319,7 @@ fn listing_entry(
         url: url.into(),
         pinned,
         modified_at: None,
+        title: None,
     })
 }
 fn row_entries(

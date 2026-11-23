@@ -191,7 +191,10 @@ async fn crawl(
     history_minutes: Option<u32>,
 ) -> Result<(), String> {
     let client = Measured::new(Client::new(USER_AGENT)?);
-    let boards = crawl::public_boards();
+    let (boards, waiting) = crawl::admitted(state, crawl::public_boards())?;
+    if waiting > 0 {
+        println!("{waiting} new boards wait for a later run");
+    }
     budget.history_until = history_minutes
         .map(|minutes| Instant::now() + Duration::from_secs(u64::from(minutes) * 60));
     let report = crawl::run_boards(state, &client, &boards, budget, &AtomicBool::new(false)).await;

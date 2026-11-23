@@ -23,8 +23,10 @@ pub enum Skin {
 
 pub struct K2webBoard {
     pub source_id: &'static str,
-    /// The board's page title, which the list page must show.
+    /// The name the app shows.
     pub name: &'static str,
+    /// The board's page title, which the list page must show.
+    pub title: &'static str,
     pub organization: &'static str,
     pub group: &'static str,
     pub site: &'static str,
@@ -36,41 +38,9 @@ pub struct K2webBoard {
     pub skin: Skin,
 }
 
-pub const K2WEB_BOARDS: [K2webBoard; 3] = [
-    K2webBoard {
-        source_id: "dorm-general",
-        name: "일반공지",
-        organization: "서강대학교 · 벨라르미노 학사",
-        group: "sogang-dorm",
-        site: "sgdormitory",
-        menu: 6975,
-        bbs: 2231,
-        rows: 7,
-        skin: Skin::Table,
-    },
-    K2webBoard {
-        source_id: "dorm-admission",
-        name: "입사 및 퇴사 공지",
-        organization: "서강대학교 · 벨라르미노 학사",
-        group: "sogang-dorm",
-        site: "sgdormitory",
-        menu: 3947,
-        bbs: 1644,
-        rows: 7,
-        skin: Skin::Table,
-    },
-    K2webBoard {
-        source_id: "dorm-menu",
-        name: "주간 메뉴",
-        organization: "서강대학교 · 벨라르미노 학사",
-        group: "sogang-dorm",
-        site: "sgdormitory",
-        menu: 3951,
-        bbs: 1648,
-        rows: 7,
-        skin: Skin::Table,
-    },
-];
+#[path = "k2web/boards.rs"]
+mod boards;
+pub use boards::K2WEB_BOARDS;
 
 pub(super) fn board(source: &SourceDefinition) -> Result<&'static K2webBoard, String> {
     K2WEB_BOARDS
@@ -279,6 +249,23 @@ fn article_link(board: &K2webBoard, href: &str) -> Result<(String, Url), String>
     }
     Ok((external, url))
 }
+/// A row's title text without the `새글` (new post) badge, which galleries
+/// print inside the title element.
+fn listed_title(element: ElementRef<'_>) -> String {
+    let parts: Vec<String> = element
+        .descendants()
+        .filter_map(|node| {
+            let text = node.value().as_text()?;
+            let badge = node
+                .ancestors()
+                .take_while(|ancestor| ancestor.id() != element.id())
+                .filter_map(ElementRef::wrap)
+                .any(|ancestor| ancestor.value().classes().any(|class| class == "new"));
+            (!badge).then(|| text.to_string())
+        })
+        .collect();
+    normalize(&parts.join(" "))
+}
 /// Text directly inside an element, without its labels' text.
 fn own_text(element: ElementRef<'_>) -> String {
     normalize(
@@ -303,7 +290,7 @@ struct Rows<'a> {
     board: &'a K2webBoard,
 }
 impl Rows<'_> {
-    fn pin(&mut self, external: String, url: Url) -> Result<(), String> {
+    fn pin(&mut self, external: String, url: Url, title: String) -> Result<(), String> {
         if !self.pinned.insert(external.clone()) {
             return invalid();
         }
@@ -319,6 +306,7 @@ impl Rows<'_> {
                 url: url.into(),
                 pinned: true,
                 modified_at: None,
+                title: Some(title),
             });
         }
         Ok(())
@@ -331,7 +319,13 @@ impl Rows<'_> {
         self.regular += 1;
         Ok(())
     }
-    fn regular(&mut self, ordinal: u32, external: String, url: Url) -> Result<(), String> {
+    fn regular(
+        &mut self,
+        ordinal: u32,
+        external: String,
+        url: Url,
+        title: String,
+    ) -> Result<(), String> {
         if !self.seen.insert(external.clone()) {
             return invalid();
         }
@@ -343,6 +337,7 @@ impl Rows<'_> {
                 url: url.into(),
                 pinned: false,
                 modified_at: None,
+                title: Some(title),
             });
         }
         Ok(())
@@ -358,7 +353,13 @@ fn table_rows(list: ElementRef<'_>, rows: &mut Rows<'_>) -> Result<(), String> {
         let number = one(row, "td.td-num")?;
         date(&text(one(row, "td.td-date")?).replace('.', "-"))?;
         let anchor = one(row, "td.td-title a")?;
-        if text(anchor).is_empty() {
+        // A board with categories prints `[category]` beside the `strong`
+        // title, which is the title the article page confirms.
+        let title = match anchor.select(selector("strong")).count() {
+            0 => listed_title(anchor),
+            _ => listed_title(one(anchor, "strong")?),
+        };
+        if title.is_empty() {
             return invalid();
         }
         let href = anchor.value().attr("href").ok_or(PARSER_ERROR)?;
@@ -372,10 +373,10 @@ fn table_rows(list: ElementRef<'_>, rows: &mut Rows<'_>) -> Result<(), String> {
             if text(one(number, "span.notice-title")?).is_empty() {
                 return invalid();
             }
-            rows.pin(external, url)?;
+            rows.pin(external, url, title)?;
         } else {
             let ordinal = text(number).parse::<u32>().map_err(|_| PARSER_ERROR)?;
-            rows.regular(ordinal, external, url)?;
+            rows.regular(ordinal, external, url, title)?;
         }
     }
     Ok(())
@@ -406,7 +407,8 @@ fn gallery_rows(list: ElementRef<'_>, rows: &mut Rows<'_>) -> Result<(), String>
         }
         let anchor = one(item, "a")?;
         let href = anchor.value().attr("href").ok_or(PARSER_ERROR)?;
-        if text(one(anchor, "strong.title")?).is_empty() {
+        let title = listed_title(one(anchor, "strong.title")?);
+        if title.is_empty() {
             return invalid();
         }
         let mut published = None;
@@ -429,7 +431,7 @@ fn gallery_rows(list: ElementRef<'_>, rows: &mut Rows<'_>) -> Result<(), String>
             rows.count(ordinal)?;
         } else {
             let (external, url) = article_link(rows.board, href)?;
-            rows.regular(ordinal, external, url)?;
+            rows.regular(ordinal, external, url, title)?;
         }
     }
     Ok(())
@@ -437,7 +439,7 @@ fn gallery_rows(list: ElementRef<'_>, rows: &mut Rows<'_>) -> Result<(), String>
 pub(super) fn listing(board: &K2webBoard, page: u32, body: &str) -> Result<ListingPage, String> {
     let html = Html::parse_document(body);
     let root = html.root_element();
-    if text(one(root, "title")?) != board.name {
+    if text(one(root, "title")?) != board.title {
         return invalid();
     }
     // The board's widget is the search form's parent (`.board-list` or

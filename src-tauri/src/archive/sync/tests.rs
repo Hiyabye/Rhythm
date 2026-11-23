@@ -177,6 +177,7 @@ fn mirror(store: &SharedStore, seq: u64, id: u64, page: &str) -> i64 {
         url: parser::main_canonical(&parser::MAIN_BOARDS[0], &external).to_string(),
         pinned: false,
         modified_at: None,
+        title: None,
     };
     let article = parser::article(&definition, &entry, page).unwrap();
     let notice = Notice {
@@ -979,6 +980,7 @@ async fn a_retried_viewer_pdf_becomes_the_body_of_a_metadata_only_notice() {
         url: parser::main_canonical(&parser::MAIN_BOARDS[0], "551680").to_string(),
         pinned: false,
         modified_at: None,
+        title: None,
     };
     let mut article = parser::article(&source, &entry, &fake.detail(551680)).unwrap();
     article.resources.clear();

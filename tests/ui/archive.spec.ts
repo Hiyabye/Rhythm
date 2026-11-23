@@ -706,3 +706,49 @@ test('board groups nest by level, and a group off hides and stops its subtree bu
   await expect(group('서강대학교').locator('.board-group-count').first()).toHaveText('구독 3/5');
   expect(await callCount(page, 'archive_set_group')).toBe(4);
 });
+
+test('below the top level, sub-groups fold unless a board under them is picked', async ({ page }) => {
+  const board = (id: string, name: string, group: string, subscribed = false) => ({ id, name, organization: '서강대학교', supported: true, subscribed, group });
+  await mockDesktop(page, {
+    sourceGroups: [
+      { id: 'sogang', name: '서강대학교', parent: null },
+      { id: 'sogang-colleges', name: '단과대학', parent: 'sogang' },
+      { id: 'sogang-liberalarts', name: '인문대학', parent: 'sogang-colleges' },
+      { id: 'sogang-history', name: '사학과', parent: 'sogang-liberalarts' },
+      { id: 'sogang-offices', name: '행정·지원', parent: 'sogang' },
+      { id: 'sogang-dorm', name: '벨라르미노 학사', parent: 'sogang-offices' },
+    ],
+    sourceList: [
+      board('sogang-academic', '학부 학사공지', 'sogang', true),
+      board('liberalarts-notice', '공지사항', 'sogang-liberalarts'),
+      board('history-notice', '공지사항', 'sogang-history'),
+      board('dorm-menu', '주간 메뉴', 'sogang-dorm', true),
+    ],
+  });
+  await page.goto('/');
+  await openSettings(page, '게시판');
+  const group = (name: string) => page.getByRole('group', { name, exact: true });
+  const children = (name: string) => group(name).getByRole('button', { name: /^하위 그룹 (보기|접기)/ }).first();
+
+  // The categories show; nothing is picked under 단과대학, so its colleges fold.
+  await expect(group('서강대학교').getByRole('heading', { name: '단과대학', level: 4 })).toBeVisible();
+  await expect(children('단과대학')).toHaveAccessibleName('하위 그룹 보기 1개');
+  await expect(children('단과대학')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('heading', { name: '인문대학' })).toHaveCount(0);
+  await expect(group('단과대학').locator('.board-group-count').first()).toHaveText('구독 0/2');
+  // A pick below keeps its category open.
+  await expect(children('행정·지원')).toHaveAttribute('aria-expanded', 'true');
+  await expect(group('행정·지원').getByRole('heading', { name: '벨라르미노 학사', level: 5 })).toBeVisible();
+
+  await children('단과대학').press('Enter');
+  await expect(children('단과대학')).toHaveAttribute('aria-expanded', 'true');
+  await expect(children('단과대학')).toBeFocused();
+  await expect(group('단과대학').getByRole('heading', { name: '인문대학', level: 5 })).toBeVisible();
+  // One level further down folds again on its own.
+  await expect(children('인문대학')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('heading', { name: '사학과' })).toHaveCount(0);
+  await children('인문대학').click();
+  await expect(group('사학과').getByRole('switch', { name: '사학과 공지사항 구독', exact: true })).toBeVisible();
+  await children('단과대학').click();
+  await expect(page.getByRole('heading', { name: '인문대학' })).toHaveCount(0);
+});

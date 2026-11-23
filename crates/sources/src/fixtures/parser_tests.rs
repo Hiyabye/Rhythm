@@ -67,11 +67,11 @@ fn cases() -> Vec<(
 #[test]
 fn catalog_has_exact_stable_source_identities_and_honest_support() {
     let sources = catalog::definitions();
-    assert_eq!(sources.len(), 39);
-    assert_eq!(sources.iter().filter(|s| s.supported).count(), 39);
+    assert_eq!(sources.len(), 167);
+    assert_eq!(sources.iter().filter(|s| s.supported).count(), 167);
     assert_eq!(
         sources.iter().map(|s| &s.id).collect::<HashSet<_>>().len(),
-        39
+        167
     );
     for s in sources {
         assert!(Url::parse(&s.url).is_ok());
@@ -336,6 +336,7 @@ fn changed_structures_wrong_identity_and_missing_fields_are_errors_not_empty_suc
         url: "https://computing.sogang.ac.kr/ko/community/academicNotice/detail/969".into(),
         pinned: true,
         modified_at: None,
+        title: None,
     };
     let detail = include_str!("computing-academic-detail.html");
     assert!(article(
@@ -396,6 +397,7 @@ fn iframe_only_main_articles_are_explicitly_empty_but_other_empty_results_fail()
         url: main_canonical(&MAIN_BOARDS[0], "551681").to_string(),
         pinned: false,
         modified_at: None,
+        title: None,
     };
     let mut value: Value = serde_json::from_str(include_str!("main-detail.json")).unwrap();
     value["data"]["pkId"] = 551681.into();
@@ -461,6 +463,7 @@ fn computing_news_distinguishes_public_route_from_internal_attachment_parent() {
         url: "https://computing.sogang.ac.kr/ko/community/news/detail/282".into(),
         pinned: false,
         modified_at: None,
+        title: None,
     };
     let body = include_str!("computing-news-detail-282.html");
     for broken in [
@@ -528,6 +531,7 @@ fn an_attachment_also_used_inline_retains_its_image_role() {
         url: main_canonical(&MAIN_BOARDS[0], "551637").into(),
         pinned: true,
         modified_at: None,
+        title: None,
     };
     let mut body: Value = serde_json::from_str(include_str!("main-detail.json")).unwrap();
     let url = "https://www.sogang.ac.kr/file-fe-prd/editor/example.png";
@@ -557,6 +561,7 @@ fn wrapped_iframe_body_is_iframe_only_but_wrapped_text_is_not() {
         url: main_canonical(&MAIN_BOARDS[0], "551377").to_string(),
         pinned: false,
         modified_at: None,
+        title: None,
     };
     // Captured body: an empty paragraph and `div.iframe-wrapper` around the viewer.
     let captured = include_str!("main-detail-551377.json");
@@ -596,6 +601,7 @@ fn deeply_nested_legacy_tables_keep_their_text() {
         url: "https://computing.sogang.ac.kr/ko/community/career/detail/3323".into(),
         pinned: false,
         modified_at: None,
+        title: None,
     };
     let archived = article(&source, &entry, &page).unwrap();
     for text in ["신입사원 모집", "질문하기", "ymjeon@shinhan.com"] {
@@ -624,6 +630,7 @@ fn pdf_viewer_body_references_its_pdf_and_takes_the_pdf_text() {
         url: main_canonical(&MAIN_BOARDS[0], "551680").to_string(),
         pinned: false,
         modified_at: None,
+        title: None,
     };
     let captured = include_str!("main-detail-551680.json");
     let mut archived = article(&source, &entry, captured).unwrap();

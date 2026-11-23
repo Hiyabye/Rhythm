@@ -130,6 +130,7 @@ pub(super) fn listing(
             url: format!("https://eng.sogang.ac.kr{href}"),
             pinned,
             modified_at: None,
+            title: None,
         });
     }
     let start = regular.saturating_sub((page - 1) * 10);

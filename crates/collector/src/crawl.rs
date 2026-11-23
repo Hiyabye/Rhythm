@@ -83,6 +83,35 @@ pub fn public_boards() -> Vec<SourceDefinition> {
         .collect()
 }
 
+/// Boards that have never finished a first pass start at most this many per
+/// run (#80 step 3): a first pass reads three pages of notices, and starting
+/// over a hundred boards on one paced server at once would outlast the run,
+/// which then uploads nothing and repeats.
+pub const NEW_BOARDS_PER_RUN: usize = 20;
+
+/// The boards this run crawls: every board whose first pass is done, plus the
+/// first `NEW_BOARDS_PER_RUN` others in catalog order. Returns them and the
+/// number left for a later run.
+pub fn admitted(
+    state: &State,
+    boards: Vec<SourceDefinition>,
+) -> Result<(Vec<SourceDefinition>, usize), String> {
+    let mut admitted = Vec::with_capacity(boards.len());
+    let mut started = 0;
+    let mut waiting = 0;
+    for board in boards {
+        if state.seed_complete(&board.id)? {
+            admitted.push(board);
+        } else if started < NEW_BOARDS_PER_RUN {
+            started += 1;
+            admitted.push(board);
+        } else {
+            waiting += 1;
+        }
+    }
+    Ok((admitted, waiting))
+}
+
 /// Crawls the boards in two phases (#80, user decisions 2026-11-22). First
 /// every board's incremental pass and upkeep, so new notices never wait for a
 /// backfill; then the history backlog until `budget.history_until`, boards
@@ -555,6 +584,16 @@ impl<T: Transport> Crawl<'_, T> {
                 // Skip the request while the stored notice already matches it.
                 if let (true, Some(modified_at)) = (exists, entry.modified_at.as_deref()) {
                     if state.listing_unchanged(&definition.id, &entry.external_id, modified_at)? {
+                        continue;
+                    }
+                }
+                // A listing without change times (k2web) shows each row's title:
+                // a known notice is re-fetched only when that title changed, and
+                // body-only edits arrive through the deletion audit (user
+                // decision, #80 step 3). On one shared server, re-reading the edit
+                // window of every board would outlast the run.
+                if let (true, Some(title)) = (exists, entry.title.as_deref()) {
+                    if state.listed_title_unchanged(&definition.id, &entry.external_id, title)? {
                         continue;
                     }
                 }

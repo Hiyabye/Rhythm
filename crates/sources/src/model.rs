@@ -54,6 +54,10 @@ pub struct ListingEntry {
     /// entries carry one (the mechanical sitemap). The sync skips an unchanged
     /// entry without a request while the archived value matches.
     pub modified_at: Option<String>,
+    /// The row's title as the list shows it, from a family whose articles
+    /// carry no change marker (k2web). The collector's edit window re-fetches
+    /// a known notice only while this differs from the archived title.
+    pub title: Option<String>,
 }
 #[derive(Clone, Debug)]
 pub struct ListingPage {

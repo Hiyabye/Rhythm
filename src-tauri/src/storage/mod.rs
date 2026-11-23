@@ -2,6 +2,16 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// How a notice names its board everywhere it is shown, notifications
+/// included: `<unit> · <board>`, the unit being the organization after
+/// `서강대학교 · ` (#80 step 3; many boards are just 공지사항). Main-site boards
+/// read `서강대학교 · <board>`. Expects the sources table aliased `s`.
+macro_rules! source_label {
+    () => {
+        "(CASE WHEN instr(s.organization,' · ')>0 THEN substr(s.organization,instr(s.organization,' · ')+3) ELSE s.organization END||' · '||s.name)"
+    };
+}
+
 mod archive;
 pub mod calendar;
 pub mod cybercampus;
