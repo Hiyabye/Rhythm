@@ -494,13 +494,23 @@ fn computing_listing(
         total_pages,
     })
 }
+/// The largest notice response `article` accepts, and so the fetch limit for
+/// a notice. Main-site notices can carry inline `data:` images (dropped by the
+/// sanitizer) that exceed 4 MiB (user decision, #80).
+pub fn article_limit(source: &SourceDefinition) -> usize {
+    if main_board(&source.id).is_some() {
+        16 * 1024 * 1024
+    } else {
+        4 * 1024 * 1024
+    }
+}
 pub fn article(
     source: &SourceDefinition,
     entry: &ListingEntry,
     body: &str,
 ) -> Result<ArticleInput, String> {
     detail_url(source, entry)?;
-    if body.len() > 4 * 1024 * 1024 {
+    if body.len() > article_limit(source) {
         return invalid();
     }
     match source.family.as_str() {

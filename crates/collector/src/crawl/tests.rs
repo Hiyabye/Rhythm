@@ -127,7 +127,7 @@ impl Transport for Fake {
         &self,
         url: &Url,
         validators: Validators,
-        _limit: usize,
+        limit: usize,
         _cancel: &AtomicBool,
         access: Access,
     ) -> Result<Fetch, FetchError> {
@@ -137,6 +137,10 @@ impl Transport for Fake {
             .unwrap()
             .push((url.to_string(), validators.clone()));
         let body = |text: String, mime: &str, etag: Option<String>| {
+            // Like the real transport, a response over the limit is an error.
+            if text.len() > limit {
+                return Err("파일이 다운로드 크기 제한을 초과했습니다.".into());
+            }
             Ok(Fetch::Body {
                 bytes: text.into_bytes(),
                 mime: Some(mime.into()),
@@ -564,6 +568,27 @@ async fn known_notices_are_rechecked_only_within_thirty_regular_rows() {
     assert!(!notice(&state, "185").historical);
     let fetched: HashSet<u64> = details(&fake).into_iter().map(|(_, id)| id).collect();
     assert!(fetched.is_disjoint(&(2..=15).collect()), "{fetched:?}");
+}
+
+#[tokio::test]
+async fn a_main_notice_over_four_mib_is_archived() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![vec![2, 3]]);
+    // Inline data: images make some main-site notices larger than 4 MiB.
+    fake.changed.lock().unwrap().insert(
+        2,
+        format!(
+            "<p>큰 이미지가 있는 공지</p><img src=\"data:image/png;base64,{}\">",
+            "A".repeat(6 * 1024 * 1024)
+        ),
+    );
+    historical(&state, &fake, Budget::default()).await;
+    let board = state.board(MAIN).unwrap();
+    assert!(board.history_complete, "{:?}", board.last_error);
+    assert!(notice(&state, "2")
+        .body_text
+        .contains("큰 이미지가 있는 공지"));
+    assert!(skipped(&state).is_empty());
 }
 
 #[tokio::test]

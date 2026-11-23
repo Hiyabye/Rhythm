@@ -110,6 +110,37 @@ fn main_list_pagination_and_full_original_article_are_verified() {
     assert!(second.has_next);
 }
 #[test]
+fn a_main_notice_with_large_inline_images_is_archived_up_to_sixteen_mib() {
+    let main = source("sogang-academic");
+    let page = listing(&main, 1, include_str!("main-list-exact.json")).unwrap();
+    let entry = page
+        .entries
+        .iter()
+        .find(|e| e.external_id == "551637")
+        .unwrap();
+    let with_image = |bytes: usize| {
+        let mut value: Value = serde_json::from_str(include_str!("main-detail.json")).unwrap();
+        let content = value["data"]["content"].as_str().unwrap().to_owned();
+        value["data"]["content"] = Value::String(format!(
+            "{content}<img src=\"data:image/png;base64,{}\">",
+            "A".repeat(bytes)
+        ));
+        value.to_string()
+    };
+    let notice = article(&main, entry, &with_image(6 * 1024 * 1024)).unwrap();
+    assert!(notice.body_text.contains("강의평가"));
+    // The inline image is neither kept nor fetched.
+    assert!(!notice.body_html.contains("base64"));
+    assert!(notice.resources.iter().all(|r| !r.url.starts_with("data:")));
+    assert_eq!(article_limit(&main), 16 * 1024 * 1024);
+    assert!(article(&main, entry, &with_image(17 * 1024 * 1024)).is_err());
+    // Other boards keep the 4 MiB limit.
+    assert_eq!(
+        article_limit(&source("computing-academic")),
+        4 * 1024 * 1024
+    );
+}
+#[test]
 fn other_main_site_boards_share_the_api_with_their_own_board_id() {
     let cases = [
         (
