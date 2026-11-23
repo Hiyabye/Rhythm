@@ -142,6 +142,43 @@ images with a normal public route; both were downloaded through Rhythm's transpo
 Inline images on `scc.sogang.ac.kr` are HTTP (and the HTTPS path returns 404), so
 they remain recorded-but-unsupported references rather than being fetched.
 
+The following bounded captures were obtained during #80 step 2 (k2web family,
+2026-11-23) from `https://new-cms.sogang.ac.kr`, the host the family requests, using
+public GETs only (robots.txt checked, one request at a time). They are boards of other
+k2web sites that are not in the catalog; the tests describe them with their own board
+rows. Lists keep the `<title>` and the search form's parent element (`.board-list` or
+`.album-list`: search form, count, rows and `pageForm` pager); details keep `og:url` and
+the complete `.board-view` subtree; the message page keeps its `#messageForm`. Nothing
+was executed or retyped; line endings are LF and trailing whitespace is removed.
+
+- `k2web-gsot-list.html`, `k2web-gsot-page2.html`, `k2web-gsot-last.html`: pages 1, 2
+  and 95 of `/gsot/3208/subview.do` (table, 12 rows, eight pins repeated on every page
+  and partly among the regular rows, category tabs, total 1,129).
+- `k2web-gsot-detail-420698.html`: a `분류` item whose value is also shown as the title
+  prefix (`[일반] …`); no attachments.
+- `k2web-sociology-list.html` (13 pins, all ten regular rows are pins) and
+  `k2web-sociology-detail-352078.html`, whose `og:url` is the literal `?`. The page
+  is 17.4 MB: one inline `data:image/png;base64,` image. Only that payload was cut to
+  its first 64 base64 characters; nothing else changed.
+- `k2web-sbs-list.html`, `k2web-sbs-detail-425296.html`: no `작성자` item, a `[행사]`
+  title prefix without a `분류` item, a hidden title escaped twice and one
+  `/CrossEditor/` image.
+- `k2web-science-list.html`, `k2web-science-detail-347256.html`: `board-table horizon4`
+  (other column order), 12 rows.
+- `k2web-gsinfo-list.html`, `k2web-gsinfo-detail-374796.html`: 52 pins, two attachments.
+- `k2web-liberalarts-list.html`, `k2web-liberalarts-page2.html`,
+  `k2web-liberalarts-last.html` (pages 1, 2, 24) and `k2web-liberalarts-detail-425315.html`:
+  an `.albumWrap` gallery (12 cards, `No. N`) and a poster whose body images are under
+  `/sites/liberalarts/atchmnfl/bbs/1722/`.
+- `k2web-innov-list.html`, `k2web-innov-detail-405464.html`: a `.thumnailWrap.webzine`
+  gallery (`NO. N`) and a newsletter of third-party images with one attachment.
+- `k2web-outbound-list.html` and `k2web-outbound-detail-420716.html`: the CMS message
+  page `접근 권한이 없습니다.` that a login-only post answers with.
+
+A census of all 129 k2web boards active in 2026 (list page 1 and one detail each,
+through the department host names, not committed) parsed with this family: every list,
+and every detail except the login-only post and one whose read was cut at 8 MiB.
+
 The following bounded captures were obtained during the mechanical source addition
 (2026-11-05), using public GETs only. Nothing was executed or retyped; line endings
 are LF.

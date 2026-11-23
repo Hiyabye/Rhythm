@@ -187,26 +187,39 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
         }
         "new-cms.sogang.ac.kr" => {
             let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
-            // Only the three verified dormitory menus and their board ids. Inline
-            // editor images under /CrossEditor/ are the only article resources this
-            // host serves; other school hosts' images stay blocked by policy.
-            let menus = ["6975", "3947", "3951"];
-            let boards = ["2231", "1644", "1648"];
+            // Only the menus and board ids of the catalogued k2web boards.
+            let boards = &crate::parser::K2WEB_BOARDS;
             let list = parts.len() == 3
-                && parts[0] == "sgdormitory"
-                && menus.contains(&parts[1])
-                && parts[2] == "subview.do";
+                && parts[2] == "subview.do"
+                && boards
+                    .iter()
+                    .any(|board| parts[0] == board.site && parts[1] == board.menu.to_string());
             let board_file = parts.len() == 5
-                && parts[..2] == ["bbs", "sgdormitory"]
-                && boards.contains(&parts[2])
+                && parts[0] == "bbs"
+                && boards
+                    .iter()
+                    .any(|board| parts[1] == board.site && parts[2] == board.bbs.to_string())
                 && positive_id(parts[3])
                 && ["artclView.do", "download.do"].contains(&parts[4]);
+            // Inline editor images; other school hosts' images stay blocked.
             let image = parts.len() == 5
                 && parts[..3] == ["CrossEditor", "binary", "images"]
                 && (1..=12).contains(&parts[3].len())
                 && parts[3].bytes().all(|b| b.is_ascii_digit())
                 && raster_name(parts[4]);
-            list || board_file || image || path == "/robots.txt"
+            // Images a notice body keeps in its own site's folder (uploads,
+            // migrated posts; user decision, #80). Bytes are verified as raster.
+            let lower = path.to_ascii_lowercase();
+            let site_image = (3..=8).contains(&parts.len())
+                && parts[0] == "sites"
+                && boards.iter().any(|board| parts[1] == board.site)
+                && parts[2..]
+                    .iter()
+                    .all(|part| !part.is_empty() && part.len() <= 512 && !part.starts_with('.'))
+                && !lower.contains("%2f")
+                && !lower.contains("%5c")
+                && raster_name(parts[parts.len() - 1]);
+            list || board_file || image || site_image || path == "/robots.txt"
         }
         // The CMS file route behind the main board's PDF-viewer iframes
         // (user decision): a notice whose whole body is that viewer is archived

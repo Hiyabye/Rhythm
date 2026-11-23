@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+</head>
+<body>
+<form id="messageForm" name="messageForm" method="post" action="/outbound/index.do" onsubmit="return jf_messageSubmit();" class="_messageForm">
+
+
+
+
+		<div id="errorMessege" class="outLog">
+			<div class="inner">
+				<div class="head">
+					<div>
+						<img src="/Web-home/_UI/images/message/message_logo.png">
+					</div>
+				</div>
+				<div class="cont">
+					<p class="txt">
+						<strong>접근 권한이 없습니다.<br><br><div class='error-btn'><a href="/lgn/outbound/view.do?layout=unknown"><span>로그인</span></a></div></strong>
+					</p>
+
+						<div class="error-btn">
+							<input type="submit" value="확인">
+						</div>
+
+				</div>
+			</div>
+		</div>
+
+			</form>
+</body>
+</html>

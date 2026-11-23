@@ -1,0 +1,1083 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>뉴스레터</title>
+</head>
+<body>
+<div class="board-list">
+
+
+		<form name="searchForm" method="post" action="/bbs/science/2740/artclList.do">
+			<input type="hidden" name="layout" value="736369656e6365404031303431344040666e637431" />
+			<input type="hidden" id="findClSeq" name="findClSeq" value=""/>
+			<input type="hidden" id="findOpnwrd" name="findOpnwrd" value="" />
+
+
+
+
+
+	        <!-- Search -->
+			<div class="srch_box">
+
+				<div class="srch_counts">
+					총 <strong>34</strong> 개의 게시물
+				</div>
+
+				<div class="search">
+
+
+					<div class="board-serch">
+						<fieldset>
+							<legend>게시물 검색</legend>
+								<select id="findType" name="findType" class="_selectBox" title="검색 선택">
+
+
+
+
+												<option value="sj" >제목</option>
+
+												<option value="userNm" >작성자</option>
+
+
+
+								</select>
+								<input type="text" id="findWord" name="findWord" value="" onkeypress="if(event.keyCode == '13') jf_searchArtcl('findWord', this.value)">
+							   <span class="_button"> <input type="submit" value="검색"></span>
+						</fieldset>
+					</div>
+				</div>
+			</div>
+		</form>
+
+		<form name="viewForm" method="post">
+			<input type="hidden" name="layout" value="736369656e6365404031303431344040666e637431" />
+			<input type="hidden" name="page" value="1">
+			<input type="hidden" name="findType" value="">
+			<input type="hidden" name="findWord" value="">
+			<input type="hidden" name="findClSeq" value=""/>
+			<input type="hidden" name="findOpnwrd" value="" />
+			<input type="hidden" name="rgsBgndeStr" value="">
+			<input type="hidden" name="rgsEnddeStr" value="">
+			<input type="hidden" name="password">
+		</form>
+			<h2 class="hidden">게시글 리스트</h2>
+
+	        <!-- List Table -->
+			<div class="boardWrap">
+				<table class="board-table horizon4">
+	                <caption>자연과학부 뉴스레터</caption>
+	                <colgroup>
+
+	                    <col class="col-num">
+
+
+
+                           			<col class="col-title">
+
+
+
+
+
+
+
+
+                           			<col class="col-writer">
+
+
+
+
+	                    <col class="col-date">
+
+	                    <col class="col-counts">
+
+	                    	<col class="col-file">
+
+	                </colgroup>
+	                <thead>
+	                    <tr>
+
+	                        <th class="th-num">번호</th>
+
+
+
+                            			 <th class="th-title">제목</th>
+
+
+
+
+
+
+
+
+                            			<th class="th-writer">작성자</th>
+
+
+
+
+	                        <th class="th-date">작성일</th>
+
+	                        <th class="th-counts">조회수</th>
+
+	                        	<th class="th-file">첨부파일</th>
+
+	                    </tr>
+	                </thead>
+	                <tbody>
+
+
+
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			34
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/science/2740/347241/artclView.do" onclick="jf_viewArtcl('science', '2740', '347241')">
+
+
+
+
+
+									                                	<strong>News Letter Vol. 69 (September 2026)</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		자연과학부
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.09.18</td>
+
+		                                <td class="td-access">135</td>
+
+		                                    <td class="td-file">
+
+													<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			33
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/science/2740/347242/artclView.do" onclick="jf_viewArtcl('science', '2740', '347242')">
+
+
+
+
+
+									                                	<strong>News Letter Vol. 68 (June 2026)</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		자연과학부
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.06.24</td>
+
+		                                <td class="td-access">257</td>
+
+		                                    <td class="td-file">
+
+													<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			32
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/science/2740/347243/artclView.do" onclick="jf_viewArtcl('science', '2740', '347243')">
+
+
+
+
+
+									                                	<strong>News Letter Vol. 67 (March 2026)</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		자연과학부
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.03.23</td>
+
+		                                <td class="td-access">427</td>
+
+		                                    <td class="td-file">
+
+													<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			31
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/science/2740/347244/artclView.do" onclick="jf_viewArtcl('science', '2740', '347244')">
+
+
+
+
+
+									                                	<strong>News Letter Vol. 66 (December 2025)</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		자연과학부
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2025.12.17</td>
+
+		                                <td class="td-access">473</td>
+
+		                                    <td class="td-file">
+
+													<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			30
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/science/2740/347245/artclView.do" onclick="jf_viewArtcl('science', '2740', '347245')">
+
+
+
+
+
+									                                	<strong>News Letter Vol. 65 (September 2025)</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		자연과학부
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2025.09.15</td>
+
+		                                <td class="td-access">495</td>
+
+		                                    <td class="td-file">
+
+													<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			29
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/science/2740/347246/artclView.do" onclick="jf_viewArtcl('science', '2740', '347246')">
+
+
+
+
+
+									                                	<strong>News Letter Vol. 64 (June 2025)</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		자연과학부
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2025.06.27</td>
+
+		                                <td class="td-access">571</td>
+
+		                                    <td class="td-file">
+
+													<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			28
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/science/2740/347247/artclView.do" onclick="jf_viewArtcl('science', '2740', '347247')">
+
+
+
+
+
+									                                	<strong>News Letter Vol. 63 (March 2025)</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		자연과학부
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2025.03.18</td>
+
+		                                <td class="td-access">713</td>
+
+		                                    <td class="td-file">
+
+													<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			27
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/science/2740/347248/artclView.do" onclick="jf_viewArtcl('science', '2740', '347248')">
+
+
+
+
+
+									                                	<strong>News Letter Vol. 62 (December 2024)</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		자연과학부
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2025.01.03</td>
+
+		                                <td class="td-access">738</td>
+
+		                                    <td class="td-file">
+
+													<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			26
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/science/2740/347252/artclView.do" onclick="jf_viewArtcl('science', '2740', '347252')">
+
+
+
+
+
+									                                	<strong>News Letter Vol. 61 (September 2024)</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		자연과학부
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2024.09.04</td>
+
+		                                <td class="td-access">833</td>
+
+		                                    <td class="td-file">
+
+													<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			25
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/science/2740/347253/artclView.do" onclick="jf_viewArtcl('science', '2740', '347253')">
+
+
+
+
+
+									                                	<strong>News Letter Vol. 60 (June 2024)</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		자연과학부
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2024.06.10</td>
+
+		                                <td class="td-access">729</td>
+
+		                                    <td class="td-file">
+
+													<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			24
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/science/2740/347254/artclView.do" onclick="jf_viewArtcl('science', '2740', '347254')">
+
+
+
+
+
+									                                	<strong>News Letter Vol. 59 (March 2024)</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		자연과학부
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2024.03.13</td>
+
+		                                <td class="td-access">1027</td>
+
+		                                    <td class="td-file">
+
+													<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			23
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/science/2740/347256/artclView.do" onclick="jf_viewArtcl('science', '2740', '347256')">
+
+
+
+
+
+									                                	<strong>News Letter Vol. 58 (December 2023)</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		자연과학부
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2023.12.08</td>
+
+		                                <td class="td-access">878</td>
+
+		                                    <td class="td-file">
+
+													<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+		                                    </td>
+
+		                            </tr>
+
+
+
+
+	                </tbody>
+	            </table>
+	        </div>
+
+
+		<form name="pageForm" method="post" action="/bbs/science/2740/artclList.do">
+			<input type="hidden" name="layout" value="736369656e6365404031303431344040666e637431" />
+			<input type="hidden" id="page" name="page" value="1">
+			<input type="hidden" name="findType" value="">
+			<input type="hidden" name="findWord" value="">
+			<input type="hidden" name="findClSeq" value=""/>
+			<input type="hidden" name="findOpnwrd" value="" />
+			<input type="hidden" name="rgsBgndeStr" value="">
+			<input type="hidden" name="rgsEnddeStr" value="">
+			<div class="_paging">
+	<div class="_inner">
+		<a href="javascript:page_link('1')" class="_first" title="처음 목록으로 이동">처음</a>
+<p class="_pageState"><span class="_curPage">1</span><span class="_totPage">3</span></p><ul>
+<li><strong title="현재 페이지">1</strong></li>
+<li><a href="javascript:page_link('2')" title="2페이지">2</a></li>
+<li><a href="javascript:page_link('3')" title="3페이지">3</a></li>
+</ul>
+<a href="javascript:page_link('2')" class="_listNext" title="다음 페이지">다음 페이지</a>
+<a href="javascript:page_link('3')" class="_last" title="마지막 목록으로 이동">끝</a>
+	</div>
+</div>
+
+		</form>
+
+	    <!-- Button -->
+		<div class="btns">
+			<div class=btn-control>
+
+			</div>
+		</div>
+	</div>
+</body>
+</html>

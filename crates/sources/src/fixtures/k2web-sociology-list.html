@@ -1,0 +1,1480 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>학술행사</title>
+</head>
+<body>
+<div class="board-list">
+
+
+		<form name="searchForm" method="post" action="/bbs/sociology/2778/artclList.do">
+			<input type="hidden" name="layout" value="736f63696f6c6f67794040343337354040666e637431" />
+			<input type="hidden" id="findClSeq" name="findClSeq" value=""/>
+			<input type="hidden" id="findOpnwrd" name="findOpnwrd" value="" />
+
+
+
+
+
+	        <!-- Search -->
+			<div class="srch_box">
+
+				<div class="srch_counts">
+					총 <strong>68</strong> 개의 게시물
+				</div>
+
+				<div class="search">
+
+
+					<div class="board-serch">
+						<fieldset>
+							<legend>게시물 검색</legend>
+								<select id="findType" name="findType" class="_selectBox" title="검색 선택">
+
+
+
+
+												<option value="sj" >제목</option>
+
+												<option value="userNm" >작성자</option>
+
+
+
+								</select>
+								<input type="text" id="findWord" name="findWord" value="" onkeypress="if(event.keyCode == '13') jf_searchArtcl('findWord', this.value)">
+							   <span class="_button"> <input type="submit" value="검색"></span>
+						</fieldset>
+					</div>
+				</div>
+			</div>
+		</form>
+
+		<form name="viewForm" method="post">
+			<input type="hidden" name="layout" value="736f63696f6c6f67794040343337354040666e637431" />
+			<input type="hidden" name="page" value="1">
+			<input type="hidden" name="findType" value="">
+			<input type="hidden" name="findWord" value="">
+			<input type="hidden" name="findClSeq" value=""/>
+			<input type="hidden" name="findOpnwrd" value="" />
+			<input type="hidden" name="rgsBgndeStr" value="">
+			<input type="hidden" name="rgsEnddeStr" value="">
+			<input type="hidden" name="password">
+		</form>
+			<h2 class="hidden">게시글 리스트</h2>
+
+	        <!-- List Table -->
+			<div class="boardWrap">
+				<table class="board-table horizon1">
+	                <caption>사회학과 학술행사</caption>
+	                <colgroup>
+
+	                    <col class="col-num">
+
+
+
+                           			<col class="col-title">
+
+
+
+
+
+
+
+
+                           			<col class="col-writer">
+
+
+
+
+	                    <col class="col-date">
+
+	                    <col class="col-counts">
+
+	                    	<col class="col-file">
+
+	                </colgroup>
+	                <thead>
+	                    <tr>
+
+	                        <th class="th-num">번호</th>
+
+
+
+                            			 <th class="th-title">제목</th>
+
+
+
+
+
+
+
+
+                            			<th class="th-writer">작성자</th>
+
+
+
+
+	                        <th class="th-date">작성일</th>
+
+	                        <th class="th-counts">조회수</th>
+
+	                        	<th class="th-file">첨부파일</th>
+
+	                    </tr>
+	                </thead>
+	                <tbody>
+
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/sociology/2778/352065/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352065')">
+				                                        <strong>[한국사회학회] 전상진 교수님 대중강연 (9/18 금)</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            서강대 사회학과
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.09.07</td>
+
+	                                <td class="td-counts">161</td>
+
+	                                    <td class="td-file">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/sociology/2778/352066/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352066')">
+				                                        <strong>[사회학과-사회과학연구소] 한중 사회학 콜로키엄 (9/7 월) </strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            서강대 사회학과
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.09.07</td>
+
+	                                <td class="td-counts">109</td>
+
+	                                    <td class="td-file">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/sociology/2778/352067/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352067')">
+				                                        <strong>[사회학과-HUSS 공동개최] 오지민 박사 &quot;연구방법실습 특강_ 선생연구검토의 이</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            서강대 사회학과
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.09.04</td>
+
+	                                <td class="td-counts">148</td>
+
+	                                    <td class="td-file">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/sociology/2778/352068/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352068')">
+				                                        <strong>[사회학과-사회과학연구소] ISA RC58 - Sogang Sociology 감정사회학 국</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            서강대 사회학과
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.08.31</td>
+
+	                                <td class="td-counts">160</td>
+
+	                                    <td class="td-file">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/sociology/2778/352069/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352069')">
+				                                        <strong>[특강 공지] 감병석 프로듀서 &quot;사회학에서 배운 Creativity&quot;</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            서강대 사회학과
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.08.03</td>
+
+	                                <td class="td-counts">161</td>
+
+	                                    <td class="td-file">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/sociology/2778/352070/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352070')">
+				                                        <strong>[학술행사 공지] 2026 하계 사회학과 학회 세미나 참관 안내문</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            서강대 사회학과
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.07.13</td>
+
+	                                <td class="td-counts">279</td>
+
+	                                    <td class="td-file">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/sociology/2778/352071/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352071')">
+				                                        <strong>서강대 사회학과-푸단대 국제 콜로키움 개최(6월 23일 16:00)</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            서강대 사회학과
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.06.23</td>
+
+	                                <td class="td-counts">264</td>
+
+	                                    <td class="td-file">
+
+												<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/sociology/2778/352072/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352072')">
+				                                        <strong>2026년 5월 사회학과 국제 콜로키움 &quot;한국의 반동 정치: 극우의 형성과 민주주</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            서강대 사회학과
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.05.15</td>
+
+	                                <td class="td-counts">334</td>
+
+	                                    <td class="td-file">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/sociology/2778/352073/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352073')">
+				                                        <strong>[사회학과 공동주최] 2026년 한국문화사회학회  봄 학술대회</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            서강대 사회학과
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.05.15</td>
+
+	                                <td class="td-counts">281</td>
+
+	                                    <td class="td-file">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/sociology/2778/352075/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352075')">
+				                                        <strong> [사회과학연구소] 한국의 불평등과 기본소득: 제도 설계와 재배분의 정치 (유종성 교수)</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            서강대 사회학과
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.05.09</td>
+
+	                                <td class="td-counts">217</td>
+
+	                                    <td class="td-file">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/sociology/2778/352076/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352076')">
+				                                        <strong>[사회학과·사회과학연구소] AI and the Future of Society Series</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            서강대 사회학과
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.04.23</td>
+
+	                                <td class="td-counts">277</td>
+
+	                                    <td class="td-file">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/sociology/2778/352077/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352077')">
+				                                        <strong>[사회학과 공동주최] 한국냉전학회 4월 월례발표회</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            서강대 사회학과
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.04.17</td>
+
+	                                <td class="td-counts">200</td>
+
+	                                    <td class="td-file">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/sociology/2778/352078/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352078')">
+				                                        <strong>2026년 5월 사회학과 영화 상영회 및 박봉남 감독 초청 안내</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            서강대 사회학과
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.04.17</td>
+
+	                                <td class="td-counts">380</td>
+
+	                                    <td class="td-file">
+
+	                                   </td>
+
+	                            </tr>
+
+
+
+
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			68
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/sociology/2778/352065/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352065')">
+
+
+
+
+
+									                                	<strong>[한국사회학회] 전상진 교수님 대중강연 (9/18 금)</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		서강대 사회학과
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.09.07</td>
+
+		                                <td class="td-access">161</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			67
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/sociology/2778/352066/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352066')">
+
+
+
+
+
+									                                	<strong>[사회학과-사회과학연구소] 한중 사회학 콜로키엄 (9/7 월) </strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		서강대 사회학과
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.09.07</td>
+
+		                                <td class="td-access">109</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			66
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/sociology/2778/352067/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352067')">
+
+
+
+
+
+									                                	<strong>[사회학과-HUSS 공동개최] 오지민 박사 &quot;연구방법실습 특강_ 선생연구검토의 이</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		서강대 사회학과
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.09.04</td>
+
+		                                <td class="td-access">148</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			65
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/sociology/2778/352068/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352068')">
+
+
+
+
+
+									                                	<strong>[사회학과-사회과학연구소] ISA RC58 - Sogang Sociology 감정사회학 국</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		서강대 사회학과
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.08.31</td>
+
+		                                <td class="td-access">160</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			64
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/sociology/2778/352069/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352069')">
+
+
+
+
+
+									                                	<strong>[특강 공지] 감병석 프로듀서 &quot;사회학에서 배운 Creativity&quot;</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		서강대 사회학과
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.08.03</td>
+
+		                                <td class="td-access">161</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			63
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/sociology/2778/352070/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352070')">
+
+
+
+
+
+									                                	<strong>[학술행사 공지] 2026 하계 사회학과 학회 세미나 참관 안내문</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		서강대 사회학과
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.07.13</td>
+
+		                                <td class="td-access">279</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			62
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/sociology/2778/352071/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352071')">
+
+
+
+
+
+									                                	<strong>서강대 사회학과-푸단대 국제 콜로키움 개최(6월 23일 16:00)</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		서강대 사회학과
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.06.23</td>
+
+		                                <td class="td-access">264</td>
+
+		                                    <td class="td-file">
+
+													<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			61
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/sociology/2778/352072/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352072')">
+
+
+
+
+
+									                                	<strong>2026년 5월 사회학과 국제 콜로키움 &quot;한국의 반동 정치: 극우의 형성과 민주주</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		서강대 사회학과
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.05.15</td>
+
+		                                <td class="td-access">334</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			60
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/sociology/2778/352073/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352073')">
+
+
+
+
+
+									                                	<strong>[사회학과 공동주최] 2026년 한국문화사회학회  봄 학술대회</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		서강대 사회학과
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.05.15</td>
+
+		                                <td class="td-access">281</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			59
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/sociology/2778/352075/artclView.do" onclick="jf_viewArtcl('sociology', '2778', '352075')">
+
+
+
+
+
+									                                	<strong> [사회과학연구소] 한국의 불평등과 기본소득: 제도 설계와 재배분의 정치 (유종성 교수)</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		서강대 사회학과
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.05.09</td>
+
+		                                <td class="td-access">217</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+
+
+
+	                </tbody>
+	            </table>
+	        </div>
+
+
+		<form name="pageForm" method="post" action="/bbs/sociology/2778/artclList.do">
+			<input type="hidden" name="layout" value="736f63696f6c6f67794040343337354040666e637431" />
+			<input type="hidden" id="page" name="page" value="1">
+			<input type="hidden" name="findType" value="">
+			<input type="hidden" name="findWord" value="">
+			<input type="hidden" name="findClSeq" value=""/>
+			<input type="hidden" name="findOpnwrd" value="" />
+			<input type="hidden" name="rgsBgndeStr" value="">
+			<input type="hidden" name="rgsEnddeStr" value="">
+			<div class="_paging">
+	<div class="_inner">
+		<a href="javascript:page_link('1')" class="_first" title="처음 목록으로 이동">처음</a>
+<p class="_pageState"><span class="_curPage">1</span><span class="_totPage">7</span></p><ul>
+<li><strong title="현재 페이지">1</strong></li>
+<li><a href="javascript:page_link('2')" title="2페이지">2</a></li>
+<li><a href="javascript:page_link('3')" title="3페이지">3</a></li>
+<li><a href="javascript:page_link('4')" title="4페이지">4</a></li>
+<li><a href="javascript:page_link('5')" title="5페이지">5</a></li>
+<li><a href="javascript:page_link('6')" title="6페이지">6</a></li>
+<li><a href="javascript:page_link('7')" title="7페이지">7</a></li>
+</ul>
+<a href="javascript:page_link('2')" class="_listNext" title="다음 페이지">다음 페이지</a>
+<a href="javascript:page_link('7')" class="_last" title="마지막 목록으로 이동">끝</a>
+	</div>
+</div>
+
+		</form>
+
+	    <!-- Button -->
+		<div class="btns">
+			<div class=btn-control>
+
+			</div>
+		</div>
+	</div>
+</body>
+</html>
