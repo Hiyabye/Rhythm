@@ -533,6 +533,40 @@ async fn a_burst_beyond_three_pages_is_discovered_without_pins_as_frontier() {
 }
 
 #[tokio::test]
+async fn known_notices_are_rechecked_only_within_thirty_regular_rows() {
+    let state = State::open_in_memory().unwrap();
+    // Three full 50-row pages, a pin (1) on the first.
+    let fake = Fake::new(vec![
+        (1..=50).collect(),
+        (51..=100).collect(),
+        (101..=150).collect(),
+    ]);
+    historical(&state, &fake, Budget::default()).await;
+    assert_eq!(notices(&state).len(), 150);
+    fake.calls.lock().unwrap().clear();
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    let fetched: HashSet<u64> = details(&fake).into_iter().map(|(_, id)| id).collect();
+    // The pin and the first 30 regular rows (2..=31), nothing further down.
+    assert_eq!(fetched, (1..=31).collect());
+    let lists: Vec<_> = fake
+        .paths()
+        .into_iter()
+        .filter(|url| url.contains("/boardList"))
+        .collect();
+    assert_eq!(lists.len(), 1, "page 1 holds the whole window: {lists:?}");
+    assert_eq!(state.board(MAIN).unwrap().status, "completed");
+
+    // New notices on top still arrive, however far they push the window.
+    fake.pages.lock().unwrap()[0] = std::iter::once(1).chain(151..=185).chain(2..=15).collect();
+    fake.calls.lock().unwrap().clear();
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert_eq!(notices(&state).len(), 185);
+    assert!(!notice(&state, "185").historical);
+    let fetched: HashSet<u64> = details(&fake).into_iter().map(|(_, id)| id).collect();
+    assert!(fetched.is_disjoint(&(2..=15).collect()), "{fetched:?}");
+}
+
+#[tokio::test]
 async fn the_first_incremental_pass_seeds_three_pages_as_history() {
     let state = State::open_in_memory().unwrap();
     let fake = Fake::new(vec![vec![1, 2], vec![1, 3], vec![1, 4], vec![1, 5]]);
