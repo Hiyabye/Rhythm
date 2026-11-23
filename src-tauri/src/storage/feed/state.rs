@@ -173,12 +173,14 @@ impl Store {
             .is_some_and(|generated| now - generated > STALE_AFTER);
         let mut statement = self
             .connection
-            .prepare(
-                "SELECT b.source_id,s.name,b.last_success_at,b.consecutive_failures
+            .prepare(concat!(
+                "SELECT b.source_id,",
+                source_label!(),
+                ",b.last_success_at,b.consecutive_failures
                  FROM feed_boards b JOIN sources s ON s.id=b.source_id
                  WHERE s.subscribed=1 AND b.consecutive_failures>=?1
-                 ORDER BY s.name,b.source_id",
-            )
+                 ORDER BY 2,b.source_id"
+            ))
             .map_err(|e| e.to_string())?;
         let failing_boards = statement
             .query_map([FAILING_AFTER], |r| {

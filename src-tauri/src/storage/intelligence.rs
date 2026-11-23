@@ -984,13 +984,14 @@ impl Store {
         let window = self
             .connection
             .prepare(&format!(
-                "SELECT d.id,{VECTOR_COLUMNS},d.source_id,s.name,d.title,d.published_at
+                "SELECT d.id,{VECTOR_COLUMNS},d.source_id,{},d.title,d.published_at
                  FROM documents d
                  JOIN sources s ON s.id=d.source_id
                  {}
                  WHERE {HAS_VECTOR} AND {NOT_TRASHED}
                  ORDER BY d.published_at DESC,d.id DESC
                  LIMIT ?",
+                source_label!(),
                 vector_join(LATEST_REVISION)
             ))
             .map_err(|e| e.to_string())?

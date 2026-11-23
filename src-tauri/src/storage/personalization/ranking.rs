@@ -85,12 +85,12 @@ pub(super) const ACTIVE_SOURCES_SQL: &str = "SELECT s.id FROM sources s WHERE
                         WHERE se.source_id=s.id AND ep.enabled=1
                     )";
 
-pub(super) const CANDIDATE_COLUMNS: &str = "d.id,d.source_id,s.name,d.title,d.author,d.category,d.published_at,d.collected_at,d.historical,
+pub(super) const CANDIDATE_COLUMNS: &str = concat!("d.id,d.source_id,", source_label!(), ",d.title,d.author,d.category,d.published_at,d.collected_at,d.historical,
                     COALESCE(u.saved,0),COALESCE(u.is_read,0),substr(d.body_text,1,320),f.value,
                     CASE WHEN EXISTS(SELECT 1 FROM resources r WHERE r.document_id=d.id
                          AND r.revision_id=(SELECT MAX(rv.id) FROM document_revisions rv WHERE rv.document_id=d.id)
                          AND r.status<>'downloaded') THEN 'missing_resources' ELSE 'archived' END,
-                    f.updated_at,s.subscribed,s.organization,d.last_revision_at";
+                    f.updated_at,s.subscribed,s.organization,d.last_revision_at");
 
 pub(super) fn fts_phrase(term: &str) -> String {
     format!("\"{}\"", term.replace('"', "\"\""))

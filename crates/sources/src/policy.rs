@@ -188,7 +188,7 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
         "new-cms.sogang.ac.kr" => {
             let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
             // Only the menus and board ids of the catalogued k2web boards.
-            let boards = &crate::parser::K2WEB_BOARDS;
+            let boards = crate::parser::K2WEB_BOARDS;
             let list = parts.len() == 3
                 && parts[2] == "subview.do"
                 && boards

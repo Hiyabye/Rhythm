@@ -1600,6 +1600,7 @@ fn skipped_articles_persist_validate_and_clear_on_archive() {
         url: format!("https://www.sogang.ac.kr/ko/detail/{id}"),
         pinned: false,
         modified_at: None,
+        title: None,
     };
     let hash = "a".repeat(64);
     for (source, entry, reason, sha) in [
@@ -1875,6 +1876,25 @@ fn group_scope_lists_only_its_own_boards() {
     }
     // Subscribing is not required: an unsubscribed board's archive stays in its group.
     store.subscribe("eng-research", true).unwrap();
+    // Lists name a board with its unit; main-site boards with the school.
+    let labels: std::collections::HashSet<_> = store
+        .archive_query(&ArchiveQuery::default())
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|item| item.source_name)
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "서강대학교 · 학부 학사공지",
+            "공과대학 · 일반공지",
+            "공과대학 · 연구공지",
+            "기계공학과 · 일반공지"
+        ]
+        .map(String::from)
+        .into()
+    );
     let scoped = |group: &str| {
         let page = store
             .archive_query(&ArchiveQuery {
@@ -2023,6 +2043,43 @@ fn source_groups_stop_their_subtree_and_restore_each_pick() {
     );
 }
 #[test]
+fn a_catalog_refresh_moves_existing_groups_and_keeps_their_switches() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(&directory.path().join("db")).unwrap();
+    store.catalog(&crate::archive::definitions()).unwrap();
+    store.subscribe("eng-research", true).unwrap();
+    store.subscribe("dorm-menu", true).unwrap();
+    store.set_source_group("sogang-eng", false).unwrap();
+    // The tree before #80 step 3: colleges and the dormitory under the root.
+    store
+        .connection
+        .execute_batch(
+            "UPDATE source_groups SET parent_id='sogang' WHERE id IN ('sogang-eng','sogang-dorm');",
+        )
+        .unwrap();
+    store.catalog(&crate::archive::definitions()).unwrap();
+    let groups = store.source_groups().unwrap();
+    let group = |id: &str| groups.iter().find(|g| g.id == id).unwrap().clone();
+    assert_eq!(
+        group("sogang-eng").parent.as_deref(),
+        Some("sogang-colleges")
+    );
+    assert_eq!(
+        group("sogang-dorm").parent.as_deref(),
+        Some("sogang-offices")
+    );
+    assert!(!group("sogang-eng").enabled && group("sogang-colleges").enabled);
+    assert_eq!(subscribed_ids(&store), ["dorm-menu"]);
+    // The new category's switch covers the moved groups.
+    store.set_source_group("sogang-offices", false).unwrap();
+    assert!(subscribed_ids(&store).is_empty());
+    store.set_source_group("sogang-offices", true).unwrap();
+    store.set_source_group("sogang-eng", true).unwrap();
+    assert_eq!(subscribed_ids(&store), ["dorm-menu", "eng-research"]);
+    // New boards arrive unpicked.
+    assert!(!store.source("history-notice").unwrap().selected);
+}
+#[test]
 fn schema_twenty_upgrade_keeps_every_subscription_with_groups_on() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("db");
@@ -2045,7 +2102,7 @@ fn schema_twenty_upgrade_keeps_every_subscription_with_groups_on() {
     store.catalog(&crate::archive::definitions()).unwrap();
     assert_eq!(subscribed_ids(&store), ["dorm-menu", "se-news"]);
     assert!(store.source_groups().unwrap().iter().all(|g| g.enabled));
-    assert_eq!(store.source_groups().unwrap().len(), 8);
+    assert_eq!(store.source_groups().unwrap().len(), 77);
 }
 #[test]
 fn every_public_board_belongs_to_a_known_group() {
@@ -2707,6 +2764,7 @@ fn schema_40_clears_public_board_crawl_state_and_keeps_cybercampus() {
         url: url.into(),
         pinned: false,
         modified_at: None,
+        title: None,
     };
     {
         let store = Store::open(&path).unwrap();

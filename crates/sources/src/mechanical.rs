@@ -159,6 +159,7 @@ pub(super) fn listing(
             url: url.into(),
             pinned: false,
             modified_at,
+            title: None,
         });
     }
     if entries.is_empty() {

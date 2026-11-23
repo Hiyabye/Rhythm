@@ -88,6 +88,7 @@ fn list_urls_and_detail_urls_are_exact() {
             url: format!("https://me.sogang.ac.kr/ko/board/{board}/2419"),
             pinned: false,
             modified_at: None,
+            title: None,
         };
         assert_eq!(
             detail_url(&definition, &entry).unwrap().as_str(),
@@ -108,6 +109,7 @@ fn list_urls_and_detail_urls_are_exact() {
         url: "https://evil.example/ko/board/notice/2419".into(),
         pinned: false,
         modified_at: None,
+        title: None,
     };
     assert!(detail_url(&unknown, &entry).is_err());
     entry.url = "https://me.sogang.ac.kr/ko/board/notice/2419".into();
@@ -181,6 +183,7 @@ fn hero_images_survive_and_embedded_video_frames_do_not() {
         url: "https://me.sogang.ac.kr/ko/board/award/2427".into(),
         pinned: false,
         modified_at: Some("2026-11-04T16:47:29.482Z".into()),
+        title: None,
     };
     let parsed = article(
         &awards,
@@ -205,6 +208,7 @@ fn hero_images_survive_and_embedded_video_frames_do_not() {
         url: "https://me.sogang.ac.kr/ko/board/alumni_news/1835".into(),
         pinned: false,
         modified_at: None,
+        title: None,
     };
     let parsed = article(
         &alumni,
@@ -224,6 +228,7 @@ fn hero_images_survive_and_embedded_video_frames_do_not() {
         url: "https://me.sogang.ac.kr/ko/board/research/2425".into(),
         pinned: false,
         modified_at: None,
+        title: None,
     };
     let parsed = article(
         &research,
@@ -249,6 +254,7 @@ fn hero_images_survive_and_embedded_video_frames_do_not() {
         url: "https://me.sogang.ac.kr/ko/board/events/1762".into(),
         pinned: false,
         modified_at: None,
+        title: None,
     };
     let parsed = article(
         &events,

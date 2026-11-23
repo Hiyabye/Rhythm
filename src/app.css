@@ -1014,6 +1014,11 @@ button svg {
 .board-picker {
   justify-self: start;
 }
+/* A group's sub-groups, folded behind their own toggle below the top level. */
+.board-children {
+  display: grid;
+  gap: 10px;
+}
 .board-group.off .board-group-name {
   color: var(--secondary);
 }

@@ -183,6 +183,7 @@ impl State {
             _ => Err(format!("unknown board {}", board.source_id)),
         })
     }
+    /// False for a board the state has never seen.
     pub fn seed_complete(&self, source_id: &str) -> Result<bool, String> {
         self.with(|c| {
             c.query_row(
@@ -190,7 +191,9 @@ impl State {
                 [source_id],
                 |row| row.get(0),
             )
+            .optional()
         })
+        .map(|seeded| seeded.unwrap_or(false))
     }
     pub fn mark_seed_complete(&self, source_id: &str) -> Result<(), String> {
         self.with(|c| {
@@ -244,6 +247,26 @@ impl State {
             .optional()
         })
         .map(|stored| stored.flatten().is_some_and(|value| value == modified_at))
+    }
+    /// True when the stored notice already carries the title its list row
+    /// shows (k2web, whose articles have no change marker; #80 step 3). A
+    /// notice reported missing or removed is fetched again instead.
+    pub fn listed_title_unchanged(
+        &self,
+        source_id: &str,
+        external_id: &str,
+        title: &str,
+    ) -> Result<bool, String> {
+        self.with(|c| {
+            c.query_row(
+                "SELECT title FROM notices WHERE source_id=?1 AND external_id=?2
+                 AND missing_since IS NULL AND removed_at IS NULL",
+                params![source_id, external_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+        })
+        .map(|stored| stored.is_some_and(|value| value == title))
     }
     pub fn checked(&self, source_id: &str, external_id: &str) -> Result<(), String> {
         self.with(|c| {
@@ -803,6 +826,7 @@ fn entry(external_id: String, url: String) -> ListingEntry {
         url,
         pinned: false,
         modified_at: None,
+        title: None,
     }
 }
 

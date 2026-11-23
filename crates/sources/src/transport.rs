@@ -356,9 +356,7 @@ impl Client {
             .content_length()
             .is_some_and(|size| size > max_bytes as u64)
         {
-            return Err(Failure::Fatal(
-                "파일이 다운로드 크기 제한을 초과했습니다.".into(),
-            ));
+            return Err(Failure::Fatal(TOO_LARGE.into()));
         }
         let get_header = |name: header::HeaderName| {
             response
@@ -384,9 +382,7 @@ impl Client {
             .map_err(|_| Failure::Retry("자료를 내려받던 중 연결이 끊어졌습니다.".into()))?
         {
             if bytes.len().saturating_add(chunk.len()) > max_bytes {
-                return Err(Failure::Fatal(
-                    "파일이 다운로드 크기 제한을 초과했습니다.".into(),
-                ));
+                return Err(Failure::Fatal(TOO_LARGE.into()));
             }
             bytes.extend_from_slice(&chunk);
             if cancel.load(Ordering::Acquire) {
@@ -429,6 +425,8 @@ fn studium_root() -> Result<reqwest::Certificate, String> {
 }
 /// A 429 response. The sync stops the board on it instead of requesting the
 /// rest of the page from a server that asked it to slow down.
+/// A response over the caller's byte limit.
+pub const TOO_LARGE: &str = "파일이 다운로드 크기 제한을 초과했습니다.";
 pub const RATE_LIMITED: &str =
     "학교 서버가 요청을 제한했습니다. 잠시 기다린 후 다시 동기화해 주세요.";
 /// Message for an unsuccessful HTTP status.
@@ -606,6 +604,9 @@ mod tests {
             "/sites/sgdormitory/atchmnfl/bbs/2231/temp_1795392463736100.png",
             "/sites/sgdormitory/images/migrated/bbs/884755_1.JPG",
             "/sites/sgdormitory/%EB%B0%94%EB%A1%9C.png",
+            "/gsot/3208/subview.do",
+            "/bbs/gsot/908/420698/artclView.do",
+            "/sites/gsot/atchmnfl/bbs/908/image.png",
             "/robots.txt",
         ] {
             assert!(
@@ -626,10 +627,18 @@ mod tests {
             "/CrossEditor/binary/images/000035/nested/image.png",
             "/CrossEditor/binary/other/000035/image.png",
             "/Web-home/_UI/css/common/jquery-ui.css",
-            // Another k2web site that is not in the catalog.
-            "/gsot/3208/subview.do",
-            "/bbs/gsot/908/420698/artclView.do",
-            "/sites/gsot/atchmnfl/bbs/908/image.png",
+            // A k2web site that is not in the catalog, and a left-out board
+            // (시설 관련) of a catalogued site.
+            "/sgarmy/6887/subview.do",
+            "/bbs/sgarmy/2001/420698/artclView.do",
+            "/sites/sgarmy/atchmnfl/bbs/2001/image.png",
+            "/sgdormitory/3945/subview.do",
+            "/bbs/sgdormitory/1646/313348/artclView.do",
+            // A catalogued site with a menu or board id the catalog does not list,
+            // and one site's menu under another site.
+            "/history/3208/subview.do",
+            "/gsot/3209/subview.do",
+            "/bbs/gsot/909/420698/artclView.do",
             // Site folders hold only images the policy approves.
             "/sites/sgdormitory/atchmnfl/bbs/2231/file.pdf",
             "/sites/sgdormitory/a/b/c/d/e/f/image.png",

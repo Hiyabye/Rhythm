@@ -17,6 +17,9 @@
   // Each group's own boards start folded behind their count; a group with none picked
   // starts open so the choice is visible. Kept only while the pane is open.
   let expanded = $state<Record<string, boolean>>({});
+  // Below the top level, a group's sub-groups fold too (the catalog has dozens
+  // of units, #80): open when a board somewhere below is picked, else folded.
+  let childrenOpen = $state<Record<string, boolean>>({});
   let status = $state<SyncStatus | null>(null);
   let loading = $state(true);
   let busy = $state(false);
@@ -59,6 +62,14 @@
     return [...map];
   }
 
+  // Whether `id` is `ancestor` or nested below it.
+  function within(groups: SourceGroup[], id: string, ancestor: string): boolean {
+    for (let current: string | null = id; current; current = groups.find((group) => group.id === current)?.parent ?? null) {
+      if (current === ancestor) return true;
+    }
+    return false;
+  }
+
   type GroupNode = { group: SourceGroup; boards: SourceInfo[]; children: GroupNode[]; total: SourceInfo[] };
 
   // Groups nest by `parent`; a group with no board of this extension anywhere
@@ -82,6 +93,7 @@
       status = nextStatus;
       for (const group of nextGroups) {
         if (!(group.id in expanded)) expanded[group.id] = !nextSources.some((source) => source.group === group.id && source.selected);
+        if (!(group.id in childrenOpen)) childrenOpen[group.id] = nextSources.some((source) => source.selected && source.group !== null && within(nextGroups, source.group, group.id));
       }
     } catch (reason) { if (active && request === refreshGeneration) error = archiveError(reason); }
     finally { if (active && request === refreshGeneration) loading = false; }
@@ -249,7 +261,13 @@
           <button class="text-button board-picker" aria-expanded={expanded[node.group.id] ?? false} aria-controls={`board-picker-${node.group.id}`} onclick={() => expanded[node.group.id] = !expanded[node.group.id]}>{expanded[node.group.id] ? '게시판 접기' : '게시판 고르기'} <span class="muted">{own}/{node.boards.length}</span></button>
           {#if expanded[node.group.id]}<ul class="board-grid" id={`board-picker-${node.group.id}`} aria-label={`${node.group.name} 게시판`}>{#each node.boards as source (source.id)}{@render tile(source, node.group.name)}{/each}</ul>{/if}
         {/if}
-        {#each node.children as child (child.group.id)}{@render group(child, level + 1)}{/each}
+        {#if node.children.length && level > 1}
+          {@const open = childrenOpen[node.group.id] ?? false}
+          <button class="text-button board-picker" aria-expanded={open} aria-controls={`board-children-${node.group.id}`} onclick={() => childrenOpen[node.group.id] = !open}>{open ? '하위 그룹 접기' : '하위 그룹 보기'} <span class="muted">{node.children.length}개</span></button>
+        {/if}
+        {#if node.children.length && (level === 1 || childrenOpen[node.group.id])}
+          <div class="board-children" id={`board-children-${node.group.id}`}>{#each node.children as child (child.group.id)}{@render group(child, level + 1)}{/each}</div>
+        {/if}
       {/if}
     </section>
   {/snippet}

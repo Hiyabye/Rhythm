@@ -20,6 +20,7 @@ fn entry(id: &str, board: &str) -> ListingEntry {
         url: format!("https://se.sogang.ac.kr/board/board_view.php?board_id={board}&no={id}"),
         pinned: false,
         modified_at: None,
+        title: None,
     }
 }
 fn ids(page: &ListingPage) -> Vec<&str> {

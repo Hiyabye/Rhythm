@@ -187,6 +187,7 @@ pub(super) fn listing(
             external_id,
             pinned,
             modified_at: None,
+            title: None,
         });
     }
     let start = total.saturating_sub((page - 1) * 10);

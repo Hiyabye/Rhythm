@@ -83,6 +83,35 @@ pub fn public_boards() -> Vec<SourceDefinition> {
         .collect()
 }
 
+/// Boards that have never finished a first pass start at most this many per
+/// run (#80 step 3): a first pass reads three pages of notices, and starting
+/// over a hundred boards on one paced server at once would outlast the run,
+/// which then uploads nothing and repeats.
+pub const NEW_BOARDS_PER_RUN: usize = 20;
+
+/// The boards this run crawls: every board whose first pass is done, plus the
+/// first `NEW_BOARDS_PER_RUN` others in catalog order. Returns them and the
+/// number left for a later run.
+pub fn admitted(
+    state: &State,
+    boards: Vec<SourceDefinition>,
+) -> Result<(Vec<SourceDefinition>, usize), String> {
+    let mut admitted = Vec::with_capacity(boards.len());
+    let mut started = 0;
+    let mut waiting = 0;
+    for board in boards {
+        if state.seed_complete(&board.id)? {
+            admitted.push(board);
+        } else if started < NEW_BOARDS_PER_RUN {
+            started += 1;
+            admitted.push(board);
+        } else {
+            waiting += 1;
+        }
+    }
+    Ok((admitted, waiting))
+}
+
 /// Crawls the boards in two phases (#80, user decisions 2026-11-22). First
 /// every board's incremental pass and upkeep, so new notices never wait for a
 /// backfill; then the history backlog until `budget.history_until`, boards
@@ -558,6 +587,16 @@ impl<T: Transport> Crawl<'_, T> {
                         continue;
                     }
                 }
+                // A listing without change times (k2web) shows each row's title:
+                // a known notice is re-fetched only when that title changed, and
+                // body-only edits arrive through the deletion audit (user
+                // decision, #80 step 3). On one shared server, re-reading the edit
+                // window of every board would outlast the run.
+                if let (true, Some(title)) = (exists, entry.title.as_deref()) {
+                    if state.listed_title_unchanged(&definition.id, &entry.external_id, title)? {
+                        continue;
+                    }
+                }
                 let deadline = historical && past(self.budget.history_until);
                 if deadline || self.budget.articles.is_some_and(|max| processed >= max) {
                     if !errors.is_empty() {
@@ -753,6 +792,16 @@ impl<T: Transport> Crawl<'_, T> {
                     .is_some_and(|status| parser::missing(definition, status, "")) =>
             {
                 return Err(ArticleError::Missing)
+            }
+            // Fetching it again returns the same page, so a notice over the
+            // limit is skipped (with the bounded retries) instead of holding
+            // the board's history (user decision, #80 step 3).
+            Err(error) if error.message == network::TOO_LARGE => {
+                return Err(ArticleError::Permanent {
+                    reason: "공지 원문이 너무 커서 보관하지 않았습니다.".into(),
+                    // No response bytes are kept.
+                    response_sha256: crate::sha256_hex(b""),
+                });
             }
             response => response.map_err(String::from)?,
         };

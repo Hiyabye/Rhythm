@@ -339,6 +339,7 @@ async fn notices<H: Http>(
                     url: canonical_url(),
                     pinned: false,
                     modified_at: None,
+                    title: None,
                 };
                 with_store(store, |s| {
                     s.record_skipped(

@@ -139,7 +139,7 @@ impl Transport for Fake {
         let body = |text: String, mime: &str, etag: Option<String>| {
             // Like the real transport, a response over the limit is an error.
             if text.len() > limit {
-                return Err("파일이 다운로드 크기 제한을 초과했습니다.".into());
+                return Err(network::TOO_LARGE.into());
             }
             Ok(Fetch::Body {
                 bytes: text.into_bytes(),
@@ -314,7 +314,7 @@ fn skipped(state: &State) -> Vec<String> {
 #[test]
 fn public_boards_are_every_supported_board_but_cybercampus() {
     let boards = public_boards();
-    assert_eq!(boards.len(), 38);
+    assert_eq!(boards.len(), 166);
     assert!(boards
         .iter()
         .all(|b| b.family != catalog::CYBERCAMPUS_FAMILY));
@@ -1236,4 +1236,152 @@ async fn skipped_notices_are_retried_daily_within_bounded_attempts() {
     assert!(skipped(&state).is_empty());
     assert_eq!(notice(&state, "2").title, "장학금 AI 연구 공지 2");
     assert!(notices(&state).iter().all(|n| n.external_id != "6"));
+}
+
+const INNOV: &str = "innov-newsletter";
+const INNOV_LIST: &str = "https://new-cms.sogang.ac.kr/innov/10558/subview.do?page=1";
+const INNOV_DETAIL: &str = "https://new-cms.sogang.ac.kr/bbs/innov/3184/405464/artclView.do";
+
+/// Serves the k2web gallery fixture (five posts on one page): the captured
+/// notice 405464, and the CMS's missing-post page for the other four.
+fn serve_innov(fake: &Fake, title: &str) {
+    let html = |text: &str| {
+        (
+            text.replace("서강의 혁신을 기록하다 Vol.5", title),
+            "text/html".to_string(),
+        )
+    };
+    let mut extra = fake.extra.lock().unwrap();
+    extra.insert(
+        INNOV_LIST.into(),
+        html(include_str!(
+            "../../../sources/src/fixtures/k2web-innov-list.html"
+        )),
+    );
+    extra.insert(
+        INNOV_DETAIL.into(),
+        html(include_str!(
+            "../../../sources/src/fixtures/k2web-innov-detail-405464.html"
+        )),
+    );
+    for id in [374715, 374716, 374718, 374719] {
+        extra.insert(
+            format!("https://new-cms.sogang.ac.kr/bbs/innov/3184/{id}/artclView.do"),
+            html(
+                "<html><body><div id=\"errorMessege\"><p class=\"txt\">\
+                  <strong>게시물이(가) 없습니다.</strong></p></div></body></html>",
+            ),
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_k2web_notice_is_refetched_only_when_its_list_title_changes() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![]);
+    serve_innov(&fake, "서강의 혁신을 기록하다 Vol.5");
+    let detail_requests = |fake: &Fake| {
+        fake.paths()
+            .iter()
+            .filter(|url| *url == INNOV_DETAIL)
+            .count()
+    };
+
+    run(&state, &fake, INNOV, Budget::default()).await.unwrap();
+    assert!(state.seed_complete(INNOV).unwrap());
+    let title = notice(&state, "405464").title;
+    assert_eq!(detail_requests(&fake), 1);
+
+    // The list still shows the archived title: no request.
+    run(&state, &fake, INNOV, Budget::default()).await.unwrap();
+    assert_eq!(detail_requests(&fake), 1);
+
+    // A changed title, or a notice reported missing, is fetched again.
+    serve_innov(&fake, "서강의 혁신을 기록하다 Vol.5 (수정)");
+    run(&state, &fake, INNOV, Budget::default()).await.unwrap();
+    assert_eq!(detail_requests(&fake), 2);
+    assert_eq!(notice(&state, "405464").title, format!("{title} (수정)"));
+    run(&state, &fake, INNOV, Budget::default()).await.unwrap();
+    assert_eq!(detail_requests(&fake), 2);
+    exec(
+        &state,
+        "UPDATE notices SET missing_since='2026-11-20T00:00:00Z' WHERE external_id='405464'",
+    );
+    run(&state, &fake, INNOV, Budget::default()).await.unwrap();
+    assert_eq!(detail_requests(&fake), 3);
+    assert_eq!(deletion(&state, "405464"), (None, None));
+}
+
+#[tokio::test]
+async fn new_boards_start_a_bounded_number_per_run_in_catalog_order() {
+    let state = State::open_in_memory().unwrap();
+    let boards = public_boards();
+    // Every board is new: only the first ones start.
+    let (started, waiting) = admitted(&state, boards.clone()).unwrap();
+    assert_eq!(started.len(), NEW_BOARDS_PER_RUN);
+    assert_eq!(waiting, boards.len() - NEW_BOARDS_PER_RUN);
+    assert!(started
+        .iter()
+        .zip(&boards)
+        .all(|(started, board)| started.id == board.id));
+
+    // Boards past their first pass always run, wherever they are listed; a
+    // started board that has not finished keeps its turn.
+    let last = boards.last().unwrap().id.clone();
+    for board in boards.iter().take(5).chain(boards.last()) {
+        state.board(&board.id).unwrap();
+        if board.id != boards[0].id {
+            state.mark_seed_complete(&board.id).unwrap();
+        }
+    }
+    let (started, waiting) = admitted(&state, boards.clone()).unwrap();
+    let ids: Vec<_> = started.iter().map(|board| board.id.as_str()).collect();
+    // The unfinished first board, four done ones, the next nineteen new ones
+    // and the last board.
+    let mut expected: Vec<_> = boards[..4 + NEW_BOARDS_PER_RUN]
+        .iter()
+        .map(|board| board.id.as_str())
+        .collect();
+    expected.push(&last);
+    assert_eq!(ids, expected);
+    assert_eq!(waiting, boards.len() - ids.len());
+}
+
+#[tokio::test]
+async fn a_k2web_notice_over_its_limit_is_skipped_without_holding_the_board() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![]);
+    serve_innov(&fake, "서강의 혁신을 기록하다 Vol.5");
+    let detail = include_str!("../../../sources/src/fixtures/k2web-innov-detail-405464.html");
+    // Over 4 MiB is still a k2web notice (inline images the sanitizer drops).
+    let padded = detail.replacen(
+        "</body>",
+        &format!("<!--{}--></body>", "x".repeat(5 << 20)),
+        1,
+    );
+    fake.extra
+        .lock()
+        .unwrap()
+        .insert(INNOV_DETAIL.into(), (padded, "text/html".into()));
+    run(&state, &fake, INNOV, Budget::default()).await.unwrap();
+    assert_eq!(notices(&state).len(), 1);
+
+    // Over 16 MiB the same page would come back every time: skipped, and the
+    // board completes instead of failing on it.
+    let state = State::open_in_memory().unwrap();
+    let huge = detail.replacen(
+        "</body>",
+        &format!("<!--{}--></body>", "x".repeat(17 << 20)),
+        1,
+    );
+    fake.extra
+        .lock()
+        .unwrap()
+        .insert(INNOV_DETAIL.into(), (huge, "text/html".into()));
+    run(&state, &fake, INNOV, Budget::default()).await.unwrap();
+    assert!(notices(&state).is_empty());
+    assert_eq!(skipped(&state), ["405464"]);
+    let board = state.board(INNOV).unwrap();
+    assert_eq!(board.status, "completed");
+    assert!(state.seed_complete(INNOV).unwrap());
 }

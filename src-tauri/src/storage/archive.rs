@@ -17,7 +17,7 @@ EXISTS(SELECT 1 FROM feed_boards b WHERE b.source_id=sources.id),\
 (SELECT history_complete FROM feed_boards b WHERE b.source_id=sources.id)";
 macro_rules! item_columns {
     ($snippet:literal) => {
-        concat!("d.id,d.source_id,s.name,d.title,d.author,d.category,d.published_at,d.collected_at,COALESCE(u.is_read,0),COALESCE(u.saved,0),d.historical,", $snippet, ",CASE WHEN EXISTS(SELECT 1 FROM resources a WHERE a.document_id=d.id AND a.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id) AND a.status<>'downloaded') THEN 'missing_resources' ELSE 'archived' END,EXISTS(SELECT 1 FROM trashed_documents t WHERE t.document_id=d.id)")
+        concat!("d.id,d.source_id,", source_label!(), ",d.title,d.author,d.category,d.published_at,d.collected_at,COALESCE(u.is_read,0),COALESCE(u.saved,0),d.historical,", $snippet, ",CASE WHEN EXISTS(SELECT 1 FROM resources a WHERE a.document_id=d.id AND a.revision_id=(SELECT MAX(r.id) FROM document_revisions r WHERE r.document_id=d.id) AND a.status<>'downloaded') THEN 'missing_resources' ELSE 'archived' END,EXISTS(SELECT 1 FROM trashed_documents t WHERE t.document_id=d.id)")
     };
 }
 /// The snippet column is the whole body, which `excerpt` narrows around a match.
@@ -747,6 +747,7 @@ impl Store {
                             url: row.get(2)?,
                             pinned: false,
                             modified_at: None,
+                            title: None,
                         },
                     ))
                 },
