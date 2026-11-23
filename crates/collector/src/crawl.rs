@@ -11,12 +11,12 @@ use rhythm_sources::{
     transport::{self as network, Access, Fetch, FetchError, Transport},
 };
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     future::Future,
     net::IpAddr,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Mutex,
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -134,6 +134,7 @@ pub async fn run_boards<T: Transport>(
     cancel: &AtomicBool,
 ) -> Report {
     let start = Instant::now();
+    let policies = &Policies::default();
     let groups = server_groups(transport, boards).await;
     let outcomes = Mutex::new(Vec::<(usize, Result<(), String>)>::new());
     let record = |index: usize, outcome: Result<(), String>| {
@@ -161,7 +162,7 @@ pub async fn run_boards<T: Transport>(
             let board_start = Instant::now();
             record(
                 index,
-                run_incremental(state, transport, &boards[index], budget, cancel).await,
+                run_incremental(state, transport, &boards[index], budget, cancel, policies).await,
             );
             if board_start.elapsed() >= slowest.1 {
                 slowest = (boards[index].id.clone(), board_start.elapsed());
@@ -212,7 +213,7 @@ pub async fn run_boards<T: Transport>(
         history_groups,
         || stopped(cancel, budget),
         |index| async move {
-            match run_history(state, transport, &boards[index], budget, cancel).await {
+            match run_history(state, transport, &boards[index], budget, cancel, policies).await {
                 // Without a deadline each board gets one turn, as before.
                 Ok(page) => page.filter(|_| budget.history_until.is_some()),
                 Err(error) => {
@@ -369,8 +370,9 @@ pub async fn run_board<T: Transport>(
     budget: Budget,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
-    run_incremental(state, transport, definition, budget, cancel).await?;
-    run_history(state, transport, definition, budget, cancel)
+    let policies = &Policies::default();
+    run_incremental(state, transport, definition, budget, cancel, policies).await?;
+    run_history(state, transport, definition, budget, cancel, policies)
         .await
         .map(drop)
 }
@@ -383,6 +385,7 @@ async fn run_incremental<T: Transport>(
     definition: &SourceDefinition,
     budget: Budget,
     cancel: &AtomicBool,
+    policies: &Policies,
 ) -> Result<(), String> {
     let mut board = state.board(&definition.id)?;
     // Counters describe this attempt; checkpoints stay cumulative.
@@ -396,6 +399,7 @@ async fn run_incremental<T: Transport>(
         transport,
         cancel,
         budget,
+        policies,
     };
     let mut outcome = crawl.pass(definition, &mut board, Pass::Incremental).await;
     // The mechanical sitemap lists every current notice, so the audit there is
@@ -423,6 +427,7 @@ async fn run_history<T: Transport>(
     definition: &SourceDefinition,
     budget: Budget,
     cancel: &AtomicBool,
+    policies: &Policies,
 ) -> Result<Option<u32>, String> {
     let mut board = state.board(&definition.id)?;
     if board.history_complete {
@@ -437,6 +442,7 @@ async fn run_history<T: Transport>(
         transport,
         cancel,
         budget,
+        policies,
     };
     let outcome = crawl
         .pass(definition, &mut board, Pass::Historical)
@@ -481,6 +487,37 @@ struct Crawl<'a, T> {
     transport: &'a T,
     cancel: &'a AtomicBool,
     budget: Budget,
+    policies: &'a Policies,
+}
+
+/// robots.txt policies by origin, loaded once per run: every board of an
+/// origin shares one file, and loading it for each pass cost about 90 s a run
+/// on new-cms (118 loads). A failed load is not kept, so the next board on
+/// that origin tries again.
+#[derive(Default)]
+struct Policies(Mutex<HashMap<String, Arc<Robots>>>);
+
+impl Policies {
+    async fn get<T: Transport>(
+        &self,
+        transport: &T,
+        url: &Url,
+        cancel: &AtomicBool,
+    ) -> Result<Arc<Robots>, FetchError> {
+        let origin = url.origin().ascii_serialization();
+        if let Some(policy) = self.lookup(&origin) {
+            return Ok(policy);
+        }
+        let policy = Arc::new(Robots::load(transport, url, cancel, Access::Source).await?);
+        if let Ok(mut policies) = self.0.lock() {
+            policies.insert(origin, Arc::clone(&policy));
+        }
+        Ok(policy)
+    }
+
+    fn lookup(&self, origin: &str) -> Option<Arc<Robots>> {
+        self.0.lock().ok()?.get(origin).cloned()
+    }
 }
 
 impl<T: Transport> Crawl<'_, T> {
@@ -505,7 +542,10 @@ impl<T: Transport> Crawl<'_, T> {
         }
         let first_page = if historical { board.next_page } else { 1 };
         let initial = parser::list_url(definition, first_page)?;
-        let policy = Robots::load(self.transport, &initial, self.cancel, Access::Source).await?;
+        let policy = self
+            .policies
+            .get(self.transport, &initial, self.cancel)
+            .await?;
         let mut seen = HashSet::new();
         let mut page_hashes = HashSet::new();
         // A sitemap listing skips unchanged entries by their own change time.
@@ -755,7 +795,10 @@ impl<T: Transport> Crawl<'_, T> {
             return Ok(());
         }
         let initial = parser::list_url(definition, 1)?;
-        let policy = Robots::load(self.transport, &initial, self.cancel, Access::Source).await?;
+        let policy = self
+            .policies
+            .get(self.transport, &initial, self.cancel)
+            .await?;
         let work = audits.into_iter().map(|entry| (entry, false, false)).chain(
             retries
                 .into_iter()
