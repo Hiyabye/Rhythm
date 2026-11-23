@@ -1,0 +1,1527 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>공지사항</title>
+</head>
+<body>
+<div class="board-list">
+
+
+		<form name="searchForm" method="post" action="/bbs/gsot/908/artclList.do">
+			<input type="hidden" name="layout" value="67736f744040333230384040666e637431" />
+			<input type="hidden" id="findClSeq" name="findClSeq" value=""/>
+			<input type="hidden" id="findOpnwrd" name="findOpnwrd" value="" />
+
+
+	            <h2 class="hidden">분류</h2>
+	            <!-- Category -->
+				<div class="cate">
+					<div class="all-list type1 type1"><a href="/bbs/gsot/908/artclList.do" onclick="jf_searchArtcl('findClSeq', '')">전체</a></div>
+					<ul class="active">
+
+
+
+
+										<li><a href="/bbs/gsot/908/artclList.do" onclick="jf_searchArtcl('findClSeq', '278')">입시</a></li>
+
+										<li><a href="/bbs/gsot/908/artclList.do" onclick="jf_searchArtcl('findClSeq', '279')">학사</a></li>
+
+										<li><a href="/bbs/gsot/908/artclList.do" onclick="jf_searchArtcl('findClSeq', '280')">졸업/논문</a></li>
+
+										<li><a href="/bbs/gsot/908/artclList.do" onclick="jf_searchArtcl('findClSeq', '282')">등록/장학</a></li>
+
+										<li><a href="/bbs/gsot/908/artclList.do" onclick="jf_searchArtcl('findClSeq', '283')">일반</a></li>
+
+
+
+
+
+					</ul>
+
+
+				</div>
+
+
+
+	            <h2 class="hidden">말머리 분류</h2>
+				<div class="tabmenu">
+					<ul>
+
+
+								<li><a href="/bbs/gsot/908/artclList.do" onclick="jf_searchArtcl('findOpnwrd', '')" class="on">전체</a></li>
+
+									<li >
+										<a href="/bbs/gsot/908/artclList.do" onclick="jf_searchArtcl('findOpnwrd', '110')" >
+											입시
+										</a>
+									</li>
+
+									<li >
+										<a href="/bbs/gsot/908/artclList.do" onclick="jf_searchArtcl('findOpnwrd', '111')" >
+											학사
+										</a>
+									</li>
+
+									<li >
+										<a href="/bbs/gsot/908/artclList.do" onclick="jf_searchArtcl('findOpnwrd', '112')" >
+											졸업/논문
+										</a>
+									</li>
+
+									<li >
+										<a href="/bbs/gsot/908/artclList.do" onclick="jf_searchArtcl('findOpnwrd', '113')" >
+											등록/장학
+										</a>
+									</li>
+
+									<li >
+										<a href="/bbs/gsot/908/artclList.do" onclick="jf_searchArtcl('findOpnwrd', '114')" >
+											일반
+										</a>
+									</li>
+
+
+
+
+					</ul>
+				</div>
+
+
+	        <!-- Search -->
+			<div class="srch_box">
+
+				<div class="srch_counts">
+					총 <strong>1129</strong> 개의 게시물
+				</div>
+
+				<div class="search">
+
+
+					<div class="board-serch">
+						<fieldset>
+							<legend>게시물 검색</legend>
+								<select id="findType" name="findType" class="_selectBox" title="검색 선택">
+
+
+
+
+												<option value="sj" >제목</option>
+
+												<option value="userNm" >작성자</option>
+
+
+
+								</select>
+								<input type="text" id="findWord" name="findWord" value="" onkeypress="if(event.keyCode == '13') jf_searchArtcl('findWord', this.value)">
+							   <span class="_button"> <input type="submit" value="검색"></span>
+						</fieldset>
+					</div>
+				</div>
+			</div>
+		</form>
+
+		<form name="viewForm" method="post">
+			<input type="hidden" name="layout" value="67736f744040333230384040666e637431" />
+			<input type="hidden" name="page" value="1">
+			<input type="hidden" name="findType" value="">
+			<input type="hidden" name="findWord" value="">
+			<input type="hidden" name="findClSeq" value=""/>
+			<input type="hidden" name="findOpnwrd" value="" />
+			<input type="hidden" name="rgsBgndeStr" value="">
+			<input type="hidden" name="rgsEnddeStr" value="">
+			<input type="hidden" name="password">
+		</form>
+			<h2 class="hidden">게시글 리스트</h2>
+
+	        <!-- List Table -->
+			<div class="boardWrap">
+				<table class="board-table horizon1">
+	                <caption>신학대학원 공지사항</caption>
+	                <colgroup>
+
+	                    <col class="col-num">
+
+
+
+                           			<col class="col-title">
+
+
+
+
+
+
+
+
+                           			<col class="col-writer">
+
+
+
+
+	                    <col class="col-date">
+
+	                    <col class="col-counts">
+
+	                    	<col class="col-file">
+
+	                </colgroup>
+	                <thead>
+	                    <tr>
+
+	                        <th class="th-num">번호</th>
+
+
+
+                            			 <th class="th-title">제목</th>
+
+
+
+
+
+
+
+
+                            			<th class="th-writer">작성자</th>
+
+
+
+
+	                        <th class="th-date">작성일</th>
+
+	                        <th class="th-counts">조회수</th>
+
+	                        	<th class="th-file">첨부파일</th>
+
+	                    </tr>
+	                </thead>
+	                <tbody>
+
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/gsot/908/394243/artclView.do" onclick="jf_viewArtcl('gsot', '908', '394243')">
+				                                        <strong>명도회 장학금, 인재양성기금 수혜자 공모 리마인드 안내</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            신학대학원
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.11.12</td>
+
+	                                <td class="td-counts">22</td>
+
+	                                    <td class="td-file">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/gsot/908/386517/artclView.do" onclick="jf_viewArtcl('gsot', '908', '386517')">
+				                                        <strong>2026학년도 2학기 종합시험 결과 안내</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            신***원
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.11.10</td>
+
+	                                <td class="td-counts">49</td>
+
+	                                    <td class="td-file">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/gsot/908/376327/artclView.do" onclick="jf_viewArtcl('gsot', '908', '376327')">
+				                                        <strong>2027학년도 전기 2차전형 신입생 모집 안내(11/16~11/27)</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            신***원
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.11.04</td>
+
+	                                <td class="td-counts">48</td>
+
+	                                    <td class="td-file">
+
+												<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/gsot/908/376319/artclView.do" onclick="jf_viewArtcl('gsot', '908', '376319')">
+				                                        <strong>사회복지학/가톨릭사회복지학전공  석·박사 학위논문 프로포절 발표회 안내</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            신***원
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.11.04</td>
+
+	                                <td class="td-counts">45</td>
+
+	                                    <td class="td-file">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/gsot/908/376317/artclView.do" onclick="jf_viewArtcl('gsot', '908', '376317')">
+				                                        <strong>2027학년도 전기 신학대학원 입학설명회 자료 안내</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            신***원
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.11.03</td>
+
+	                                <td class="td-counts">34</td>
+
+	                                    <td class="td-file">
+
+												<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/gsot/908/311313/artclView.do" onclick="jf_viewArtcl('gsot', '908', '311313')">
+				                                        <strong>신학대학원 입학상담 오픈카톡방 개설 안내</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            신***원
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.10.02</td>
+
+	                                <td class="td-counts">41</td>
+
+	                                    <td class="td-file">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/gsot/908/311149/artclView.do" onclick="jf_viewArtcl('gsot', '908', '311149')">
+				                                        <strong>2027년 전기 「인재양성기금」 수혜자 공모 안내</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            신***원
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.10.01</td>
+
+	                                <td class="td-counts">37</td>
+
+	                                    <td class="td-file">
+
+												<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+	                                   </td>
+
+	                            </tr>
+
+								<tr class="notice">
+
+	                                <td class="td-num">
+
+
+
+	                                            <span class="notice-title">일반공지</span>
+
+
+	                                </td>
+
+
+
+		                            			 <td class="td-title notice alignL">
+				                                    <a href="/bbs/gsot/908/252658/artclView.do" onclick="jf_viewArtcl('gsot', '908', '252658')">
+				                                        <strong>2027년도 명도회 장학금  지원 대상자 공모</strong>
+				                                    </a>
+				                                </td>
+
+
+
+
+
+
+
+
+		                            			<td class="td-write">
+		                                            신***원
+				                                </td>
+
+
+
+
+	                                <td class="td-date">2026.09.11</td>
+
+	                                <td class="td-counts">132</td>
+
+	                                    <td class="td-file">
+
+												<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+	                                   </td>
+
+	                            </tr>
+
+
+
+
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			1129
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/gsot/908/420698/artclView.do" onclick="jf_viewArtcl('gsot', '908', '420698')">
+
+
+
+
+
+									                                	[일반]
+
+						                                    <strong>2027학년도 논술전형 논술시험에 따른 학교 출입 통제 안내(11/21토 ~ 11/22일)</strong>
+
+
+
+
+						                                    	<span class="new">새글</span>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		신학대학원
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.11.17</td>
+
+		                                <td class="td-access">23</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			1128
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/gsot/908/394243/artclView.do" onclick="jf_viewArtcl('gsot', '908', '394243')">
+
+
+
+
+
+									                                	[등록/장학]
+
+						                                    <strong>명도회 장학금, 인재양성기금 수혜자 공모 리마인드 안내</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		신학대학원
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.11.12</td>
+
+		                                <td class="td-access">22</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			1127
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/gsot/908/386517/artclView.do" onclick="jf_viewArtcl('gsot', '908', '386517')">
+
+
+
+
+
+									                                	[학사]
+
+						                                    <strong>2026학년도 2학기 종합시험 결과 안내</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		신***원
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.11.10</td>
+
+		                                <td class="td-access">49</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			1126
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/gsot/908/376327/artclView.do" onclick="jf_viewArtcl('gsot', '908', '376327')">
+
+
+
+
+
+									                                	[입시]
+
+						                                    <strong>2027학년도 전기 2차전형 신입생 모집 안내(11/16~11/27)</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		신***원
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.11.04</td>
+
+		                                <td class="td-access">48</td>
+
+		                                    <td class="td-file">
+
+													<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			1125
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/gsot/908/376319/artclView.do" onclick="jf_viewArtcl('gsot', '908', '376319')">
+
+
+
+
+
+									                                	[학사]
+
+						                                    <strong>사회복지학/가톨릭사회복지학전공  석·박사 학위논문 프로포절 발표회 안내</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		신***원
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.11.04</td>
+
+		                                <td class="td-access">45</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			1124
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/gsot/908/376317/artclView.do" onclick="jf_viewArtcl('gsot', '908', '376317')">
+
+
+
+
+
+									                                	[입시]
+
+						                                    <strong>2027학년도 전기 신학대학원 입학설명회 자료 안내</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		신***원
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.11.03</td>
+
+		                                <td class="td-access">34</td>
+
+		                                    <td class="td-file">
+
+													<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			1123
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/gsot/908/375915/artclView.do" onclick="jf_viewArtcl('gsot', '908', '375915')">
+
+
+
+
+
+									                                	[입시]
+
+						                                    <strong>신학대학원 입학설명회 안내[11월 3일(화) 17시부터]</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		신***원
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.11.02</td>
+
+		                                <td class="td-access">16</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			1122
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/gsot/908/345292/artclView.do" onclick="jf_viewArtcl('gsot', '908', '345292')">
+
+
+
+
+
+									                                	[입시]
+
+						                                    <strong>2027학년도 전기(1차) 입시 합격자 발표</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		신***원
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.10.23</td>
+
+		                                <td class="td-access">46</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			1121
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/gsot/908/333257/artclView.do" onclick="jf_viewArtcl('gsot', '908', '333257')">
+
+
+
+
+
+									                                	[일반]
+
+						                                    <strong>MAGIS 2027 KOREA 체험팀&양성팀 파트타이머 모집안내</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		신***원
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.10.21</td>
+
+		                                <td class="td-access">28</td>
+
+		                                    <td class="td-file">
+
+													<img src="/Web-home/fnct/bbs/JW_bbs_table/images/attachment.png" alt="첨부파일">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			1120
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/gsot/908/328219/artclView.do" onclick="jf_viewArtcl('gsot', '908', '328219')">
+
+
+
+
+
+									                                	[학사]
+
+						                                    <strong>2026학년도 2학기 종합시험 시간표 안내</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		신***원
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.10.16</td>
+
+		                                <td class="td-access">69</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			1119
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/gsot/908/318896/artclView.do" onclick="jf_viewArtcl('gsot', '908', '318896')">
+
+
+
+
+
+									                                	[입시]
+
+						                                    <strong>2027학년도 전기(1차)  입시 시험 및 면접 안내</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		신***원
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.10.12</td>
+
+		                                <td class="td-access">39</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+                                    <tr >
+
+			                            <td class="td-num">
+
+
+
+			                            			1118
+
+
+			                            </td>
+
+
+
+			                            			  <td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+									                                	<a href="/bbs/gsot/908/315631/artclView.do" onclick="jf_viewArtcl('gsot', '908', '315631')">
+
+
+
+
+
+									                                	[입시]
+
+						                                    <strong>신학대학원 2027학년도 전기 입학설명회 안내</strong>
+									                                	</a>
+
+
+
+
+
+													</td>
+
+
+
+
+
+
+
+
+			                            			<td class="td-write">
+
+
+
+
+
+
+																		신***원
+
+
+
+
+			                            			</td>
+
+
+
+
+		                                <td class="td-date">2026.10.12</td>
+
+		                                <td class="td-access">45</td>
+
+		                                    <td class="td-file">
+
+		                                    </td>
+
+		                            </tr>
+
+
+
+
+	                </tbody>
+	            </table>
+	        </div>
+
+
+		<form name="pageForm" method="post" action="/bbs/gsot/908/artclList.do">
+			<input type="hidden" name="layout" value="67736f744040333230384040666e637431" />
+			<input type="hidden" id="page" name="page" value="1">
+			<input type="hidden" name="findType" value="">
+			<input type="hidden" name="findWord" value="">
+			<input type="hidden" name="findClSeq" value=""/>
+			<input type="hidden" name="findOpnwrd" value="" />
+			<input type="hidden" name="rgsBgndeStr" value="">
+			<input type="hidden" name="rgsEnddeStr" value="">
+			<div class="_paging">
+	<div class="_inner">
+		<a href="javascript:page_link('1')" class="_first" title="처음 목록으로 이동">처음</a>
+<p class="_pageState"><span class="_curPage">1</span><span class="_totPage">95</span></p><ul>
+<li><strong title="현재 페이지">1</strong></li>
+<li><a href="javascript:page_link('2')" title="2페이지">2</a></li>
+<li><a href="javascript:page_link('3')" title="3페이지">3</a></li>
+<li><a href="javascript:page_link('4')" title="4페이지">4</a></li>
+<li><a href="javascript:page_link('5')" title="5페이지">5</a></li>
+<li><a href="javascript:page_link('6')" title="6페이지">6</a></li>
+<li><a href="javascript:page_link('7')" title="7페이지">7</a></li>
+<li><a href="javascript:page_link('8')" title="8페이지">8</a></li>
+<li><a href="javascript:page_link('9')" title="9페이지">9</a></li>
+<li><a href="javascript:page_link('10')" title="10페이지">10</a></li>
+</ul>
+<a href="javascript:page_link('2')" class="_listNext" title="다음 페이지">다음 페이지</a>
+<a href="javascript:page_link('11')" class="_next" title="다음 목록으로 이동">다음</a>
+<a href="javascript:page_link('95')" class="_last" title="마지막 목록으로 이동">끝</a>
+	</div>
+</div>
+
+		</form>
+
+	    <!-- Button -->
+		<div class="btns">
+			<div class=btn-control>
+
+			</div>
+		</div>
+	</div>
+</body>
+</html>

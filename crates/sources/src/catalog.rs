@@ -116,18 +116,18 @@ pub fn definitions() -> Vec<SourceDefinition> {
             true,
         );
     }
-    for (id, menu, name) in [
-        ("general", 6975, "일반공지"),
-        ("admission", 3947, "입사 및 퇴사 공지"),
-        ("menu", 3951, "주간 메뉴"),
-    ] {
+    // k2web CMS boards are one row each of `parser::K2WEB_BOARDS`.
+    for board in &crate::parser::K2WEB_BOARDS {
         add(
-            &format!("dorm-{id}"),
-            name,
-            "서강대학교 · 벨라르미노 학사",
-            "dormitory",
-            "sogang-dorm",
-            format!("https://new-cms.sogang.ac.kr/sgdormitory/{menu}/subview.do"),
+            board.source_id,
+            board.name,
+            board.organization,
+            "k2web",
+            board.group,
+            format!(
+                "https://new-cms.sogang.ac.kr/{}/{}/subview.do",
+                board.site, board.menu
+            ),
             true,
         );
     }

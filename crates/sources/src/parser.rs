@@ -6,14 +6,15 @@ use url::Url;
 
 #[path = "community.rs"]
 mod community;
-#[path = "dormitory.rs"]
-mod dormitory;
 #[path = "engineering.rs"]
 mod engineering;
+#[path = "k2web.rs"]
+mod k2web;
 #[path = "mechanical.rs"]
 mod mechanical;
 #[path = "semiconductor.rs"]
 mod semiconductor;
+pub use k2web::{K2webBoard, Skin, K2WEB_BOARDS};
 
 const PARSER_ERROR: &str = "학교 페이지 형식이 예상과 다릅니다. 기존 보관 자료는 유지됩니다.";
 fn invalid<T>() -> Result<T, String> {
@@ -195,7 +196,7 @@ pub fn list_url(source: &SourceDefinition, page: u32) -> Result<Url, String> {
     match source.family.as_str() {
         "community" => return community::list_url(source, page),
         "engineering" => return engineering::list_url(source, page),
-        "dormitory" => return dormitory::list_url(source, page),
+        "k2web" => return k2web::list_url(k2web::board(source)?, page),
         "mechanical" => return mechanical::list_url(source, page),
         "semiconductor" => return semiconductor::list_url(source, page),
         _ => {}
@@ -231,7 +232,7 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
     match source.family.as_str() {
         "community" => return community::detail_url(source, entry),
         "engineering" => return engineering::detail_url(source, entry),
-        "dormitory" => return dormitory::detail_url(source, entry),
+        "k2web" => return k2web::detail_url(k2web::board(source)?, entry),
         "mechanical" => return mechanical::detail_url(source, entry),
         "semiconductor" => return semiconductor::detail_url(source, entry),
         _ => {}
@@ -266,7 +267,7 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
 pub fn missing(source: &SourceDefinition, status: u16, body: &str) -> bool {
     match source.family.as_str() {
         "main" | "engineering" | "mechanical" => matches!(status, 404 | 410),
-        "dormitory" => status == 200 && dormitory::missing(body),
+        "k2web" => status == 200 && k2web::missing(body),
         // The phrase also sits in the site's script bundle on every page, so
         // only the rendered empty-detail block counts.
         "computing" => {
@@ -285,7 +286,7 @@ pub fn listing(source: &SourceDefinition, page: u32, body: &str) -> Result<Listi
     match source.family.as_str() {
         "community" => community::listing(source, page, body),
         "engineering" => engineering::listing(source, page, body),
-        "dormitory" => dormitory::listing(source, page, body),
+        "k2web" => k2web::listing(k2web::board(source)?, page, body),
         "mechanical" => mechanical::listing(source, page, body),
         "semiconductor" => semiconductor::listing(source, page, body),
         _ => match main_board(&source.id) {
@@ -516,7 +517,7 @@ pub fn article(
     match source.family.as_str() {
         "community" => return community::article(source, entry, body),
         "engineering" => return engineering::article(source, entry, body),
-        "dormitory" => return dormitory::article(source, entry, body),
+        "k2web" => return k2web::article(k2web::board(source)?, entry, body),
         "mechanical" => return mechanical::article(source, entry, body),
         "semiconductor" => return semiconductor::article(source, entry, body),
         _ => {}

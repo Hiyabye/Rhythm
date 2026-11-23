@@ -1,0 +1,715 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>포스터 게시판</title>
+</head>
+<body>
+<div class="album-list">
+
+
+		<form name="searchForm" method="post" action="/bbs/liberalarts/1722/artclList.do">
+			<input type="hidden" name="layout" value="6c69626572616c617274734040343030374040666e637431" />
+			<input type="hidden" id="findClSeq" name="findClSeq" value=""/>
+			<input type="hidden" id="findOpnwrd" name="findOpnwrd" value="" />
+
+
+
+
+				<h2 class="hidden">말머리 분류</h2>
+				<div class="tabmenu">
+					<ul>
+
+
+								<li><a href="/bbs/liberalarts/1722/artclList.do" onclick="jf_searchArtcl('findOpnwrd', '')" class="on">전체</a></li>
+
+									<li >
+										<a href="/bbs/liberalarts/1722/artclList.do" onclick="jf_searchArtcl('findOpnwrd', '122')" >
+											세미나
+										</a>
+									</li>
+
+									<li >
+										<a href="/bbs/liberalarts/1722/artclList.do" onclick="jf_searchArtcl('findOpnwrd', '123')" >
+											취업
+										</a>
+									</li>
+
+									<li >
+										<a href="/bbs/liberalarts/1722/artclList.do" onclick="jf_searchArtcl('findOpnwrd', '124')" >
+											동아리
+										</a>
+									</li>
+
+									<li >
+										<a href="/bbs/liberalarts/1722/artclList.do" onclick="jf_searchArtcl('findOpnwrd', '125')" >
+											기타
+										</a>
+									</li>
+
+
+
+
+					</ul>
+				</div>
+
+
+			<!-- Search -->
+			<div class="srch_box">
+				<div class="srch_left">
+
+					<div class="srch_counts">
+						총 <strong>287</strong> 개의 게시물
+					</div>
+				</div>
+				<div class="srch_right">
+					<div class="search">
+
+
+						<div class="board-serch">
+							<fieldset>
+								<legend>게시물 검색</legend>
+
+								<div class="row">
+									<select id="findType" name="findType" class="_selectBox" title="검색 선택">
+
+
+
+
+													<option value="sj" >제목</option>
+
+
+													<option value="userNm" >작성자</option>
+
+
+
+
+
+
+									</select>
+									<input type="text" id="findWord" name="findWord" value="" onkeypress="if(event.keyCode == '13') jf_searchArtcl('findWord', this.value)" placeholder="검색어를 입력해 주세요.">
+									<span class="_button"> <input type="submit" value="검색"></span>
+								</div>
+							</fieldset>
+						</div>
+					</div>
+				</div>
+			</div>
+		</form>
+
+		<form name="viewForm" method="post">
+			<input type="hidden" name="layout" value="6c69626572616c617274734040343030374040666e637431" />
+			<input type="hidden" name="page" value="1">
+			<input type="hidden" name="findType" value="">
+			<input type="hidden" name="findWord" value="">
+			<input type="hidden" name="findClSeq" value=""/>
+			<input type="hidden" name="findOpnwrd" value="" />
+			<input type="hidden" name="rgsBgndeStr" value="">
+			<input type="hidden" name="rgsEnddeStr" value="">
+			<input type="hidden" name="password">
+		</form>
+
+		<h2 class="hidden">게시글 리스트</h2>
+
+		<div class="albumWrap">
+			<ul class="boxtype4">
+
+
+
+                            <li>
+
+								<a href="/bbs/liberalarts/1722/425315/artclView.do" onclick="jf_viewArtcl('liberalarts', '1722', '425315')">
+									<div class="thum">
+
+											<img src="/sites/liberalarts/atchmnfl/bbs/1722/thumbnail/temp_1795392454767100.jpg" alt="포스터">
+
+									</div>
+									<div>
+										<div class="conts">
+											<p class="sub">
+												<span class="num">No. 287</span>
+
+													<span class="brackets">기타</span>
+
+											</p>
+											<div class="row">
+												<strong class="title">
+													<em>[외부] 2026년 KNUE 국제학술대회 개최</em>
+
+														<span class="new">새글</span>
+
+
+
+
+												</strong>
+
+												<ul class="detail">
+
+														<li class="writer"><strong>작성자</strong>
+
+															인문대학
+														</li>
+
+													<li class="date"><strong>등록일</strong>2026.11.23</li>
+													<li class="view"><strong>조회수</strong>2</li>
+													<li class="file"><strong>첨부파일</strong>
+
+
+
+													</li>
+												</ul>
+											</div>
+										</div>
+									</div>
+								</a>
+							</li>
+
+                            <li>
+
+								<a href="/bbs/liberalarts/1722/423617/artclView.do" onclick="jf_viewArtcl('liberalarts', '1722', '423617')">
+									<div class="thum">
+
+											<img src="/sites/liberalarts/atchmnfl/bbs/1722/thumbnail/temp_1795142575904100.jpg" alt="포스터">
+
+									</div>
+									<div>
+										<div class="conts">
+											<p class="sub">
+												<span class="num">No. 286</span>
+
+													<span class="brackets">기타</span>
+
+											</p>
+											<div class="row">
+												<strong class="title">
+													<em>[외부] 데이터 표준 관련 국제전문가 초청 세미나 &apos;연결과 확장&apos; 개최</em>
+
+
+
+
+												</strong>
+
+												<ul class="detail">
+
+														<li class="writer"><strong>작성자</strong>
+
+															인문대학
+														</li>
+
+													<li class="date"><strong>등록일</strong>2026.11.20</li>
+													<li class="view"><strong>조회수</strong>2</li>
+													<li class="file"><strong>첨부파일</strong>
+
+
+
+													</li>
+												</ul>
+											</div>
+										</div>
+									</div>
+								</a>
+							</li>
+
+                            <li>
+
+								<a href="/bbs/liberalarts/1722/423339/artclView.do" onclick="jf_viewArtcl('liberalarts', '1722', '423339')">
+									<div class="thum">
+
+											<img src="/sites/liberalarts/atchmnfl/bbs/1722/thumbnail/temp_1795067519082100.jpg" alt="모집요강">
+
+									</div>
+									<div>
+										<div class="conts">
+											<p class="sub">
+												<span class="num">No. 285</span>
+
+													<span class="brackets">기타</span>
+
+											</p>
+											<div class="row">
+												<strong class="title">
+													<em>[외부] 2027학년도 국사편찬위원회 사료연수과정 신입생 모집 안내</em>
+
+
+
+
+												</strong>
+
+												<ul class="detail">
+
+														<li class="writer"><strong>작성자</strong>
+
+															인문대학
+														</li>
+
+													<li class="date"><strong>등록일</strong>2026.11.19</li>
+													<li class="view"><strong>조회수</strong>6</li>
+													<li class="file"><strong>첨부파일</strong>
+
+
+
+													</li>
+												</ul>
+											</div>
+										</div>
+									</div>
+								</a>
+							</li>
+
+                            <li>
+
+								<a href="/bbs/liberalarts/1722/395601/artclView.do" onclick="jf_viewArtcl('liberalarts', '1722', '395601')">
+									<div class="thum">
+
+											<img src="/sites/liberalarts/atchmnfl/bbs/1722/thumbnail/temp_1794464485452100.jpg" alt="[외부] 학술대회">
+
+									</div>
+									<div>
+										<div class="conts">
+											<p class="sub">
+												<span class="num">No. 284</span>
+
+													<span class="brackets">기타</span>
+
+											</p>
+											<div class="row">
+												<strong class="title">
+													<em>[외부] 고흥 1관 4포 관방유적 학술대회</em>
+
+
+
+
+												</strong>
+
+												<ul class="detail">
+
+														<li class="writer"><strong>작성자</strong>
+
+															인**학
+														</li>
+
+													<li class="date"><strong>등록일</strong>2026.11.12</li>
+													<li class="view"><strong>조회수</strong>4</li>
+													<li class="file"><strong>첨부파일</strong>
+
+
+
+													</li>
+												</ul>
+											</div>
+										</div>
+									</div>
+								</a>
+							</li>
+
+                            <li>
+
+								<a href="/bbs/liberalarts/1722/386586/artclView.do" onclick="jf_viewArtcl('liberalarts', '1722', '386586')">
+									<div class="thum">
+
+											<img src="/sites/liberalarts/atchmnfl/bbs/1722/thumbnail/temp_1794369833354100.png" alt="포스터">
+
+									</div>
+									<div>
+										<div class="conts">
+											<p class="sub">
+												<span class="num">No. 283</span>
+
+													<span class="brackets">기타</span>
+
+											</p>
+											<div class="row">
+												<strong class="title">
+													<em>[국제대학원·국제지역연구소] Orange the World 캠페인 특별강연 안내 : 11/</em>
+
+
+
+
+												</strong>
+
+												<ul class="detail">
+
+														<li class="writer"><strong>작성자</strong>
+
+															인**학
+														</li>
+
+													<li class="date"><strong>등록일</strong>2026.11.11</li>
+													<li class="view"><strong>조회수</strong>5</li>
+													<li class="file"><strong>첨부파일</strong>
+
+
+
+													</li>
+												</ul>
+											</div>
+										</div>
+									</div>
+								</a>
+							</li>
+
+                            <li>
+
+								<a href="/bbs/liberalarts/1722/385309/artclView.do" onclick="jf_viewArtcl('liberalarts', '1722', '385309')">
+									<div class="thum">
+
+											<img src="/sites/liberalarts/atchmnfl/bbs/1722/thumbnail/temp_1794271931119100.png" alt="포스터">
+
+									</div>
+									<div>
+										<div class="conts">
+											<p class="sub">
+												<span class="num">No. 282</span>
+
+													<span class="brackets">기타</span>
+
+											</p>
+											<div class="row">
+												<strong class="title">
+													<em>[국제지역문화원] 2026년 전문가 특강 &lt;인문학과 콘텐츠&gt; 신청 안내</em>
+
+
+
+
+												</strong>
+
+												<ul class="detail">
+
+														<li class="writer"><strong>작성자</strong>
+
+															인**학
+														</li>
+
+													<li class="date"><strong>등록일</strong>2026.11.10</li>
+													<li class="view"><strong>조회수</strong>4</li>
+													<li class="file"><strong>첨부파일</strong>
+
+
+
+													</li>
+												</ul>
+											</div>
+										</div>
+									</div>
+								</a>
+							</li>
+
+                            <li>
+
+								<a href="/bbs/liberalarts/1722/384853/artclView.do" onclick="jf_viewArtcl('liberalarts', '1722', '384853')">
+									<div class="thum">
+
+											<img src="/sites/liberalarts/atchmnfl/bbs/1722/thumbnail/temp_1794209392442100.jpg" alt="포스터">
+
+									</div>
+									<div>
+										<div class="conts">
+											<p class="sub">
+												<span class="num">No. 281</span>
+
+													<span class="brackets">기타</span>
+
+											</p>
+											<div class="row">
+												<strong class="title">
+													<em>[외부] 「고창 무장읍성 출토 비격진천뢰의 가치 재조명」학술세미나 개최</em>
+
+
+
+
+												</strong>
+
+												<ul class="detail">
+
+														<li class="writer"><strong>작성자</strong>
+
+															인**학
+														</li>
+
+													<li class="date"><strong>등록일</strong>2026.11.09</li>
+													<li class="view"><strong>조회수</strong>3</li>
+													<li class="file"><strong>첨부파일</strong>
+
+
+
+													</li>
+												</ul>
+											</div>
+										</div>
+									</div>
+								</a>
+							</li>
+
+                            <li>
+
+								<a href="/bbs/liberalarts/1722/384044/artclView.do" onclick="jf_viewArtcl('liberalarts', '1722', '384044')">
+									<div class="thum">
+
+											<img src="/sites/liberalarts/atchmnfl/bbs/1722/thumbnail/temp_1794192014338100.jpg" alt="포스터">
+
+									</div>
+									<div>
+										<div class="conts">
+											<p class="sub">
+												<span class="num">No. 280</span>
+
+													<span class="brackets">기타</span>
+
+											</p>
+											<div class="row">
+												<strong class="title">
+													<em>[외부] University of Wisconsin-Stout 2027 Winter 글로벌</em>
+
+
+
+
+												</strong>
+
+												<ul class="detail">
+
+														<li class="writer"><strong>작성자</strong>
+
+															인**학
+														</li>
+
+													<li class="date"><strong>등록일</strong>2026.11.09</li>
+													<li class="view"><strong>조회수</strong>4</li>
+													<li class="file"><strong>첨부파일</strong>
+
+
+
+													</li>
+												</ul>
+											</div>
+										</div>
+									</div>
+								</a>
+							</li>
+
+                            <li>
+
+								<a href="/bbs/liberalarts/1722/383930/artclView.do" onclick="jf_viewArtcl('liberalarts', '1722', '383930')">
+									<div class="thum">
+
+											<img src="/sites/liberalarts/atchmnfl/bbs/1722/thumbnail/temp_1793928734467100.jpg" alt="포스터">
+
+									</div>
+									<div>
+										<div class="conts">
+											<p class="sub">
+												<span class="num">No. 279</span>
+
+													<span class="brackets">기타</span>
+
+											</p>
+											<div class="row">
+												<strong class="title">
+													<em>[인문대학] 인문페스타 개최 안내 : 11/4(수)~11/6(금)</em>
+
+
+
+
+												</strong>
+
+												<ul class="detail">
+
+														<li class="writer"><strong>작성자</strong>
+
+															인**학
+														</li>
+
+													<li class="date"><strong>등록일</strong>2026.11.06</li>
+													<li class="view"><strong>조회수</strong>8</li>
+													<li class="file"><strong>첨부파일</strong>
+
+
+
+													</li>
+												</ul>
+											</div>
+										</div>
+									</div>
+								</a>
+							</li>
+
+                            <li>
+
+								<a href="/bbs/liberalarts/1722/376173/artclView.do" onclick="jf_viewArtcl('liberalarts', '1722', '376173')">
+									<div class="thum">
+
+											<img src="/sites/liberalarts/atchmnfl/bbs/1722/thumbnail/temp_1793691701281100.jpg" alt="초청장">
+
+									</div>
+									<div>
+										<div class="conts">
+											<p class="sub">
+												<span class="num">No. 278</span>
+
+													<span class="brackets">기타</span>
+
+											</p>
+											<div class="row">
+												<strong class="title">
+													<em>[외부] 청주 선교기지 세계유산 등재를 위한 학술회의 개최</em>
+
+
+
+
+												</strong>
+
+												<ul class="detail">
+
+														<li class="writer"><strong>작성자</strong>
+
+															인**학
+														</li>
+
+													<li class="date"><strong>등록일</strong>2026.11.03</li>
+													<li class="view"><strong>조회수</strong>3</li>
+													<li class="file"><strong>첨부파일</strong>
+
+
+
+													</li>
+												</ul>
+											</div>
+										</div>
+									</div>
+								</a>
+							</li>
+
+                            <li>
+
+								<a href="/bbs/liberalarts/1722/376157/artclView.do" onclick="jf_viewArtcl('liberalarts', '1722', '376157')">
+									<div class="thum">
+
+											<img src="/sites/liberalarts/atchmnfl/bbs/1722/thumbnail/temp_1793685000239100.jpg" alt=".">
+
+									</div>
+									<div>
+										<div class="conts">
+											<p class="sub">
+												<span class="num">No. 277</span>
+
+													<span class="brackets">세미나</span>
+
+											</p>
+											<div class="row">
+												<strong class="title">
+													<em>[트랜스내셔널인문학연구소] 2026 정기 심포지엄</em>
+
+
+
+
+												</strong>
+
+												<ul class="detail">
+
+														<li class="writer"><strong>작성자</strong>
+
+															인**학
+														</li>
+
+													<li class="date"><strong>등록일</strong>2026.11.03</li>
+													<li class="view"><strong>조회수</strong>5</li>
+													<li class="file"><strong>첨부파일</strong>
+
+													</li>
+												</ul>
+											</div>
+										</div>
+									</div>
+								</a>
+							</li>
+
+                            <li>
+
+								<a href="/bbs/liberalarts/1722/375908/artclView.do" onclick="jf_viewArtcl('liberalarts', '1722', '375908')">
+									<div class="thum">
+
+											<img src="/sites/liberalarts/atchmnfl/bbs/1722/thumbnail/temp_1793600808203100.png" alt=".">
+
+									</div>
+									<div>
+										<div class="conts">
+											<p class="sub">
+												<span class="num">No. 276</span>
+
+													<span class="brackets">기타</span>
+
+											</p>
+											<div class="row">
+												<strong class="title">
+													<em>[외부] 성균중국연구원 Stanford University Yiqing Xu 교수 초청 특</em>
+
+
+
+
+												</strong>
+
+												<ul class="detail">
+
+														<li class="writer"><strong>작성자</strong>
+
+															인**학
+														</li>
+
+													<li class="date"><strong>등록일</strong>2026.11.02</li>
+													<li class="view"><strong>조회수</strong>6</li>
+													<li class="file"><strong>첨부파일</strong>
+
+													</li>
+												</ul>
+											</div>
+										</div>
+									</div>
+								</a>
+							</li>
+
+
+
+
+			</ul>
+		</div>
+
+		<form name="pageForm" method="post" action="/bbs/liberalarts/1722/artclList.do">
+			<input type="hidden" name="layout" value="6c69626572616c617274734040343030374040666e637431" />
+			<input type="hidden" id="page" name="page" value="1">
+			<input type="hidden" name="findType" value="">
+			<input type="hidden" name="findWord" value="">
+			<input type="hidden" name="findClSeq" value=""/>
+			<input type="hidden" name="findOpnwrd" value="" />
+			<input type="hidden" name="rgsBgndeStr" value="">
+			<input type="hidden" name="rgsEnddeStr" value="">
+			<div class="_paging">
+	<div class="_inner">
+		<a href="javascript:page_link('1')" class="_first" title="처음 목록으로 이동">처음</a>
+<p class="_pageState"><span class="_curPage">1</span><span class="_totPage">24</span></p><ul>
+<li><strong title="현재 페이지">1</strong></li>
+<li><a href="javascript:page_link('2')" title="2페이지">2</a></li>
+<li><a href="javascript:page_link('3')" title="3페이지">3</a></li>
+<li><a href="javascript:page_link('4')" title="4페이지">4</a></li>
+<li><a href="javascript:page_link('5')" title="5페이지">5</a></li>
+<li><a href="javascript:page_link('6')" title="6페이지">6</a></li>
+<li><a href="javascript:page_link('7')" title="7페이지">7</a></li>
+<li><a href="javascript:page_link('8')" title="8페이지">8</a></li>
+<li><a href="javascript:page_link('9')" title="9페이지">9</a></li>
+<li><a href="javascript:page_link('10')" title="10페이지">10</a></li>
+</ul>
+<a href="javascript:page_link('2')" class="_listNext" title="다음 페이지">다음 페이지</a>
+<a href="javascript:page_link('11')" class="_next" title="다음 목록으로 이동">다음</a>
+<a href="javascript:page_link('24')" class="_last" title="마지막 목록으로 이동">끝</a>
+	</div>
+</div>
+
+		</form>
+
+		<!-- Button -->
+		<div class="btns">
+			<div class="btn-control">
+
+			</div>
+		</div>
+	</div>
+</body>
+</html>

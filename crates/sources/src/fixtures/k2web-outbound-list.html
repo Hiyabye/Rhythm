@@ -1,0 +1,905 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>파견교환/방문학생 선발</title>
+</head>
+<body>
+<div class="board-list">
+
+
+		<form name="searchForm" method="post" action="/bbs/outbound/617/artclList.do">
+			<input type="hidden" name="layout" value="6f7574626f756e644040313931384040666e637431" />
+			<input type="hidden" id="findClSeq" name="findClSeq" value=""/>
+			<input type="hidden" id="findOpnwrd" name="findOpnwrd" value="" />
+
+
+
+
+				<h2 class="hidden">말머리 분류</h2>
+				<div class="tabmenu">
+					<ul>
+
+
+								<li><a href="/bbs/outbound/617/artclList.do" onclick="jf_searchArtcl('findOpnwrd', '')" class="on">전체</a></li>
+
+									<li >
+										<a href="/bbs/outbound/617/artclList.do" onclick="jf_searchArtcl('findOpnwrd', '65')" >
+											선발공고
+										</a>
+									</li>
+
+									<li >
+										<a href="/bbs/outbound/617/artclList.do" onclick="jf_searchArtcl('findOpnwrd', '66')" >
+											장학금
+										</a>
+									</li>
+
+
+
+
+					</ul>
+				</div>
+
+
+			<!-- Search -->
+			<div class="srch_box">
+				<div class="srch_left">
+
+					<div class="srch_counts">
+						총 <strong>10</strong> 개의 게시물
+					</div>
+				</div>
+				<div class="srch_right">
+					<div class="search">
+
+
+						<div class="board-serch">
+							<fieldset>
+								<legend>게시물 검색</legend>
+
+								<div class="row">
+									<select id="findType" name="findType" class="_selectBox" title="검색 선택">
+
+
+
+
+													<option value="sj" >제목</option>
+
+
+													<option value="userNm" >작성자</option>
+
+
+
+
+
+
+									</select>
+									<input type="text" id="findWord" name="findWord" value="" onkeypress="if(event.keyCode == '13') jf_searchArtcl('findWord', this.value)" placeholder="검색어를 입력해 주세요.">
+									<span class="_button"> <input type="submit" value="검색"></span>
+								</div>
+							</fieldset>
+						</div>
+					</div>
+				</div>
+			</div>
+		</form>
+
+		<form name="viewForm" method="post">
+			<input type="hidden" name="layout" value="6f7574626f756e644040313931384040666e637431" />
+			<input type="hidden" name="page" value="1">
+			<input type="hidden" name="findType" value="">
+			<input type="hidden" name="findWord" value="">
+			<input type="hidden" name="findClSeq" value=""/>
+			<input type="hidden" name="findOpnwrd" value="" />
+			<input type="hidden" name="rgsBgndeStr" value="">
+			<input type="hidden" name="rgsEnddeStr" value="">
+			<input type="hidden" name="password">
+		</form>
+
+		<h2 class="hidden">게시글 리스트</h2>
+
+		<!-- List Table -->
+		<div class="boardWrap">
+			<table class="board-table horizon1">
+				<caption>파견교환/방문학생 선발 공고</caption>
+				<colgroup>
+
+					<col class="col-num">
+
+
+
+								<col class="col-title">
+
+
+
+
+
+
+
+
+								<col class="col-writer">
+
+
+
+
+
+
+						<col class="col-file">
+
+
+					<col class="col-date">
+					<col class="col-counts">
+				</colgroup>
+				<thead>
+					<tr>
+
+						<th class="th-num">번호</th>
+
+
+
+										<th class="th-title">제목</th>
+
+
+
+
+
+
+
+
+									<th class="th-writer">작성자</th>
+
+
+
+
+
+
+							<th class="th-file">첨부파일</th>
+
+
+						<th class="th-date">작성일</th>
+						<th class="th-counts">조회수</th>
+					</tr>
+				</thead>
+				<tbody>
+
+
+
+
+
+								<tr >
+
+									<td class="td-num">
+
+
+
+												10
+
+
+									</td>
+
+
+
+													<td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+																	<a href="/bbs/outbound/617/420716/artclView.do" onclick="jf_viewArtcl('outbound', '617', '420716')">
+
+
+
+
+
+																	<span class="cate"><i>선발공고</i></span>
+
+
+														<strong>2027학년도 2학기 파견 교환/방문학생 선발 공고</strong>
+
+
+															<span class="new">새글</span>
+																	</a>
+
+
+
+
+
+												</td>
+
+
+
+
+
+
+
+
+												<td class="td-write">
+
+													o******d
+												</td>
+
+
+
+
+
+
+										<td class="td-file">
+
+												<span class="is-file"></span>
+
+										</td>
+
+
+									<td class="td-date">2026.11.17</td>
+									<td class="td-counts">237</td>
+								</tr>
+
+								<tr >
+
+									<td class="td-num">
+
+
+
+												9
+
+
+									</td>
+
+
+
+													<td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+																	<a href="/bbs/outbound/617/231963/artclView.do" onclick="jf_viewArtcl('outbound', '617', '231963')">
+
+
+
+
+
+																	<span class="cate"><i>선발공고</i></span>
+
+
+														<strong>2027학년도 1학기 파견 교환/방문학생 선발 결과 발표(제2외국어권)</strong>
+																	</a>
+
+
+
+
+
+												</td>
+
+
+
+
+
+
+
+
+												<td class="td-write">
+
+													o******d
+												</td>
+
+
+
+
+
+
+										<td class="td-file">
+
+												<span class="is-file"></span>
+
+										</td>
+
+
+									<td class="td-date">2026.08.14</td>
+									<td class="td-counts">845</td>
+								</tr>
+
+								<tr >
+
+									<td class="td-num">
+
+
+
+												8
+
+
+									</td>
+
+
+
+													<td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+																	<a href="/bbs/outbound/617/231157/artclView.do" onclick="jf_viewArtcl('outbound', '617', '231157')">
+
+
+
+
+
+																	<span class="cate"><i>선발공고</i></span>
+
+
+														<strong>[긴급공지] 2027-1학기 파견 교환/방문학생 선발 일정 변경 안내</strong>
+																	</a>
+
+
+
+
+
+												</td>
+
+
+
+
+
+
+
+
+												<td class="td-write">
+
+													o******d
+												</td>
+
+
+
+
+
+
+										<td class="td-file">
+
+										</td>
+
+
+									<td class="td-date">2026.07.13</td>
+									<td class="td-counts">1410</td>
+								</tr>
+
+								<tr >
+
+									<td class="td-num">
+
+
+
+												7
+
+
+									</td>
+
+
+
+													<td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+																	<a href="/bbs/outbound/617/230701/artclView.do" onclick="jf_viewArtcl('outbound', '617', '230701')">
+
+
+
+
+
+																	<span class="cate"><i>선발공고</i></span>
+
+
+														<strong>(선발완료)2027학년도 1학기 파견 교환/방문학생 선발 공고 (수정)</strong>
+																	</a>
+
+
+
+
+
+												</td>
+
+
+
+
+
+
+
+
+												<td class="td-write">
+
+													o******d
+												</td>
+
+
+
+
+
+
+										<td class="td-file">
+
+												<span class="is-file"></span>
+
+										</td>
+
+
+									<td class="td-date">2026.05.18</td>
+									<td class="td-counts">3902</td>
+								</tr>
+
+								<tr >
+
+									<td class="td-num">
+
+
+
+												6
+
+
+									</td>
+
+
+
+													<td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+																	<a href="/bbs/outbound/617/228068/artclView.do" onclick="jf_viewArtcl('outbound', '617', '228068')">
+
+
+
+
+
+																	<span class="cate"><i>선발공고</i></span>
+
+
+														<strong>(선발 완료) 2026학년도 2학기 파견 교환/방문학생 선발 본공고</strong>
+																	</a>
+
+
+
+
+
+												</td>
+
+
+
+
+
+
+
+
+												<td class="td-write">
+
+													o******d
+												</td>
+
+
+
+
+
+
+										<td class="td-file">
+
+										</td>
+
+
+									<td class="td-date">2026.03.06</td>
+									<td class="td-counts">2667</td>
+								</tr>
+
+								<tr >
+
+									<td class="td-num">
+
+
+
+												5
+
+
+									</td>
+
+
+
+													<td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+																	<a href="/bbs/outbound/617/228067/artclView.do" onclick="jf_viewArtcl('outbound', '617', '228067')">
+
+
+
+
+
+																	<span class="cate"><i>선발공고</i></span>
+
+
+														<strong>(선발 완료) 2026학년도 1학기 파견 교환/방문학생 선발 본공고 및 설명회 안내</strong>
+																	</a>
+
+
+
+
+
+												</td>
+
+
+
+
+
+
+
+
+												<td class="td-write">
+
+													o******d
+												</td>
+
+
+
+
+
+
+										<td class="td-file">
+
+										</td>
+
+
+									<td class="td-date">2026.03.06</td>
+									<td class="td-counts">927</td>
+								</tr>
+
+								<tr >
+
+									<td class="td-num">
+
+
+
+												4
+
+
+									</td>
+
+
+
+													<td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+																	<a href="/bbs/outbound/617/228066/artclView.do" onclick="jf_viewArtcl('outbound', '617', '228066')">
+
+
+
+
+
+																	<span class="cate"><i>선발공고</i></span>
+
+
+														<strong>(선발 완료) 2025학년도 2학기 파견 교환/방문학생 선발 본공고 및 설명회 안내</strong>
+																	</a>
+
+
+
+
+
+												</td>
+
+
+
+
+
+
+
+
+												<td class="td-write">
+
+													o******d
+												</td>
+
+
+
+
+
+
+										<td class="td-file">
+
+										</td>
+
+
+									<td class="td-date">2026.03.06</td>
+									<td class="td-counts">335</td>
+								</tr>
+
+								<tr >
+
+									<td class="td-num">
+
+
+
+												3
+
+
+									</td>
+
+
+
+													<td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+																	<a href="/bbs/outbound/617/228065/artclView.do" onclick="jf_viewArtcl('outbound', '617', '228065')">
+
+
+
+
+
+																	<span class="cate"><i>선발공고</i></span>
+
+
+														<strong>(선발 완료) 2025학년도 1학기 파견 교환/방문학생 선발 본공고 및 설명회 안내</strong>
+																	</a>
+
+
+
+
+
+												</td>
+
+
+
+
+
+
+
+
+												<td class="td-write">
+
+													o******d
+												</td>
+
+
+
+
+
+
+										<td class="td-file">
+
+										</td>
+
+
+									<td class="td-date">2026.03.06</td>
+									<td class="td-counts">144</td>
+								</tr>
+
+								<tr >
+
+									<td class="td-num">
+
+
+
+												2
+
+
+									</td>
+
+
+
+													<td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+																	<a href="/bbs/outbound/617/228064/artclView.do" onclick="jf_viewArtcl('outbound', '617', '228064')">
+
+
+
+
+
+																	<span class="cate"><i>선발공고</i></span>
+
+
+														<strong>(선발 완료) 2024학년도 2학기 파견 교환/방문학생 선발 본공고 및 설명회 안내</strong>
+																	</a>
+
+
+
+
+
+												</td>
+
+
+
+
+
+
+
+
+												<td class="td-write">
+
+													o******d
+												</td>
+
+
+
+
+
+
+										<td class="td-file">
+
+										</td>
+
+
+									<td class="td-date">2026.03.06</td>
+									<td class="td-counts">136</td>
+								</tr>
+
+								<tr >
+
+									<td class="td-num">
+
+
+
+												1
+
+
+									</td>
+
+
+
+													<td class="td-title alignL">
+
+
+
+
+
+
+
+
+
+
+
+																	<a href="/bbs/outbound/617/228063/artclView.do" onclick="jf_viewArtcl('outbound', '617', '228063')">
+
+
+
+
+
+																	<span class="cate"><i>선발공고</i></span>
+
+
+														<strong>(선발 완료) 2024학년도 1학기 파견 교환/방문학생 선발 본공고 및 설명회 안내</strong>
+																	</a>
+
+
+
+
+
+												</td>
+
+
+
+
+
+
+
+
+												<td class="td-write">
+
+													o******d
+												</td>
+
+
+
+
+
+
+										<td class="td-file">
+
+										</td>
+
+
+									<td class="td-date">2026.03.06</td>
+									<td class="td-counts">124</td>
+								</tr>
+
+
+
+
+				</tbody>
+			</table>
+		</div>
+
+		<form name="pageForm" method="post" action="/bbs/outbound/617/artclList.do">
+			<input type="hidden" name="layout" value="6f7574626f756e644040313931384040666e637431" />
+			<input type="hidden" id="page" name="page" value="1">
+			<input type="hidden" name="findType" value="">
+			<input type="hidden" name="findWord" value="">
+			<input type="hidden" name="findClSeq" value=""/>
+			<input type="hidden" name="findOpnwrd" value="" />
+			<input type="hidden" name="rgsBgndeStr" value="">
+			<input type="hidden" name="rgsEnddeStr" value="">
+			<div class="_paging">
+	<div class="_inner">
+		<a href="javascript:page_link('1')" class="_first" title="처음 목록으로 이동">처음</a>
+<p class="_pageState"><span class="_curPage">1</span><span class="_totPage">1</span></p><ul>
+<li><strong title="현재 페이지">1</strong></li>
+</ul>
+<a href="javascript:page_link('1')" class="_last" title="마지막 목록으로 이동">끝</a>
+	</div>
+</div>
+
+		</form>
+
+		<!-- Button -->
+		<div class="btns">
+			<div class="btn-control">
+
+			</div>
+		</div>
+	</div>
+</body>
+</html>

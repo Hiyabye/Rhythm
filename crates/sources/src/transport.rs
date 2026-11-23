@@ -594,7 +594,7 @@ mod tests {
         }
     }
     #[test]
-    fn dormitory_policy_is_limited_to_verified_menus_boards_and_editor_images() {
+    fn k2web_policy_is_limited_to_catalogued_boards_and_their_images() {
         for path in [
             "/sgdormitory/6975/subview.do",
             "/sgdormitory/3947/subview.do",
@@ -603,6 +603,9 @@ mod tests {
             "/bbs/sgdormitory/1644/90922/download.do",
             "/bbs/sgdormitory/1648/374772/artclView.do",
             "/CrossEditor/binary/images/000035/20261102092906954_POL76LWU.png",
+            "/sites/sgdormitory/atchmnfl/bbs/2231/temp_1795392463736100.png",
+            "/sites/sgdormitory/images/migrated/bbs/884755_1.JPG",
+            "/sites/sgdormitory/%EB%B0%94%EB%A1%9C.png",
             "/robots.txt",
         ] {
             assert!(
@@ -623,6 +626,16 @@ mod tests {
             "/CrossEditor/binary/images/000035/nested/image.png",
             "/CrossEditor/binary/other/000035/image.png",
             "/Web-home/_UI/css/common/jquery-ui.css",
+            // Another k2web site that is not in the catalog.
+            "/gsot/3208/subview.do",
+            "/bbs/gsot/908/420698/artclView.do",
+            "/sites/gsot/atchmnfl/bbs/908/image.png",
+            // Site folders hold only images the policy approves.
+            "/sites/sgdormitory/atchmnfl/bbs/2231/file.pdf",
+            "/sites/sgdormitory/a/b/c/d/e/f/image.png",
+            "/sites/sgdormitory/.hidden/image.png",
+            "/sites/sgdormitory/a%2Fb.png",
+            "/sites/sgdormitory/a%5cb.png",
         ] {
             assert!(
                 validate_url(&Url::parse(&format!("https://new-cms.sogang.ac.kr{path}")).unwrap())
