@@ -134,7 +134,7 @@ impl Client {
                 return Err("사용자가 동기화를 중단했습니다.".into());
             }
             let outcome = tokio::select! {
-                result=tokio::time::timeout(Duration::from_secs(25),self.attempt(url,validators.clone(),max_bytes,cancel,access))=>match result {Ok(value)=>value,Err(_)=>Err(Failure::Retry("학교 서버 응답 시간이 초과되었습니다.".into()))},
+                result=tokio::time::timeout(ATTEMPT_WAIT,self.attempt(url,validators.clone(),max_bytes,cancel,access))=>match result {Ok(value)=>value,Err(_)=>Err(Failure::Retry(TIMED_OUT.into()))},
                 _=cancelled(cancel)=>return Err("사용자가 동기화를 중단했습니다.".into()),
             };
             match outcome {
@@ -244,7 +244,9 @@ impl Client {
             .redirect(reqwest::redirect::Policy::none())
             .resolve_to_addrs(host, &addresses)
             .connect_timeout(Duration::from_secs(8))
-            .timeout(Duration::from_secs(20))
+            // No total timeout: headers and body have their own deadlines
+            // below. A body that stalls still ends after this idle time.
+            .read_timeout(HEADER_WAIT)
             .pool_max_idle_per_host(0)
             .user_agent(self.user_agent)
             .build()
@@ -277,7 +279,9 @@ impl Client {
                 }
             }
         }
-        let response = self.send(request).await;
+        let response = tokio::time::timeout(HEADER_WAIT, self.send(request))
+            .await
+            .unwrap_or_else(|_| Err(Failure::Retry(TIMED_OUT.into())));
         drop(gate);
         let mut response = response?;
         let status = response.status();
@@ -376,10 +380,20 @@ impl Client {
                 .to_ascii_lowercase()
         });
         let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
+        let body_deadline = tokio::time::Instant::now() + BODY_WAIT;
+        while let Some(chunk) = tokio::time::timeout_at(body_deadline, response.chunk())
             .await
-            .map_err(|_| Failure::Retry("자료를 내려받던 중 연결이 끊어졌습니다.".into()))?
+            .map_err(|_| Failure::Retry(TIMED_OUT.into()))?
+            .map_err(|error| {
+                Failure::Retry(
+                    if error.is_timeout() {
+                        TIMED_OUT
+                    } else {
+                        "자료를 내려받던 중 연결이 끊어졌습니다."
+                    }
+                    .into(),
+                )
+            })?
         {
             if bytes.len().saturating_add(chunk.len()) > max_bytes {
                 return Err(Failure::Fatal(TOO_LARGE.into()));
@@ -433,6 +447,15 @@ pub const RATE_LIMITED: &str =
 pub fn http_refused(status: u16) -> String {
     format!("공개 자료에 접근할 수 없습니다. (HTTP {status})")
 }
+const TIMED_OUT: &str = "학교 서버 응답 시간이 초과되었습니다.";
+/// Time for the response headers, and the longest pause within a body.
+const HEADER_WAIT: Duration = Duration::from_secs(20);
+/// Time for a whole body once the headers arrived. Pages of 1–2 MB took over
+/// 20 s from the collector's GitHub runner (the old total timeout), so the
+/// same notices timed out on every run.
+const BODY_WAIT: Duration = Duration::from_secs(90);
+/// Bounds one attempt, including the wait for the server's pacing gate.
+const ATTEMPT_WAIT: Duration = Duration::from_secs(120);
 const CONNECTION_FAILED: &str =
     "학교 서버에 안전하게 연결하지 못했습니다. 연결 상태나 인증서 구성을 확인해 주세요.";
 pub fn validate(url: &Url, access: Access) -> Result<(), String> {

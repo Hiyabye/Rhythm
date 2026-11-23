@@ -2,6 +2,7 @@
 //! pages built from the committed fixtures, served by a fake transport.
 use super::*;
 use rhythm_sources::transport::FetchError;
+use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -661,7 +662,8 @@ async fn a_permanent_failure_is_skipped_but_a_transient_one_holds_the_page() {
     assert_eq!(board.next_page, 1);
     assert!(skipped(&state).is_empty());
 
-    // A later fetch that archives the notice removes it from the skipped list.
+    // Passes leave a skipped notice alone; the daily retry that archives it
+    // removes it from the skipped list.
     let state = State::open_in_memory().unwrap();
     let fake = Fake::new(vec![vec![2, 3], vec![4]]);
     fake.bad.lock().unwrap().insert(3);
@@ -669,8 +671,115 @@ async fn a_permanent_failure_is_skipped_but_a_transient_one_holds_the_page() {
     fake.bad.lock().unwrap().clear();
     fake.pages.lock().unwrap()[0].insert(0, 5);
     run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert_eq!(
+        requests(&fake, &main_detail(3)),
+        1,
+        "not refetched by the pass"
+    );
+    assert_eq!(skipped(&state), ["3"]);
+    exec(
+        &state,
+        &format!("UPDATE skipped SET recorded_at={DAY_AGO} WHERE external_id='3'"),
+    );
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
     assert_eq!(skipped(&state), Vec::<String>::new());
     assert_eq!(notices(&state).len(), 4);
+}
+
+/// Runs of one notice's transient failures recorded so far.
+fn transient_runs(state: &State, external_id: &str) -> Option<i64> {
+    state
+        .with(|c| {
+            c.query_row(
+                "SELECT runs FROM transient_failures WHERE external_id=?1",
+                [external_id],
+                |row| row.get(0),
+            )
+            .optional()
+        })
+        .unwrap()
+}
+/// Moves the last transient failure back past the one-run gap.
+fn next_run(state: &State) {
+    exec(
+        state,
+        "UPDATE transient_failures SET last_failed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now','-11 minutes')",
+    );
+}
+
+#[tokio::test]
+async fn a_notice_failing_transiently_on_three_runs_is_skipped() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![vec![2, 3, 4]]);
+    fake.failed.lock().unwrap().insert(3);
+    assert!(run(&state, &fake, MAIN, Budget::default()).await.is_err());
+    // A second failure within the same run's time counts once.
+    assert!(run(&state, &fake, MAIN, Budget::default()).await.is_err());
+    assert_eq!(transient_runs(&state, "3"), Some(1));
+    next_run(&state);
+    assert!(run(&state, &fake, MAIN, Budget::default()).await.is_err());
+    assert_eq!(transient_runs(&state, "3"), Some(2));
+    assert!(skipped(&state).is_empty());
+    assert!(
+        !state.seed_complete(MAIN).unwrap(),
+        "the page is still held"
+    );
+
+    next_run(&state);
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert_eq!(skipped(&state), ["3"]);
+    assert_eq!(transient_runs(&state, "3"), None);
+    let board = state.board(MAIN).unwrap();
+    assert_eq!((board.status.as_str(), board.failed), ("completed", 0));
+    assert!(board.history_complete);
+    assert!(state.seed_complete(MAIN).unwrap());
+
+    // A failed daily retry uses an attempt and waits another day.
+    let fetched = requests(&fake, &main_detail(3));
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert_eq!(
+        requests(&fake, &main_detail(3)),
+        fetched,
+        "not before a day"
+    );
+    exec(
+        &state,
+        &format!("UPDATE skipped SET recorded_at={DAY_AGO} WHERE external_id='3'"),
+    );
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert_eq!(requests(&fake, &main_detail(3)), fetched + 1);
+    let attempts: i64 = state
+        .with(|c| c.query_row("SELECT attempts FROM skipped", [], |row| row.get(0)))
+        .unwrap();
+    assert_eq!(attempts, 2);
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert_eq!(requests(&fake, &main_detail(3)), fetched + 1);
+
+    // Once the server answers, the retry archives it.
+    fake.failed.lock().unwrap().clear();
+    exec(
+        &state,
+        &format!("UPDATE skipped SET recorded_at={DAY_AGO} WHERE external_id='3'"),
+    );
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert!(skipped(&state).is_empty());
+    assert_eq!(notices(&state).len(), 3);
+}
+
+#[tokio::test]
+async fn a_success_resets_the_transient_failure_count() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![vec![2, 3, 4]]);
+    fake.failed.lock().unwrap().insert(3);
+    assert!(run(&state, &fake, MAIN, Budget::default()).await.is_err());
+    next_run(&state);
+    assert!(run(&state, &fake, MAIN, Budget::default()).await.is_err());
+    assert_eq!(transient_runs(&state, "3"), Some(2));
+    fake.failed.lock().unwrap().clear();
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    assert_eq!(transient_runs(&state, "3"), None);
+    assert!(skipped(&state).is_empty());
+    assert_eq!(notices(&state).len(), 3);
 }
 
 #[tokio::test]

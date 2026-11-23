@@ -28,6 +28,7 @@ studium = ["reqwest/native-tls"]
 
 [dev-dependencies]
 http = "1"
+http-body = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "test-util"] }
 rusqlite = { version = "0.38", default-features = false, features = ["bundled"] }
