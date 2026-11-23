@@ -812,6 +812,27 @@ async fn robots_disallow_prevents_every_article_request() {
 }
 
 #[tokio::test]
+async fn identical_pins_only_pages_are_not_a_repeated_listing() {
+    // sociology-news: the 14 newest notices are all pinned, so pages 1 and 2
+    // list the same pins and nothing else.
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![vec![1], vec![1], vec![1, 2, 3]]);
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    let ids: Vec<_> = notices(&state).into_iter().map(|n| n.external_id).collect();
+    assert_eq!(ids, ["1", "2", "3"]);
+    assert!(state.board(MAIN).unwrap().history_complete);
+
+    // A repeated page of regular rows still stops the board.
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![vec![2, 3], vec![2, 3], vec![4]]);
+    let error = run(&state, &fake, MAIN, Budget::default())
+        .await
+        .unwrap_err();
+    assert!(error.contains("반복"), "{error}");
+    assert!(!state.board(MAIN).unwrap().history_complete);
+}
+
+#[tokio::test]
 async fn a_page_of_only_pins_is_not_a_known_frontier() {
     let state = State::open_in_memory().unwrap();
     let fake = Fake::new(vec![vec![1, 2]]);

@@ -174,6 +174,9 @@ was executed or retyped; line endings are LF and trailing whitespace is removed.
   gallery (`NO. N`) and a newsletter of third-party images with one attachment.
 - `k2web-outbound-list.html` and `k2web-outbound-detail-420716.html`: the CMS message
   page `접근 권한이 없습니다.` that a login-only post answers with.
+- `k2web-gradsch-page3.html`: page 3 of `/gradsch/1244/subview.do` (일반대학원 공지사항, a
+  catalogued board), captured 2026-11-23 the same way: ordinal 770 is a private post,
+  `비공개된 게시물입니다.` with a `span.clsdr` marker and no link.
 
 A census of all 129 k2web boards active in 2026 (list page 1 and one detail each,
 through the department host names, not committed) parsed with this family: every list,
