@@ -256,6 +256,7 @@ async fn historical(state: &State, fake: &Fake, budget: Budget) {
         transport: fake,
         cancel: &AtomicBool::new(false),
         budget,
+        policies: &Policies::default(),
     };
     let mut board = state.board(MAIN).unwrap();
     let _ = crawl
@@ -601,6 +602,7 @@ async fn the_first_incremental_pass_seeds_three_pages_as_history() {
         transport: &fake,
         cancel: &AtomicBool::new(false),
         budget: Budget::default(),
+        policies: &Policies::default(),
     };
     let mut board = state.board(MAIN).unwrap();
     crawl
@@ -1061,6 +1063,32 @@ async fn the_deadline_stops_history_but_never_new_notices() {
     assert_eq!(board.consecutive_failures, 0);
     assert_eq!(board.next_page, 1);
     assert!(!board.history_complete);
+}
+
+#[tokio::test]
+async fn robots_txt_loads_once_per_origin_and_run() {
+    // Two boards on one origin, each with an incremental pass, upkeep and
+    // several history turns.
+    let (state, fake, boards) = owing_history();
+    let turns = Budget {
+        articles: Some(1),
+        history_until: Some(Instant::now() + Duration::from_secs(60)),
+        ..Budget::default()
+    };
+    let report = run_boards(&state, &fake, &boards, turns, &AtomicBool::new(false)).await;
+    assert!(report.outcomes.iter().all(|(_, outcome)| outcome.is_ok()));
+    assert_eq!(report.history_owed, 0);
+    let robots = |fake: &Fake| {
+        fake.paths()
+            .iter()
+            .filter(|url| url.as_str() == "https://www.sogang.ac.kr/robots.txt")
+            .count()
+    };
+    assert_eq!(robots(&fake), 1);
+
+    // The next run loads it again.
+    run_boards(&state, &fake, &boards, turns, &AtomicBool::new(false)).await;
+    assert_eq!(robots(&fake), 2);
 }
 
 #[tokio::test]
