@@ -241,6 +241,43 @@ fn notices_keep_attachments_and_reject_data_uri_editor_images() {
 }
 
 #[test]
+fn attachment_names_keep_a_literal_plus() {
+    // Notice 29's file names hold literal `+` characters, written raw in the
+    // href; form decoding would turn them into spaces the page never shows.
+    let notices = source("se-notices");
+    let parsed = article(
+        &notices,
+        &entry("29", "notice"),
+        include_str!("semiconductor-notice-detail-29.html"),
+    )
+    .unwrap();
+    assert_eq!(parsed.title, "[학사] 2026학년도 2학기 학부 수강신청 안내");
+    assert_eq!(parsed.published_at, "2026-08-03");
+    let names: Vec<_> = parsed
+        .resources
+        .iter()
+        .map(|r| r.filename.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "첨부1.+2026학년도+2학기+수강신청+안내.hwp",
+            "첨부2.+(전공별)수강신청+유의사항.hwp",
+            "첨부3.+2026학년도+2학기+수강신청+관련+FAQ전학년공통.hwp",
+        ]
+    );
+    for resource in &parsed.resources {
+        assert_eq!(resource.kind, "attachment");
+        let url = Url::parse(&resource.url).unwrap();
+        assert_eq!(url.path(), "/board/filedown.php");
+        // The request keeps the site's own query, `+` included.
+        assert!(url.query().unwrap().contains("filename=%EC%B2%A8%EB%B6%80"));
+        assert!(url.query().unwrap().contains(".+"));
+    }
+    assert!(parsed.body_text.contains("첨부파일까지"));
+}
+
+#[test]
 fn news_records_same_host_and_blocked_external_images() {
     let news = source("se-news");
     let page = listing(&news, 1, include_str!("semiconductor-news-list.html")).unwrap();

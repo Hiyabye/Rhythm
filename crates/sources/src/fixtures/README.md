@@ -219,6 +219,9 @@ chrome outside `#inner_wrap` was removed, and line endings are LF.
 - `semiconductor-notice-detail-36.html`: `?board_id=notice&no=36`; one
   `/board/filedown.php` attachment (`출입권한신청서 TE605 ... .xlsx`).
   `semiconductor-notice-detail-39.html`: `no=39`; text body and no attachments.
+  `semiconductor-notice-detail-29.html`: `no=29`, captured 2026-11-23 the same
+  way (one public GET); three `.hwp` attachments whose names hold literal `+`
+  characters, written raw in the `filename` query.
 - `semiconductor-news-detail-10.html`: `?board_id=news&no=10`; one same-host
   `/smart_editor/upload/...png` editor image. `semiconductor-news-detail-14.html`:
   `no=14`; three inline images on `ee.sogang.ac.kr/se2/`, which that host's

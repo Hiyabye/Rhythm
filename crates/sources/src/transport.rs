@@ -740,6 +740,8 @@ mod tests {
             "/board/board_view.php?board_id=notice_industry&no=7",
             "/board/filedown.php?filepath=wXJClutf9n%2FgtLi2zZE7x&filename=a.pdf",
             "/board/filedown.php?filepath=abc&filename=출입권한신청서.xlsx",
+            // A literal `+` in a name (notice 29).
+            "/board/filedown.php?filepath=wXJClutf9n%2FgtLi2zZE7x&filename=첨부1.+2026학년도+2학기+수강신청+안내.hwp",
             "/smart_editor/upload/1781851902-601781851902268.png",
         ] {
             assert!(
