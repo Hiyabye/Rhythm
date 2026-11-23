@@ -30,6 +30,11 @@ const HISTORY_DEADLINE: &str =
 const AUDIT_PER_RUN: usize = 3;
 /// Skipped-notice retries per board and run (user decision).
 const RETRIES_PER_RUN: usize = 3;
+/// The incremental edit window: known notices are re-fetched for edits only
+/// within the first three pages and the first this many regular rows (user
+/// decision, #80). Ten-row boards keep three pages; the main site's 50-row
+/// pages would otherwise re-fetch about 150 notices per board and run.
+const EDIT_ROWS: usize = 30;
 
 /// Limits for one bounded run; history continues from the checkpoint next run.
 #[derive(Clone, Copy, Default)]
@@ -468,6 +473,9 @@ impl<T: Transport> Crawl<'_, T> {
         let policy = Robots::load(self.transport, &initial, self.cancel, Access::Source).await?;
         let mut seen = HashSet::new();
         let mut page_hashes = HashSet::new();
+        // A sitemap listing skips unchanged entries by their own change time.
+        let windowed = !historical && !seed && definition.family != "mechanical";
+        let mut regular_rows = 0;
         let mut page = first_page;
         let mut processed = 0;
         loop {
@@ -530,11 +538,16 @@ impl<T: Transport> Crawl<'_, T> {
                 active(self.cancel)?;
                 let existing_id = state.notice_id(&definition.id, &entry.external_id)?;
                 let exists = existing_id.is_some();
+                let mut past_window = false;
                 if !entry.pinned {
                     known_regular_frontier = true;
                     all_regular_known &= exists;
+                    past_window = windowed && regular_rows >= EDIT_ROWS;
+                    regular_rows += 1;
                 }
-                if !seen.insert(entry.external_id.clone()) || (historical && exists) {
+                if !seen.insert(entry.external_id.clone())
+                    || (exists && (historical || past_window))
+                {
                     continue;
                 }
                 // A sitemap-backed listing carries the site's own change time.
@@ -621,9 +634,11 @@ impl<T: Transport> Crawl<'_, T> {
                 state.progress(board, "completed", None, true)?;
                 return Ok((first_page == 1).then_some(seen));
             }
-            // The three-page edit window must not truncate discovery of a larger
+            // The edit window must not truncate discovery of a larger
             // burst. Only regular records (never repeated pins) establish a frontier.
-            if !historical && page >= 3 && (seed || (known_regular_frontier && all_regular_known)) {
+            let window_read = page >= 3 || (windowed && regular_rows >= EDIT_ROWS);
+            if !historical && window_read && (seed || (known_regular_frontier && all_regular_known))
+            {
                 if seed {
                     state.mark_seed_complete(&definition.id)?;
                 }
