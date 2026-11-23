@@ -356,9 +356,7 @@ impl Client {
             .content_length()
             .is_some_and(|size| size > max_bytes as u64)
         {
-            return Err(Failure::Fatal(
-                "파일이 다운로드 크기 제한을 초과했습니다.".into(),
-            ));
+            return Err(Failure::Fatal(TOO_LARGE.into()));
         }
         let get_header = |name: header::HeaderName| {
             response
@@ -384,9 +382,7 @@ impl Client {
             .map_err(|_| Failure::Retry("자료를 내려받던 중 연결이 끊어졌습니다.".into()))?
         {
             if bytes.len().saturating_add(chunk.len()) > max_bytes {
-                return Err(Failure::Fatal(
-                    "파일이 다운로드 크기 제한을 초과했습니다.".into(),
-                ));
+                return Err(Failure::Fatal(TOO_LARGE.into()));
             }
             bytes.extend_from_slice(&chunk);
             if cancel.load(Ordering::Acquire) {
@@ -429,6 +425,8 @@ fn studium_root() -> Result<reqwest::Certificate, String> {
 }
 /// A 429 response. The sync stops the board on it instead of requesting the
 /// rest of the page from a server that asked it to slow down.
+/// A response over the caller's byte limit.
+pub const TOO_LARGE: &str = "파일이 다운로드 크기 제한을 초과했습니다.";
 pub const RATE_LIMITED: &str =
     "학교 서버가 요청을 제한했습니다. 잠시 기다린 후 다시 동기화해 주세요.";
 /// Message for an unsuccessful HTTP status.

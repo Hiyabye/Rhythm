@@ -498,10 +498,11 @@ fn computing_listing(
     })
 }
 /// The largest notice response `article` accepts, and so the fetch limit for
-/// a notice. Main-site notices can carry inline `data:` images (dropped by the
-/// sanitizer) that exceed 4 MiB (user decision, #80).
+/// a notice. Main-site and k2web notices can carry inline `data:` images
+/// (dropped by the sanitizer) that exceed 4 MiB (user decisions, #80; a live
+/// run found five such k2web notices).
 pub fn article_limit(source: &SourceDefinition) -> usize {
-    if main_board(&source.id).is_some() {
+    if main_board(&source.id).is_some() || source.family == "k2web" {
         16 * 1024 * 1024
     } else {
         4 * 1024 * 1024

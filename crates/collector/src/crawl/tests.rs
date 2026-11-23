@@ -139,7 +139,7 @@ impl Transport for Fake {
         let body = |text: String, mime: &str, etag: Option<String>| {
             // Like the real transport, a response over the limit is an error.
             if text.len() > limit {
-                return Err("파일이 다운로드 크기 제한을 초과했습니다.".into());
+                return Err(network::TOO_LARGE.into());
             }
             Ok(Fetch::Body {
                 bytes: text.into_bytes(),
@@ -1345,4 +1345,43 @@ async fn new_boards_start_a_bounded_number_per_run_in_catalog_order() {
     expected.push(&last);
     assert_eq!(ids, expected);
     assert_eq!(waiting, boards.len() - ids.len());
+}
+
+#[tokio::test]
+async fn a_k2web_notice_over_its_limit_is_skipped_without_holding_the_board() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![]);
+    serve_innov(&fake, "서강의 혁신을 기록하다 Vol.5");
+    let detail = include_str!("../../../sources/src/fixtures/k2web-innov-detail-405464.html");
+    // Over 4 MiB is still a k2web notice (inline images the sanitizer drops).
+    let padded = detail.replacen(
+        "</body>",
+        &format!("<!--{}--></body>", "x".repeat(5 << 20)),
+        1,
+    );
+    fake.extra
+        .lock()
+        .unwrap()
+        .insert(INNOV_DETAIL.into(), (padded, "text/html".into()));
+    run(&state, &fake, INNOV, Budget::default()).await.unwrap();
+    assert_eq!(notices(&state).len(), 1);
+
+    // Over 16 MiB the same page would come back every time: skipped, and the
+    // board completes instead of failing on it.
+    let state = State::open_in_memory().unwrap();
+    let huge = detail.replacen(
+        "</body>",
+        &format!("<!--{}--></body>", "x".repeat(17 << 20)),
+        1,
+    );
+    fake.extra
+        .lock()
+        .unwrap()
+        .insert(INNOV_DETAIL.into(), (huge, "text/html".into()));
+    run(&state, &fake, INNOV, Budget::default()).await.unwrap();
+    assert!(notices(&state).is_empty());
+    assert_eq!(skipped(&state), ["405464"]);
+    let board = state.board(INNOV).unwrap();
+    assert_eq!(board.status, "completed");
+    assert!(state.seed_complete(INNOV).unwrap());
 }

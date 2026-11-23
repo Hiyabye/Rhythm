@@ -793,6 +793,16 @@ impl<T: Transport> Crawl<'_, T> {
             {
                 return Err(ArticleError::Missing)
             }
+            // Fetching it again returns the same page, so a notice over the
+            // limit is skipped (with the bounded retries) instead of holding
+            // the board's history (user decision, #80 step 3).
+            Err(error) if error.message == network::TOO_LARGE => {
+                return Err(ArticleError::Permanent {
+                    reason: "공지 원문이 너무 커서 보관하지 않았습니다.".into(),
+                    // No response bytes are kept.
+                    response_sha256: crate::sha256_hex(b""),
+                });
+            }
             response => response.map_err(String::from)?,
         };
         let inserted = match response {
