@@ -22,7 +22,8 @@ use std::{
 };
 use url::Url;
 
-const ARTICLE_LIMIT: usize = 4 * 1024 * 1024;
+/// Listing pages; notices use `parser::article_limit`.
+const LISTING_LIMIT: usize = 4 * 1024 * 1024;
 /// A history turn stopped by the run's deadline: normal, not a failure.
 const HISTORY_DEADLINE: &str =
     "이번 실행의 이력 시간을 다 써서 멈췄습니다. 다음 실행에서 이어서 가져옵니다.";
@@ -500,7 +501,7 @@ impl<T: Transport> Crawl<'_, T> {
                 self.transport,
                 &url,
                 None,
-                ARTICLE_LIMIT,
+                LISTING_LIMIT,
                 self.cancel,
                 &policy,
             )
@@ -740,7 +741,7 @@ impl<T: Transport> Crawl<'_, T> {
             self.transport,
             &url,
             validators,
-            ARTICLE_LIMIT,
+            parser::article_limit(definition),
             self.cancel,
             policy,
         )

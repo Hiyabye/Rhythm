@@ -14,7 +14,6 @@ use tokio::sync::Notify;
 use url::Url;
 
 pub type SharedStore = Arc<Mutex<Store>>;
-const ARTICLE_LIMIT: usize = 4 * 1024 * 1024;
 const FILE_LIMIT: usize = 20 * 1024 * 1024;
 const IMPORT_RESOURCES: u64 = 256 * 1024 * 1024;
 

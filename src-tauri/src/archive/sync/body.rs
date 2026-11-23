@@ -100,7 +100,7 @@ impl Bodies {
             transport,
             &url,
             None,
-            ARTICLE_LIMIT,
+            parser::article_limit(&definition),
             &cancel,
             &policy,
             network::Access::Source,
