@@ -5,6 +5,7 @@
   import { archiveError } from './archive-format';
   import { confirmAction } from './confirm';
   import Hint from './Hint.svelte';
+  import InterestChips from './InterestChips.svelte';
   import Popover from './Popover.svelte';
 
   type Polarity = PersonalInterest['polarity'];
@@ -113,6 +114,20 @@
     if (await action('personalization_remove_interest', { id: interest.id }) && editingId === interest.id) editingId = null;
   }
 
+  // A picker chip toggles without a confirmation: tapping it again restores the interest, and
+  // it is the same single tap that saved it (the editor's delete keeps its confirmation).
+  async function pickInterest(value: string): Promise<boolean> {
+    return action('personalization_save_interest', {
+      interest: { id: null, name: value, aliases: [], priority: 3, polarity: 'positive' } satisfies PersonalInterestInput,
+    });
+  }
+
+  async function unpickInterest(interest: PersonalInterest): Promise<boolean> {
+    const removed = await action('personalization_remove_interest', { id: interest.id });
+    if (removed && editingId === interest.id) editingId = null;
+    return removed;
+  }
+
   async function resetPersonalization() {
     let confirmed: boolean;
     try {
@@ -199,6 +214,10 @@
 
     <div class="settings-group-title"><h3>관심 분야</h3><Hint label="관심 분야">추천 순위에만 쓰이며 이 기기에만 저장됩니다. 주제를 눌러 별칭과 우선순위를 바꿀 수 있습니다. 학습된 관심사는 저장하거나 관심 표시한 서로 다른 공지가 쌓이면 생기고, 근거는 180일 뒤 만료됩니다. 삭제한 관심사는 과거 행동만으로 다시 생기지 않습니다.</Hint></div>
     <div class="settings-group">
+      <div class="settings-row chip-row">
+        <span class="row-label">추천 주제</span>
+        <InterestChips interests={data.interests} {busy} onadd={pickInterest} onremove={unpickInterest} />
+      </div>
       {#each [['positive', '관심'], ['negative', '관심 없음']] as [direction, label]}
         {@const items = explicit.filter((interest) => interest.polarity === direction)}
         <div class="settings-row chip-row">
