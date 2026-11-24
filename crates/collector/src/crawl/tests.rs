@@ -1471,6 +1471,31 @@ async fn a_k2web_notice_is_refetched_only_when_its_list_title_changes() {
 }
 
 #[tokio::test]
+async fn a_k2web_list_title_cut_short_matches_the_archived_title() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![]);
+    serve_innov(&fake, "서강의 혁신을 기록하다 Vol.5");
+    run(&state, &fake, INNOV, Budget::default()).await.unwrap();
+    assert_eq!(requests(&fake, INNOV_DETAIL), 1);
+    let list = |title: &str| {
+        let mut extra = fake.extra.lock().unwrap();
+        let page = extra.get_mut(INNOV_LIST).unwrap();
+        page.0 = include_str!("../../../sources/src/fixtures/k2web-innov-list.html")
+            .replace("서강의 혁신을 기록하다 Vol.5", title);
+    };
+
+    // The CMS cuts long titles in its lists; the article shows them whole.
+    list("서강의 혁신을 기록하다 V");
+    run(&state, &fake, INNOV, Budget::default()).await.unwrap();
+    assert_eq!(requests(&fake, INNOV_DETAIL), 1);
+
+    // Any other listed title is a change.
+    list("서강의 혁신을 기록하다 Vol.6");
+    run(&state, &fake, INNOV, Budget::default()).await.unwrap();
+    assert_eq!(requests(&fake, INNOV_DETAIL), 2);
+}
+
+#[tokio::test]
 async fn new_boards_start_a_bounded_number_per_run_in_catalog_order() {
     let state = State::open_in_memory().unwrap();
     let boards = public_boards();
