@@ -1,18 +1,12 @@
 use super::*;
 use crate::catalog;
+use crate::tests::entry_of;
 
 fn source(id: &str) -> SourceDefinition {
     catalog::definitions()
         .into_iter()
         .find(|source| source.id == id)
         .unwrap()
-}
-fn entry_of(page: &ListingPage, external_id: &str) -> ListingEntry {
-    page.entries
-        .iter()
-        .find(|entry| entry.external_id == external_id)
-        .unwrap()
-        .clone()
 }
 fn clean(parsed: &ArticleInput) {
     assert!(!parsed.title.is_empty());

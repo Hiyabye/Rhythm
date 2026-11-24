@@ -343,7 +343,7 @@ Depth is flat. Panes are separated by 1 px hairlines (`--line`) and the tonal st
 
 The sidebar is opaque `--sidebar`, not macOS vibrancy; translucency would need a Tauri window setting and is an accepted gap.
 
-Shared styles live in `src/app.css`, with AI surfaces in `src/lib/ai.css`; reusable symbols are in `src/lib/Icon.svelte`. Tailwind CSS is integrated, while semantic component classes define the visual system.
+Shared styles live in `src/app.css`; reusable symbols are in `src/lib/Icon.svelte`. Tailwind CSS is integrated, while semantic component classes define the visual system.
 
 ## Color
 
