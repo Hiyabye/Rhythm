@@ -4,7 +4,7 @@ What Rhythm's AI has been verified to do: the collector's server embeddings, the
 
 Since v2.0.0 the collector embeds and classifies public notices through Cloudflare Workers AI and ships vectors and categories in the feed; the app embeds only search queries and Cybercampus notices with the local model (#166 D5, D6, D12, D25). Both sides use the same model, input builder, prototypes and thresholds (`crates/embed`), so a local query vector is compared directly with feed vectors.
 
-AI summaries (Qwen3.5 2B/4B and Gemma 4 E2B/E4B generation, optional vision projectors) and the OpenAI-compatible remote engine were retired (#226); their evaluation evidence is in git history before that change. Calendar dates come from the deterministic extractor (`crates/sources/src/dates.rs`), measured in [the roadmap](ROADMAP.md#current-state).
+No generation models or remote engine are offered (#226). Calendar dates come from the deterministic extractor (`crates/sources/src/dates.rs`), measured in [the roadmap](ROADMAP.md#current-state).
 
 ## Runtime
 
@@ -88,7 +88,7 @@ Set `RHYTHM_EMBEDDING_EVAL_FORCE_CPU=1` for the CPU launch. The report includes 
 
 ## Semantic search
 
-Search queries are compared with the stored classifier vectors, so the query instruction and cut-off were chosen on real output (#127). The ignored `actual_semantic_search_evaluation` embeds the 18 fixtures exactly as the classifier stores them (`classification::input`) and 12 authored paraphrase queries (for example `생활비 지원` → the scholarship fixtures, `학교를 잠시 쉬고 싶어요` → `academic`) that mostly avoid the fixtures' own words. Measured on the same Mac with the pinned Qwen3-Embedding 0.6B Q8_0 (verified size/SHA-256, isolated directory) on Metal:
+Search queries are compared with the stored classifier vectors, so the query instruction and cut-off were chosen on real output (#127). The ignored `actual_semantic_search_evaluation` embeds the 18 fixtures exactly as the classifier stores them (`rhythm_embed::input`) and 12 authored paraphrase queries (for example `생활비 지원` → the scholarship fixtures, `학교를 잠시 쉬고 싶어요` → `academic`) that mostly avoid the fixtures' own words. Measured on the same Mac with the pinned Qwen3-Embedding 0.6B Q8_0 (verified size/SHA-256, isolated directory) on Metal:
 
 | Query instruction | MRR | Relevant in top 3 |
 | --- | ---: | ---: |

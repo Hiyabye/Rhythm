@@ -2,7 +2,7 @@
 
 Area instructions for `src-tauri/src/proactive/`, `src-tauri/src/core/lifecycle.rs` and `storage/proactive.rs`. The root `AGENTS.md` (project-wide rules) applies too.
 
-- `src-tauri/src/proactive/`: `scheduler.rs` runs persisted source tasks while the app is open; `notification.rs` discovers, filters, batches and routes notification actions. `core/lifecycle.rs` owns tray/window/login behavior; settings and durable event/task state live in `storage/proactive.rs` (`proactive/{model,tasks}.rs`) and schema migrations 005–007.
+- `src-tauri/src/proactive/`: `scheduler.rs` runs persisted source tasks while the app is open; `notification.rs` discovers, filters, batches and routes notification actions; `reminders.rs` sends due todo reminders from the scheduler loop. `core/lifecycle.rs` owns tray/window/login behavior; settings and durable event/task state live in `storage/proactive.rs` (with `storage/proactive/{model,tasks}.rs`) and schema migrations 005–007.
 
 ## Invariants
 
@@ -22,4 +22,5 @@ cargo test --locked -p rhythm proactive::tests
 ```
 
 - Native notification, scheduler and login evidence is recorded once in `docs/ROADMAP.md#verification-status` (macOS) and `docs/WINDOWS_VALIDATION.md`. On macOS, notification display/click was observed only in an isolated synthetic bundle, login only as a temporary-HOME plist simulation, and the scheduler only in bounded runs; live-source notifications, real login launch and sleep/wake are unverified. Do not generalize beyond those records.
+- Windows-only ignored native checks (`native_validation::prepare_one_native_notification_revision`, `windows_notification::installed_notification_diagnostics`) run only under an isolated validation identity.
 - Deterministic Rust tests do not verify native tray/login/notification behavior. Do not report an API handoff as display or receipt.
