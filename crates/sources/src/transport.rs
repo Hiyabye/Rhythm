@@ -336,7 +336,7 @@ impl Client {
                 mime: Some("text/plain".into()),
             });
         }
-        // A school host that has no robots.txt at all (user decision, #80 step 4):
+        // A school host that has no robots.txt at all (#80 step 4):
         // only these exact hosts, only for a missing file.
         if access == Access::Source
             && url.path() == "/robots.txt"
