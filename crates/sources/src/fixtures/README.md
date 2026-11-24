@@ -287,6 +287,10 @@ whitespace is removed.
   `vendor-klec-notice-detail-2933.html` (two `dnview.php` images and their files; the
   site itself sends U+FFFD for the lost emoji), `vendor-klec-notice-detail-344.html`
   (2015, `/univ/upload/bbs/` images) and `vendor-klec-news-detail-2988.html`.
+- `vendor-klec-notice-untitled.html` and `vendor-klec-notice-detail-1888.html`: page 14
+  of 일반공지 and its post 1888, which the site shows with an empty title (captured
+  2026-11-24, trimmed to the list form and the article); the empty row stopped the
+  board's history in production until the list accepted it.
 - `vendor-klec-notice-detail-2757.html`: a second block titled `링크` (one Instagram link)
   after the two attachments; found by the bounded live collector run.
 - `vendor-klec-notice-wrong-board-2988.html`: news post 2988 requested with 일반공지's
