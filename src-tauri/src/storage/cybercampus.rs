@@ -1,6 +1,7 @@
 //! Courses and deadlines of the Cybercampus connector. Notices are ordinary
 //! archive documents; these rows mirror what eClass currently shows and are
 //! replaced per course on every successful sync.
+use super::trash::NOT_TRASHED;
 use super::Store;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -48,6 +49,9 @@ pub struct CybercampusCourse {
     pub name: String,
     pub year: i32,
     pub term: String,
+    /// Unread notices of the course outside 휴지통, for its sidebar entry.
+    /// Course notices carry the course name as their category.
+    pub unread: u64,
 }
 
 fn short(value: &str, max: usize) -> bool {
@@ -125,15 +129,22 @@ impl Store {
     pub(crate) fn cybercampus_courses(&self) -> Result<Vec<CybercampusCourse>, String> {
         let mut statement = self
             .connection
-            .prepare("SELECT course_key,name,year,term FROM cybercampus_courses ORDER BY name,course_key")
+            .prepare(&format!(
+                "SELECT c.course_key,c.name,c.year,c.term,(SELECT COUNT(*) FROM documents d
+                     LEFT JOIN document_state u ON u.document_id=d.id
+                     WHERE d.source_id=?1 AND d.category=c.name AND COALESCE(u.is_read,0)=0
+                       AND {NOT_TRASHED})
+                 FROM cybercampus_courses c ORDER BY c.name,c.course_key"
+            ))
             .map_err(|e| e.to_string())?;
         let rows = statement
-            .query_map([], |row| {
+            .query_map([crate::archive::catalog::CYBERCAMPUS_SOURCE_ID], |row| {
                 Ok(CybercampusCourse {
                     course_key: row.get(0)?,
                     name: row.get(1)?,
                     year: row.get(2)?,
                     term: row.get(3)?,
+                    unread: row.get::<_, i64>(4)? as u64,
                 })
             })
             .map_err(|e| e.to_string())?
@@ -413,6 +424,58 @@ mod tests {
             .cybercampus_replace_tasks("K1", &[task("3", None), bad])
             .is_err());
         assert_eq!(store.cybercampus_tasks().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn each_course_counts_its_own_unread_notices_outside_trash() {
+        let (_directory, store) = crate::storage::temp_store();
+        store.catalog(&crate::archive::definitions()).unwrap();
+        store
+            .cybercampus_set_courses(
+                2026,
+                "3",
+                &[course("K1", "운영체제"), course("K2", "응용수학II")],
+            )
+            .unwrap();
+        let notice = |id: &str, course: &str| crate::archive::model::ArticleInput {
+            external_id: id.into(),
+            canonical_url: format!("https://eclass.sogang.ac.kr/notice/{id}"),
+            title: format!("공지 {id}"),
+            author: None,
+            category: Some(course.into()),
+            published_at: "2026-11-20".into(),
+            modified_at: None,
+            original: String::new(),
+            unsupported_body: false,
+            body_html: "<p>본문</p>".into(),
+            body_text: "본문".into(),
+            resources: vec![],
+            etag: None,
+            last_modified: None,
+        };
+        let mut ids = Vec::new();
+        for (id, course) in [
+            ("K1-1", "운영체제"),
+            ("K1-2", "운영체제"),
+            ("K1-3", "운영체제"),
+        ] {
+            ids.push(
+                store
+                    .upsert_article("cybercampus", &notice(id, course), false)
+                    .unwrap()
+                    .0,
+            );
+        }
+        store.set_document_state(ids[0], Some(true), None).unwrap();
+        store.trash_documents(&[ids[1]]).unwrap();
+        let unread = store
+            .cybercampus_courses()
+            .unwrap()
+            .into_iter()
+            .map(|course| (course.name, course.unread))
+            .collect::<Vec<_>>();
+        // Sorted by name; a course without notices counts zero.
+        assert_eq!(unread, [("운영체제".into(), 1), ("응용수학II".into(), 0)]);
     }
 
     #[test]

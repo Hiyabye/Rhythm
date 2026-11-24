@@ -20,7 +20,7 @@
   import { fade, fly, slide } from './lib/motion';
   import { archiveError as message, archiveDay, groupScope, localDayKey, openTask, organizationLabel, scopeGroup, timeOptions } from './lib/archive-format';
   import { clock } from './lib/clock.svelte';
-  import type { ArchiveSummary, AutoTrashMonths, ClockFormat, EnergyProfile, Settings, Snapshot, SourceGroup, SourceInfo, SyncStatus, FeedStatus, Theme, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusTask, TodoPrefill } from './lib/types';
+  import type { ArchiveSummary, AutoTrashMonths, ClockFormat, EnergyProfile, Settings, Snapshot, SourceGroup, SourceInfo, SyncStatus, FeedStatus, Theme, ProactiveActivation, ProactiveSnapshot, RestoreOutcome, AutoUpdateCheck, UpdateInfo, CybercampusCourse, CybercampusTask, TodoPrefill } from './lib/types';
 
   const themes: { id: Theme; label: string; icon: string }[] = [
     { id: 'light', label: '라이트', icon: 'today' },
@@ -83,8 +83,10 @@
   let sourceGroups = $state<SourceGroup[]>([]);
   let syncStatus = $state<SyncStatus | null>(null);
   // A new token asks ArchiveView to reset its filters, optionally scoped to one board or group (`groupScope`).
-  let sourceRequest = $state({ id: '', token: 0 });
+  let sourceRequest = $state({ id: '', category: '', token: 0 });
   let activeSource = $state('');
+  // A Cybercampus course entry scopes the inbox to its board and the course's category.
+  let activeCategory = $state('');
   let weekPane = $state(false);
   // A new token asks the calendar page to select `day`.
   let calendarRequest = $state<{ day: string; token: number; prefill: TodoPrefill | null }>({ day: '', token: 0, prefill: null });
@@ -116,6 +118,9 @@
     if (!panes.some((item) => item.id === settingsPane)) settingsPane = 'extensions';
   });
   let scopedBoard = $derived(page === 'inbox' && activeSource ? sources.find((item) => item.id === activeSource) ?? null : null);
+  // The synced term's courses, one sidebar entry each under 사이버캠퍼스.
+  let courses = $state<CybercampusCourse[]>([]);
+  let scopedCourse = $derived(scopedBoard?.family === 'cybercampus' && courses.some((course) => course.name === activeCategory) ? activeCategory : null);
   let scopedGroup = $derived(page === 'inbox' ? sourceGroups.find((group) => group.id === scopeGroup(activeSource)) ?? null : null);
   // A board chosen inside a group feed keeps the group's sidebar entry current.
   let currentFeed = $derived(page === 'inbox' ? scopeGroup(activeSource) ?? scopedBoard?.group ?? null : null);
@@ -126,9 +131,11 @@
   // Each context refresh (sync finished, reader closed) and each page change reloads them, like the archive counts.
   $effect(() => {
     void sources; void page;
-    if (!desktop || !enabled.has('cybercampus')) { tasks = []; return; }
+    if (!desktop || !enabled.has('cybercampus')) { tasks = []; courses = []; return; }
     let current = true;
     void invoke<CybercampusTask[]>('cybercampus_tasks').then((value) => { if (current) tasks = value; }).catch(() => { /* The 과제·마감 page reports load failures. */ });
+    // Without courses (never synced, or a failed read) the sidebar keeps the single board entry.
+    void invoke<CybercampusCourse[]>('cybercampus_courses').then((value) => { if (current) courses = value; }).catch(() => { if (current) courses = []; });
     return () => { current = false; };
   });
   function navCount(id: string): { count: number; label: string } | null {
@@ -230,10 +237,11 @@
     };
   });
 
-  async function navigate(destination: string, sourceId = '') {
+  async function navigate(destination: string, sourceId = '', category = '') {
     page = destination;
-    sourceRequest = { id: sourceId, token: sourceRequest.token + 1 };
+    sourceRequest = { id: sourceId, category, token: sourceRequest.token + 1 };
     activeSource = sourceId;
+    activeCategory = category;
     notice = '';
     await showTop();
   }
@@ -433,10 +441,21 @@
             <!-- An organization named like its section (사이버캠퍼스) would only repeat the heading. -->
             {#if organization !== group.name}<li class="board-organization" aria-hidden="true">{organization}</li>{/if}
             {#each members as board (board.id)}
+              {#if board.family === 'cybercampus' && courses.length}
+                <!-- Cybercampus is one board; each course is listed as its own feed (its notices' category). -->
+                {#each courses as course (course.course_key)}
+                  {@const current = scopedCourse === course.name}
+                  <li><button class="source-item board" class:active={current} aria-current={current ? 'page' : undefined} aria-label={course.name} aria-describedby={course.unread ? `course-count-${course.course_key}` : undefined} onclick={() => navigate('inbox', board.id, course.name)}>
+                    <span class={`board-swatch family-${board.family}`} aria-hidden="true"></span><span class="source-label">{course.name}</span>
+                    {#if course.unread}<span class="count" aria-hidden="true">{course.unread.toLocaleString('ko-KR')}</span><span class="sr-only" id={`course-count-${course.course_key}`}>읽지 않은 공지 {course.unread}개</span>{/if}
+                  </button></li>
+                {/each}
+              {:else}
               <li><button class="source-item board" class:active={page === 'inbox' && activeSource === board.id} aria-current={page === 'inbox' && activeSource === board.id ? 'page' : undefined} aria-label={`${organizationLabel(board.organization)} ${board.name}`} aria-describedby={board.unread ? `board-count-${board.id}` : undefined} onclick={() => navigate('inbox', board.id)}>
                 <span class={`board-swatch family-${board.family}`} aria-hidden="true"></span><span class="source-label">{board.name}</span>
                 {#if board.unread}<span class="count" aria-hidden="true">{board.unread.toLocaleString('ko-KR')}</span><span class="sr-only" id={`board-count-${board.id}`}>읽지 않은 공지 {board.unread}개</span>{/if}
               </button></li>
+              {/if}
             {/each}
           {:else}
             {#if !group.feeds.length}<li><button class="source-item quiet" onclick={() => openSettings(group.pane)}><span class="source-label">구독한 게시판 없음 · 설정</span></button></li>{/if}
@@ -455,7 +474,7 @@
   </aside>
 
   <main id="main" tabindex="-1" class:with-week-pane={weekPane}>
-    <header class="page-header"><h1>{scopedGroup?.name ?? scopedBoard?.name ?? heading}</h1>{#if scopedGroup}<p>게시판 {boards.filter((board) => board.group === scopedGroup.id).length}개 · 받은 소식</p>{:else if scopedBoard}<p>{organizationLabel(scopedBoard.organization)} · 받은 소식</p>{/if}{#if page === 'today'}<p>{date}{#if summary}{' · '}읽지 않은 공지 {summary.unread.toLocaleString('ko-KR')}{#if summary.new_since_sync}{' · '}최근 동기화로 새 공지 {summary.new_since_sync.toLocaleString('ko-KR')}{/if}{/if}</p>{/if}</header>
+    <header class="page-header"><h1>{scopedCourse ?? scopedGroup?.name ?? scopedBoard?.name ?? heading}</h1>{#if scopedGroup}<p>게시판 {boards.filter((board) => board.group === scopedGroup.id).length}개 · 받은 소식</p>{:else if scopedBoard}<p>{organizationLabel(scopedBoard.organization)} · 받은 소식</p>{/if}{#if page === 'today'}<p>{date}{#if summary}{' · '}읽지 않은 공지 {summary.unread.toLocaleString('ko-KR')}{#if summary.new_since_sync}{' · '}최근 동기화로 새 공지 {summary.new_since_sync.toLocaleString('ko-KR')}{/if}{/if}</p>{/if}</header>
     {#if !desktop && !loading}<div class="banner browser-notice" role="status"><Icon name="info" /><div><strong>데스크톱 앱에서 시작해 주세요</strong><p>브라우저에서는 화면만 둘러볼 수 있습니다. 설정 저장과 로컬 데이터 접근은 Rhythm 앱에서 사용할 수 있습니다.</p></div></div>{/if}
     {#if error}<div class="banner error" role="alert" transition:slide><Icon name="info" /><div><strong>작업을 완료하지 못했습니다</strong><p>{error}</p></div>{#if !snapshot && desktop}<button class="text-button" onclick={load}>다시 시도</button>{/if}</div>{/if}
     {#if restoreOutcome}<div class="banner" role="status" transition:slide><Icon name="info" /><div><strong>백업 복원을 마쳤습니다</strong><p>공지 {restoreOutcome.documents.toLocaleString('ko-KR')}건과 첨부 자료 {restoreOutcome.resources.toLocaleString('ko-KR')}개를 복원하고 무결성을 확인했습니다.{#if restoreOutcome.unavailable_resources} 백업 당시 내려받지 못한 첨부 자료 {restoreOutcome.unavailable_resources.toLocaleString('ko-KR')}개는 포함되지 않았습니다.{/if}{#if restoreOutcome.models_needing_reinstall} 사용할 수 없는 AI 모델 {restoreOutcome.models_needing_reinstall.toLocaleString('ko-KR')}개는 다시 설치해 주세요.{/if} 이전 데이터는 데이터 폴더에 복구용으로 보관되어 있습니다.</p></div><button class="text-button" onclick={() => restoreOutcome = null}>닫기</button></div>{/if}
@@ -519,7 +538,7 @@
       <StudiumView {desktop} activation={studiumActivation} proactiveEnabled={enabled.has('proactive')} onactivation={handleProactiveActivation} onsettings={() => openSettings(enabled.has('proactive') ? 'notifications' : 'extensions')} />
     {:else}
       <ArchiveView {page} {desktop} {enabled} onsetup={openSetup} onextensions={() => openSettings('extensions')} {sourceRequest} activation={proactiveActivation} onactivationhandled={() => proactiveActivation = null} onsettings={(pane) => openSettings(pane ?? 'extensions')}
-        onsourcechange={(id) => activeSource = id}
+        onsourcechange={(id, category) => { activeSource = id; activeCategory = category; }}
         onweekpane={(visible) => weekPane = visible}
         ontasks={() => void navigate('tasks')}
         {calendarRequest}

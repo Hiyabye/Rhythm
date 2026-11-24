@@ -105,6 +105,7 @@ fn main() {
         "cybercampus_status",
         "cybercampus_save_login",
         "cybercampus_forget_login",
+        "cybercampus_courses",
         "cybercampus_tasks",
     ];
 

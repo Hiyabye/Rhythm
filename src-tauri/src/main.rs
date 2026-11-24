@@ -672,6 +672,7 @@ fn main() {
             archive::cybercampus::cybercampus_status,
             archive::cybercampus::cybercampus_save_login,
             archive::cybercampus::cybercampus_forget_login,
+            archive::cybercampus::cybercampus_courses,
             archive::cybercampus::cybercampus_tasks
         ])
         .build(context)

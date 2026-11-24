@@ -427,6 +427,8 @@ export interface CybercampusCourse {
   name: string;
   year: number;
   term: string;
+  /** Unread notices of the course outside 휴지통. */
+  unread: number;
 }
 export interface CybercampusStatus {
   id: string | null;
