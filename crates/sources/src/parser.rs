@@ -165,6 +165,14 @@ pub const MAIN_BOARDS: [MainBoard; 5] = [
         redirect: "/ko/campus/student-support/notice",
     },
 ];
+/// Boards whose notices may be archived metadata-only (`unsupported_body`):
+/// main-site iframe bodies and k2web bodies of inline `data:` images only.
+pub fn metadata_only_allowed(source_id: &str) -> bool {
+    main_board(source_id).is_some()
+        || K2WEB_BOARDS
+            .iter()
+            .any(|board| board.source_id == source_id)
+}
 pub fn main_board(source_id: &str) -> Option<&'static MainBoard> {
     MAIN_BOARDS
         .iter()
@@ -789,19 +797,39 @@ pub fn with_pdf_text(article: &mut ArticleInput, pdfs: &[(String, String)]) {
 /// True when the body holds one or more iframes and nothing else: only blank
 /// text and textless layout wrappers (as in `<div class="iframe-wrapper">`).
 fn iframe_only(content: &str) -> bool {
-    fn only_iframes(element: ElementRef<'_>, depth: usize, found: &mut bool) -> bool {
+    only_wrapped(content, |element| element.value().name() == "iframe")
+}
+/// A body that is only inline `data:` images (k2web poster notices), which the
+/// sanitizer drops: nothing of it can be archived.
+pub(crate) fn data_images_only(content: &str) -> bool {
+    only_wrapped(content, |element| {
+        element.value().name() == "img"
+            && element
+                .value()
+                .attr("src")
+                .is_some_and(|src| src.trim_start().starts_with("data:"))
+    })
+}
+/// Whether `content` holds at least one `leaf` element and otherwise only blank
+/// text and textless `p`/`div`/`span`/`br` wrappers.
+fn only_wrapped(content: &str, leaf: fn(ElementRef<'_>) -> bool) -> bool {
+    fn walk(
+        element: ElementRef<'_>,
+        depth: usize,
+        leaf: fn(ElementRef<'_>) -> bool,
+        found: &mut bool,
+    ) -> bool {
         depth <= MAX_DEPTH
             && element.children().all(|child| {
                 if let Some(text) = child.value().as_text() {
                     text.trim().is_empty()
                 } else if let Some(element) = ElementRef::wrap(child) {
-                    match element.value().name() {
-                        "iframe" => {
-                            *found = true;
-                            true
-                        }
-                        "p" | "div" | "span" | "br" => only_iframes(element, depth + 1, found),
-                        _ => false,
+                    if leaf(element) {
+                        *found = true;
+                        true
+                    } else {
+                        matches!(element.value().name(), "p" | "div" | "span" | "br")
+                            && walk(element, depth + 1, leaf, found)
                     }
                 } else {
                     true
@@ -810,7 +838,7 @@ fn iframe_only(content: &str) -> bool {
     }
     let fragment = Html::parse_fragment(content);
     let mut found = false;
-    only_iframes(fragment.root_element(), 0, &mut found) && found
+    walk(fragment.root_element(), 0, leaf, &mut found) && found
 }
 
 pub fn sanitize(content: &str, base: &str) -> Result<(String, String, Vec<ResourceInput>), String> {

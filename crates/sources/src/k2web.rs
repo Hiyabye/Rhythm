@@ -597,7 +597,7 @@ pub(super) fn article(
         class.as_deref(),
     )?;
     let content = one(view, ".txt")?.inner_html();
-    let (body_html, body_text, inline) = sanitize(&content, &entry.url)?;
+    let (mut body_html, body_text, inline) = sanitize(&content, &entry.url)?;
     let mut resources = Vec::new();
     // Boards without files render no attachment block at all.
     let blocks: Vec<_> = view.select(selector("div.attachment")).collect();
@@ -640,7 +640,16 @@ pub(super) fn article(
         }
     }
     merge_inline_resources(&mut resources, inline);
-    if resources.len() > 200 || (body_text.is_empty() && resources.is_empty()) {
+    // A poster notice whose whole body is inline `data:` images and which has
+    // no files is archived metadata-only (user decision, 2026-11-24): the
+    // sanitizer drops those images, and the title still names the notice.
+    let unsupported_body =
+        body_text.is_empty() && resources.is_empty() && data_images_only(&content);
+    if unsupported_body {
+        body_html.clear();
+    }
+    if resources.len() > 200 || (body_text.is_empty() && resources.is_empty() && !unsupported_body)
+    {
         return invalid();
     }
     Ok(ArticleInput {
@@ -652,7 +661,7 @@ pub(super) fn article(
         published_at,
         modified_at: None,
         original: body.into(),
-        unsupported_body: false,
+        unsupported_body,
         body_html,
         body_text,
         resources,
