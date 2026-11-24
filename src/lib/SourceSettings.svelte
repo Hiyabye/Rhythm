@@ -5,6 +5,7 @@
   import { archiveDate, archiveError, organizationLabel, sourceStatus } from './archive-format';
   import { clock } from './clock.svelte';
   import Icon from './Icon.svelte';
+  import Spinner from './Spinner.svelte';
   import Hint from './Hint.svelte';
   import Popover from './Popover.svelte';
   import CybercampusSettings from './CybercampusSettings.svelte';
@@ -202,7 +203,7 @@
     <button class="button secondary small" disabled={locked || !subscribed.length} onclick={() => start('resources')}>자료 모두 내려받기</button>
     <Hint label="가져오기">저장한 로그인으로 본인 강좌의 공지와 과제·마감을 가져옵니다. 구독만으로는 아무것도 가져오지 않습니다. 중단해도 지금까지 저장한 자료는 남고, 다시 누르면 이어갑니다. 처음 가져오는 기록은 새 소식으로 세지 않습니다. 자료 모두 내려받기는 아직 받지 못한 첨부 파일과 이미지를 한 번에 최대 256 MB까지 받고, 다시 누르면 이어서 받습니다. 어떤 접근 제한도 우회하지 않습니다.</Hint>
     <span class="collect-status" role="status" aria-live="polite">
-      {#if status?.running}<Icon name="refresh" size={14} />{runningLabel(status)}{:else if !loading}구독 {subscribed.length}개{/if}
+      {#if status?.running}<Spinner />{runningLabel(status)}{:else if !loading}구독 {subscribed.length}개{/if}
     </span>
     {#if status?.running}<button class="text-button" disabled={busy} aria-label="가져오기 중단" onclick={cancel}>중단</button>{/if}
   </div>
@@ -254,7 +255,7 @@
       <button class="board-switch" role="switch" aria-checked={source.selected} aria-label={`${organization} ${source.name} 구독`} aria-describedby={alert ? `board-alert-${source.id}` : undefined} disabled={switchesLocked || !source.supported} onclick={() => subscribe(source)}>
         <span class="board-mark" aria-hidden="true">{#if source.subscribed}<Icon name="check" size={13} />{/if}</span>
         <span class="board-name">{source.name}</span>
-        {#if running}<span class="board-state spinning" aria-hidden="true"><Icon name="refresh" size={14} /></span>
+        {#if running}<span class="board-state spinning" aria-hidden="true"><Spinner /></span>
         {:else if alert}<span class="board-state alert" aria-hidden="true"><Icon name="warning" size={14} /></span>{/if}
       </button>
       {#if alert}<span class="sr-only" id={`board-alert-${source.id}`}>{alert}</span>{/if}

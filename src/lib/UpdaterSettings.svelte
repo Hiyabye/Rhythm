@@ -4,6 +4,7 @@
   import { confirmAction } from './confirm';
   import { isWindows } from './platform';
   import Hint from './Hint.svelte';
+  import ProgressBar from './Progress.svelte';
   import type { AutoUpdateCheck, UpdateInfo } from './types';
 
   type Progress = { phase: 'downloading' | 'verifying' | 'installing' | 'staged' | 'restarting'; version?: string; downloaded?: number; total?: number | null };
@@ -105,7 +106,7 @@
     {#if desktop && configured}
       <div class="settings-row"><span class="row-label">앱 업데이트<Hint label="앱 업데이트">GitHub 안정 채널에서 받은 업데이트의 서명과 기기 아키텍처를 확인한 뒤, 설치하고 다시 시작할지 묻습니다.</Hint>{#if checked && !update}<span class="row-detail" role="status">최신 버전입니다.</span>{/if}</span><button class="button secondary small" disabled={checking || installing} onclick={check}>{checking ? '확인 중…' : '업데이트 확인'}</button></div>
       <div class="settings-row"><span class="row-label">자동으로 업데이트 확인<Hint label="자동으로 업데이트 확인">앱이 실행 중일 때 하루에 한 번 GitHub에서 새 버전을 확인해 알려 드립니다. 내려받기와 설치는 직접 고를 때만 진행합니다.</Hint></span><button class="switch" class:on={autoCheck === true} role="switch" aria-label="자동으로 업데이트 확인" aria-checked={autoCheck === true} disabled={autoCheck === null || savingAutoCheck} onclick={toggleAutoCheck}><span></span></button></div>
-      {#if update}<div class="settings-row"><span class="row-label">새 버전 {update.version}<span class="row-detail">{update.body ?? '서명된 안정 버전을 설치할 수 있습니다.'}</span>{#if progress}<span class="row-detail" role="status">{progress.phase === 'downloading' ? `다운로드 중${progress.total ? ` · ${Math.round((progress.downloaded ?? 0) / progress.total * 100)}%` : '…'}` : progress.phase === 'verifying' ? '다운로드한 서명 검증 중…' : progress.phase === 'installing' ? '검증된 업데이트를 설치 중…' : progress.phase === 'staged' ? '서명된 업데이트를 준비했습니다.' : '앱을 다시 시작합니다…'}</span>{/if}</span><button class="button small" disabled={installing} onclick={install}>{installing ? '업데이트 중…' : progress?.phase === 'staged' ? '설치 및 다시 시작' : '다운로드 및 설치'}</button></div>
+      {#if update}<div class="settings-row"><span class="row-label">새 버전 {update.version}<span class="row-detail">{update.body ?? '서명된 안정 버전을 설치할 수 있습니다.'}</span>{#if progress}<span class="row-detail" role="status">{progress.phase === 'downloading' ? `다운로드 중${progress.total ? ` · ${Math.round((progress.downloaded ?? 0) / progress.total * 100)}%` : '…'}` : progress.phase === 'verifying' ? '다운로드한 서명 검증 중…' : progress.phase === 'installing' ? '검증된 업데이트를 설치 중…' : progress.phase === 'staged' ? '서명된 업데이트를 준비했습니다.' : '앱을 다시 시작합니다…'}</span>{#if progress.phase === 'downloading'}<label class="update-progress"><span class="sr-only">업데이트 다운로드</span><ProgressBar max={progress.total ?? 1} value={progress.total ? progress.downloaded ?? 0 : undefined} /></label>{/if}{/if}</span><button class="button small" disabled={installing} onclick={install}>{installing ? '업데이트 중…' : progress?.phase === 'staged' ? '설치 및 다시 시작' : '다운로드 및 설치'}</button></div>
       {:else if progress}<p class="footnote" role="status">{progress.phase === 'staged' ? '서명된 업데이트를 준비했습니다.' : '업데이트를 처리하고 있습니다…'}</p>{/if}
     {:else if desktop && configured === false}
       <div class="settings-row stacked">
@@ -140,3 +141,7 @@
   {#if desktop && configured && error}<div class="banner error" role="alert"><div><strong>업데이트를 완료하지 못했습니다</strong><p>{error}</p></div><button class="text-button" disabled={checking || installing} onclick={progress?.phase === 'staged' ? install : check}>다시 시도</button></div>{/if}
   {#if !desktop}<p class="footnote">업데이트 확인과 설치는 데스크톱 앱에서 사용할 수 있습니다.</p>{/if}
 </div>
+
+<style>
+  .update-progress { display: block; flex-basis: 100%; max-width: 280px; margin-top: 6px; }
+</style>

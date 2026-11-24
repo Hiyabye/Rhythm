@@ -3,6 +3,7 @@
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import Icon from './lib/Icon.svelte';
+  import Spinner from './lib/Spinner.svelte';
   import ArchiveView from './lib/ArchiveView.svelte';
   import SourceSettings from './lib/SourceSettings.svelte';
   import FeedSettings from './lib/FeedSettings.svelte';
@@ -465,7 +466,7 @@
       {/each}
       <div class="sidebar-bottom">
         <p class="sync-line" role="status">
-          {#if syncStatus?.running}<Icon name="refresh" size={14} /><span>{syncStatus.message}{#if syncStatus.active.length === 1 && syncStatus.active[0].page > 0} · {syncStatus.active[0].page}쪽{:else if syncStatus.active.length > 1} · 게시판 {syncStatus.active.length}개{/if}</span>
+          {#if syncStatus?.running}<Spinner /><span>{syncStatus.message}{#if syncStatus.active.length === 1 && syncStatus.active[0].page > 0} · {syncStatus.active[0].page}쪽{:else if syncStatus.active.length > 1} · 게시판 {syncStatus.active.length}개{/if}</span>
           {:else if lastChecked}<span>마지막 확인 {checkedLabel(lastChecked)}</span>
           {:else if boards.length}<span>아직 가져온 적 없음</span>{/if}
         </p>
