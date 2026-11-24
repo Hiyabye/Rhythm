@@ -124,9 +124,15 @@ fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String>
 /// A board of www.sogang.ac.kr's BbsData API (family `main`). `config` is its
 /// `bbsConfigFk`; the rest is the query the site's own list puts on detail
 /// links, so a notice's canonical URL is the one the site shows (#80).
+/// `sogang-onestop` has no list page on the site (#315, user decision
+/// 2026-11-24), so its link carries only `bbsConfigFk`: `page` is `None`.
 pub struct MainBoard {
     pub source_id: &'static str,
     pub config: u64,
+    page: Option<MainPage>,
+}
+/// The list-page query the site adds to a detail link.
+struct MainPage {
     namepage: &'static str,
     text: &'static str,
     /// The site adds `data=%5B%5D` on some boards only.
@@ -134,51 +140,66 @@ pub struct MainBoard {
     title: Option<&'static str>,
     redirect: &'static str,
 }
-pub const MAIN_BOARDS: [MainBoard; 5] = [
+pub const MAIN_BOARDS: [MainBoard; 6] = [
     MainBoard {
         source_id: "sogang-academic",
         config: 2,
-        namepage: "AcademicNotice",
-        text: "학사 지원",
-        data: true,
-        title: Some("학부 학사공지"),
-        redirect: "/ko/academic-support/notices",
+        page: Some(MainPage {
+            namepage: "AcademicNotice",
+            text: "학사 지원",
+            data: true,
+            title: Some("학부 학사공지"),
+            redirect: "/ko/academic-support/notices",
+        }),
     },
     MainBoard {
         source_id: "sogang-general",
         config: 1,
-        namepage: "StoryNotificationGeneral",
-        text: "서강 Story",
-        data: false,
-        title: Some("일반공지"),
-        redirect: "/ko/story/notification-general",
+        page: Some(MainPage {
+            namepage: "StoryNotificationGeneral",
+            text: "서강 Story",
+            data: false,
+            title: Some("일반공지"),
+            redirect: "/ko/story/notification-general",
+        }),
     },
     MainBoard {
         source_id: "sogang-scholarship",
         config: 141,
-        namepage: "ScholarshipNotice",
-        text: "학사 지원",
-        data: true,
-        title: Some("장학공지"),
-        redirect: "/ko/scholarship-notice",
+        page: Some(MainPage {
+            namepage: "ScholarshipNotice",
+            text: "학사 지원",
+            data: true,
+            title: Some("장학공지"),
+            redirect: "/ko/scholarship-notice",
+        }),
     },
     MainBoard {
         source_id: "sogang-events",
         config: 142,
-        namepage: "StoryNotificationEvent",
-        text: "서강 Story",
-        data: false,
-        title: Some("행사특강"),
-        redirect: "/ko/story/notification-event",
+        page: Some(MainPage {
+            namepage: "StoryNotificationEvent",
+            text: "서강 Story",
+            data: false,
+            title: Some("행사특강"),
+            redirect: "/ko/story/notification-event",
+        }),
     },
     MainBoard {
         source_id: "sogang-student",
         config: 34,
-        namepage: "CampusStudentSupportGeneralNotice",
-        text: "캠퍼스 생활",
-        data: false,
-        title: None,
-        redirect: "/ko/campus/student-support/notice",
+        page: Some(MainPage {
+            namepage: "CampusStudentSupportGeneralNotice",
+            text: "캠퍼스 생활",
+            data: false,
+            title: None,
+            redirect: "/ko/campus/student-support/notice",
+        }),
+    },
+    MainBoard {
+        source_id: "sogang-onestop",
+        config: 3,
+        page: None,
     },
 ];
 /// Boards whose notices may be archived metadata-only (`unsupported_body`):
@@ -203,18 +224,18 @@ pub fn main_canonical(board: &MainBoard, external: &str) -> Url {
     let mut url = Url::parse(&format!("https://www.sogang.ac.kr/ko/detail/{external}")).unwrap();
     let config = board.config.to_string();
     let mut query = url.query_pairs_mut();
-    query.extend_pairs([
-        ("bbsConfigFk", config.as_str()),
-        ("namepage", board.namepage),
-        ("text", board.text),
-    ]);
-    if board.data {
-        query.append_pair("data", "%5B%5D");
+    query.append_pair("bbsConfigFk", &config);
+    if let Some(page) = &board.page {
+        query.append_pair("namepage", page.namepage);
+        query.append_pair("text", page.text);
+        if page.data {
+            query.append_pair("data", "%5B%5D");
+        }
+        if let Some(title) = page.title {
+            query.append_pair("title", title);
+        }
+        query.append_pair("redirect", page.redirect);
     }
-    if let Some(title) = board.title {
-        query.append_pair("title", title);
-    }
-    query.append_pair("redirect", board.redirect);
     drop(query);
     url
 }

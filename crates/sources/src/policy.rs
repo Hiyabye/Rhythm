@@ -509,14 +509,14 @@ mod tests {
     use super::*;
     #[test]
     fn main_site_attachments_are_limited_to_catalogued_boards() {
-        for board in [1, 2, 34, 141, 142] {
+        for board in [1, 2, 3, 34, 141, 142] {
             let url =
                 format!("https://www.sogang.ac.kr/file-fe-prd/board/{board}/551882_1.pdf?sg=a.pdf");
             assert!(validate_url(&Url::parse(&url).unwrap()).is_ok(), "{url}");
         }
         for path in [
             "/file-fe-prd/board/104/551415_1.pdf",
-            "/file-fe-prd/board/3/1_1.pdf",
+            "/file-fe-prd/board/4/1_1.pdf",
             "/file-fe-prd/board/141/",
             "/file-fe-prd/board/x/1.pdf",
         ] {

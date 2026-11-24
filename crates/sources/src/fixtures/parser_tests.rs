@@ -67,11 +67,11 @@ fn cases() -> Vec<(
 #[test]
 fn catalog_has_exact_stable_source_identities_and_honest_support() {
     let sources = catalog::definitions();
-    assert_eq!(sources.len(), 172);
-    assert_eq!(sources.iter().filter(|s| s.supported).count(), 172);
+    assert_eq!(sources.len(), 173);
+    assert_eq!(sources.iter().filter(|s| s.supported).count(), 173);
     assert_eq!(
         sources.iter().map(|s| &s.id).collect::<HashSet<_>>().len(),
-        172
+        173
     );
     for s in sources {
         assert!(Url::parse(&s.url).is_ok());
@@ -183,6 +183,26 @@ fn other_main_site_boards_share_the_api_with_their_own_board_id() {
             "인파사고",
             1,
         ),
+        (
+            "sogang-onestop",
+            3,
+            include_str!("main-onestop-list.json"),
+            7,
+            "550212",
+            include_str!("main-onestop-detail-550212.json"),
+            "근로장학생",
+            1,
+        ),
+        (
+            "sogang-onestop",
+            3,
+            include_str!("main-onestop-list.json"),
+            7,
+            "550598",
+            include_str!("main-onestop-detail-550598.json"),
+            "대청소",
+            0,
+        ),
     ];
     for (id, config, list, pages, external, detail, word, files) in cases {
         let board = source(id);
@@ -200,9 +220,13 @@ fn other_main_site_boards_share_the_api_with_their_own_board_id() {
             .find(|e| e.external_id == external)
             .unwrap_or_else(|| panic!("{id} lists {external}"));
         // The canonical URL is the site's own detail link for that board.
-        assert!(entry.url.starts_with(&format!(
-            "https://www.sogang.ac.kr/ko/detail/{external}?bbsConfigFk={config}&"
-        )));
+        // Board 3 has no list page on the site (#315): its link is only the board ID.
+        let prefix = format!("https://www.sogang.ac.kr/ko/detail/{external}?bbsConfigFk={config}");
+        if id == "sogang-onestop" {
+            assert_eq!(entry.url, prefix);
+        } else {
+            assert!(entry.url.starts_with(&format!("{prefix}&")), "{id}");
+        }
         assert!(detail_url(&board, entry)
             .unwrap()
             .as_str()
@@ -238,11 +262,21 @@ fn other_main_site_boards_share_the_api_with_their_own_board_id() {
         assert!(article(&academic, &foreign, detail).is_err(), "{id}");
         assert!(detail_url(&board, &foreign).is_err(), "{id}");
     }
-    // The academic canonical URL is unchanged, so archived notices keep theirs.
-    assert_eq!(
-        main_canonical(&MAIN_BOARDS[0], "551637").as_str(),
-        "https://www.sogang.ac.kr/ko/detail/551637?bbsConfigFk=2&namepage=AcademicNotice&text=%ED%95%99%EC%82%AC+%EC%A7%80%EC%9B%90&data=%255B%255D&title=%ED%95%99%EB%B6%80+%ED%95%99%EC%82%AC%EA%B3%B5%EC%A7%80&redirect=%2Fko%2Facademic-support%2Fnotices"
-    );
+    // The canonical URLs of the original five boards are unchanged, so archived
+    // notices keep theirs.
+    for (index, expected) in [
+        "https://www.sogang.ac.kr/ko/detail/551637?bbsConfigFk=2&namepage=AcademicNotice&text=%ED%95%99%EC%82%AC+%EC%A7%80%EC%9B%90&data=%255B%255D&title=%ED%95%99%EB%B6%80+%ED%95%99%EC%82%AC%EA%B3%B5%EC%A7%80&redirect=%2Fko%2Facademic-support%2Fnotices",
+        "https://www.sogang.ac.kr/ko/detail/551637?bbsConfigFk=1&namepage=StoryNotificationGeneral&text=%EC%84%9C%EA%B0%95+Story&title=%EC%9D%BC%EB%B0%98%EA%B3%B5%EC%A7%80&redirect=%2Fko%2Fstory%2Fnotification-general",
+        "https://www.sogang.ac.kr/ko/detail/551637?bbsConfigFk=141&namepage=ScholarshipNotice&text=%ED%95%99%EC%82%AC+%EC%A7%80%EC%9B%90&data=%255B%255D&title=%EC%9E%A5%ED%95%99%EA%B3%B5%EC%A7%80&redirect=%2Fko%2Fscholarship-notice",
+        "https://www.sogang.ac.kr/ko/detail/551637?bbsConfigFk=142&namepage=StoryNotificationEvent&text=%EC%84%9C%EA%B0%95+Story&title=%ED%96%89%EC%82%AC%ED%8A%B9%EA%B0%95&redirect=%2Fko%2Fstory%2Fnotification-event",
+        "https://www.sogang.ac.kr/ko/detail/551637?bbsConfigFk=34&namepage=CampusStudentSupportGeneralNotice&text=%EC%BA%A0%ED%8D%BC%EC%8A%A4+%EC%83%9D%ED%99%9C&redirect=%2Fko%2Fcampus%2Fstudent-support%2Fnotice",
+        "https://www.sogang.ac.kr/ko/detail/551637?bbsConfigFk=3",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(main_canonical(&MAIN_BOARDS[index], "551637").as_str(), expected);
+    }
 }
 #[test]
 fn computing_five_boards_have_scoped_pins_full_text_metadata_and_real_resources() {

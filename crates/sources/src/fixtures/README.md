@@ -13,6 +13,11 @@ its original rights; Rhythm's GPL-3.0-or-later license does not relicense it.
 - `main-general-detail-551892.json`, `main-scholarship-detail-551882.json`,
   `main-events-detail-551374.json`, `main-student-detail-551671.json` (2026-11-22): the
   unchanged public JSON details of one listed notice with attachments on each board.
+- `main-onestop-list.json`, `main-onestop-detail-550212.json`,
+  `main-onestop-detail-550598.json` (2026-11-24, #315): page 1 of the same list endpoint
+  with `bbsConfigFk=3` (종합봉사실, 302 notices) and the unchanged public JSON details of
+  two listed notices (one with an attachment, one without). The site lists no page for
+  this board, so its notice link carries only `bbsConfigFk` (user decision).
 - `main-detail.json`: public JSON detail for `pkId=551637`; original HTML body,
   author, category references, publication date, and volatile view-count metadata.
 - `computing-*-list.html`: only the original `.board-lnb` and `.board-content`

@@ -198,6 +198,9 @@ pub fn definitions() -> Vec<SourceDefinition> {
         ("scholarship", "장학공지", "scholarship-notice"),
         ("events", "행사특강", "story/notification-event"),
         ("student", "학생 일반공지", "campus/student-support/notice"),
+        // The site lists no page for this board (#315): its URL is the
+        // service-room info page, and notice links carry only the board ID.
+        ("onestop", "종합봉사실 공지", "service-room"),
     ] {
         add(
             &format!("sogang-{id}"),
