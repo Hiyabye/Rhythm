@@ -580,6 +580,25 @@ test('sidebar boards scope the inbox and badges describe their counts', async ({
   await expect(sidebar.getByRole('button', { name: '소프트웨어융합대학 소식', exact: true })).not.toHaveAttribute('aria-current');
 });
 
+test('the feed pages ask for subscribed boards only, while search covers the whole archive', async ({ page }) => {
+  const board = (id: string, name: string, subscribed: boolean) => ({ id, name, organization: '서강대학교 · 소프트웨어융합대학', supported: true, subscribed, group: 'sogang-computing' });
+  await mockDesktop(page, {
+    count: 2,
+    sourceGroups: [{ id: 'sogang', name: '서강대학교', parent: null }, { id: 'sogang-computing', name: '소프트웨어융합대학', parent: 'sogang' }],
+    sourceList: [board('computing-academic', '학사 공지', true), board('computing-updates', '소식', false)],
+    noticeSources: ['computing-academic', 'computing-updates'],
+  });
+  await page.goto('/');
+  const lastQuery = () => page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'archive_query').at(-1).args.query);
+  const boards = () => page.getByRole('combobox', { name: '정보원', exact: true }).locator('option').allTextContents();
+  await navigate(page, '받은 소식');
+  await expect.poll(async () => (await lastQuery()).subscribed_only).toBe(true);
+  expect(await boards()).not.toContain('소식');
+  await navigate(page, '검색');
+  await expect.poll(async () => (await lastQuery()).subscribed_only).toBe(false);
+  expect(await boards()).toContain('소식');
+});
+
 test('a sidebar group feed lists its own boards, and chips narrow it to one', async ({ page }) => {
   const board = (id: string, name: string, group: string, subscribed: boolean) => ({ id, name, organization: '서강대학교 · 소프트웨어융합대학', supported: true, subscribed, group });
   await mockDesktop(page, {

@@ -188,7 +188,8 @@ impl Store {
                  LEFT JOIN document_state u ON u.document_id=d.id
                  WHERE n.day BETWEEN date(?1,'-{MAX_SPAN_DAYS} days') AND ?2
                    AND COALESCE(n.end_day,n.day) >= ?1 AND {NOT_TRASHED}
-                   AND (COALESCE(u.saved,0)=1 OR (?3 AND n.kind='deadline'))
+                   AND (COALESCE(u.saved,0)=1 OR (?3 AND n.kind='deadline'
+                        AND d.source_id IN (SELECT id FROM sources WHERE subscribed=1)))
                  ORDER BY n.day, n.time IS NOT NULL, n.time, d.published_at DESC, n.document_id, n.ordinal
                  LIMIT ?4"
             ))

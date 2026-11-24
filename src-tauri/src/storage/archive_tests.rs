@@ -701,6 +701,7 @@ fn list_preview_marks_only_bodies_longer_than_the_excerpt() {
             ai_category: None,
             saved_only: false,
             unread_only: false,
+            subscribed_only: false,
             trashed: false,
             ascending: false,
             opportunities: false,
@@ -2489,6 +2490,8 @@ fn dated(store: &Store, from: &str, to: &str) -> Vec<(String, String, String)> {
 #[test]
 fn notice_dates_follow_content_saved_state_toggle_and_trash() {
     let (_directory, store) = database();
+    // Every-notice deadlines come only from subscribed sources.
+    store.subscribe("one", true).unwrap();
     let (id, _) = store
         .upsert_article(
             "one",
@@ -2547,6 +2550,17 @@ fn notice_dates_follow_content_saved_state_toggle_and_trash() {
             .collect::<Vec<_>>(),
         [("2026-11-20", "deadline")]
     );
+    // An unsubscribed board's deadlines leave the calendar; a saved notice keeps its dates.
+    store.subscribe("one", false).unwrap();
+    assert!(store
+        .calendar_notice_dates("2026-11-01", "2026-12-31")
+        .unwrap()
+        .dates
+        .is_empty());
+    store.set_document_state(id, None, Some(true)).unwrap();
+    assert_eq!(dated(&store, "2026-11-01", "2026-12-31").len(), 2);
+    store.set_document_state(id, None, Some(false)).unwrap();
+    store.subscribe("one", true).unwrap();
 
     // A new revision replaces the dates instead of adding to them.
     store
@@ -2660,6 +2674,8 @@ fn filled_pdf_body_gets_its_dates() {
 #[test]
 fn notice_dates_backfill_stale_rows_and_the_toggle_survive_reopen() {
     let (directory, store) = database();
+    // Every-notice deadlines come only from subscribed sources.
+    store.subscribe("one", true).unwrap();
     for index in 0..3 {
         store
             .upsert_article(
@@ -2883,4 +2899,41 @@ fn only_main_and_k2web_boards_archive_a_notice_metadata_only() {
         .upsert_article("sori-contests", &poster, false)
         .unwrap();
     assert!(store.upsert_article("ee-general", &poster, false).is_err());
+}
+
+#[test]
+fn feed_pages_and_unread_counts_keep_to_subscribed_sources() {
+    let (_directory, store) = database();
+    store.subscribe("one", true).unwrap();
+    for (source, id) in [("one", "a"), ("two", "b")] {
+        store
+            .upsert_article(
+                source,
+                &article(id, "장학 안내", "본문", "2026-11-02"),
+                false,
+            )
+            .unwrap();
+    }
+    let sources = |query: &ArchiveQuery| {
+        store
+            .archive_query(query)
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| item.source_id)
+            .collect::<Vec<_>>()
+    };
+    let feed = ArchiveQuery {
+        subscribed_only: true,
+        ..ArchiveQuery::default()
+    };
+    // The feed mirrors every board; only 받은 소식 and the other feed pages narrow it.
+    assert_eq!(sources(&feed), ["one"]);
+    assert_eq!(sources(&ArchiveQuery::default()).len(), 2);
+    let summary = store.archive_summary().unwrap();
+    assert_eq!((summary.documents, summary.unread), (2, 1));
+
+    store.subscribe("two", true).unwrap();
+    assert_eq!(sources(&feed).len(), 2);
+    assert_eq!(store.archive_summary().unwrap().unread, 2);
 }

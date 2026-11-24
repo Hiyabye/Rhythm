@@ -27,6 +27,8 @@
   let calendarOn = $derived(enabled.has('calendar'));
   let ai = $derived(enabled.has('ai'));
   let sourcesOn = $derived(enabled.has('sogang_notices') || enabled.has('cybercampus'));
+  // The feed mirrors every board; these pages follow subscriptions, while 검색, 보관함 and 휴지통 cover the whole archive.
+  let feedPage = $derived(page === 'today' || page === 'inbox' || page === 'opportunities');
   let result = $state<ArchivePage>({ items: [], total: 0, categories: [] });
   let summary = $state<ArchiveSummary | null>(null);
   let sources = $state<SourceInfo[]>([]);
@@ -129,7 +131,7 @@
   $effect(() => {
     const scopedGroup = scopeGroup(source);
     const filters = { query, source_id: scopedGroup ? null : source || null, group_id: scopedGroup, category: category || null,
-      ai_category: ai ? aiCategory || null : null, saved_only: page === 'bookmark', unread_only: unread, trashed: page === 'trash', ascending: sort === 'oldest',
+      ai_category: ai ? aiCategory || null : null, saved_only: page === 'bookmark', unread_only: unread, subscribed_only: feedPage, trashed: page === 'trash', ascending: sort === 'oldest',
       opportunities: page === 'opportunities', include_closed: page === 'opportunities' && includeClosed, offset, limit: pageSize };
     const ranked = page === 'search' && sort === 'relevance' && query !== '';
     void revision;
@@ -475,8 +477,10 @@
   }
   // Stored tasks outlive an unsubscribed board; the week follows the 과제·마감 navigation and shows them only while subscribed.
   // The 정보원 select lists each group's own boards under it; ungrouped boards follow.
-  let scopeOptions = $derived(groups.map((group) => ({ group, boards: sources.filter((item) => item.group === group.id) })).filter((entry) => entry.boards.length));
-  let ungroupedSources = $derived(sources.filter((item) => !item.group || !groups.some((group) => group.id === item.group)));
+  // The feed pages list only subscribed boards (and the one chosen), like their notices.
+  let listedSources = $derived(feedPage ? sources.filter((item) => item.subscribed || item.id === source) : sources);
+  let scopeOptions = $derived(groups.map((group) => ({ group, boards: listedSources.filter((item) => item.group === group.id) })).filter((entry) => entry.boards.length));
+  let ungroupedSources = $derived(listedSources.filter((item) => !item.group || !groups.some((group) => group.id === item.group)));
   // A group feed, or one of its boards, offers chips for the group's subscribed boards.
   let chipGroup = $derived(groups.find((group) => group.id === (scopeGroup(source) ?? sources.find((item) => item.id === source)?.group)) ?? null);
   let chipBoards = $derived(chipGroup ? sources.filter((item) => item.group === chipGroup.id && ((item.supported && item.subscribed) || item.id === source)) : []);
