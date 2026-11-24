@@ -63,6 +63,7 @@ const KLEC_NEWS_PAST_END: &str = include_str!("vendor-klec-news-past-end.html");
 const KLEC_HWP: &str = include_str!("vendor-klec-notice-detail-2978.html");
 const KLEC_ZIP: &str = include_str!("vendor-klec-notice-detail-2951.html");
 const KLEC_IMAGES: &str = include_str!("vendor-klec-notice-detail-2933.html");
+const KLEC_LINK: &str = include_str!("vendor-klec-notice-detail-2757.html");
 const KLEC_OLD: &str = include_str!("vendor-klec-notice-detail-344.html");
 const KLEC_PHOTO: &str = include_str!("vendor-klec-news-detail-2988.html");
 const KLEC_WRONG_BOARD: &str = include_str!("vendor-klec-notice-wrong-board-2988.html");
@@ -431,4 +432,31 @@ fn tampered_list_links_fail() {
         1,
     );
     assert!(listing(&klec, 24, &gap).is_err());
+}
+
+#[test]
+fn a_klec_link_block_joins_the_body_and_keeps_the_files() {
+    let klec = source("klec-notice");
+    let notice = article(&klec, &klec_entry("2757", "00010"), KLEC_LINK).unwrap();
+    assert_eq!(
+        notice.title,
+        "서강대학교판교캠퍼스 방문 후기 SNS 이벤트(5/8일까지)"
+    );
+    assert_eq!(
+        notice
+            .resources
+            .iter()
+            .filter(|r| r.kind == "attachment")
+            .map(|r| r.filename.as_str())
+            .collect::<Vec<_>>(),
+        ["0423 sns 이벤트(한국어).png", "0423 sns 이벤트(중국어).png"]
+    );
+    // The body names the account only as text; the block adds the link.
+    assert!(notice
+        .body_html
+        .contains("<a href=\"https://www.instagram.com/sogangsdic/\""));
+    // Another block title is not a known layout.
+    let unknown = KLEC_LINK.replacen(">링크<", ">관련 자료<", 1);
+    assert_ne!(unknown, KLEC_LINK);
+    assert!(article(&klec, &klec_entry("2757", "00010"), &unknown).is_err());
 }

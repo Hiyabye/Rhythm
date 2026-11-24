@@ -287,6 +287,8 @@ whitespace is removed.
   `vendor-klec-notice-detail-2933.html` (two `dnview.php` images and their files; the
   site itself sends U+FFFD for the lost emoji), `vendor-klec-notice-detail-344.html`
   (2015, `/univ/upload/bbs/` images) and `vendor-klec-news-detail-2988.html`.
+- `vendor-klec-notice-detail-2757.html`: a second block titled `링크` (one Instagram link)
+  after the two attachments; found by the bounded live collector run.
 - `vendor-klec-notice-wrong-board-2988.html`: news post 2988 requested with 일반공지's
   `bbsid=00010`; the site serves it, and its hidden `bbsid` still says `00011`.
 - `vendor-klec-notice-denied.html`: the `글보기 권한이 없습니다.` page for

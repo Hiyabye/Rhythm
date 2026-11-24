@@ -336,6 +336,22 @@ impl Client {
                 mime: Some("text/plain".into()),
             });
         }
+        // A school host that has no robots.txt at all (user decision, #80 step 4):
+        // only these exact hosts, only for a missing file.
+        if access == Access::Source
+            && url.path() == "/robots.txt"
+            && matches!(status.as_u16(), 404 | 410)
+            && url
+                .host_str()
+                .is_some_and(|host| ABSENT_ROBOTS_HOSTS.contains(&host))
+        {
+            return Ok(Fetch::Body {
+                bytes: Vec::new(),
+                etag: None,
+                last_modified: None,
+                mime: Some("text/plain".into()),
+            });
+        }
         // RFC 9309: an unavailable (4xx) robots.txt places no restrictions. Only
         // other hosts get this reading; a school host's error stays an error.
         if access == Access::EmbeddedImage
@@ -420,6 +436,10 @@ async fn cancelled(cancel: &AtomicBool) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
+/// School hosts whose robots.txt is absent (HTTP 404), read as no rules:
+/// 한국어교육원, observed 2026-11-24. Every other school host's robots error
+/// stays an error, so a broken policy server never becomes allow-all.
+const ABSENT_ROBOTS_HOSTS: [&str; 1] = ["klec.sogang.ac.kr"];
 #[cfg(feature = "studium")]
 fn is_studium(access: Access) -> bool {
     access == Access::Studium

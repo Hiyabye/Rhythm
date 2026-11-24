@@ -18,6 +18,17 @@ struct ChainCompletion {
     supplemental: Vec<CertificateDer<'static>>,
 }
 
+/// Hosts that serve their leaf without the Sectigo OV R36 intermediate. The
+/// continuing-education sites (#80 step 4) were observed doing so on
+/// 2026-11-24 with the same `*.sogang.ac.kr` leaf.
+const COMPLETED_HOSTS: [&str; 5] = [
+    "www.sogang.ac.kr",
+    "new-cms.sogang.ac.kr",
+    "eclass.sogang.ac.kr",
+    "scec.sogang.ac.kr",
+    "klec.sogang.ac.kr",
+];
+
 impl ServerCertVerifier for ChainCompletion {
     fn verify_server_cert(
         &self,
@@ -32,8 +43,7 @@ impl ServerCertVerifier for ChainCompletion {
         if matches!(
             server_name,
             ServerName::DnsName(name)
-                if ["www.sogang.ac.kr", "new-cms.sogang.ac.kr", "eclass.sogang.ac.kr"]
-                    .contains(&name.as_ref())
+                if COMPLETED_HOSTS.contains(&name.as_ref())
         ) {
             let mut chain = intermediates.to_vec();
             for certificate in &self.supplemental {
@@ -188,6 +198,12 @@ mod tests {
         assert!(verifier
             .verify_server_cert(&leaf(), &[], &dormitory, &[], valid_time())
             .is_ok());
+        for host in ["scec.sogang.ac.kr", "klec.sogang.ac.kr"] {
+            let name = ServerName::try_from(host).unwrap();
+            assert!(verifier
+                .verify_server_cert(&leaf(), &[], &name, &[], valid_time())
+                .is_ok());
+        }
         // The wildcard leaf also covers computing, but no chain is supplied for it.
         let other = ServerName::try_from("computing.sogang.ac.kr").unwrap();
         assert!(verifier

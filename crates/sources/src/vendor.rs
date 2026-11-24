@@ -662,13 +662,29 @@ fn klec_article(
     }
     let title = text(one(view, "div.bbs-tit-wrap > div.bbs-tit")?);
     let published_at = date(&text(one(view, "div.bbs-date")?))?;
-    let content = one(view, "div.bbs-con")?.inner_html();
-    let blocks: Vec<_> = view.select(selector("div.bbs-attachments")).collect();
-    let links = match blocks[..] {
-        [] => vec![],
-        [block] => block.select(selector("ul.file-wrap > li > a")).collect(),
-        _ => return invalid(),
-    };
+    let mut content = one(view, "div.bbs-con")?.inner_html();
+    // Up to two blocks below the body: `첨부파일` (files) and `링크`, related
+    // links the editor attached, which join the body so they are kept.
+    let mut files = None;
+    let mut related = None;
+    for block in view.select(selector("div.bbs-attachments")) {
+        let slot = match text(one(block, "div.attach-tit")?).as_str() {
+            "첨부파일" => &mut files,
+            "링크" => &mut related,
+            _ => return invalid(),
+        };
+        if slot.replace(block).is_some() {
+            return invalid();
+        }
+    }
+    if let Some(block) = related {
+        for link in one(block, "ul.file-wrap")?.select(selector("a")) {
+            content.push_str(&format!("<p>{}</p>", link.html()));
+        }
+    }
+    let links = files.map_or_else(Vec::new, |block| {
+        block.select(selector("ul.file-wrap > li > a")).collect()
+    });
     let resources = attachments(board, entry, links, "/univ/lms_bbs/dn.php")?;
     Ok(Parts {
         title,

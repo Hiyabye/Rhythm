@@ -1,6 +1,7 @@
 # University certificate-chain completion
 
-`www.sogang.ac.kr`, `new-cms.sogang.ac.kr` and `eclass.sogang.ac.kr` currently present
+`www.sogang.ac.kr`, `new-cms.sogang.ac.kr`, `eclass.sogang.ac.kr`, `scec.sogang.ac.kr` and
+`klec.sogang.ac.kr` currently present
 their leaf without its intermediate certificate. Ordinary Rustls/WebPKI verification therefore fails with
 `UnknownIssuer` even though the leaf has a valid path to a Mozilla-trusted root when the
 intermediate is supplied.
@@ -17,10 +18,14 @@ Source: the user's reference collector,
 The bytes were fetched as data; no reference JavaScript was executed.
 
 `tls.rs::ChainCompletion` supplies these certificates only when the TLS server name
-is exactly `www.sogang.ac.kr`, `new-cms.sogang.ac.kr` or `eclass.sogang.ac.kr`. The
+is exactly one of those five hosts (`tls.rs::COMPLETED_HOSTS`). The
 dormitory CMS leaf observed on 2026-11-05 and the eClass (Cybercampus) leaf observed on
 2026-11-06 (`*.sogang.ac.kr`, served without its intermediate) are issued by the same
-Sectigo OV R36 intermediate (same SHA-256), so the candidate file is unchanged. It delegates certificate and handshake-signature
+Sectigo OV R36 intermediate (same SHA-256), so the candidate file is unchanged. The
+continuing-education sites `scec` (미래교육원) and `klec` (한국어교육원), observed on 2026-11-24,
+serve the same `*.sogang.ac.kr` leaf without its intermediate; `openssl verify` with
+hostname checking accepted both leaves through the pinned R36 candidate and
+`sectigo-r46-root.pem`. It delegates certificate and handshake-signature
 verification to `WebPkiServerVerifier`. They are **never added to the root store**.
 The root store is exactly `webpki_roots::TLS_SERVER_ROOTS`; system trust and global
 Rustls crypto-provider settings are not changed. Normal hostname, validity,

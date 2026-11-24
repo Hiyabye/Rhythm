@@ -311,3 +311,44 @@ async fn a_body_past_its_deadline_is_reported_as_a_timeout() {
     assert_eq!(started.elapsed(), BODY_WAIT);
     script.assert_one_request(&status_url());
 }
+
+#[tokio::test]
+async fn only_klec_missing_robots_policy_becomes_empty() {
+    let source = |client: &Client, url: &Url| {
+        let url = url.clone();
+        let client = client.clone();
+        async move {
+            client
+                .get(&url, None, 1024, &AtomicBool::new(false), Access::Source)
+                .await
+        }
+    };
+    let addresses = vec!["8.8.8.8:443".parse().unwrap()];
+    let klec = Url::parse("https://klec.sogang.ac.kr/robots.txt").unwrap();
+    for status in [404, 410] {
+        let (client, script) = Script::client(addresses.clone(), vec![Reply::Http(status)]);
+        match source(&client, &klec).await.unwrap() {
+            Fetch::Body { bytes, mime, .. } => {
+                assert!(bytes.is_empty());
+                assert_eq!(mime.as_deref(), Some("text/plain"));
+            }
+            _ => panic!("missing robots policy must be an empty body"),
+        }
+        let requests = script.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].url(), &klec);
+    }
+    let scec = Url::parse("https://scec.sogang.ac.kr/robots.txt").unwrap();
+    let page =
+        Url::parse("https://klec.sogang.ac.kr/index.php?bbs_idx=1&pagekind=c&bbsid=00010").unwrap();
+    for (url, status) in [
+        (&klec, 401),
+        (&klec, 403),
+        (&klec, 429),
+        (&scec, 404),
+        (&page, 404),
+    ] {
+        let (client, _) = Script::client(addresses.clone(), vec![Reply::Http(status)]);
+        assert_eq!(source(&client, url).await.unwrap_err().status, Some(status));
+    }
+}
