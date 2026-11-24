@@ -42,7 +42,7 @@ Also supported but secondary: a quick check of Today, deep reading of long notic
 
 Environment: a desktop window with native window controls and a 640 px minimum width, a tray item (menu bar on macOS, notification area on Windows), native notifications and native confirmation dialogs. The window may be hidden for long periods.
 
-Current information architecture: every feature beyond the core shell is a built-in extension the user turns on, modeled on Obsidian's plugins (built-in only, never loaded from outside). The core is 오늘 and 설정 (확장 기능, 일반, 데이터 및 정보 with backup and updates). Extensions add 받은 소식 and its boards (서강대학교 공지), 과제·마감 (사이버캠퍼스), 탐색, 보관함, Today's 나를 위한 소식 and 앞으로 7일, AI 분류 (with the 기회 page) and 알림·백그라운드, each with its own settings pane. A new profile starts blank; upgraded profiles keep what they had.
+Current information architecture: every feature beyond the core shell is a built-in extension the user turns on, modeled on Obsidian's plugins (built-in only, never loaded from outside). The core is 오늘 and 설정 (확장 기능, 일반, 데이터 및 정보 with backup and updates). Extensions add 받은 소식 and its boards (서강대학교 공지), 과제·마감 (사이버캠퍼스), 검색, 보관함, Today's 나를 위한 소식 and 앞으로 7일, 기회 (AI 분류), 캘린더, 열람실 and 알림·백그라운드; boards, Cybercampus, personalization, AI and 알림·백그라운드 add settings panes. 휴지통 shows while a source extension is on or it still holds notices. A new profile starts blank; upgraded profiles keep what they had.
 
 ## Capabilities and Constraints
 
@@ -60,7 +60,7 @@ Current information architecture: every feature beyond the core shell is a built
 ## Brand Commitments
 
 - **Native macOS look for the whole app (standing user decision, 2026-11-02).** In the redesign direction round, the user chose the category standard on purpose: a macOS-native app (source-list sidebar, system list rows, one system accent, light and dark themes) built without irony. Things 3 and Fantastical set the craft bar. This covers every screen, including Settings and the reader, not only the shell and Today. The same UI currently renders on Windows; whether Windows should get its own look has not been decided.
-- Otherwise nothing is binding. The name "Rhythm", the Beat four-bar mark (`assets/branding/beat.svg`), the five-view navigation and the "command center" tagline are current but replaceable.
+- Otherwise nothing is binding. The name "Rhythm", the Beat four-bar mark (`assets/branding/beat.svg`), the source-list navigation and the "command center" tagline are current but replaceable.
 
 Voice that stays: all user-facing UI, feedback and errors are in natural Korean. Internal identifiers and model names stay recognizable. Copy is honest about limits: it never claims delivery, verification, completeness or accuracy that wasn't established.
 

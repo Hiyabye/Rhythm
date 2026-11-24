@@ -16,11 +16,10 @@ Rhythm supports Windows 11 x64 alongside macOS Apple Silicon. The port came from
 - Visual Studio Build Tools with x64 MSVC and the Windows 11 SDK (observed: Build Tools 17.14.44, MSVC 14.44.35207, SDK 10.0.26100.0).
 - Stable Rust `x86_64-pc-windows-msvc`, 1.90+.
 - No LLVM or CMake: `scripts/stage-llama.mjs` downloads the pinned llama.cpp build (network access) and checks their size and SHA-256.
-- Roughly 10 GiB free on C: and 30 GiB on D:. Dependencies, model weights and build outputs add more.
 
 ### Project-local toolchain (optional)
 
-`scripts/setup-windows.ps1` checks the OS, free space, Node/npm and WebView2, then installs Visual Studio Build Tools and Rust into a `.build-tools` folder next to the checkout (the repository must be on D:). It downloads only from Microsoft and rust-lang.org over HTTPS, checks the Visual Studio bootstrapper's Authenticode signature and the rustup SHA-256, never reboots, and stops instead of overwriting an unexpected installation. Installing Build Tools needs an administrator PowerShell. It installs no GPU tools; none are needed.
+`scripts/setup-windows.ps1` checks the OS, free space (at least 10 GiB on C: and 30 GiB on D:; dependencies, model weights and build outputs add more), Node/npm and WebView2, then installs Visual Studio Build Tools and Rust into a `.build-tools` folder next to the checkout (the repository must be on D:). It downloads only from Microsoft and rust-lang.org over HTTPS, checks the Visual Studio bootstrapper's Authenticode signature and the rustup SHA-256, never reboots, and stops instead of overwriting an unexpected installation. Installing Build Tools needs an administrator PowerShell. It installs no GPU tools; none are needed.
 
 ```powershell
 & .\scripts\setup-windows.ps1     # once
@@ -41,7 +40,7 @@ npm run desktop:build
 - `npm run desktop` and `npm run desktop:build` delegate to `scripts/desktop-windows.mjs`. It stages the VC runtime first (so missing tools fail early), then the pinned llama.cpp CPU build (`scripts/stage-llama.mjs`, which copies those VC runtime DLLs beside it), then runs Tauri.
 - VC runtime staging runs under `RHYTHM_POWERSHELL` (default `powershell.exe`). The script never changes execution policy and never retries under another host.
 - llama.cpp archives are extracted with Windows' own `System32\tar.exe`, because Git's GNU `tar` earlier on PATH cannot read zip files.
-- A release build writes only `Rhythm_<version>_x64-setup.exe` and its `.sha256` to `target/release/distribution/`, plus `<exe>.sig` when `TAURI_SIGNING_PRIVATE_KEY` and `RHYTHM_UPDATER_PUBKEY` are both set.
+- A release build writes only `Rhythm_<version>_x64-setup.exe` and its `.sha256` to `<CARGO_TARGET_DIR or target>/release/distribution/` (`..\.build-tools\target\…` after `windows-env.ps1`; the llama.cpp cache stays in `<checkout>\target\llama-cache`), plus `<exe>.sig` when `TAURI_SIGNING_PRIVATE_KEY` and `RHYTHM_UPDATER_PUBKEY` are both set.
 - `target-cpu=native` is rejected because installers must run on other PCs.
 
 ## Embedding server

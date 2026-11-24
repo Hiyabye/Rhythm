@@ -45,13 +45,13 @@ Anything else is a major change: removing or renaming a field, changing a field'
 | --- | --- |
 | `format` | `"1.1"` |
 | `generated_at` | When this manifest was published (RFC 3339 UTC) |
-| `moved_to` | `null`, or the HTTPS base URL the feed moved to (#166 D22). The manifest there must verify like this one |
+| `moved_to` | `null`, or the HTTPS base URL the feed moved to (#166 D22; must start with `https://`). The manifest there must verify like this one |
 | `embedding.model`, `embedding.scope` | The Workers AI model and the scope (model + `rhythm_embed::config_hash`) of new vectors |
 | `embedding.dimensions` | `1024` |
 | `embedding.canary` | The latest drift check (#166 D27): `recorded`, `normal`, `warning`, `stopped`, or `null` before the first one |
 | `boards[]` | Per board: `source_id`, `last_success_at`, `consecutive_failures`, `history_complete` (#166 D19) |
 | `snapshot` | `through_seq`, `records` and `vectors` (`{path, sha256, size}`; `vectors` may be `null`) |
-| `segments[]` | `from_seq`, `to_seq`, `records`, `vectors`, in seq order |
+| `segments[]` | `from_seq`, `to_seq`, `records`, `vectors` (may be `null`), in seq order |
 
 The crate also checks the manifest's structure:
 

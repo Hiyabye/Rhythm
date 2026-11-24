@@ -38,7 +38,7 @@ No second PC or VM has been tested. The only installed runs of the current codeb
 
 ## AI on Windows
 
-Observed with the bundled `llama-server` b12068 (PR #63). Model runs used the pinned 2B/4B Q4_K_M files copied from existing local copies (size and SHA-256 matched); no weights were downloaded. Those were the generation models, retired with AI summaries (#226): the rows below show that the bundled Vulkan and CPU builds ran on this PC, but the embedding classifier, the only model Rhythm runs now, has not been run on Windows. The Vulkan build and the execution-mode setting were removed in #178, so the Vulkan rows are historical; Rhythm now ships only the CPU build.
+Observed with the bundled `llama-server` b12068 (PR #63). Model runs used the pinned 2B/4B Q4_K_M files copied from existing local copies (size and SHA-256 matched); no weights were downloaded. Those were the generation models, retired with AI summaries (#226): the rows below show that the bundled Vulkan and CPU builds ran on this PC, and the embedding classifier, the only model Rhythm runs now, ran on Windows only in the #271 run below. The Vulkan build and the execution-mode setting were removed in #178, so the Vulkan rows are historical; Rhythm now ships only the CPU build.
 
 | Check | Observed |
 | --- | --- |

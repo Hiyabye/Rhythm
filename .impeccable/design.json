@@ -552,9 +552,9 @@
         "purpose": "Feedback chips appearing on row hover/focus."
       },
       {
-        "name": "sync-spin",
-        "value": "rotate 1.4s linear infinite",
-        "purpose": "Refresh icon only while a sync runs."
+        "name": "spin",
+        "value": "spin .8s linear infinite",
+        "purpose": "Spinner.svelte beside busy buttons and progress lines, only while work runs."
       },
       {
         "name": "state-entry",
