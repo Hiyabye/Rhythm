@@ -1159,6 +1159,9 @@ fn new_since_sync_counts_what_the_latest_manifest_brought() {
             definition("cybercampus", "cybercampus"),
         ])
         .unwrap();
+    // Only subscribed sources count, like the 받은 소식 list.
+    store.subscribe("one", true).unwrap();
+    store.subscribe("cybercampus", true).unwrap();
     // A notice the app crawled in v1 never counts, however recent.
     store
         .upsert_article("one", &article("v1", "예전 본문"), false)
@@ -1184,6 +1187,9 @@ fn new_since_sync_counts_what_the_latest_manifest_brought() {
         ],
     );
     assert_eq!(new_since_sync(&store), 2);
+    store.subscribe("one", false).unwrap();
+    assert_eq!(new_since_sync(&store), 0);
+    store.subscribe("one", true).unwrap();
     // The same manifest again (a sync with nothing new) keeps the count.
     accept(&store, "2026-11-18T12:30:00.000Z");
     store.feed_record(FeedResult::Ok, None).unwrap();
@@ -1220,6 +1226,7 @@ fn a_schema_40_profile_starts_counting_at_the_next_manifest() {
     {
         let store = Store::open(&path).unwrap();
         store.catalog(&[definition("one", "main")]).unwrap();
+        store.subscribe("one", true).unwrap();
         accept(&store, "2026-11-18T12:00:00.000Z");
         store
             .feed_apply_snapshot(

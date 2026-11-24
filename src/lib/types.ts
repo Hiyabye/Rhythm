@@ -323,6 +323,8 @@ export interface ArchiveQuery {
   ai_category: string | null;
   saved_only: boolean;
   unread_only: boolean;
+  /** The feed pages (오늘, 받은 소식, 기회): only notices of subscribed sources. */
+  subscribed_only?: boolean;
   /** Lists 휴지통 instead of the notices outside it. */
   trashed: boolean;
   ascending: boolean;
