@@ -81,7 +81,7 @@ test('inbox', async ({ page }) => {
 });
 test('explore search', async ({ page }) => {
   await open(page);
-  await nav(page, '탐색');
+  await nav(page, '검색');
   await page.getByRole('searchbox').first().fill('장학');
   await expect(page.locator('#notice-1')).toBeVisible();
   await shot(page, 'explore');
