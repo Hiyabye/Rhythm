@@ -71,6 +71,10 @@ test('workflow changes and unknown change sets run everything', () => {
   assert.deepEqual(classify(null), all);
 });
 
+test('issue and pull request templates run nothing', () => {
+  assert.deepEqual(classify(['.github/pull_request_template.md', '.github/ISSUE_TEMPLATE/task.yml']), none);
+});
+
 test('pull requests never build packages', () => {
   assert.deepEqual(classify(['Cargo.lock'], { pullRequest: true }), { ...none, rust: true });
   assert.deepEqual(classify(null, { pullRequest: true }), { ...all, packaging: false });
