@@ -316,7 +316,7 @@ fn skipped(state: &State) -> Vec<String> {
 #[test]
 fn public_boards_are_every_supported_board_but_cybercampus() {
     let boards = public_boards();
-    assert_eq!(boards.len(), 170);
+    assert_eq!(boards.len(), 171);
     assert!(boards
         .iter()
         .all(|b| b.family != catalog::CYBERCAMPUS_FAMILY));
@@ -1800,4 +1800,72 @@ async fn a_vendor_board_archives_its_notices_and_reports_gone_posts_missing() {
     assert_eq!((board.status.as_str(), board.failed), ("completed", 0));
     assert!(board.last_error.is_none() && skipped(&state).is_empty());
     assert!(state.seed_complete("scec-notice").unwrap());
+}
+
+/// The 입학처 board from both captured list pages: notices 29514 and 24472 are
+/// the captured articles, every other row answers with the site's missing-post
+/// script, and robots.txt is the site's HTML "not found" page.
+#[tokio::test]
+async fn the_admission_board_reads_through_its_html_robots_page() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![]);
+    let board = definition("admission-notice");
+    let html = |text: &str| (text.to_string(), "text/html".to_string());
+    let detail = |id: &str| {
+        format!("https://admission.sogang.ac.kr/enter/html/counsel/noticeView.asp?idx={id}")
+    };
+    {
+        let mut extra = fake.extra.lock().unwrap();
+        extra.insert(
+            "https://admission.sogang.ac.kr/robots.txt".into(),
+            html("<html><body>페이지를 찾을 수 없습니다</body></html>"),
+        );
+        for (page, body) in [
+            (
+                1,
+                include_str!("../../../sources/src/fixtures/admission-notice-list.html"),
+            ),
+            (
+                2,
+                include_str!("../../../sources/src/fixtures/admission-notice-last.html"),
+            ),
+        ] {
+            let url = rhythm_sources::parser::list_url(&board, page).unwrap();
+            extra.insert(url.into(), html(body));
+            for id in body
+                .split("viewData('")
+                .skip(1)
+                .map(|rest| &rest[..rest.find('\'').unwrap()])
+            {
+                extra.insert(
+                    detail(id),
+                    html(include_str!(
+                        "../../../sources/src/fixtures/admission-notice-missing.html"
+                    )),
+                );
+            }
+        }
+        for id in ["29514", "24472"] {
+            let body = match id {
+                "29514" => {
+                    include_str!("../../../sources/src/fixtures/admission-notice-detail-29514.html")
+                }
+                _ => {
+                    include_str!("../../../sources/src/fixtures/admission-notice-detail-24472.html")
+                }
+            };
+            extra.insert(detail(id), html(body));
+        }
+    }
+
+    run(&state, &fake, "admission-notice", Budget::default())
+        .await
+        .unwrap();
+    let mut archived: Vec<_> = notices(&state).into_iter().map(|n| n.external_id).collect();
+    archived.sort();
+    assert_eq!(archived, ["24472", "29514"]);
+    let board = state.board("admission-notice").unwrap();
+    assert_eq!((board.status.as_str(), board.failed), ("completed", 0));
+    assert!(board.last_error.is_none() && skipped(&state).is_empty());
+    assert!(state.seed_complete("admission-notice").unwrap());
 }

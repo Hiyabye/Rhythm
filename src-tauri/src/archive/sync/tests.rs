@@ -1118,6 +1118,74 @@ async fn opening_a_feed_notice_fills_its_body_from_the_school() {
 }
 
 #[tokio::test]
+async fn opening_an_admission_notice_reads_its_page_and_files() {
+    const SOURCE: &str = "admission-notice";
+    let (dir, store) = setup();
+    with_store(&store, |s| s.subscribe(SOURCE, true)).unwrap();
+    let fake = Fake::new();
+    let page =
+        include_str!("../../../../crates/sources/src/fixtures/admission-notice-detail-29514.html");
+    let entry = ListingEntry {
+        external_id: "29514".into(),
+        url: "https://admission.sogang.ac.kr/enter/html/counsel/noticeView.asp?idx=29514".into(),
+        pinned: false,
+        modified_at: None,
+        title: None,
+    };
+    let definition = with_store(&store, |s| s.source(SOURCE)).unwrap().definition;
+    let article_url = parser::detail_url(&definition, &entry).unwrap();
+    let files: Vec<String> = parser::article(&definition, &entry, page)
+        .unwrap()
+        .resources
+        .into_iter()
+        .map(|r| r.url)
+        .collect();
+    assert_eq!(files.len(), 2);
+    {
+        let mut extra = fake.extra.lock().unwrap();
+        // The site's robots.txt is its HTML "not found" page.
+        extra.insert(
+            "https://admission.sogang.ac.kr/robots.txt".into(),
+            Some((
+                b"<html><body>not found</body></html>".to_vec(),
+                "text/html".into(),
+            )),
+        );
+        extra.insert(
+            article_url.to_string(),
+            Some((page.as_bytes().to_vec(), "text/html".into())),
+        );
+        for file in &files {
+            extra.insert(
+                file.clone(),
+                Some((b"%PDF-1.4 synthetic".to_vec(), "application/pdf".into())),
+            );
+        }
+    }
+    let id = mirror_board(&store, 1, SOURCE, &entry, page);
+    let bodies = body::Bodies::default();
+
+    assert!(!bodies.fetch(&store, dir.path(), &fake, id).await.unwrap());
+    bodies
+        .resources(&store, dir.path(), &fake, id)
+        .await
+        .unwrap();
+    let detail = with_store(&store, |s| s.document(id, None)).unwrap();
+    assert!(!detail.summary_only);
+    assert!(!detail.body_text.is_empty());
+    assert_eq!(detail.resources.len(), 2);
+    assert!(
+        detail.resources.iter().all(|r| r.status == "downloaded"),
+        "{:?}",
+        detail
+            .resources
+            .iter()
+            .map(|r| &r.status)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
 async fn opening_a_vendor_notice_reads_its_article_files_and_images() {
     const SOURCE: &str = "klec-notice";
     let (dir, store) = setup();

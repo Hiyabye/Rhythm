@@ -4,6 +4,8 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use url::Url;
 
+#[path = "admission.rs"]
+mod admission;
 #[path = "community.rs"]
 mod community;
 #[path = "engineering.rs"]
@@ -18,6 +20,9 @@ mod semiconductor;
 mod vendor;
 #[path = "wordpress.rs"]
 mod wordpress;
+pub(crate) use admission::{
+    stored_file as admission_stored_file, NAME as ADMISSION_NAME, SOURCE_ID as ADMISSION_SOURCE_ID,
+};
 pub use k2web::{K2webBoard, Skin, K2WEB_BOARDS};
 pub use vendor::{
     board_url as vendor_board_url, Site as VendorSite, VendorBoard, BOARDS as VENDOR_BOARDS,
@@ -225,6 +230,7 @@ pub fn list_url(source: &SourceDefinition, page: u32) -> Result<Url, String> {
         "semiconductor" => return semiconductor::list_url(source, page),
         "wordpress" => return wordpress::list_url(source, page),
         "vendor" => return vendor::list_url(vendor::board(source)?, page),
+        "admission" => return admission::list_url(page),
         _ => {}
     }
     if let Some(board) = main_board(&source.id) {
@@ -263,6 +269,7 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
         "semiconductor" => return semiconductor::detail_url(source, entry),
         "wordpress" => return wordpress::detail_url(source, entry),
         "vendor" => return vendor::detail_url(vendor::board(source)?, entry),
+        "admission" => return admission::detail_url(entry),
         _ => {}
     }
     if let Some(board) = main_board(&source.id) {
@@ -300,6 +307,7 @@ pub fn missing(source: &SourceDefinition, status: u16, body: &str) -> bool {
         "vendor" => {
             status == 200 && vendor::board(source).is_ok_and(|board| vendor::missing(board, body))
         }
+        "admission" => status == 200 && admission::missing(body),
         // The phrase also sits in the site's script bundle on every page, so
         // only the rendered empty-detail block counts.
         "computing" => {
@@ -323,6 +331,7 @@ pub fn listing(source: &SourceDefinition, page: u32, body: &str) -> Result<Listi
         "semiconductor" => semiconductor::listing(source, page, body),
         "wordpress" => wordpress::listing(source, page, body),
         "vendor" => vendor::listing(vendor::board(source)?, page, body),
+        "admission" => admission::listing(page, body),
         _ => match main_board(&source.id) {
             Some(board) => main_listing(board, page, body),
             None => computing_listing(source, page, body),
@@ -559,6 +568,7 @@ pub fn article(
         "semiconductor" => return semiconductor::article(source, entry, body),
         "wordpress" => return wordpress::article(source, entry, body),
         "vendor" => return vendor::article(vendor::board(source)?, entry, body),
+        "admission" => return admission::article(entry, body),
         _ => {}
     }
     let (title, author, category, published_at, modified_at, content, mut resources) =

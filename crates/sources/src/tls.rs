@@ -19,14 +19,15 @@ struct ChainCompletion {
 }
 
 /// Hosts that serve their leaf without the Sectigo OV R36 intermediate. The
-/// continuing-education sites (#80 step 4) were observed doing so on
-/// 2026-11-24 with the same `*.sogang.ac.kr` leaf.
-const COMPLETED_HOSTS: [&str; 5] = [
+/// continuing-education and admission sites (#80 step 4) were observed doing
+/// so on 2026-11-24 with the same `*.sogang.ac.kr` leaf.
+const COMPLETED_HOSTS: [&str; 6] = [
     "www.sogang.ac.kr",
     "new-cms.sogang.ac.kr",
     "eclass.sogang.ac.kr",
     "scec.sogang.ac.kr",
     "klec.sogang.ac.kr",
+    "admission.sogang.ac.kr",
 ];
 
 impl ServerCertVerifier for ChainCompletion {
@@ -198,7 +199,11 @@ mod tests {
         assert!(verifier
             .verify_server_cert(&leaf(), &[], &dormitory, &[], valid_time())
             .is_ok());
-        for host in ["scec.sogang.ac.kr", "klec.sogang.ac.kr"] {
+        for host in [
+            "scec.sogang.ac.kr",
+            "klec.sogang.ac.kr",
+            "admission.sogang.ac.kr",
+        ] {
             let name = ServerName::try_from(host).unwrap();
             assert!(verifier
                 .verify_server_cert(&leaf(), &[], &name, &[], valid_time())

@@ -293,3 +293,19 @@ whitespace is removed.
   `bbsid=00010`; the site serves it, and its hidden `bbsid` still says `00011`.
 - `vendor-klec-notice-denied.html`: the `글보기 권한이 없습니다.` page for
   `bbs_idx=99999999`, the same page a members-only post shows.
+
+The following bounded captures were obtained during #80 step 4 (admission family,
+2026-11-24) from `https://admission.sogang.ac.kr`, using public GETs only (its
+robots.txt is the site's HTML not-found page), one request at a time with the
+collector's user agent. Lists keep `p.pageTitle`, the category tabs, `div.boardSearch`
+(the declared total), `ul.boardList` and `div.pageArea`; details keep `div.boardView`
+under the page's `<title>`. Pages were sent with CRLF line endings. Nothing was executed
+or retyped; line endings are LF and trailing whitespace is removed.
+
+- `admission-notice-list.html`, `admission-notice-last.html`,
+  `admission-notice-past-end.html`: pages 1, 2 and 3 of `notice.asp?s_page=N` (전체, total
+  20: five pins on every page, five regular rows on page 1 and ten on page 2; page 3
+  lists only the pins).
+- `admission-notice-detail-29514.html` (a PDF and an HWP through `download.File.asp`)
+  and `admission-notice-detail-24472.html` (2023, one PDF).
+- `admission-notice-missing.html`: the whole answer for `idx=99999999`, unchanged.

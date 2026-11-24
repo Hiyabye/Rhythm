@@ -105,6 +105,7 @@ pub fn groups() -> Vec<SourceGroup> {
         ("sogang-yebigun", "예비군연대", Some("sogang-offices")),
         ("sogang-hrgec", "인권·성평등센터", Some("sogang-offices")),
         ("sogang-character", "인성교육센터", Some("sogang-offices")),
+        ("sogang-admission", "입학처", Some("sogang-offices")),
         ("sogang-dasoni", "장애학생지원센터", Some("sogang-offices")),
         ("sogang-wholeperson", "전인교육원", Some("sogang-offices")),
         ("sogang-sori", "청년광장", Some("sogang-offices")),
@@ -338,6 +339,16 @@ pub fn definitions() -> Vec<SourceDefinition> {
     );
     // The continuing-education sites on one outside vendor's board engine
     // (#80 step 4), one row each of `parser::VENDOR_BOARDS`.
+    // 입학처 공지사항, every admission category as one board (#80 step 4).
+    add(
+        crate::parser::ADMISSION_SOURCE_ID,
+        crate::parser::ADMISSION_NAME,
+        "서강대학교 · 입학처",
+        "admission",
+        "sogang-admission",
+        "https://admission.sogang.ac.kr/enter/html/counsel/notice.asp".into(),
+        true,
+    );
     for board in crate::parser::VENDOR_BOARDS.iter() {
         add(
             board.source_id,
