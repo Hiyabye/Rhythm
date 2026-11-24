@@ -262,6 +262,79 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
                 && raster_name(parts[4]);
             list || post || image || path == "/robots.txt"
         }
+        // 미래교육원 (#80 step 4): robots.txt disallows only /nGmaster/. The
+        // board's list and article routes with every query key bound, its
+        // attachment route and the editor and file-view images.
+        "scec.sogang.ac.kr" => {
+            let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+            let board = crate::parser::VENDOR_BOARDS
+                .iter()
+                .any(|board| board.site == crate::parser::VendorSite::Scec && board.page == path);
+            let list = board && exact_query(url, &[("pageno", positive_id)]);
+            let article = board
+                && exact_query(
+                    url,
+                    &[
+                        ("smode", |v| v == "view"),
+                        ("bbs_idx", positive_id),
+                        ("bbsid", scec_bbsid),
+                    ],
+                );
+            let attachment = path == "/nGsmart/modules/dn.php"
+                && exact_query(
+                    url,
+                    &[
+                        ("downloadname", downloadable_name),
+                        ("filename", downloadable_name),
+                        ("bbs_idx", positive_id),
+                    ],
+                );
+            let file_image = path == "/nGsmart/modules/dnview.php"
+                && exact_query(
+                    url,
+                    &[("downloadname", raster_file), ("filename", raster_file)],
+                );
+            let editor_image =
+                parts.len() == 3 && parts[..2] == ["upload", "htmlarea"] && editor_image(parts[2]);
+            list || article || attachment || file_image || editor_image || path == "/robots.txt"
+        }
+        // 한국어교육원 (#80 step 4): no robots.txt (404). Lists go through the
+        // site root's `url` parameter, articles through /index.php with every
+        // query key bound; attachments, file-view and uploaded images.
+        "klec.sogang.ac.kr" => {
+            let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+            let list =
+                path == "/" && exact_query(url, &[("url", klec_page), ("pageno", positive_id)]);
+            let article = path == "/index.php"
+                && exact_query(
+                    url,
+                    &[
+                        ("bbs_idx", positive_id),
+                        ("pagekind", |v| v == "c"),
+                        ("bbsid", klec_bbsid),
+                    ],
+                );
+            let attachment = path == "/univ/lms_bbs/dn.php"
+                && exact_query(
+                    url,
+                    &[
+                        ("downloadname", downloadable_name),
+                        ("filename", downloadable_name),
+                        ("bbs_idx", positive_id),
+                    ],
+                );
+            let file_image = path == "/univ/lms_bbs/dnview.php"
+                && exact_query(
+                    url,
+                    &[("downloadname", raster_file), ("filename", raster_file)],
+                );
+            let upload_image = parts.len() == 4
+                && parts[..3] == ["univ", "upload", "bbs"]
+                && !parts[3].starts_with('.')
+                && raster_name(parts[3])
+                && url.query().is_none();
+            list || article || attachment || file_image || upload_image || path == "/robots.txt"
+        }
         // The CMS file route behind the main board's PDF-viewer iframes
         // (user decision): a notice whose whole body is that viewer is archived
         // from the PDF's text. Article images on this host stay unsupported.
@@ -313,6 +386,24 @@ fn semiconductor_board(value: &str) -> bool {
         "notice_industry",
     ]
     .contains(&value)
+}
+fn scec_bbsid(value: &str) -> bool {
+    crate::parser::VENDOR_BOARDS
+        .iter()
+        .any(|board| board.site == crate::parser::VendorSite::Scec && board.bbsid == value)
+}
+fn klec_bbsid(value: &str) -> bool {
+    crate::parser::VENDOR_BOARDS
+        .iter()
+        .any(|board| board.site == crate::parser::VendorSite::Klec && board.bbsid == value)
+}
+fn klec_page(value: &str) -> bool {
+    crate::parser::VENDOR_BOARDS
+        .iter()
+        .any(|board| board.site == crate::parser::VendorSite::Klec && board.page == value)
+}
+fn raster_file(value: &str) -> bool {
+    downloadable_name(value) && raster_name(value)
 }
 fn bounded_value(value: &str) -> bool {
     !value.is_empty() && value.len() <= 2048 && !value.chars().any(char::is_control)

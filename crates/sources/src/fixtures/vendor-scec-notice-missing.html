@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>서강대학교 미래교육원</title>
+</head>
+<body>
+<div class="viewer">
+		<!-- 뷰어 상단 START -->
+		<div class="view-top">
+			<!-- 카테고리 있는 경우 카테고리명 추가 -->
+				<!-- ※※'카테고리' 사용 시 노출(없으면 안나옴) -->
+				<!-- 2026-04-22: Q&A 상세 제목 출력 Stored XSS 방지 -->
+				<h5 class="view-tit"></h5>
+			<ul class="view-info">
+				<li>
+					<p class="view-info-tit">작성자</p>
+						<!-- 2026-04-22: Q&A 상세 작성자 출력 Stored XSS 방지 -->
+						<p class="view-info-txt"></p>
+				</li>
+				<li>
+					<p class="view-info-tit">등록일</p>
+					<p class="view-info-txt"></p>
+				</li>
+				<li>
+					<p class="view-info-tit">조회수</p>
+					<p class="view-info-txt"></p>
+				</li>
+			</ul>
+		</div>
+		<!-- 뷰어 상단 END -->
+		<!-- 글영역 START -->
+		<div class="view-con">
+			<div class="inner">
+									<!-- 2026-04-30: Q&A 보안 필터는 유지하고 다른 게시판 관리자 HTML 출력 보존 -->
+								</div>
+		</div>
+		<!-- 글영역 END -->
+		<!-- 첨부파일 START -->
+				<!-- 첨부파일 END -->
+
+		<!-- 좋아요/평점영역 START -->
+						<!-- 좋아요/평점영역 END -->
+
+		<!-- 댓글영역 START -->
+				<!-- 댓글영역 END -->
+
+		<!-- 이전글/다음글 START -->
+		<div class="view-paging">
+							<div class="view-move prev nomove"><!-- 이전/다음글이 없는 경우 nomove 클래스 추가 -->
+					<p>
+						<span>이전글</span>
+					</p>
+					<a href="#">이전글이 없습니다</a>
+				</div>
+										<div class="view-move next">
+					<p>
+						<span>다음글</span>
+					</p>
+					<!-- 2026-04-22: 다음글 링크 파라미터 URL 인코딩 -->
+					<a href="/fro_end/html/dep_05/5100.php?smode=view&rownum=1&bbs_idx=86522&bbsid=f_notice&pageno=1&pagekind=c&cafeid=&ref_code=&keyword=&keyfield=&category=&cafeid_conn=&ref_code_conn=&gopage=">2025학년도 멀티미디어학전공 신(편)입생 추가모집</a>
+				</div>
+					</div>
+		<!-- 이전글/다음글 END -->
+
+		<!-- 관리자만 보이는 버튼 START -->
+		<div class="btn-wrap admin">
+											</div>
+		<!-- 관리자만 보이는 버튼 END -->
+		<div class="btn-wrap center">
+			<a href="" class="c-btn btn08">목록</a>
+		</div>
+	</div>
+<form name="deleteForm" id="deleteForm" method="post" action="/fro_end/html/dep_05/5100.php">
+<input type="hidden" name="updatemode" value="">
+<!-- 2026-04-22: 삭제 폼 hidden 파라미터 속성 출력 XSS 방지 -->
+<input type="hidden" name="cafeid" value="">
+<input type="hidden" name="ref_code" value="">
+<input type="hidden" name="cafeid_conn" value="">
+<input type="hidden" name="ref_code_conn" value="">
+<input type="hidden" name="smode" value="">
+<input type="hidden" name="bbs_idx" value="99999999">
+<input type="hidden" name="comment_idx" value="">
+<input type="hidden" name="gopage" value="aea857c1b42a17d64224629dc6b6f6d593994a8bce5be62d4beee8e411ccfe1739b1b33cae1f1b40dbb7cef0be8b1eb6f4441224b541cd4c5b4f37756a47ed2703ceaaef924dca34d3a9825b950b0ed2">
+<input type="hidden" name="pwd" value="">
+<input type="hidden" name="bbsid" value="f_notice">
+</form>
+</body>
+</html>

@@ -316,7 +316,7 @@ fn skipped(state: &State) -> Vec<String> {
 #[test]
 fn public_boards_are_every_supported_board_but_cybercampus() {
     let boards = public_boards();
-    assert_eq!(boards.len(), 167);
+    assert_eq!(boards.len(), 170);
     assert!(boards
         .iter()
         .all(|b| b.family != catalog::CYBERCAMPUS_FAMILY));
@@ -1737,4 +1737,67 @@ async fn history_retries_a_notice_an_older_collector_version_skipped() {
     assert_eq!(requests(&fake, &main_detail(3)), 2);
     assert!(skipped(&state).is_empty());
     assert!(notice(&state, "3").historical);
+}
+
+/// A one-page 미래교육원 board made from the captured last page (three rows):
+/// the total and pager say page 1 of 1. Notice 45763 is the captured article;
+/// the other two answer with the site's empty article frame for a gone post.
+fn serve_scec(fake: &Fake) -> String {
+    let fixture = include_str!("../../../sources/src/fixtures/vendor-scec-notice-last.html");
+    let start = fixture.find("<div class=\"bbs-paging\">").unwrap();
+    let end = start + fixture[start..].find("</div>").unwrap();
+    let list = format!(
+        "{}<div class=\"bbs-paging\"><ul>\
+         <li class=\"arrow prev\"><a href=\"#\"></a></li>\
+         <li class=\"on\"><a href=\"#none\">1</a></li>\
+         <li class=\"arrow next\"><a href=\"#\"></a></li></ul>{}",
+        &fixture[..start],
+        &fixture[end..]
+    )
+    .replace("total-numb\">383", "total-numb\">3");
+    let board = definition("scec-notice");
+    let html = |text: &str| (text.to_string(), "text/html".to_string());
+    let detail = |id: &str| {
+        format!("https://scec.sogang.ac.kr/fro_end/html/dep_05/5100.php?smode=view&bbs_idx={id}&bbsid=f_notice")
+    };
+    let mut extra = fake.extra.lock().unwrap();
+    extra.insert(
+        rhythm_sources::parser::list_url(&board, 1).unwrap().into(),
+        html(&list),
+    );
+    extra.insert(
+        detail("45763"),
+        html(include_str!(
+            "../../../sources/src/fixtures/vendor-scec-notice-detail-45763.html"
+        )),
+    );
+    for id in ["84854", "84834"] {
+        extra.insert(
+            detail(id),
+            html(include_str!(
+                "../../../sources/src/fixtures/vendor-scec-notice-missing.html"
+            )),
+        );
+    }
+    detail("45763")
+}
+
+#[tokio::test]
+async fn a_vendor_board_archives_its_notices_and_reports_gone_posts_missing() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![]);
+    let detail = serve_scec(&fake);
+
+    run(&state, &fake, "scec-notice", Budget::default())
+        .await
+        .unwrap();
+    let archived = notices(&state);
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0].title, "International Culture Festival");
+    assert!(fake.paths().contains(&detail));
+    // A gone post is neither a failure nor a skip, and history is complete.
+    let board = state.board("scec-notice").unwrap();
+    assert_eq!((board.status.as_str(), board.failed), ("completed", 0));
+    assert!(board.last_error.is_none() && skipped(&state).is_empty());
+    assert!(state.seed_complete("scec-notice").unwrap());
 }

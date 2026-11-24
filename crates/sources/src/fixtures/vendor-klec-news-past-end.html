@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>서강대학교 한국어교육원</title>
+</head>
+<body>
+<form name="SearchForm" id="SearchForm" method="get" action="/index.php" style="margin:0px">
+<input type="hidden" name="pagetype" id="pagetype" value="">
+<input type="hidden" name="pageno" id="pageno" value="19">
+<input type="hidden" name="bbsid" id="bbsid" value="00011">
+<input type="hidden" name="qstr" id="qstr" value="&pagetype=&bbsid=00011&category=">
+
+<!--게시판 list 시작-->
+<div class="bbs bbs-list bbs-list01">
+	<!--게시판 검색창 시작-->
+	<div class="bbs-top mt5 cf">
+		<div class="search cf">
+			<div class="sel-wrap">
+				<select name="category" id="category">
+					<option value="">년도</option>
+											<option value="2026" >2026</option>
+											<option value="2025" >2025</option>
+											<option value="2024" >2024</option>
+											<option value="2023" >2023</option>
+											<option value="2022" >2022</option>
+											<option value="2021" >2021</option>
+											<option value="2020" >2020</option>
+											<option value="2019" >2019</option>
+											<option value="2018" >2018</option>
+											<option value="2017" >2017</option>
+											<option value="2016" >2016</option>
+											<option value="2015" >2015</option>
+									</select>
+			</div>
+			<div class="sel-wrap">
+				<select name="keyfield" id="keyfield">
+					<option value="title" >제목</option>
+					<option value="writer" >작성자</option>
+					<option value="content" >내용</option>
+				</select>
+			</div>
+			<div class="input-wrap">
+				<input type="text" placeholder="검색어를 입력해주세요" name="keyword" value="">
+				<a class="search-btn" href="javascript:SearchForm.submit();">검색</a>
+			</div>
+		</div>
+	</div>
+	<!--게시판 검색창 끝-->
+
+	<!--갤러리 시작-->
+	<ul class="photo_wrap cf">
+
+	</ul>
+	<!--갤러리 끝-->
+
+	<!--게시판 페이지 숫자 시작-->
+	<div class="pagination Mont_B">
+	<div class="page-num">
+				<a href="/index.php?pagetype=&pageno=1&keyfield=&keyword=&category=&qrystring=&bbsid=00011" class="first page-btn"></a>
+						<a href="/index.php?pagetype=&pageno=10&keyfield=&keyword=&category=&qrystring=&bbsid=00011" class="prev page-btn"></a>
+										<a href="/index.php?pagetype=&pageno=11&keyfield=&keyword=&category=&qrystring=&bbsid=00011">11</a>
+											<a href="/index.php?pagetype=&pageno=12&keyfield=&keyword=&category=&qrystring=&bbsid=00011">12</a>
+											<a href="/index.php?pagetype=&pageno=13&keyfield=&keyword=&category=&qrystring=&bbsid=00011">13</a>
+											<a href="/index.php?pagetype=&pageno=14&keyfield=&keyword=&category=&qrystring=&bbsid=00011">14</a>
+											<a href="/index.php?pagetype=&pageno=15&keyfield=&keyword=&category=&qrystring=&bbsid=00011">15</a>
+											<a href="/index.php?pagetype=&pageno=16&keyfield=&keyword=&category=&qrystring=&bbsid=00011">16</a>
+											<a href="/index.php?pagetype=&pageno=17&keyfield=&keyword=&category=&qrystring=&bbsid=00011">17</a>
+											<a href="/index.php?pagetype=&pageno=18&keyfield=&keyword=&category=&qrystring=&bbsid=00011">18</a>
+									<a href="#" class="next page-btn"></a>
+						<a href="/index.php?pagetype=&pageno=18&keyfield=&keyword=&category=&qrystring=&bbsid=00011" class="last page-btn"></a>
+			</div>
+</div>	<!--게시판 페이지 숫자 끝-->
+
+	<!--관리자일때 글쓰기 버튼 시작-->
+	<!--관리자일때 글쓰기 버튼 끝-->
+
+</div>
+<!--게시판 list 끝-->
+</form>
+</body>
+</html>
