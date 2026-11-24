@@ -257,3 +257,39 @@ agent, public GETs only, saved byte for byte:
   route. 47154 is text only; 47085 has six images under `/wp-content/uploads/2026/11/`
   (Korean file names); 46650 has one upload image and an embedded YouTube iframe the
   sanitizer must drop.
+
+The following bounded captures were obtained during #80 step 4 (vendor family,
+2026-11-24) from `https://scec.sogang.ac.kr` and `https://klec.sogang.ac.kr`, using
+public GETs only (scec's robots.txt allows everything but `/nGmaster/`; klec has none),
+one request at a time with the collector's user agent. Lists keep scec's board heading
+(`div.title`), category tabs (`.sub-tabmenu`) and `section.list-wrap`, and klec's
+`SearchForm` (rows and pager); scec details keep `div.viewer` and the `deleteForm`;
+klec details keep the `bbs-view` subtree and the comment form up to its hidden `bbsid`,
+after which the form, unclosed on the site, is closed. klec pages were sent with CRLF
+line endings. Nothing was executed or retyped; line endings are LF and trailing
+whitespace is removed.
+
+- `vendor-scec-notice-list.html`, `vendor-scec-notice-page3.html`,
+  `vendor-scec-notice-last.html`, `vendor-scec-notice-past-end.html`: pages 1, 3, 39
+  and 40 of 공지사항 (전체, total 383). 25 pins fill pages 1–3; page 40 is an empty
+  table.
+- `vendor-scec-notice-detail-90122.html` (category `전체`, one `.hwp` attachment, an
+  `/upload/htmlarea/` image), `vendor-scec-notice-detail-89659.html` (category
+  `교육원소식`) and `vendor-scec-notice-detail-45763.html` (2006, no category, a
+  `dnview.php` image and the same attachment listed twice).
+- `vendor-scec-notice-missing.html`: the empty article frame for `bbs_idx=99999999`.
+- `vendor-klec-notice-list.html`, `vendor-klec-notice-last.html`,
+  `vendor-klec-notice-past-end.html`: pages 1, 24 and 25 of 일반공지 (one pin, also a
+  regular row); `vendor-klec-news-list.html`, `vendor-klec-news-last.html`,
+  `vendor-klec-news-past-end.html`: pages 1, 18 and 19 of the 한국어교육원 소식 gallery.
+- `vendor-klec-notice-detail-2978.html` (two `.hwp` attachments),
+  `vendor-klec-notice-detail-2951.html` (`.pdf` and `.zip`),
+  `vendor-klec-notice-detail-2933.html` (two `dnview.php` images and their files; the
+  site itself sends U+FFFD for the lost emoji), `vendor-klec-notice-detail-344.html`
+  (2015, `/univ/upload/bbs/` images) and `vendor-klec-news-detail-2988.html`.
+- `vendor-klec-notice-detail-2757.html`: a second block titled `링크` (one Instagram link)
+  after the two attachments; found by the bounded live collector run.
+- `vendor-klec-notice-wrong-board-2988.html`: news post 2988 requested with 일반공지's
+  `bbsid=00010`; the site serves it, and its hidden `bbsid` still says `00011`.
+- `vendor-klec-notice-denied.html`: the `글보기 권한이 없습니다.` page for
+  `bbs_idx=99999999`, the same page a members-only post shows.

@@ -14,9 +14,14 @@ mod k2web;
 mod mechanical;
 #[path = "semiconductor.rs"]
 mod semiconductor;
+#[path = "vendor.rs"]
+mod vendor;
 #[path = "wordpress.rs"]
 mod wordpress;
 pub use k2web::{K2webBoard, Skin, K2WEB_BOARDS};
+pub use vendor::{
+    board_url as vendor_board_url, Site as VendorSite, VendorBoard, BOARDS as VENDOR_BOARDS,
+};
 pub(crate) use wordpress::{
     BOARDS as WORDPRESS_BOARDS, LIST_FIELDS as WORDPRESS_LIST_FIELDS,
     PER_PAGE as WORDPRESS_PER_PAGE, POST_FIELDS as WORDPRESS_POST_FIELDS,
@@ -219,6 +224,7 @@ pub fn list_url(source: &SourceDefinition, page: u32) -> Result<Url, String> {
         "mechanical" => return mechanical::list_url(source, page),
         "semiconductor" => return semiconductor::list_url(source, page),
         "wordpress" => return wordpress::list_url(source, page),
+        "vendor" => return vendor::list_url(vendor::board(source)?, page),
         _ => {}
     }
     if let Some(board) = main_board(&source.id) {
@@ -256,6 +262,7 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
         "mechanical" => return mechanical::detail_url(source, entry),
         "semiconductor" => return semiconductor::detail_url(source, entry),
         "wordpress" => return wordpress::detail_url(source, entry),
+        "vendor" => return vendor::detail_url(vendor::board(source)?, entry),
         _ => {}
     }
     if let Some(board) = main_board(&source.id) {
@@ -283,12 +290,16 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
 /// notice count (user decision, 2026-11-17): HTTP 404/410 where the site sends
 /// them, or the site's own missing-post page. Community and semiconductor
 /// boards answer a missing notice with a generic redirect or an empty template
-/// that an error page could also produce, so nothing from them counts.
+/// that an error page could also produce, so nothing from them counts; klec
+/// answers one with its members-only page.
 /// `body` is the response text for a 200 answer and empty otherwise.
 pub fn missing(source: &SourceDefinition, status: u16, body: &str) -> bool {
     match source.family.as_str() {
         "main" | "engineering" | "mechanical" | "wordpress" => matches!(status, 404 | 410),
         "k2web" => status == 200 && k2web::missing(body),
+        "vendor" => {
+            status == 200 && vendor::board(source).is_ok_and(|board| vendor::missing(board, body))
+        }
         // The phrase also sits in the site's script bundle on every page, so
         // only the rendered empty-detail block counts.
         "computing" => {
@@ -311,6 +322,7 @@ pub fn listing(source: &SourceDefinition, page: u32, body: &str) -> Result<Listi
         "mechanical" => mechanical::listing(source, page, body),
         "semiconductor" => semiconductor::listing(source, page, body),
         "wordpress" => wordpress::listing(source, page, body),
+        "vendor" => vendor::listing(vendor::board(source)?, page, body),
         _ => match main_board(&source.id) {
             Some(board) => main_listing(board, page, body),
             None => computing_listing(source, page, body),
@@ -546,6 +558,7 @@ pub fn article(
         "mechanical" => return mechanical::article(source, entry, body),
         "semiconductor" => return semiconductor::article(source, entry, body),
         "wordpress" => return wordpress::article(source, entry, body),
+        "vendor" => return vendor::article(vendor::board(source)?, entry, body),
         _ => {}
     }
     let (title, author, category, published_at, modified_at, content, mut resources) =

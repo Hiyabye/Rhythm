@@ -1118,6 +1118,63 @@ async fn opening_a_feed_notice_fills_its_body_from_the_school() {
 }
 
 #[tokio::test]
+async fn opening_a_vendor_notice_reads_its_article_files_and_images() {
+    const SOURCE: &str = "klec-notice";
+    let (dir, store) = setup();
+    with_store(&store, |s| s.subscribe(SOURCE, true)).unwrap();
+    let fake = Fake::new();
+    let page =
+        include_str!("../../../../crates/sources/src/fixtures/vendor-klec-notice-detail-2933.html");
+    let entry = ListingEntry {
+        external_id: "2933".into(),
+        url: "https://klec.sogang.ac.kr/index.php?bbs_idx=2933&pagekind=c&bbsid=00010".into(),
+        pinned: false,
+        modified_at: None,
+        title: None,
+    };
+    let definition = with_store(&store, |s| s.source(SOURCE)).unwrap().definition;
+    let article_url = parser::detail_url(&definition, &entry).unwrap();
+    // Two PNG attachments and the two file-view images of the same slides.
+    let files: Vec<String> = parser::article(&definition, &entry, page)
+        .unwrap()
+        .resources
+        .into_iter()
+        .map(|r| r.url)
+        .collect();
+    assert_eq!(files.len(), 4);
+    {
+        let mut extra = fake.extra.lock().unwrap();
+        extra.insert(
+            article_url.to_string(),
+            Some((page.as_bytes().to_vec(), "text/html".into())),
+        );
+        for file in &files {
+            extra.insert(file.clone(), Some((png(), "image/png".into())));
+        }
+    }
+    let id = mirror_board(&store, 1, SOURCE, &entry, page);
+    let bodies = body::Bodies::default();
+
+    assert!(!bodies.fetch(&store, dir.path(), &fake, id).await.unwrap());
+    bodies
+        .resources(&store, dir.path(), &fake, id)
+        .await
+        .unwrap();
+    let detail = with_store(&store, |s| s.document(id, None)).unwrap();
+    assert!(!detail.summary_only);
+    assert!(detail.body_text.contains("SOGANG K-STAR CHALLENGE"));
+    assert_eq!(detail.resources.len(), 4);
+    assert!(detail.resources.iter().all(|r| r.status == "downloaded"));
+    assert_eq!(
+        fake.paths()
+            .iter()
+            .filter(|url| **url == article_url.as_str())
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn opening_a_wordpress_notice_reads_its_post_and_upload_images() {
     const SOURCE: &str = "creative-news";
     let (dir, store) = setup();

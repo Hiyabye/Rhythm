@@ -90,6 +90,7 @@ pub fn groups() -> Vec<SourceGroup> {
             Some("sogang-offices"),
         ),
         ("sogang-innov", "대학혁신추진단", Some("sogang-offices")),
+        ("sogang-scec", "미래교육원", Some("sogang-offices")),
         ("sogang-dorm", "벨라르미노 학사", Some("sogang-offices")),
         (
             "sogang-psdic",
@@ -109,6 +110,7 @@ pub fn groups() -> Vec<SourceGroup> {
         ("sogang-sori", "청년광장", Some("sogang-offices")),
         ("sogang-sggym", "체육관", Some("sogang-offices")),
         ("sogang-sgup", "출판부", Some("sogang-offices")),
+        ("sogang-klec", "한국어교육원", Some("sogang-offices")),
         ("sogang-institutes", "연구소", Some("sogang")),
         (
             "sogang-dsri",
@@ -334,6 +336,19 @@ pub fn definitions() -> Vec<SourceDefinition> {
         "https://creative.sogang.ac.kr/blog/newsevents/".into(),
         true,
     );
+    // The continuing-education sites on one outside vendor's board engine
+    // (#80 step 4), one row each of `parser::VENDOR_BOARDS`.
+    for board in crate::parser::VENDOR_BOARDS.iter() {
+        add(
+            board.source_id,
+            board.name,
+            board.organization,
+            "vendor",
+            board.group,
+            crate::parser::vendor_board_url(board),
+            true,
+        );
+    }
     // The logged-in user's own course notices, read through the eClass session
     // (#86); not a public board, so it has its own description.
     sources.push(SourceDefinition {

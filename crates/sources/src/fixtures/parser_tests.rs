@@ -67,11 +67,11 @@ fn cases() -> Vec<(
 #[test]
 fn catalog_has_exact_stable_source_identities_and_honest_support() {
     let sources = catalog::definitions();
-    assert_eq!(sources.len(), 168);
-    assert_eq!(sources.iter().filter(|s| s.supported).count(), 168);
+    assert_eq!(sources.len(), 171);
+    assert_eq!(sources.iter().filter(|s| s.supported).count(), 171);
     assert_eq!(
         sources.iter().map(|s| &s.id).collect::<HashSet<_>>().len(),
-        168
+        171
     );
     for s in sources {
         assert!(Url::parse(&s.url).is_ok());

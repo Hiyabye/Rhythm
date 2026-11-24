@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>서강대학교 한국어교육원</title>
+</head>
+<body>
+<form name="SearchForm" id="SearchForm" method="get" action="/index.php" style="margin:0px">
+<input type="hidden" name="pagetype" id="pagetype" value="">
+<input type="hidden" name="pageno" id="pageno" value="25">
+<input type="hidden" name="bbsid" id="bbsid" value="00010">
+<input type="hidden" name="qstr" id="qstr" value="&pagetype=&category=">
+
+<!--게시판 list 시작-->
+<div class="bbs bbs-list bbs-list02">
+	<!--게시판 검색창 시작-->
+	<div class="bbs-top mt5 cf">
+		<div class="search cf">
+			<div class="sel-wrap">
+				<select name="keyfield" id="keyfield">
+					<option value="title" >제목</option>
+					<option value="writer" >작성자</option>
+					<option value="content" >내용</option>
+				</select>
+			</div>
+			<div class="input-wrap">
+				<input type="text" placeholder="검색어를 입력해주세요" name="keyword" value="">
+				<a class="search-btn" href="javascript:SearchForm.submit();">검색</a>
+			</div>
+		</div>
+	</div>
+	<!--게시판 검색창 끝-->
+	<!--게시판 목록 시작-->
+	<div class="bbs-table-wrap mt5">
+		<table class="table01-sub">
+			 <colgroup>
+				<col width="10%">
+								<col width="*">
+												<col width="10%">
+											  				<col width="10%">
+			  			  			</colgroup>
+			<thead>
+				<tr>
+					<th scope="col">번호</th>
+			  					<th scope="col">제목</th>
+			  			  					<th scope="col" class="bbs-pc">작성자</th>
+			  			  			  					<th scope="col" class="bbs-pc">작성일</th>
+			  			  				</tr>
+			</thead>
+			<tbody>
+			<!--한페이지당 10개씩 보이도록-->
+
+
+
+
+
+
+
+
+
+
+					</tbody>
+		</table>
+	</div>
+	<!--게시판 목록 끝-->
+
+	<!--게시판 페이지 숫자 시작-->
+	<div class="pagination Mont_B">
+	<div class="page-num">
+				<a href="/index.php?pagetype=&pageno=1&keyfield=&keyword=&category=&qrystring=&bbsid=00010" class="first page-btn"></a>
+						<a href="/index.php?pagetype=&pageno=20&keyfield=&keyword=&category=&qrystring=&bbsid=00010" class="prev page-btn"></a>
+										<a href="/index.php?pagetype=&pageno=21&keyfield=&keyword=&category=&qrystring=&bbsid=00010">21</a>
+											<a href="/index.php?pagetype=&pageno=22&keyfield=&keyword=&category=&qrystring=&bbsid=00010">22</a>
+											<a href="/index.php?pagetype=&pageno=23&keyfield=&keyword=&category=&qrystring=&bbsid=00010">23</a>
+											<a href="/index.php?pagetype=&pageno=24&keyfield=&keyword=&category=&qrystring=&bbsid=00010">24</a>
+									<a href="#" class="next page-btn"></a>
+						<a href="/index.php?pagetype=&pageno=24&keyfield=&keyword=&category=&qrystring=&bbsid=00010" class="last page-btn"></a>
+			</div>
+</div>	<!--게시판 페이지 숫자 끝-->
+
+	<!--관리자일때 글쓰기 버튼 시작-->
+	</div>
+</form>
+</body>
+</html>
