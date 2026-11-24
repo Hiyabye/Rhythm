@@ -4,6 +4,7 @@
   import type { CybercampusStatus } from './types';
   import { archiveError } from './archive-format';
   import Hint from './Hint.svelte';
+  import Spinner from './Spinner.svelte';
 
   let { locked }: { locked: boolean } = $props();
   let status = $state<CybercampusStatus | null>(null);
@@ -53,7 +54,7 @@
     <form class="field-with-button" onsubmit={save}>
       <input aria-label="사이버캠퍼스 아이디(학번)" type="text" bind:value={id} placeholder="학번" autocomplete="username" spellcheck="false" disabled={busy || locked} />
       <input aria-label="사이버캠퍼스 비밀번호" type="password" bind:value={password} placeholder="비밀번호" autocomplete="current-password" disabled={busy || locked} />
-      <button class="button secondary small" type="submit" disabled={busy || locked || !id.trim() || !password}>{busy ? '확인하는 중…' : status?.id ? '다시 저장' : '확인 후 저장'}</button>
+      <button class="button secondary small" type="submit" disabled={busy || locked || !id.trim() || !password}>{#if busy}<Spinner size={12} />{/if}{busy ? '확인하는 중…' : status?.id ? '다시 저장' : '확인 후 저장'}</button>
     </form>
     {#if status?.id}<div class="popover-actions"><button class="text-button" disabled={busy || locked} onclick={forget}>저장된 로그인 정보 삭제</button></div>{/if}
     {#if status?.courses.length}<p class="row-detail">{status.courses.map((course) => course.name).join(' · ')}</p>{/if}

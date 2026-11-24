@@ -161,7 +161,7 @@
     <div class="brand"><span class="beat" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>Rhythm</span></div>
     <ol class="setup-steps setup-progress" aria-label="초기 설정 단계">
       {#each steps as item, index (item.id)}
-        <li class:done={index < step} class:current={index === step} aria-current={index === step ? 'step' : undefined}><span aria-hidden="true">{#if index < step}<Icon name="check" size={12} />{:else}{index + 1}{/if}</span>{item.label}</li>
+        <li class:done={index < step} class:current={index === step} aria-current={index === step ? 'step' : undefined} title={index === step ? undefined : item.label}><span class="step-mark" aria-hidden="true">{#if index < step}<Icon name="check" size={12} />{:else}{index + 1}{/if}</span><span class="step-label">{item.label}</span></li>
       {/each}
     </ol>
 

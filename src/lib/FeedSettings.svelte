@@ -6,6 +6,7 @@
   import { clock } from './clock.svelte';
   import Hint from './Hint.svelte';
   import Icon from './Icon.svelte';
+  import Spinner from './Spinner.svelte';
 
   // The signed notice feed (#177): its age, how the last sync ended, boards the
   // server keeps failing on and an explicit 지금 받기.
@@ -53,7 +54,7 @@
     <button class="button small" disabled={!enabled || busy || feed?.running} onclick={sync}>지금 받기</button>
     <Hint label="공지 피드">서버가 30분마다 공개 게시판을 모아 서명한 공지 목록입니다. Rhythm을 연 동안 시작할 때와 30분마다 자동으로 받고, 서명을 확인한 뒤에만 반영합니다. 요청에는 개인 정보가 들어가지 않습니다. 본문 전체와 첨부 자료는 공지를 열 때 학교 사이트에서 받습니다.</Hint>
     <span class="feed-state" role="status" aria-live="polite">
-      {#if feed?.running}<Icon name="refresh" size={14} />받는 중{:else if feed?.generated_at}{archiveDate(feed.generated_at, clock.format)} 기준{:else if feed}아직 받지 않음{/if}
+      {#if feed?.running}<Spinner />받는 중{:else if feed?.generated_at}{archiveDate(feed.generated_at, clock.format)} 기준{:else if feed}아직 받지 않음{/if}
     </span>
   </div>
   {#if error}<p class="archive-error" role="alert">{error}</p>{/if}
@@ -83,7 +84,6 @@
   .feed-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 22px; }
   /* As the boards' collect status, under its own name so each pane's status stays distinct. */
   .feed-state { flex: 1; display: inline-flex; align-items: center; gap: 6px; min-width: 0; margin-left: 6px; font-size: 12px; color: var(--secondary); font-variant-numeric: tabular-nums; }
-  .feed-state :global(svg) { animation: spin 1.4s linear infinite; }
   .feed-settings .settings-group-title { margin: 0; }
   .feed-failing { display: grid; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; }
   .feed-failing li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

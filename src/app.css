@@ -215,11 +215,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.sync-line svg {
-  flex-shrink: 0;
-  animation: spin 1.4s linear infinite;
-}
-
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
@@ -393,6 +388,11 @@ p,h2,h3 {
 }
 button svg {
   flex-shrink: 0;
+}
+.text-button:has(.spinner),.busy-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .text-button {
   border: 0;
@@ -872,9 +872,6 @@ button svg {
   color: var(--secondary);
   font-variant-numeric: tabular-nums;
 }
-.collect-status svg,.board-state.spinning svg {
-  animation: spin 1.4s linear infinite;
-}
 .board-grid {
   list-style: none;
   margin: 0;
@@ -1096,36 +1093,80 @@ button svg {
 .setup-steps {
   flex: 1;
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px 18px;
+  align-items: center;
   list-style: none;
   margin: 0;
   padding: 0;
   font-size: 12px;
   color: var(--secondary);
 }
+/* One connected row: each step after the first draws the line leading to it, filled once
+   the user has reached that step. Only the current step shows its name; the others keep
+   theirs for assistive tech and as a tooltip, so the row never wraps. */
 .setup-steps li {
   display: flex;
   align-items: center;
-  gap: 6px;
+  /* The basis is the mark plus the line's margins, so the free space every step shares
+     becomes its line; the current step's basis is its content, so its line matches. */
+  flex: 1 1 32px;
+  min-width: 0;
 }
-.setup-steps span {
+.setup-steps li:first-child {
+  flex: none;
+}
+.setup-steps li.current {
+  flex: 1 0 auto;
+}
+.setup-steps li+li::before {
+  content: '';
+  flex: 1;
+  min-width: 0;
+  height: 1.5px;
+  margin: 0 6px;
+  border-radius: 1px;
+  background: var(--line-strong);
+  transition: background-color .2s ease-out;
+}
+.setup-steps li.done::before,.setup-steps li.current::before {
+  background: var(--accent-fill);
+}
+.setup-steps .step-mark {
+  flex: none;
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border: 1px solid var(--line-strong);
   border-radius: 50%;
+  background: var(--bg);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  transition: background-color .2s ease-out, border-color .2s ease-out, color .2s ease-out, box-shadow .2s ease-out;
 }
-.setup-steps li.done {
-  color: var(--text);
-}
-.setup-steps li.done span {
+.setup-steps li.done .step-mark {
   border-color: var(--accent-fill);
   background: var(--accent-fill);
   color: var(--accent-text);
+}
+.setup-steps li.current .step-mark {
+  border: 1.5px solid var(--accent);
+  color: var(--accent);
+  font-weight: 650;
+  box-shadow: 0 0 0 3px var(--soft);
+}
+.setup-steps li:not(.current) .step-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.setup-steps li.current .step-label {
+  margin-left: 8px;
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
 }
 .model-grid {
   list-style: none;
@@ -1199,11 +1240,6 @@ button svg {
   font-size: 11px;
   color: var(--secondary);
   font-variant-numeric: tabular-nums;
-}
-.ai-progress progress {
-  width: 100%;
-  height: 6px;
-  accent-color: var(--accent);
 }
 .ai-confirm {
   margin-top: 10px;
@@ -1628,14 +1664,6 @@ select:focus-visible {
 .setup-progress {
   flex: none;
   margin-bottom: 26px;
-}
-.setup-progress li.current {
-  color: var(--text);
-  font-weight: 600;
-}
-.setup-progress li.current span {
-  border-color: var(--accent);
-  color: var(--accent);
 }
 /* The flow has no sidebar, so it drops the shell's main offsets. */
 .setup-body {

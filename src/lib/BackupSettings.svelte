@@ -6,6 +6,7 @@
   import { clock } from './clock.svelte';
   import { confirmAction } from './confirm';
   import Hint from './Hint.svelte';
+  import Spinner from './Spinner.svelte';
 
   let { desktop }: { desktop: boolean } = $props();
   type BackupPreview = {
@@ -133,7 +134,7 @@
       <div class="settings-row"><span class="row-label">백업 만들기</span><button class="button secondary small" disabled={busy} onclick={createBackup}>{busy ? '처리 중…' : '백업 파일 저장'}</button></div>
       <div class="settings-row"><span class="row-label">백업에서 복원{#if restoreAvailable === null}<span class="row-detail">복원 가능 여부를 확인하고 있습니다.</span>{:else if !restoreAvailable}<span class="row-detail" role="status">복원할 수 없습니다. {restoreReason}</span>{/if}</span>{#if restoreAvailable === false}<button class="text-button" onclick={checkRestoreSupport}>다시 확인</button>{/if}<button class="button secondary small" disabled={busy || restoreAvailable !== true} onclick={chooseBackup}>{busy ? '검사 중…' : '백업 파일 선택'}</button></div>
       {#if busy}
-        <div class="settings-row"><span class="row-label"><span class="row-detail" role="status">{cancelling ? '취소 요청을 처리하고 임시 파일을 정리하고 있습니다…' : '작업 중…'}</span></span><button class="text-button" disabled={cancelling} onclick={cancelOperation}>{cancelling ? '취소 요청됨' : '작업 취소'}</button></div>
+        <div class="settings-row"><span class="row-label"><span class="row-detail busy-line" role="status"><Spinner size={12} />{cancelling ? '취소 요청을 처리하고 임시 파일을 정리하고 있습니다…' : '작업 중…'}</span></span><button class="text-button" disabled={cancelling} onclick={cancelOperation}>{cancelling ? '취소 요청됨' : '작업 취소'}</button></div>
       {/if}
       {#if preview}
         <div class="settings-row stacked" aria-live="polite">

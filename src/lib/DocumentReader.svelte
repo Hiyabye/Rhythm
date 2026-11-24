@@ -6,6 +6,7 @@
   import { clock } from './clock.svelte';
   import { confirmAction } from './confirm';
   import Icon from './Icon.svelte';
+  import Spinner from './Spinner.svelte';
   import { fly } from './motion';
 
   // `enabledSources` lists the sources whose extension is on: only those may download more files.
@@ -489,7 +490,7 @@
           <div class="resource-row">
             <div><strong>{resource.filename || (resource.kind === 'image' ? '본문 이미지' : '첨부 파일')}</strong><p>{localResourceErrors[resource.id] ? '로컬 자료 확인 필요' : resourceStatus(resource.status)} · {archiveSize(resource.bytes)}{#if resource.mime} · {resource.mime}{/if}</p>{#if localResourceErrors[resource.id]}<p class="archive-error" role="alert">{localResourceErrors[resource.id]}</p>{:else if resource.error}<p class="archive-error">{resource.error}</p>{/if}{#if resource.sha256}<details><summary>무결성 정보</summary><code>SHA-256 {resource.sha256}</code></details>{/if}</div>
             {#if resource.status === 'downloaded'}<button class="text-button" onclick={() => reveal(resource.id)}>{localResourceErrors[resource.id] ? '로컬 파일 다시 확인' : '저장 폴더에서 보기'}</button>{/if}
-            <button class="text-button" disabled={!enabled || resourceBusy || filesBusy} aria-label={`${resource.filename || '첨부 자료'} 다시 내려받기`} onclick={() => retry(resource.id)}>{resourceBusy ? '자료 다운로드 중…' : '다시 내려받기'}</button>
+            <button class="text-button" disabled={!enabled || resourceBusy || filesBusy} aria-label={`${resource.filename || '첨부 자료'} 다시 내려받기`} onclick={() => retry(resource.id)}>{#if resourceBusy}<Spinner size={12} />{/if}{resourceBusy ? '자료 다운로드 중…' : '다시 내려받기'}</button>
           </div>
         {/each}
         {#if !enabled}<p class="footnote">자료를 추가로 받으려면 설정 → 확장 기능에서 이 공지의 정보원을 켜 주세요.</p>{/if}
