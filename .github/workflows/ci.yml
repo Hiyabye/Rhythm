@@ -181,3 +181,16 @@ jobs:
           # Keep child scripts on the CI host with its matching PowerShell modules.
           $env:RHYTHM_POWERSHELL = Join-Path $PSHOME 'pwsh.exe'
           npm run desktop:build
+
+  # The one check the main ruleset requires. Path-skipped jobs count as passed;
+  # a failed or cancelled job (or a failed `changes`) fails the gate.
+  ci-ok:
+    name: CI passed
+    if: always()
+    needs: [changes, frontend, worker, rust-fmt, desktop, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo '${{ toJSON(needs.*.result) }}'
+          exit 1

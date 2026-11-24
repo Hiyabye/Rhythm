@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 // Decides which CI jobs a change needs. A path missing from a rule silently
 // skips its checks, so rules err toward running, and any workflow or action
-// change runs everything.
-const workflow = /^\.github\//;
+// change runs everything. Issue and pull request templates run nothing.
+const workflow = /^\.github\/(workflows|actions)\//;
 const rules = {
   frontend: [/^src\//, /^tests\//, /^scripts\//, /^package(-lock)?\.json$/, /^index\.html$/,
     /^vite\.config\.ts$/, /^tsconfig\.json$/, /^playwright(\.screenshots)?\.config\.ts$/,

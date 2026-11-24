@@ -54,9 +54,23 @@ test('vendored notification cancellation tests run only in macOS CI', () => {
   assert.equal(workflow.match(/cargo test --locked -p mac-usernotifications --lib send::tests/g)?.length, 1);
 });
 
+test('the required CI gate waits for every other CI job', () => {
+  const workflow = read('.github/workflows/ci.yml');
+  const jobs = [...workflow.split('\njobs:\n')[1].matchAll(/^  ([\w-]+):$/gm)].map((match) => match[1]);
+  const gate = workflow.split('\n  ci-ok:\n')[1];
+  assert.match(gate, /name: CI passed\n/);
+  assert.match(gate, /if: always\(\)\n/);
+  const needs = gate.match(/needs: \[(.*)\]/)[1].split(', ');
+  assert.deepEqual(needs.sort(), jobs.filter((job) => job !== 'ci-ok').sort());
+});
+
 test('release.yml is the only publishing workflow', () => {
   const workflows = readdirSync(new URL('../.github/workflows/', import.meta.url)).sort();
-  assert.deepEqual(workflows, ['ci.yml', 'release.yml']);
+  assert.deepEqual(workflows, ['ci.yml', 'copilot-setup-steps.yml', 'release.yml']);
+  // The cloud agent setup only reads: no secrets, write access or environments.
+  const setup = read('.github/workflows/copilot-setup-steps.yml');
+  assert.match(setup, /permissions:\n  contents: read\n/);
+  assert.doesNotMatch(setup, /secrets\.|: write|environment:/);
 });
 
 test('every tests/*.test.mjs file runs in a package.json test script', () => {
