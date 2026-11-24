@@ -33,7 +33,7 @@ Token counts matched for every checked text. Workers AI differs from local Metal
 
 ## Pinned artifacts
 
-`src-tauri/src/intelligence/catalog.json` is the executable manifest; its checksum comes from the pinned repository LFS metadata. One-click installation accepts only `verified` entries.
+`src-tauri/src/intelligence/catalog.json` is the executable manifest; its checksum comes from the pinned repository LFS metadata. One-click installation accepts only `verified` entries. The Qwen3-Embedding weights are Apache-2.0 and are never bundled with the app.
 
 | Model | Repository / file | Revision | Bytes | Status |
 | --- | --- | --- | ---: | --- |

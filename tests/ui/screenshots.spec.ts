@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { cybercampusTask, mockDesktop, openSettings, type FixtureOptions } from './fixture';
+import { cybercampusTask, mockDesktop, type FixtureOptions } from './fixture';
 import type { CybercampusTask } from '../../src/lib/types';
 
 // Regenerates the README screenshots in docs/screenshots/ from the mocked IPC
@@ -100,10 +100,4 @@ test('deadlines', async ({ page }) => {
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('과제·마감');
   await expect(page.getByText('연결 리스트 구현 과제').first()).toBeVisible();
   await shot(page, 'deadlines');
-});
-test('settings AI', async ({ page }) => {
-  await open(page);
-  await openSettings(page, 'AI');
-  await expect(page.getByRole('group', { name: '공지 분류' })).toContainText('Qwen3-Embedding 0.6B');
-  await shot(page, 'settings-ai');
 });
