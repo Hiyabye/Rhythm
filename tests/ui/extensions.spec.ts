@@ -26,7 +26,7 @@ test('turning an extension on adds its page, widget and settings, and off remove
   const panes = page.getByRole('navigation', { name: '설정 항목', exact: true });
   await openSettings(page, '확장 기능');
   const toggle = (name: string) => page.getByRole('switch', { name: `${name} 사용 설정`, exact: true }).click();
-  for (const [extension, nav] of [['서강대학교 공지', '받은 소식'], ['탐색', '탐색'], ['보관함', '보관함'], ['사이버캠퍼스', '과제·마감'], ['캘린더', '캘린더']]) {
+  for (const [extension, nav] of [['서강대학교 공지', '받은 소식'], ['검색', '검색'], ['보관함', '보관함'], ['사이버캠퍼스', '과제·마감'], ['캘린더', '캘린더']]) {
     await toggle(extension);
     await expect(sidebar.getByRole('button', { name: nav, exact: true })).toBeVisible();
   }
@@ -42,11 +42,11 @@ test('turning an extension on adds its page, widget and settings, and off remove
   await expect(page.getByRole('heading', { level: 2, name: '나를 위한 소식', exact: true })).toBeVisible();
   await expect(page.getByRole('complementary', { name: '앞으로 7일', exact: true })).toBeVisible();
 
-  // Turning 탐색 off while on its page falls back to Today.
-  await sidebar.getByRole('button', { name: '탐색', exact: true }).click();
+  // Turning 검색 off while on its page falls back to Today.
+  await sidebar.getByRole('button', { name: '검색', exact: true }).click();
   await openSettings(page, '확장 기능');
-  await toggle('탐색');
-  await expect(sidebar.getByRole('button', { name: '탐색', exact: true })).toHaveCount(0);
+  await toggle('검색');
+  await expect(sidebar.getByRole('button', { name: '검색', exact: true })).toHaveCount(0);
   await toggle('AI 분류');
   await expect(panes.getByRole('button', { name: 'AI', exact: true })).toHaveCount(0);
 });
