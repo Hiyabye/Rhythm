@@ -8,7 +8,7 @@ export type SettingsPane = 'extensions' | 'general' | 'boards' | 'cybercampus' |
 export const navigation: { id: string; label: string; extension?: string }[] = [
   { id: 'today', label: '오늘' },
   { id: 'inbox', label: '받은 소식', extension: 'sogang_notices' },
-  { id: 'search', label: '탐색', extension: 'search' },
+  { id: 'search', label: '검색', extension: 'search' },
   { id: 'bookmark', label: '보관함', extension: 'saved' },
   // AI categories with the deadlines found in each notice (#87).
   { id: 'opportunities', label: '기회', extension: 'ai' },

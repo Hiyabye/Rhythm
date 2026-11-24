@@ -115,16 +115,16 @@ test('saving an item admits only one pending write and announces feedback', asyn
 test('navigation, local searches, filters, safe highlighting and empty-result announcement', async ({ page }) => {
   await mockDesktop(page);
   await page.goto('/');
-  for (const name of ['받은 소식', '보관함', '설정', '오늘', '탐색']) await navigate(page, name);
+  for (const name of ['받은 소식', '보관함', '설정', '오늘', '검색']) await navigate(page, name);
   await expect(page.locator('#main')).toBeFocused();
   await page.getByLabel('보관된 공지 검색').fill('장학금 Computer');
-  await page.getByRole('button', { name: '검색', exact: true }).click();
+  await page.getByRole('search').getByRole('button', { name: '검색', exact: true }).click();
   await expect(page.locator('.notice-list > li')).toHaveCount(2);
   await expect(page.locator('.notice-snippet mark').first()).toBeVisible();
   await page.getByRole('combobox', { name: '게시판 분류', exact: true }).selectOption('장학');
   await expect(page.locator('.notice-list > li')).toHaveCount(1);
   await page.getByLabel('보관된 공지 검색').fill('<script> & " % _');
-  await page.getByRole('button', { name: '검색', exact: true }).click();
+  await page.getByRole('search').getByRole('button', { name: '검색', exact: true }).click();
   await expect(page.getByText('조건에 맞는 공지가 없습니다', { exact: true })).toBeVisible();
   await expect(page.locator('.archive-result-status')).toContainText('0개');
   await expect(page.locator('.archive-view script')).toHaveCount(0);
@@ -133,10 +133,10 @@ test('navigation, local searches, filters, safe highlighting and empty-result an
 test('relevance search stays text-only without an embedding model', async ({ page }) => {
   await mockDesktop(page, { count: 3, aiSemanticSearch: true });
   await page.goto('/');
-  await navigate(page, '탐색');
+  await navigate(page, '검색');
   await expect(page.getByRole('combobox', { name: '정렬', exact: true })).toHaveValue('relevance');
   await page.getByLabel('보관된 공지 검색').fill('공지 01');
-  await page.getByRole('button', { name: '검색', exact: true }).click();
+  await page.getByRole('search').getByRole('button', { name: '검색', exact: true }).click();
   await expect(page.locator('.notice-list > li')).toHaveCount(1);
   await expect.poll(() => callCount(page, 'archive_ranked_query')).toBe(1);
   await expect(page.locator('.notice-meaning-note')).toHaveCount(0);
@@ -146,9 +146,9 @@ test('relevance search stays text-only without an embedding model', async ({ pag
 test('relevance search marks notices found only by meaning, and date order is text-only', async ({ page }) => {
   await mockDesktop(page, { count: 3, aiSemanticSearch: true, aiEmbeddingInstalled: true });
   await page.goto('/');
-  await navigate(page, '탐색');
+  await navigate(page, '검색');
   await page.getByLabel('보관된 공지 검색').fill('공지 03');
-  await page.getByRole('button', { name: '검색', exact: true }).click();
+  await page.getByRole('search').getByRole('button', { name: '검색', exact: true }).click();
   await expect(page.locator('.notice-list > li')).toHaveCount(2);
   const meaning = page.locator('.notice-list > li').filter({ has: page.locator('.notice-meaning-note') });
   await expect(meaning).toHaveCount(1);
@@ -431,17 +431,17 @@ test('narrow reader contains wide tables, exposes keyboard scroll and preserves 
 test('obsolete searches cannot overwrite newer filters or clamp their page', async ({ page }) => {
   await mockDesktop(page, { count: 31 });
   await page.goto('/');
-  await navigate(page, '탐색');
+  await navigate(page, '검색');
   await expect(page.locator('.notice-list > li')).toHaveCount(30);
   await page.evaluate(() => { (window as any).__fixture.options.queryDelay = 350; });
   await page.getByLabel('보관된 공지 검색').fill('없는검색어');
-  await page.getByRole('button', { name: '검색', exact: true }).click();
+  await page.getByRole('search').getByRole('button', { name: '검색', exact: true }).click();
   await expect(page.locator('.archive-view .loading')).toBeVisible();
   await page.evaluate(() => { (window as any).__fixture.options.queryDelay = 0; });
   await page.getByRole('combobox', { name: '게시판 분류', exact: true }).selectOption('장학');
   await expect(page.getByText('조건에 맞는 공지가 없습니다', { exact: true })).toBeVisible();
   await page.getByLabel('보관된 공지 검색').fill('Computer');
-  await page.getByRole('button', { name: '검색', exact: true }).click();
+  await page.getByRole('search').getByRole('button', { name: '검색', exact: true }).click();
   await expect(page.locator('.notice-list > li')).toHaveCount(16);
   await page.waitForTimeout(400); // Let the intentionally obsolete IPC response arrive.
   await expect(page.locator('.notice-list > li')).toHaveCount(16);
@@ -561,7 +561,7 @@ test('sidebar boards scope the inbox and badges describe their counts', async ({
   const sidebar = page.getByRole('navigation', { name: '기본 탐색', exact: true });
   await expect(sidebar).toContainText('구독한 게시판 없음');
   await expect(sidebar.getByRole('button', { name: '받은 소식', exact: true })).toHaveAccessibleDescription('읽지 않은 공지 3개');
-  await expect(sidebar.getByRole('button', { name: '탐색', exact: true })).toHaveAccessibleDescription('보관된 공지 3개');
+  await expect(sidebar.getByRole('button', { name: '검색', exact: true })).toHaveAccessibleDescription('보관된 공지 3개');
   await expect(sidebar.getByRole('button', { name: '보관함', exact: true })).toHaveAccessibleDescription('저장한 공지 3개');
   // Nothing arrived with the last sync, so 오늘 shows no badge rather than a zero.
   await expect(sidebar.getByRole('button', { name: '오늘', exact: true })).not.toHaveAttribute('aria-describedby');
@@ -594,7 +594,7 @@ test('the feed pages ask for subscribed boards only, while search covers the who
   await navigate(page, '받은 소식');
   await expect.poll(async () => (await lastQuery()).subscribed_only).toBe(true);
   expect(await boards()).not.toContain('소식');
-  await navigate(page, '탐색');
+  await navigate(page, '검색');
   await expect.poll(async () => (await lastQuery()).subscribed_only).toBe(false);
   expect(await boards()).toContain('소식');
 });
