@@ -120,6 +120,8 @@ export interface FixtureOptions {
   sourceGroups?: { id: string; name: string; parent: string | null; enabled?: boolean }[];
   // Board IDs the notices cycle through, instead of all coming from 'computing-updates'.
   noticeSources?: string[];
+  // `cybercampus_courses`: the synced courses with their unread counts (default: the status courses, none unread).
+  cybercampusCourses?: { course_key: string; name: string; year: number; term: string; unread: number }[];
 }
 
 // Only the IPC boundary is faked: tests exercise the production Svelte build,
@@ -844,6 +846,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
             return copy(cybercampus);
           case 'cybercampus_forget_login': cybercampus.id = null; return copy(cybercampus);
           case 'cybercampus_tasks': return copy(options.cybercampusTasks ?? []);
+          case 'cybercampus_courses': return copy(options.cybercampusCourses ?? cybercampus.courses.map((course) => ({ ...course, unread: 0 })));
           // Mirrors storage/calendar: inclusive range, untimed first, then time and id.
           case 'calendar_todos': return copy(calendarTodos.filter((todo) => todo.day >= args.from && todo.day <= args.to)
             .sort((a, b) => a.day.localeCompare(b.day) || Number(a.time !== null) - Number(b.time !== null) || (a.time ?? '').localeCompare(b.time ?? '') || a.id - b.id));

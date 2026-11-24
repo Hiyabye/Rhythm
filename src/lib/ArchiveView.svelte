@@ -12,9 +12,9 @@
   import { fade, flip, slide } from './motion';
 
   let { page, desktop, enabled, sourceRequest, activation, onactivationhandled, onsettings, onsetup, onextensions, onsourcechange, oncontext, onweekpane, ontasks, calendarRequest, oncalendar }: {
-    page: string; desktop: boolean; enabled: Set<string>; sourceRequest: { id: string; token: number };
+    page: string; desktop: boolean; enabled: Set<string>; sourceRequest: { id: string; category: string; token: number };
     activation: { document_id: number; revision_id: number; event_id: number } | null;
-    onactivationhandled: () => void; onsettings: (pane?: 'boards' | 'personalization') => void; onsetup: () => void; onextensions: () => void; onsourcechange: (id: string) => void;
+    onactivationhandled: () => void; onsettings: (pane?: 'boards' | 'personalization') => void; onsetup: () => void; onextensions: () => void; onsourcechange: (id: string, category: string) => void;
     oncontext: (context: { summary: ArchiveSummary | null; sources: SourceInfo[] | null; groups: SourceGroup[] | null; status: SyncStatus | null }) => void;
     onweekpane: (visible: boolean) => void;
     ontasks: () => void;
@@ -97,7 +97,7 @@
     draft = '';
     query = '';
     source = request.id;
-    category = '';
+    category = request.category;
     aiCategory = '';
     unread = false;
     includeClosed = false;
@@ -340,7 +340,8 @@
       // A row that left this page (moved, restored, deleted) is no longer selected.
       const visible = new Set(next.items.map((item) => item.id));
       if ([...chosen].some((id) => !visible.has(id))) chosen = new Set([...chosen].filter((id) => visible.has(id)));
-      if (category && !next.categories.includes(category)) category = '';
+      // A course scope keeps its category while the course has no notices yet.
+      if (category && !next.categories.includes(category) && category !== sourceRequest.category) { category = ''; onsourcechange(source, ''); }
       // Removing the model takes the chips away; a chosen category would leave no way back.
       if (aiCategory && !next.ai_categories) aiCategory = '';
       await loadEmbeddingLabels(next.items.map((item) => item.id));
@@ -495,7 +496,7 @@
     source = scope;
     category = '';
     offset = 0;
-    onsourcechange(scope);
+    onsourcechange(scope, '');
   }
   let showTasks = $derived(enabled.has('cybercampus') && sources.some((item) => item.family === 'cybercampus' && item.subscribed));
   // Open deadlines only: a submitted task or one whose deadline (and late window) has passed is no longer something to plan for.
@@ -674,7 +675,7 @@
     <div class="archive-toolbar">
       <div class="archive-filters">
         <label>정보원<select value={source} onchange={(event) => chooseScope(event.currentTarget.value)} disabled={!desktop}><option value="">모든 정보원</option>{#each scopeOptions as { group, boards } (group.id)}<optgroup label={group.name}><option value={groupScope(group.id)}>{group.name} 전체</option>{#each boards as item (item.id)}<option value={item.id}>{item.name}</option>{/each}</optgroup>{/each}{#each ungroupedSources as item (item.id)}<option value={item.id}>{item.organization} · {item.name}</option>{/each}</select></label>
-        <label>게시판 분류<select bind:value={category} onchange={() => offset = 0} disabled={!desktop}><option value="">모든 분류</option>{#each result.categories as value}<option value={value}>{value}</option>{/each}</select></label>
+        <label>게시판 분류<select bind:value={category} onchange={() => { offset = 0; onsourcechange(source, category); }} disabled={!desktop}><option value="">모든 분류</option>{#if category && !result.categories.includes(category)}<option value={category}>{category}</option>{/if}{#each result.categories as value}<option value={value}>{value}</option>{/each}</select></label>
         {#if page !== 'opportunities'}<label>정렬<select bind:value={sort} onchange={() => offset = 0} disabled={!desktop}>{#if page === 'search'}<option value="relevance">관련도순</option>{/if}<option value="newest">게시일 최신순</option><option value="oldest">게시일 오래된순</option></select></label>{/if}
       </div>
       {#if page === 'inbox' && chipGroup && chipBoards.length > 1}

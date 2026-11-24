@@ -74,9 +74,9 @@ test('deadlines list what is due first and fold submitted or past items', async 
   ] });
   await page.goto('/');
   const navigation = page.getByRole('navigation', { name: '기본 탐색', exact: true });
-  // The board sits right under its section heading: an organization label of the same name would only repeat it.
+  // The synced course sits right under its section heading: an organization label of the same name would only repeat it.
   await expect(navigation.locator('.source-group-heading')).toContainText(['사이버캠퍼스']);
-  await expect(navigation.getByRole('button', { name: '사이버캠퍼스 강의 공지', exact: true })).toBeVisible();
+  await expect(navigation.getByRole('button', { name: '자료구조실습', exact: true })).toBeVisible();
   await expect(navigation.locator('.board-organization')).toHaveCount(0);
   // The sidebar counts what is still to do, matching the page's list below.
   await expect(navigation.getByRole('button', { name: '과제·마감' })).toHaveAccessibleDescription('남은 과제 2개');
@@ -110,6 +110,40 @@ test('D-day counts calendar days and rolls over at midnight without refetching',
   await page.clock.runFor('02:01:00');
   await expect(due.nth(0)).toContainText('D-1');
   await expect(due.nth(1)).toContainText('D-2');
+});
+
+test('each course is its own sidebar feed, scoped to the course category', async ({ page }) => {
+  await mockDesktop(page, {
+    sourceList: [{ ...board, subscribed: true }],
+    noticeSources: ['cybercampus'],
+    cybercampusCourses: [
+      { course_key: 'A1', name: '장학', year: 2026, term: '3', unread: 2 },
+      { course_key: 'A2', name: '응용수학II', year: 2026, term: '3', unread: 0 },
+    ],
+  });
+  await page.goto('/');
+  const sidebar = page.getByRole('navigation', { name: '기본 탐색', exact: true });
+  const lastQuery = () => page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'archive_query').at(-1).args.query);
+  // The courses replace the single board entry.
+  await expect(sidebar.getByRole('button', { name: '강의 공지', exact: true })).toHaveCount(0);
+  const course = sidebar.getByRole('button', { name: '장학', exact: true });
+  await expect(course).toHaveAccessibleDescription('읽지 않은 공지 2개');
+  await course.click();
+  await expect(page.getByRole('heading', { level: 1, name: '장학', exact: true })).toBeVisible();
+  await expect(page.locator('.page-header p')).toHaveText('사이버캠퍼스 · 받은 소식');
+  await expect(course).toHaveAttribute('aria-current', 'page');
+  await expect.poll(async () => { const query = await lastQuery(); return [query.source_id, query.category]; }).toEqual(['cybercampus', '장학']);
+  await expect(page.getByRole('list', { name: '공지 목록' }).locator('.notice-meta').first()).toContainText('장학');
+  // A course without notices yet keeps its scope instead of falling back to the whole board.
+  const empty = sidebar.getByRole('button', { name: '응용수학II', exact: true });
+  await empty.click();
+  await expect(empty).toHaveAttribute('aria-current', 'page');
+  await expect.poll(async () => (await lastQuery()).category).toBe('응용수학II');
+  await expect(page.getByRole('combobox', { name: '게시판 분류', exact: true })).toHaveValue('응용수학II');
+  // Choosing every category leaves the course.
+  await page.getByRole('combobox', { name: '게시판 분류', exact: true }).selectOption('');
+  await expect(empty).not.toHaveAttribute('aria-current');
+  await expect(page.getByRole('heading', { level: 1, name: '강의 공지', exact: true })).toBeVisible();
 });
 
 test('the deadline page appears only with the Cybercampus extension on', async ({ page }) => {

@@ -664,6 +664,15 @@ pub async fn cybercampus_forget_login(
     connector.session.reset().await;
     status(&state)
 }
+/// The synced term's courses with their unread counts, for the sidebar. Unlike
+/// `cybercampus_status` it does not read the credential store.
+#[tauri::command]
+pub async fn cybercampus_courses(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<Vec<crate::storage::cybercampus::CybercampusCourse>, String> {
+    let _lease = state.operation_gate.shared().await?;
+    with_store(&state.store, |s| s.cybercampus_courses())
+}
 #[tauri::command]
 pub async fn cybercampus_tasks(
     state: tauri::State<'_, crate::AppState>,
