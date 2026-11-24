@@ -68,7 +68,6 @@ pub(super) struct Candidate {
     item: DocumentItem,
     feedback: Option<String>,
     feedback_updated_at: Option<String>,
-    source_subscribed: bool,
     source_organization: String,
     last_revision_at: Option<String>,
     full_text_matches: u32,
@@ -90,7 +89,7 @@ pub(super) const CANDIDATE_COLUMNS: &str = concat!("d.id,d.source_id,", source_l
                     CASE WHEN EXISTS(SELECT 1 FROM resources r WHERE r.document_id=d.id
                          AND r.revision_id=(SELECT MAX(rv.id) FROM document_revisions rv WHERE rv.document_id=d.id)
                          AND r.status<>'downloaded') THEN 'missing_resources' ELSE 'archived' END,
-                    f.updated_at,s.subscribed,s.organization,d.last_revision_at");
+                    f.updated_at,s.organization,d.last_revision_at");
 
 pub(super) fn fts_phrase(term: &str) -> String {
     format!("\"{}\"", term.replace('"', "\"\""))
@@ -143,7 +142,7 @@ pub(super) fn map_candidate(
     let feedback_updated_at = row.get(14)?;
     let mut full_text_matches = 0u32;
     for index in 0..term_count {
-        if row.get::<_, bool>(18 + index)? {
+        if row.get::<_, bool>(17 + index)? {
             full_text_matches |= 1u32 << index;
         }
     }
@@ -165,9 +164,8 @@ pub(super) fn map_candidate(
             trashed: false,
         },
         feedback,
-        source_subscribed: row.get(15)?,
-        source_organization: row.get(16)?,
-        last_revision_at: row.get(17)?,
+        source_organization: row.get(15)?,
+        last_revision_at: row.get(16)?,
         full_text_matches,
         feedback_updated_at,
         vector: None,
@@ -207,7 +205,7 @@ const SIMILARITY_FLOOR: f32 = 0.75;
 /// Cosine span over which the term grows linearly to its cap.
 const SIMILARITY_SPAN: f32 = 0.20;
 /// Like a learned topic: below saved (+8) and any explicit topic, and with
-/// freshness and a subscription (6 + 2) still short of Important (18).
+/// full freshness (6) still short of Important (16).
 const SIMILARITY_CAP: i32 = 6;
 const SIMILARITY_TITLE_CHARS: usize = 30;
 
@@ -306,10 +304,6 @@ pub(super) fn score_candidate(context: &ScoringContext, candidate: &Candidate) -
                 positive_interest_matches.push(interest.name.clone());
             }
         }
-    }
-    if candidate.source_subscribed {
-        score += 2;
-        reasons.push("구독 중인 정보원".into());
     }
     let positive_feedback_bonus = match feedback_age {
         Some(0..=30) => 24,

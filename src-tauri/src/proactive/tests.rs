@@ -277,7 +277,11 @@ fn sensitivity_policies_suppress_cold_start_and_negative_signals() {
     ));
     assert!(notification::eligible(
         NotificationSensitivity::Important,
-        &item(true, 18, false, false)
+        &item(true, 16, false, false)
+    ));
+    assert!(!notification::eligible(
+        NotificationSensitivity::Important,
+        &item(true, 15, false, false)
     ));
     assert!(!notification::eligible(
         NotificationSensitivity::Interested,

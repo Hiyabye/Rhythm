@@ -621,7 +621,6 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
                 .map((interest) => interest.polarity === 'negative'
                   ? `덜 보고 싶은 분야 ‘${interest.name}’ 관련 공지`
                   : `관심 분야 ‘${interest.name}’에 맞는 공지`) : [];
-              if (sources.find((source) => source.id === item.source_id)?.subscribed) reasons.push('구독 중인 정보원');
               const feedback = documentFeedback.get(item.id) ?? null;
               if (feedback === 'interested') reasons.push('관심 표시한 공지');
               if (feedback === 'not_interested') reasons.push('관심 없음 표시한 공지');
