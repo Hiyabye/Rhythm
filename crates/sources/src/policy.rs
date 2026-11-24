@@ -221,6 +221,47 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
                 && raster_name(parts[parts.len() - 1]);
             list || board_file || image || site_image || path == "/robots.txt"
         }
+        // 아트&테크놀로지학과's WordPress REST API (#80 step 4): the News list with
+        // every query key bound to the value `parser` sends, one post with its
+        // fixed fields, and images under the dated upload folders.
+        "creative.sogang.ac.kr" => {
+            let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+            let list = path == "/wp-json/wp/v2/posts"
+                && exact_query(
+                    url,
+                    &[
+                        ("categories", |v| {
+                            crate::parser::WORDPRESS_BOARDS
+                                .iter()
+                                .any(|(_, category)| v == category.to_string())
+                        }),
+                        ("orderby", |v| v == "date"),
+                        ("order", |v| v == "desc"),
+                        ("per_page", |v| {
+                            v == crate::parser::WORDPRESS_PER_PAGE.to_string()
+                        }),
+                        ("page", positive_id),
+                        ("_fields", |v| v == crate::parser::WORDPRESS_LIST_FIELDS),
+                        ("_envelope", str::is_empty),
+                    ],
+                );
+            let post = parts.len() == 5
+                && parts[..4] == ["wp-json", "wp", "v2", "posts"]
+                && positive_id(parts[4])
+                && exact_query(
+                    url,
+                    &[("_fields", |v| v == crate::parser::WORDPRESS_POST_FIELDS)],
+                );
+            let image = parts.len() == 5
+                && parts[..2] == ["wp-content", "uploads"]
+                && parts[2].len() == 4
+                && parts[2].bytes().all(|b| b.is_ascii_digit())
+                && parts[3].len() == 2
+                && parts[3].bytes().all(|b| b.is_ascii_digit())
+                && !parts[4].starts_with('.')
+                && raster_name(parts[4]);
+            list || post || image || path == "/robots.txt"
+        }
         // The CMS file route behind the main board's PDF-viewer iframes
         // (user decision): a notice whose whole body is that viewer is archived
         // from the PDF's text. Article images on this host stay unsupported.

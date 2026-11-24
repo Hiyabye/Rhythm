@@ -2102,7 +2102,7 @@ fn schema_twenty_upgrade_keeps_every_subscription_with_groups_on() {
     store.catalog(&crate::archive::definitions()).unwrap();
     assert_eq!(subscribed_ids(&store), ["dorm-menu", "se-news"]);
     assert!(store.source_groups().unwrap().iter().all(|g| g.enabled));
-    assert_eq!(store.source_groups().unwrap().len(), 77);
+    assert_eq!(store.source_groups().unwrap().len(), 78);
 }
 #[test]
 fn every_public_board_belongs_to_a_known_group() {

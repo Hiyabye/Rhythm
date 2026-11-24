@@ -243,3 +243,17 @@ chrome outside `#inner_wrap` was removed, and line endings are LF.
 
 `dates/notices.json` is synthetic: short Korean notice texts written for the #226
 date-extractor prototype (`crates/sources/src/dates.rs`), not captured from any site.
+
+The following bounded captures were obtained for the WordPress family (#80 step 4,
+2026-11-24) from `creative.sogang.ac.kr` (아트&테크놀로지학과) with the collector's user
+agent, public GETs only, saved byte for byte:
+
+- `wordpress-creative-list.json`, `wordpress-creative-last.json`,
+  `wordpress-creative-past-end.json`: the News category (192) list at the exact URL
+  `parser::list_url` builds, pages 1 (50 posts), 6 (the last, 29 posts) and 7 (the
+  `rest_post_invalid_page_number` envelope); 279 posts in all.
+- `wordpress-creative-post-47154.json`, `wordpress-creative-post-47085.json`,
+  `wordpress-creative-post-46650.json`: three posts at the exact `parser::detail_url`
+  route. 47154 is text only; 47085 has six images under `/wp-content/uploads/2026/11/`
+  (Korean file names); 46650 has one upload image and an embedded YouTube iframe the
+  sanitizer must drop.

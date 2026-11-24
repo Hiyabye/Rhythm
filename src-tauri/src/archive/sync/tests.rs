@@ -169,19 +169,31 @@ fn setup() -> (TempDir, SharedStore) {
 /// Mirrors main-board notice `id` from the feed as the collector saw `page`
 /// (the fake's detail response), with only its excerpt archived.
 fn mirror(store: &SharedStore, seq: u64, id: u64, page: &str) -> i64 {
-    use rhythm_feed::record::{BodyState, Entry, Notice, Record, Resource, ResourceKind};
     let external = id.to_string();
-    let definition = with_store(store, |s| s.source(MAIN)).unwrap().definition;
     let entry = ListingEntry {
-        external_id: external.clone(),
         url: parser::main_canonical(&parser::MAIN_BOARDS[0], &external).to_string(),
+        external_id: external,
         pinned: false,
         modified_at: None,
         title: None,
     };
-    let article = parser::article(&definition, &entry, page).unwrap();
+    mirror_board(store, seq, MAIN, &entry, page)
+}
+/// Mirrors the notice `entry` of `source` from the feed as the collector saw
+/// `page`, with only its excerpt archived.
+fn mirror_board(
+    store: &SharedStore,
+    seq: u64,
+    source: &str,
+    entry: &ListingEntry,
+    page: &str,
+) -> i64 {
+    use rhythm_feed::record::{BodyState, Entry, Notice, Record, Resource, ResourceKind};
+    let external = entry.external_id.clone();
+    let definition = with_store(store, |s| s.source(source)).unwrap().definition;
+    let article = parser::article(&definition, entry, page).unwrap();
     let notice = Notice {
-        source_id: MAIN.into(),
+        source_id: source.into(),
         external_id: external.clone(),
         revision_hash: crate::storage::feed::article_revision_hash(&article),
         canonical_url: article.canonical_url.clone(),
@@ -225,7 +237,7 @@ fn mirror(store: &SharedStore, seq: u64, id: u64, page: &str) -> i64 {
         Some(_) => s.feed_apply_segment(seq, seq, &records, &[], false, &Default::default()),
     })
     .unwrap();
-    with_store(store, |s| s.document_id(MAIN, &external))
+    with_store(store, |s| s.document_id(source, &external))
         .unwrap()
         .unwrap()
 }
@@ -1102,6 +1114,64 @@ async fn opening_a_feed_notice_fills_its_body_from_the_school() {
             .count(),
         1,
         "robots.txt is reused between opens"
+    );
+}
+
+#[tokio::test]
+async fn opening_a_wordpress_notice_reads_its_post_and_upload_images() {
+    const SOURCE: &str = "creative-news";
+    let (dir, store) = setup();
+    with_store(&store, |s| s.subscribe(SOURCE, true)).unwrap();
+    let fake = Fake::new();
+    let page =
+        include_str!("../../../../crates/sources/src/fixtures/wordpress-creative-post-47085.json");
+    let entry = ListingEntry {
+        external_id: "47085".into(),
+        url: "https://creative.sogang.ac.kr/?p=47085".into(),
+        pinned: false,
+        modified_at: None,
+        title: None,
+    };
+    let definition = with_store(&store, |s| s.source(SOURCE)).unwrap().definition;
+    let post = parser::detail_url(&definition, &entry).unwrap();
+    let images: Vec<String> = parser::article(&definition, &entry, page)
+        .unwrap()
+        .resources
+        .into_iter()
+        .map(|r| r.url)
+        .collect();
+    assert_eq!(images.len(), 6);
+    {
+        let mut extra = fake.extra.lock().unwrap();
+        extra.insert(
+            post.to_string(),
+            Some((page.as_bytes().to_vec(), "application/json".into())),
+        );
+        for image in &images {
+            extra.insert(image.clone(), Some((png(), "image/png".into())));
+        }
+    }
+    let id = mirror_board(&store, 1, SOURCE, &entry, page);
+    let bodies = body::Bodies::default();
+
+    assert!(!bodies.fetch(&store, dir.path(), &fake, id).await.unwrap());
+    bodies
+        .resources(&store, dir.path(), &fake, id)
+        .await
+        .unwrap();
+    let detail = with_store(&store, |s| s.document(id, None)).unwrap();
+    assert!(!detail.summary_only);
+    assert!(detail
+        .body_text
+        .contains("Processing Community Day @ Seoul 2026"));
+    assert_eq!(detail.resources.len(), 6);
+    assert!(detail.resources.iter().all(|r| r.status == "downloaded"));
+    assert_eq!(
+        fake.paths()
+            .iter()
+            .filter(|url| **url == post.as_str())
+            .count(),
+        1
     );
 }
 
