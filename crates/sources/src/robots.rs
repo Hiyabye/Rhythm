@@ -5,6 +5,10 @@ use url::Url;
 
 /// Serves its robots.txt as unrendered ASP source (see `without_asp`).
 const ASP_SOURCE_HOST: &str = "scc.sogang.ac.kr";
+/// Answers /robots.txt with its HTML "page not found" page (200 text/html):
+/// there is no policy, so for this host only that page means no rules (user
+/// decision, #80 step 4). Any other host's HTML answer stays an error.
+const HTML_404_ROBOTS_HOST: &str = "admission.sogang.ac.kr";
 /// Agents, rules and crawl delay; `None` is a delay that cannot be honored,
 /// which fails the policy only when the group applies to Rhythm.
 type RobotGroup = (Vec<String>, Vec<(String, bool)>, Option<f64>);
@@ -30,6 +34,9 @@ impl Robots {
         {
             Fetch::Body { bytes, mime, .. } => {
                 if matches!(mime.as_deref(), Some("text/html" | "application/xhtml+xml")) {
+                    if robots.host_str() == Some(HTML_404_ROBOTS_HOST) {
+                        return Ok(Self::parse(url, "")?);
+                    }
                     return Err("학교의 수집 정책 대신 HTML 오류 페이지를 받았습니다.".into());
                 }
                 let body = std::str::from_utf8(&bytes)
@@ -182,6 +189,52 @@ fn wildcard_prefix(pattern: &[u8], text: &[u8], anchored: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Answers every request with one body and MIME type.
+    struct Fixed(&'static str, &'static str);
+    impl Transport for Fixed {
+        async fn fetch(
+            &self,
+            _: &Url,
+            _: Option<(Option<String>, Option<String>)>,
+            _: usize,
+            _: &AtomicBool,
+            _: Access,
+        ) -> Result<Fetch, FetchError> {
+            Ok(Fetch::Body {
+                bytes: self.0.as_bytes().to_vec(),
+                mime: Some(self.1.into()),
+                etag: None,
+                last_modified: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn only_the_admission_html_robots_page_means_no_rules() {
+        let page = Fixed(
+            "<html><body>페이지를 찾을 수 없습니다</body></html>",
+            "text/html",
+        );
+        let cancel = AtomicBool::new(false);
+        let admission =
+            Url::parse("https://admission.sogang.ac.kr/enter/html/counsel/notice.asp?s_page=1")
+                .unwrap();
+        let policy = Robots::load(&page, &admission, &cancel, Access::Source)
+            .await
+            .unwrap();
+        assert!(policy.rules.is_empty() && policy.permits(&admission));
+        let other = Url::parse("https://scec.sogang.ac.kr/fro_end/html/dep_05/5100.php").unwrap();
+        assert!(Robots::load(&page, &other, &cancel, Access::Source)
+            .await
+            .is_err());
+        // A real policy on the admission host still applies.
+        let rules = Fixed("User-agent: *\nDisallow: /enter/\n", "text/plain");
+        let policy = Robots::load(&rules, &admission, &cancel, Access::Source)
+            .await
+            .unwrap();
+        assert!(!policy.permits(&admission));
+    }
 
     /// `https://scc.sogang.ac.kr/robots.txt` as served (text/plain) on 2026-11-08:
     /// unrendered ASP source choosing rules per host name.

@@ -335,6 +335,25 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
                 && url.query().is_none();
             list || article || attachment || file_image || upload_image || path == "/robots.txt"
         }
+        // 입학처 공지사항 (#80 step 4): the list and article routes and the
+        // download script, whose stored-file path is bound to the board's
+        // folder and a plain file name. robots.txt answers with an HTML page.
+        "admission.sogang.ac.kr" => {
+            let list = path == "/enter/html/counsel/notice.asp"
+                && exact_query(url, &[("s_page", positive_id)]);
+            let article = path == "/enter/html/counsel/noticeView.asp"
+                && exact_query(url, &[("idx", positive_id)]);
+            let attachment = path == "/common/download.File.asp"
+                && exact_query(
+                    url,
+                    &[
+                        ("strRealFileName", crate::parser::admission_stored_file),
+                        // The name the script saves the file as.
+                        ("strFileName", downloadable_name),
+                    ],
+                );
+            list || article || attachment || path == "/robots.txt"
+        }
         // The CMS file route behind the main board's PDF-viewer iframes
         // (user decision): a notice whose whole body is that viewer is archived
         // from the PDF's text. Article images on this host stay unsupported.
