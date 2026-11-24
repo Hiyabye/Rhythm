@@ -8,6 +8,96 @@
         "value": "sfmono-regular",
         "createdAt": "2026-11-02T10:36:49.112Z",
         "reason": "agent triage: monospace stack on .storage-path code shows a filesystem path (code context), pre-existing, not a brand font"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          "crates/sources/src/fixtures/cms-sweducenter-press-detail-939214.html"
+        ],
+        "createdAt": "2026-11-24T15:51:18.685Z",
+        "reason": "Claude: captured school page kept verbatim as a parser test fixture (#316); its inline fonts are the school's, not Rhythm UI"
+      },
+      {
+        "rule": "overused-font",
+        "value": "*",
+        "files": [
+          "crates/sources/src/fixtures/cms-sweducenter-press-detail-939214.html"
+        ],
+        "createdAt": "2026-11-24T15:51:18.702Z",
+        "reason": "Claude: captured school page kept verbatim as a parser test fixture (#316); its inline fonts are the school's, not Rhythm UI"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          "crates/sources/src/fixtures/cms-sweducenter-notice-detail-941521.html"
+        ],
+        "createdAt": "2026-11-24T15:51:18.719Z",
+        "reason": "Claude: captured school page kept verbatim as a parser test fixture (#316); its inline fonts are the school's, not Rhythm UI"
+      },
+      {
+        "rule": "overused-font",
+        "value": "*",
+        "files": [
+          "crates/sources/src/fixtures/cms-sweducenter-notice-detail-941521.html"
+        ],
+        "createdAt": "2026-11-24T15:51:18.736Z",
+        "reason": "Claude: captured school page kept verbatim as a parser test fixture (#316); its inline fonts are the school's, not Rhythm UI"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          "crates/sources/src/fixtures/cms-sweducenter-notice-detail-941077.html"
+        ],
+        "createdAt": "2026-11-24T15:51:18.755Z",
+        "reason": "Claude: captured school page kept verbatim as a parser test fixture (#316); its inline fonts are the school's, not Rhythm UI"
+      },
+      {
+        "rule": "overused-font",
+        "value": "*",
+        "files": [
+          "crates/sources/src/fixtures/cms-sweducenter-notice-detail-941077.html"
+        ],
+        "createdAt": "2026-11-24T15:51:18.771Z",
+        "reason": "Claude: captured school page kept verbatim as a parser test fixture (#316); its inline fonts are the school's, not Rhythm UI"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          "crates/sources/src/fixtures/cms-convedu-news-detail-911675.html"
+        ],
+        "createdAt": "2026-11-24T15:51:18.788Z",
+        "reason": "Claude: captured school page kept verbatim as a parser test fixture (#316); its inline fonts are the school's, not Rhythm UI"
+      },
+      {
+        "rule": "overused-font",
+        "value": "*",
+        "files": [
+          "crates/sources/src/fixtures/cms-convedu-news-detail-911675.html"
+        ],
+        "createdAt": "2026-11-24T15:51:18.805Z",
+        "reason": "Claude: captured school page kept verbatim as a parser test fixture (#316); its inline fonts are the school's, not Rhythm UI"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          "crates/sources/src/fixtures/cms-convedu-news-detail-911673.html"
+        ],
+        "createdAt": "2026-11-24T15:51:18.822Z",
+        "reason": "Claude: captured school page kept verbatim as a parser test fixture (#316); its inline fonts are the school's, not Rhythm UI"
+      },
+      {
+        "rule": "overused-font",
+        "value": "*",
+        "files": [
+          "crates/sources/src/fixtures/cms-convedu-news-detail-911673.html"
+        ],
+        "createdAt": "2026-11-24T15:51:18.840Z",
+        "reason": "Claude: captured school page kept verbatim as a parser test fixture (#316); its inline fonts are the school's, not Rhythm UI"
       }
     ]
   }
