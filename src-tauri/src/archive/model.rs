@@ -191,11 +191,16 @@ pub struct AiCategoryCount {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ArchiveSummary {
     pub documents: u64,
+    /// Unread on subscribed sources (받은 소식).
     pub unread: u64,
+    /// Unread across the whole archive (검색).
+    pub unread_all: u64,
     pub saved: u64,
     pub new_since_sync: u64,
     pub resource_bytes: u64,
     pub trashed: u64,
+    /// 기회 notices whose deadline is today.
+    pub due_today: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SyncStatus {

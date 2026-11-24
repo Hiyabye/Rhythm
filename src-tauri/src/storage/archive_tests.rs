@@ -2931,7 +2931,11 @@ fn feed_pages_and_unread_counts_keep_to_subscribed_sources() {
     assert_eq!(sources(&feed), ["one"]);
     assert_eq!(sources(&ArchiveQuery::default()).len(), 2);
     let summary = store.archive_summary().unwrap();
-    assert_eq!((summary.documents, summary.unread), (2, 1));
+    // 검색 counts unread notices of every board.
+    assert_eq!(
+        (summary.documents, summary.unread, summary.unread_all),
+        (2, 1, 2)
+    );
 
     store.subscribe("two", true).unwrap();
     assert_eq!(sources(&feed).len(), 2);

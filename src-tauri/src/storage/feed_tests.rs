@@ -1479,7 +1479,13 @@ fn opportunities_list_open_deadlines_first_within_their_categories() {
 
     // The page shows AI output, so it needs the AI extension.
     assert!(store.archive_query(&query(false, None)).is_err());
+    let due_today = || store.archive_summary().unwrap().due_today;
+    assert_eq!(due_today(), 0);
     store.set_enabled(crate::extensions::AI, true).unwrap();
+    // The 기회 badge counts 오늘 마감 like the page: subscribed sources only.
+    assert_eq!(due_today(), 0);
+    store.subscribe("one", true).unwrap();
+    assert_eq!(due_today(), 1);
 
     let ids = |page: &ArchivePage| {
         page.items

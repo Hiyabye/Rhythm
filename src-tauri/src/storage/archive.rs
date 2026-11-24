@@ -1325,11 +1325,40 @@ impl Store {
     /// the collector first saw after the manifest accepted before the latest
     /// one (a feed notice's `collected_at` is that first sighting). The first
     /// feed sync has no previous manifest and counts nothing.
-    /// Unread and new counts follow subscriptions like the feed pages; the
-    /// archive and saved counts cover every notice.
+    /// Unread and new counts follow subscriptions like the feed pages;
+    /// `unread_all` (검색), the archive and saved counts cover every notice.
     pub(crate) fn archive_summary(&self) -> Result<ArchiveSummary, String> {
         const CYBERCAMPUS: &str = crate::archive::catalog::CYBERCAMPUS_SOURCE_ID;
-        self.connection.query_row(&format!("SELECT COUNT(*),COALESCE(SUM(s.subscribed=1 AND COALESCE(u.is_read,0)=0),0),COALESCE(SUM(COALESCE(u.saved,0)=1),0),COALESCE(SUM(s.subscribed=1 AND d.historical=0 AND CASE WHEN d.source_id='{CYBERCAMPUS}' THEN d.collected_at>=COALESCE(s.previous_success,'1970') ELSE d.from_feed=1 AND d.collected_at>COALESCE((SELECT previous_generated_at FROM feed_state WHERE id=1),'9999') END),0),(SELECT COALESCE(SUM(bytes),0) FROM (SELECT MAX(bytes) bytes FROM resources WHERE status='downloaded' GROUP BY local_path)),(SELECT COUNT(*) FROM trashed_documents) FROM documents d JOIN sources s ON s.id=d.source_id LEFT JOIN document_state u ON u.document_id=d.id WHERE {NOT_TRASHED}"),[],|r|Ok(ArchiveSummary {documents:r.get::<_,i64>(0)? as u64,unread:r.get::<_,i64>(1)? as u64,saved:r.get::<_,i64>(2)? as u64,new_since_sync:r.get::<_,i64>(3)? as u64,resource_bytes:r.get::<_,i64>(4)? as u64,trashed:r.get::<_,i64>(5)? as u64})).map_err(|e|e.to_string())
+        let due_today = self.opportunities_due_today()?;
+        self.connection.query_row(&format!("SELECT COUNT(*),COALESCE(SUM(s.subscribed=1 AND COALESCE(u.is_read,0)=0),0),COALESCE(SUM(COALESCE(u.is_read,0)=0),0),COALESCE(SUM(COALESCE(u.saved,0)=1),0),COALESCE(SUM(s.subscribed=1 AND d.historical=0 AND CASE WHEN d.source_id='{CYBERCAMPUS}' THEN d.collected_at>=COALESCE(s.previous_success,'1970') ELSE d.from_feed=1 AND d.collected_at>COALESCE((SELECT previous_generated_at FROM feed_state WHERE id=1),'9999') END),0),(SELECT COALESCE(SUM(bytes),0) FROM (SELECT MAX(bytes) bytes FROM resources WHERE status='downloaded' GROUP BY local_path)),(SELECT COUNT(*) FROM trashed_documents) FROM documents d JOIN sources s ON s.id=d.source_id LEFT JOIN document_state u ON u.document_id=d.id WHERE {NOT_TRASHED}"),[],|r|Ok(ArchiveSummary {documents:r.get::<_,i64>(0)? as u64,unread:r.get::<_,i64>(1)? as u64,unread_all:r.get::<_,i64>(2)? as u64,saved:r.get::<_,i64>(3)? as u64,new_since_sync:r.get::<_,i64>(4)? as u64,resource_bytes:r.get::<_,i64>(5)? as u64,trashed:r.get::<_,i64>(6)? as u64,due_today})).map_err(|e|e.to_string())
+    }
+    /// The 기회 rows labelled 오늘 마감: an open opportunity of a subscribed
+    /// source with a deadline today. Zero while the AI extension is off,
+    /// since the page shows AI output only then.
+    fn opportunities_due_today(&self) -> Result<u64, String> {
+        if !self.enabled(crate::extensions::AI)? {
+            return Ok(0);
+        }
+        let (mut filters, mut values) = self.archive_filters(&ArchiveQuery {
+            opportunities: true,
+            subscribed_only: true,
+            ..ArchiveQuery::default()
+        })?;
+        filters.push(
+            "EXISTS (SELECT 1 FROM notice_dates n WHERE n.document_id=d.id AND n.kind='deadline' AND n.day=?)"
+                .into(),
+        );
+        values.push(local_today().into());
+        self.connection
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM {ITEM_FROM} WHERE {}",
+                    filters.join(" AND ")
+                ),
+                params_from_iter(values.iter()),
+                |r| r.get::<_, i64>(0).map(|count| count as u64),
+            )
+            .map_err(|e| e.to_string())
     }
     pub(crate) fn document(
         &self,
