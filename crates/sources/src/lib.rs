@@ -41,6 +41,16 @@ pub fn selector(value: &str) -> &'static scraper::Selector {
 #[cfg(test)]
 mod tests {
     use super::selector;
+    use crate::model::{ListingEntry, ListingPage};
+
+    /// The listed entry with this external ID, shared by the parser fixture tests.
+    pub(crate) fn entry_of(page: &ListingPage, external_id: &str) -> ListingEntry {
+        page.entries
+            .iter()
+            .find(|entry| entry.external_id == external_id)
+            .unwrap()
+            .clone()
+    }
 
     #[test]
     fn a_selector_is_parsed_once_and_shared() {

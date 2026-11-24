@@ -55,7 +55,7 @@ Current information architecture: every feature beyond the core shell is a built
 - Single-file `.rhythm-backup` backup/restore (unencrypted, excludes model weights). Restore quits the app and finalizes on the next manual launch.
 - Destructive actions require a confirmation that names what changes and what is kept.
 - Distribution: ad-hoc-signed macOS DMG (not notarized) and unsigned per-user Windows installer. These are deliberate choices, not gaps. Releases carry Tauri-updater-signed packages for in-app updates, which the user confirms before installing; the in-app install path is verified only under validation identifiers with a loopback manifest (one Mac, one Windows PC), and builds without the key show manual steps.
-- Frontend: Svelte 5 runes, TypeScript, Tailwind plus semantic CSS (`src/app.css`, `src/lib/ai.css`), Pretendard bundled locally (no font CDN). The Tauri webview cannot rely on remote assets.
+- Frontend: Svelte 5 runes, TypeScript, Tailwind plus semantic CSS (`src/app.css`), Pretendard bundled locally (no font CDN). The Tauri webview cannot rely on remote assets.
 
 ## Brand Commitments
 

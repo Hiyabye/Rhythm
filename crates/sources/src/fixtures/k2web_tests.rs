@@ -1,4 +1,5 @@
 use super::*;
+use crate::tests::entry_of;
 
 fn board(id: &str) -> &'static K2webBoard {
     K2WEB_BOARDS
@@ -9,13 +10,6 @@ fn board(id: &str) -> &'static K2webBoard {
 /// An editable copy of a catalogued board, for tampering tests.
 fn copy(board: &K2webBoard) -> K2webBoard {
     K2webBoard { ..*board }
-}
-fn entry_of(page: &ListingPage, external_id: &str) -> ListingEntry {
-    page.entries
-        .iter()
-        .find(|entry| entry.external_id == external_id)
-        .unwrap()
-        .clone()
 }
 fn pins(page: &ListingPage) -> usize {
     page.entries.iter().filter(|entry| entry.pinned).count()
