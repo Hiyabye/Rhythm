@@ -6,6 +6,8 @@ use std::fmt;
 
 pub mod manifest;
 pub mod record;
+#[cfg(any(test, feature = "test-keys"))]
+pub mod test_keys;
 pub mod vector;
 
 pub use manifest::{verify, FileRef, Manifest, Signer};

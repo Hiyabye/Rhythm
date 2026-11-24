@@ -3,6 +3,7 @@ use crate::r2::Object;
 use rhythm_feed::{
     manifest::verify,
     record::{decode_segment, decode_snapshot, Classification, Embedding, Entry, Notice},
+    test_keys::{other_signer, signer},
 };
 use rhythm_sources::model::ArticleInput;
 use std::{collections::BTreeMap, sync::Mutex, time::Duration};
@@ -48,25 +49,6 @@ impl Bucket {
     fn bytes(&self, path: &str) -> Vec<u8> {
         self.objects.lock().unwrap()[&format!("{PREFIX}{path}")].clone()
     }
-}
-
-fn unhex(text: &str) -> Vec<u8> {
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
-        .collect()
-}
-/// Disposable keys: an RFC 8032 test seed as a PKCS#8 v1 document.
-fn key(seed: &str) -> Signer {
-    let mut document = unhex("302e020100300506032b657004220420");
-    document.extend(unhex(seed));
-    Signer::from_pkcs8(&document).unwrap()
-}
-fn signer() -> Signer {
-    key("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
-}
-fn other_signer() -> Signer {
-    key("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb")
 }
 
 fn article(id: u32, body: &str) -> ArticleInput {

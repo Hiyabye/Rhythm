@@ -5,6 +5,7 @@ use record::{
     NoticeDate, Removal, Resource, ResourceKind,
 };
 use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
+use test_keys::unhex;
 
 const EXAMPLE: &str = include_str!("fixtures/manifest.json");
 
@@ -346,10 +347,7 @@ fn standard_ed25519_keys_and_signatures_interoperate() {
             .unwrap();
     let signature = "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155\
                      5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b";
-    // An OpenSSL-style PKCS#8 v1 document holds only the seed.
-    let mut document = unhex("302e020100300506032b657004220420");
-    document.extend(&seed);
-    let signer = Signer::from_pkcs8(&document).unwrap();
+    let signer = Signer::from_pkcs8(&test_keys::pkcs8(&seed)).unwrap();
     assert_eq!(signer.public_key(), public);
     let sig = serde_json::to_vec(&Signature {
         key_id: key_id(&public),
@@ -366,13 +364,6 @@ fn standard_ed25519_keys_and_signatures_interoperate() {
         sha256_hex(b"abc"),
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     );
-}
-
-fn unhex(text: &str) -> Vec<u8> {
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
-        .collect()
 }
 
 /// The example with one JSON edit, parsed.
