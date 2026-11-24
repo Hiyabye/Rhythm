@@ -40,7 +40,7 @@ pub(super) fn eligible(
         return false;
     }
     match sensitivity {
-        NotificationSensitivity::Important => score.has_preferences && score.score >= 18,
+        NotificationSensitivity::Important => score.has_preferences && score.score >= 16,
         NotificationSensitivity::Interested => score.explicit_interest_match,
         NotificationSensitivity::All => true,
     }
