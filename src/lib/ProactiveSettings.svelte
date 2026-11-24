@@ -8,6 +8,7 @@
   import { confirmAction } from './confirm';
   import { isWindows } from './platform';
   import Icon from './Icon.svelte';
+  import Spinner from './Spinner.svelte';
   import Hint from './Hint.svelte';
 
   // Background (lifecycle and scheduler) and notifications share one snapshot but live in separate panes.
@@ -209,7 +210,7 @@
       <ul class="settings-group" aria-label="알림 기록">{#each showAllHistory ? data.history : data.history.slice(0, historyPreview) as item (item.id)}<li class="settings-row"><span class="row-label history-title">{item.title}<span class="row-detail">{historyLabel(item)} · {localTimestamp(item.created_at)}</span>{#if item.error}<span class="row-detail">{item.error}</span>{/if}{#if item.reason}<span class="row-detail">{item.reason}</span>{/if}</span><button class="text-button" type="button" disabled={historyBusy} aria-label={`${item.title} 공지 열기`} onclick={() => onopen(item.document_id, item.revision_id, item.id, item.attempt_count, [item.id])}>열기</button></li>{/each}</ul>
       <div class="group-footer">
         {#if data.history.length > historyPreview}<button class="text-button" type="button" aria-expanded={showAllHistory} onclick={() => showAllHistory = !showAllHistory}>{showAllHistory ? '최근 기록만 보기' : `모두 보기 (${data.history.length}개)`}</button>{/if}
-        <button class="text-button" type="button" disabled={historyBusy} onclick={clearHistory}>{historyBusy ? '기록을 비우는 중…' : '알림 기록 비우기'}</button>
+        <button class="text-button" type="button" disabled={historyBusy} onclick={clearHistory}>{#if historyBusy}<Spinner size={12} />{/if}{historyBusy ? '기록을 비우는 중…' : '알림 기록 비우기'}</button>
       </div>
     {:else}<p class="muted group-empty">저장된 알림 기록이 없습니다.</p>{/if}
     {/if}
