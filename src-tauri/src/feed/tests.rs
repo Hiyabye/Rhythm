@@ -6,29 +6,11 @@ use crate::{archive::model::*, storage::Store};
 use rhythm_feed::{
     manifest::{BoardHealth, EmbeddingInfo, Segment, Snapshot},
     record::{BodyState, Notice, Record, Removal},
+    test_keys::{other_signer, signer},
     Signer,
 };
 use std::collections::HashMap;
 use url::Url;
-
-fn unhex(text: &str) -> Vec<u8> {
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
-        .collect()
-}
-/// An RFC 8032 test seed as a PKCS#8 v1 document.
-fn key(seed: &str) -> Signer {
-    let mut document = unhex("302e020100300506032b657004220420");
-    document.extend(unhex(seed));
-    Signer::from_pkcs8(&document).unwrap()
-}
-fn signer() -> Signer {
-    key("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
-}
-fn other_signer() -> Signer {
-    key("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb")
-}
 
 #[derive(Default)]
 struct Fake {

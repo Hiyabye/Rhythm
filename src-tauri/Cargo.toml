@@ -55,6 +55,7 @@ windows = { version = "0.61", features = ["Data_Xml_Dom", "UI_Notifications", "F
 
 
 [dev-dependencies]
+rhythm-feed = { path = "../crates/feed", features = ["test-keys"] }
 minisign-verify = "=0.3.0"
 tempfile = "3"
 http = "1"
