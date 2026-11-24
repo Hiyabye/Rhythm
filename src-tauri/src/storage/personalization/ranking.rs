@@ -77,13 +77,13 @@ pub(super) struct Candidate {
     vector: Option<Vec<f32>>,
 }
 
-pub(super) const ACTIVE_SOURCES_SQL: &str = "SELECT s.id FROM sources s WHERE
+pub(super) const ACTIVE_SOURCES_SQL: &str = "SELECT s.id FROM sources s WHERE (
                     NOT EXISTS(SELECT 1 FROM source_extensions se WHERE se.source_id=s.id)
                     OR EXISTS(
                         SELECT 1 FROM source_extensions se
                         JOIN extension_preferences ep ON ep.extension_id=se.extension_id
                         WHERE se.source_id=s.id AND ep.enabled=1
-                    )";
+                    ))";
 
 pub(super) const CANDIDATE_COLUMNS: &str = concat!("d.id,d.source_id,", source_label!(), ",d.title,d.author,d.category,d.published_at,d.collected_at,d.historical,
                     COALESCE(u.saved,0),COALESCE(u.is_read,0),substr(d.body_text,1,320),f.value,
@@ -741,7 +741,8 @@ impl Store {
         };
         let term_matches_sql = matched_terms_sql(&context.terms, 2);
         let sql = format!(
-            "WITH active_sources(source_id) AS ({ACTIVE_SOURCES_SQL}), candidates(id) AS (
+            // The feed mirrors every board, so recommendations keep to subscribed sources.
+            "WITH active_sources(source_id) AS ({ACTIVE_SOURCES_SQL} AND s.subscribed=1), candidates(id) AS (
                 SELECT id FROM (
                     SELECT d.id FROM documents d JOIN active_sources a ON a.source_id=d.source_id
                     AND {NOT_TRASHED}

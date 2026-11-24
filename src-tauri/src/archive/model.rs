@@ -128,6 +128,10 @@ pub struct ArchiveQuery {
     pub saved_only: bool,
     #[serde(default)]
     pub unread_only: bool,
+    /// The feed pages (오늘, 받은 소식, 기회): only notices of subscribed sources.
+    /// The feed mirrors every board, so search and 보관함 leave this off.
+    #[serde(default)]
+    pub subscribed_only: bool,
     /// Lists 휴지통 instead of the notices outside it.
     #[serde(default)]
     pub trashed: bool,

@@ -74,6 +74,8 @@ fn store() -> (tempfile::TempDir, Store) {
         .catalog_for_extension("test_extension", &[source_definition()])
         .unwrap();
     store.set_enabled("test_extension", true).unwrap();
+    // Recommendations keep to subscribed sources.
+    store.subscribe("one", true).unwrap();
     for (id, title, category) in [
         (1, "인공지능 연구 공지", "연구"),
         (2, "인공지능 장학 공지", "장학"),
@@ -918,15 +920,26 @@ fn subscribed_source_is_a_small_explainable_preference() {
         .connection
         .execute("UPDATE documents SET source_id='two' WHERE id=3", [])
         .unwrap();
-    store.subscribe("one", true).unwrap();
 
-    let recommendations = store.personalization_recommendations(3).unwrap();
-    assert_eq!(recommendations.items[0].item.source_id, "one");
-    assert!(recommendations.items[0]
-        .reasons
-        .iter()
-        .any(|reason| reason == "구독 중인 정보원"));
+    // The feed mirrors every board: an unsubscribed source's notices are not
+    // recommended, even when they match an interest.
     save_interest(&store, "연구소", 5);
+    let recommendations = store.personalization_recommendations(3).unwrap();
+    assert_eq!(recommendations.items.len(), 2);
+    assert!(recommendations
+        .items
+        .iter()
+        .all(|item| item.item.source_id == "one"
+            && item
+                .reasons
+                .iter()
+                .any(|reason| reason == "구독 중인 정보원")));
+    assert!(store
+        .personalization_notification_score(3)
+        .unwrap()
+        .is_some());
+
+    store.subscribe("two", true).unwrap();
     let organization_match = store.personalization_recommendations(3).unwrap();
     assert_eq!(organization_match.items[0].item.source_id, "two");
     assert!(organization_match.items[0]
@@ -1157,13 +1170,21 @@ fn missing_extension_preference_is_disabled_for_recommendations_only() {
 }
 
 #[test]
-fn cold_start_is_useful_unpersonalized_and_deterministic() {
+fn cold_start_recommends_only_subscribed_sources_deterministically() {
     let (_directory, store) = store();
+    store.subscribe("one", false).unwrap();
+    let empty = store.personalization_recommendations(2).unwrap();
+    assert!(!empty.has_preferences);
+    assert!(empty.items.is_empty());
+
+    store.subscribe("one", true).unwrap();
     let first = store.personalization_recommendations(2).unwrap();
     let second = store.personalization_recommendations(2).unwrap();
-    assert!(!first.has_preferences);
     assert_eq!(first.items.len(), 2);
-    assert!(first.items.iter().all(|item| item.reasons.is_empty()));
+    assert!(first
+        .items
+        .iter()
+        .all(|item| item.reasons == ["구독 중인 정보원"]));
     assert_eq!(
         first
             .items
@@ -1400,6 +1421,7 @@ fn source_diversity_is_bounded_and_explained_when_it_changes_selection() {
             ],
         )
         .unwrap();
+    store.subscribe("two", true).unwrap();
     store
         .connection
         .execute(
@@ -1518,8 +1540,8 @@ fn notification_score_outlives_recommendation_limits_and_reuses_ranking_reasons(
     // UTC-day boundary that a notification scheduler also observes.
     let fresh = date_offset(4);
     let fresh_at = format!("{fresh}T09:00:00Z");
-    // Older explicit-interest match (24 points: 12 + priority 4 * 3) plus enough
-    // fresher matches (24 + 5 freshness points) to push document 2 past a small
+    // Older explicit-interest match (26 points: 12 + priority 4 * 3 + 2 for the
+    // subscribed source) plus enough fresher matches (26 + 5 freshness points) to push document 2 past a small
     // recommendation limit without changing its own score.
     for id in 10..40 {
         add_document(
@@ -1549,10 +1571,13 @@ fn notification_score_outlives_recommendation_limits_and_reuses_ranking_reasons(
         .unwrap()
         .unwrap();
     assert_eq!(unmatched_by_limit.document_id, 2);
-    assert_eq!(unmatched_by_limit.score, 24);
+    assert_eq!(unmatched_by_limit.score, 26);
     assert_eq!(
         unmatched_by_limit.reasons,
-        vec!["관심 분야 ‘장학’에 맞는 공지".to_string()]
+        vec![
+            "관심 분야 ‘장학’에 맞는 공지".to_string(),
+            "구독 중인 정보원".to_string()
+        ]
     );
 
     // The same document scored by both paths keeps identical score-bearing
@@ -1561,7 +1586,7 @@ fn notification_score_outlives_recommendation_limits_and_reuses_ranking_reasons(
         .personalization_notification_score(39)
         .unwrap()
         .unwrap();
-    assert_eq!(listed.score, 29);
+    assert_eq!(listed.score, 31);
     assert_eq!(listed.reasons, newest.reasons);
     assert!(listed.reasons.iter().any(|reason| reason == "최근 게시"));
 }
@@ -1569,6 +1594,8 @@ fn notification_score_outlives_recommendation_limits_and_reuses_ranking_reasons(
 #[test]
 fn notification_score_is_cold_start_deterministic_and_reason_free() {
     let (_directory, store) = store();
+    // Notification scores do not filter by subscription; leave out its +2 term.
+    store.subscribe("one", false).unwrap();
     let recent = date_offset(4);
     add_document(
         &store,
@@ -1614,6 +1641,8 @@ fn notification_score_is_cold_start_deterministic_and_reason_free() {
 #[test]
 fn notification_score_exposes_interest_and_feedback_state() {
     let (_directory, store) = store();
+    // Notification scores do not filter by subscription; leave out its +2 term.
+    store.subscribe("one", false).unwrap();
     save_interest(&store, "장학", 4);
 
     let matched = store
@@ -1729,7 +1758,7 @@ fn notification_scores_are_ordered_deduplicated_and_respect_source_toggles() {
 }
 
 #[test]
-fn notification_reasons_omit_list_ordering_notes() {
+fn notification_and_list_reasons_match_without_an_interest_match() {
     let (_directory, store) = store();
     store
         .personalization_save_profile(&PersonalizationProfile {
@@ -1744,8 +1773,8 @@ fn notification_reasons_omit_list_ordering_notes() {
         .unwrap()
         .unwrap();
     assert!(unmatched.has_preferences);
-    assert_eq!(unmatched.score, 0);
-    assert!(unmatched.reasons.is_empty());
+    assert_eq!(unmatched.score, 2);
+    assert_eq!(unmatched.reasons, vec!["구독 중인 정보원".to_string()]);
     assert!(unmatched.positive_interest_matches.is_empty());
 
     let recommendation = store.personalization_recommendations(3).unwrap();
@@ -1754,10 +1783,9 @@ fn notification_reasons_omit_list_ordering_notes() {
         .iter()
         .find(|recommendation| recommendation.item.id == 1)
         .unwrap();
-    assert!(item
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("보조 정렬")));
+    // Recommendations keep to subscribed sources, so the subscription reason is
+    // always score-bearing and the list needs no ordering note.
+    assert_eq!(item.reasons, unmatched.reasons);
 }
 
 #[test]
@@ -1820,8 +1848,8 @@ fn notification_score_reaches_documents_outside_every_recommendation_pool() {
         .unwrap();
     assert_eq!(score.document_id, 4);
     assert!(score.has_preferences);
-    assert_eq!(score.score, 0);
-    assert!(score.reasons.is_empty());
+    assert_eq!(score.score, 2);
+    assert_eq!(score.reasons, vec!["구독 중인 정보원".to_string()]);
     assert!(score.positive_interest_matches.is_empty());
 }
 
