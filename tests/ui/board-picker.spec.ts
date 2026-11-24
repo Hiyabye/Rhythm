@@ -27,34 +27,35 @@ const chips = (page: Page) => page.getByRole('list', { name: '서강대학교 �
 const category = (page: Page, name: string) => chips(page).getByRole('button', { name: new RegExp(`^${name},`) });
 const pick = (page: Page, name: string) => page.getByRole('button', { name: `${name} 구독`, exact: true });
 // The chip sequence as visible labels, in DOM order.
-const order = (page: Page) => chips(page).locator('.chip').evaluateAll((nodes) => nodes.map((node) => (node.getAttribute('aria-label') ?? '').replace(/, .*/, '').replace(/ 구독$/, '').replace(/^\S+ (?=\S)/, '').replace(/^.* 그룹 (켜기|끄기)$/, '그룹 $1')));
+const order = (page: Page) => chips(page).locator('.chip').evaluateAll((nodes) => nodes.map((node) => node.querySelector('span')?.textContent ?? ''));
 
-test('categories start collapsed, and opening one inserts its children right after it', async ({ page }) => {
+test('a category is open exactly while its group is on, and picked boards start in view', async ({ page }) => {
   await open(page);
-  // Opening is display state: nothing is open although boards below are picked.
+  // 행정·지원 holds a picked board, so it starts open down to that board; 단과대학 has none.
   await expect(category(page, '단과대학')).toHaveAttribute('aria-expanded', 'false');
-  await expect(category(page, '행정·지원')).toHaveAttribute('aria-expanded', 'false');
+  await expect(category(page, '행정·지원')).toHaveAttribute('aria-expanded', 'true');
   await expect(category(page, '인문대학')).toHaveCount(0);
   await expect(category(page, '행정·지원')).toHaveAccessibleName('행정·지원, 구독 1/1');
-  expect(await order(page)).toEqual(['단과대학', '행정·지원', '학부 학사공지']);
+  expect(await order(page)).toEqual(['단과대학', '행정·지원', '벨라르미노 학사', '주간 메뉴', '학부 학사공지']);
+  await expect(chips(page)).not.toContainText('꺼짐');
+  await expect(chips(page)).not.toContainText('그룹');
 
+  // Opening a group that is already on needs no save; its children follow it in place.
   await category(page, '단과대학').click();
   await expect(category(page, '단과대학')).toHaveAttribute('aria-expanded', 'true');
-  await expect(category(page, '인문대학')).toBeVisible();
-  expect(await order(page)).toEqual(['단과대학', '인문대학', '그룹 끄기', '행정·지원', '학부 학사공지']);
-
-  // Nested: the sub-category opens in place, its sub-categories first, then its own boards.
+  expect(await order(page)).toEqual(['단과대학', '인문대학', '행정·지원', '벨라르미노 학사', '주간 메뉴', '학부 학사공지']);
   await category(page, '인문대학').click();
-  expect(await order(page)).toEqual(['단과대학', '인문대학', '사학과', '공지사항', '행사', '그룹 끄기', '그룹 끄기', '행정·지원', '학부 학사공지']);
+  expect(await order(page)).toEqual(['단과대학', '인문대학', '사학과', '공지사항', '행사', '행정·지원', '벨라르미노 학사', '주간 메뉴', '학부 학사공지']);
+  expect(await callCount(page, 'archive_set_group')).toBe(0);
 
-  // Closing a category takes its whole subtree with it; reopening restores what was open below.
+  // Closing a category turns its group off and takes its subtree with it; reopening turns it on.
   await category(page, '단과대학').click();
-  await expect.poll(() => order(page)).toEqual(['단과대학', '행정·지원', '학부 학사공지']);
+  await expect.poll(() => order(page)).toEqual(['단과대학', '행정·지원', '벨라르미노 학사', '주간 메뉴', '학부 학사공지']);
   await category(page, '단과대학').click();
   await expect(category(page, '사학과')).toBeVisible();
-  // Opening and closing change no subscription.
+  const calls = await page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'archive_set_group').map((call: any) => call.args));
+  expect(calls).toEqual([{ id: 'sogang-colleges', enabled: false }, { id: 'sogang-colleges', enabled: true }]);
   expect(await callCount(page, 'archive_subscribe')).toBe(0);
-  expect(await callCount(page, 'archive_set_group')).toBe(0);
 });
 
 test('a board chip toggles its subscription and reflects the stored result', async ({ page }) => {
@@ -76,8 +77,6 @@ test('a board chip toggles its subscription and reflects the stored result', asy
 
 test('a failed subscribe shows the error and leaves the chip as it was', async ({ page }) => {
   await open(page);
-  await category(page, '행정·지원').click();
-  await category(page, '벨라르미노 학사').click();
   const menu = pick(page, '벨라르미노 학사 주간 메뉴');
   await expect(menu).toHaveAttribute('aria-pressed', 'true');
   await page.evaluate(() => { (window as any).__fixture.subscribeError = true; });
@@ -111,17 +110,18 @@ test('chips work from the keyboard and keep focus on the pressed chip', async ({
   await expect(pick(page, '사학과 공지사항')).toBeFocused();
 });
 
-test('a group that is off has an explicit switch chip; the top group switch hides everything', async ({ page }) => {
+test('a group that is off shows closed and opening it turns it on; the top group switch hides everything', async ({ page }) => {
   await open(page, groups.map((group) => group.id === 'sogang-offices' ? { ...group, enabled: false } : group));
-  await expect(category(page, '행정·지원')).toHaveAccessibleName('행정·지원, 꺼짐');
-  await category(page, '행정·지원').click();
-  // Nothing below an off group is shown or pickable until the person turns it on.
+  // Its picked board is kept but not subscribed, and nothing below it is shown.
+  await expect(category(page, '행정·지원')).toHaveAttribute('aria-expanded', 'false');
   await expect(category(page, '벨라르미노 학사')).toHaveCount(0);
-  await page.getByRole('button', { name: '행정·지원 그룹 켜기', exact: true }).click();
+  await category(page, '행정·지원').click();
+  await expect(category(page, '행정·지원')).toHaveAttribute('aria-expanded', 'true');
   await expect(category(page, '행정·지원')).toHaveAccessibleName('행정·지원, 구독 1/1');
-  await expect(category(page, '벨라르미노 학사')).toBeVisible();
-  await page.getByRole('button', { name: '행정·지원 그룹 끄기', exact: true }).click();
-  await expect(category(page, '행정·지원')).toHaveAccessibleName('행정·지원, 꺼짐');
+  await expect(pick(page, '벨라르미노 학사 주간 메뉴')).toHaveAttribute('aria-pressed', 'true');
+  await category(page, '행정·지원').click();
+  await expect(category(page, '행정·지원')).toHaveAttribute('aria-expanded', 'false');
+  await expect(category(page, '행정·지원')).toHaveAccessibleName('행정·지원, 구독 0/1');
   expect(await callCount(page, 'archive_set_group')).toBe(2);
 
   await page.getByRole('switch', { name: '서강대학교 전체', exact: true }).click();

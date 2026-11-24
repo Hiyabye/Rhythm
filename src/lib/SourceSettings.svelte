@@ -15,9 +15,12 @@
   let catalog = $state<SourceInfo[]>([]);
   let sources = $derived(catalog.filter((source) => source.extension === extension));
   let groupList = $state<SourceGroup[]>([]);
-  // Chips the person opened, kept only while the pane is open. Opening is display state:
-  // it never changes a subscription, and every category starts closed.
+  // A category chip is open exactly while its group is on: opening turns the group on and
+  // closing turns it off. An enabled group starts open when a board below it is picked,
+  // so the profile's picks stay in view; `open` keeps the person's own opening of an
+  // enabled group without picks, only while the pane is open.
   let open = $state<Record<string, boolean>>({});
+  const isOpen = (node: GroupNode) => node.group.enabled && (open[node.group.id] ?? node.total.some((source) => source.selected));
   let status = $state<SyncStatus | null>(null);
   let loading = $state(true);
   let busy = $state(false);
@@ -74,16 +77,22 @@
 
   // One flat sequence per top-level group: a category chip is followed, while open, by its
   // sub-categories, then its own boards, so opening pushes the later chips along.
-  type Chip = { key: string; kind: 'group' | 'board' | 'enable' | 'disable'; node?: GroupNode; source?: SourceInfo; parent: string };
-  function chips(node: GroupNode, top = false): Chip[] {
+  type Chip = { key: string; kind: 'group' | 'board'; node?: GroupNode; source?: SourceInfo; parent: string };
+  function chips(node: GroupNode): Chip[] {
     const items: Chip[] = [];
     for (const child of node.children) {
       items.push({ key: `g-${child.group.id}`, kind: 'group', node: child, parent: node.group.name });
-      if (open[child.group.id]) items.push(...(child.group.enabled ? chips(child) : [{ key: `on-${child.group.id}`, kind: 'enable' as const, node: child, parent: child.group.name }]));
+      if (isOpen(child)) items.push(...chips(child));
     }
     for (const source of node.boards) items.push({ key: `b-${source.id}`, kind: 'board', source, parent: node.group.name });
-    if (!top) items.push({ key: `off-${node.group.id}`, kind: 'disable', node, parent: node.group.name });
     return items;
+  }
+
+  // Opening an enabled group needs no save; every other press switches the group.
+  async function toggleCategory(node: GroupNode) {
+    const opening = !isOpen(node);
+    if (opening && node.group.enabled) { open[node.group.id] = true; return; }
+    if (await setGroup(node)) open[node.group.id] = opening;
   }
 
   async function refresh(showLoading = true) {
@@ -119,21 +128,22 @@
     finally { if (active) busy = false; }
   }
 
-  async function setGroup(node: GroupNode) {
-    if (busy || loading || !enabled) return;
+  async function setGroup(node: GroupNode): Promise<boolean> {
+    if (busy || loading || !enabled) return false;
     busy = true;
     refreshGeneration++;
     error = '';
     const on = !node.group.enabled;
     try {
       const next = await invoke<SubscribeResult>('archive_set_group', { id: node.group.id, enabled: on });
-      if (!active) return;
+      if (!active) return false;
       catalog = next.sources;
       groupList = next.groups;
       // Only public boards have groups.
       feedback = !on ? `${node.group.name} 그룹을 껐습니다. 아래 게시판 공지는 추천과 알림에서 빠지며, 고른 게시판과 받은 공지는 그대로 남습니다.`
         : `${node.group.name} 그룹을 켰습니다. 전에 고른 게시판을 다시 구독합니다.`;
-    } catch (reason) { if (active) error = archiveError(reason); }
+      return true;
+    } catch (reason) { if (active) error = archiveError(reason); return false; }
     finally { if (active) busy = false; }
   }
 
@@ -255,8 +265,9 @@
     {#if chip.kind === 'group' && chip.node}
       {@const node = chip.node}
       {@const on = node.total.filter((source) => source.subscribed).length}
-      <button class="chip group" class:open={open[node.group.id]} class:off={!node.group.enabled} aria-expanded={open[node.group.id] ?? false} aria-label={`${node.group.name}, ${node.group.enabled ? `구독 ${on}/${node.total.length}` : '꺼짐'}`} onclick={() => open[node.group.id] = !open[node.group.id]}>
-        <span>{node.group.name}</span><span class="chip-count" aria-hidden="true">{node.group.enabled ? `${on}/${node.total.length}` : '꺼짐'}</span>
+      {@const expanded = isOpen(node)}
+      <button class="chip group" class:open={expanded} aria-expanded={expanded} aria-label={`${node.group.name}, 구독 ${on}/${node.total.length}`} aria-disabled={switchesLocked} onclick={() => toggleCategory(node)}>
+        <span>{node.group.name}</span><span class="chip-count" aria-hidden="true">{on}/{node.total.length}</span>
         <Icon name="plus" size={13} />
       </button>
     {:else if chip.kind === 'board' && chip.source}
@@ -267,10 +278,6 @@
       </button>
       {#if alert}<span class="sr-only" id={`board-alert-${source.id}`}>{alert}</span>{/if}
       {@render info(source, chip.parent, source.family === 'cybercampus')}
-    {:else if chip.node}
-      <button class="chip action" aria-label={`${chip.node.group.name} 그룹 ${chip.kind === 'enable' ? '켜기' : '끄기'}`} aria-disabled={switchesLocked} onclick={() => chip.node && setGroup(chip.node)}>
-        {chip.kind === 'enable' ? '그룹 켜기' : '그룹 끄기'}
-      </button>
     {/if}
   {/snippet}
 
@@ -284,7 +291,7 @@
       </div>
       {#if node.group.enabled}
         <ul class="chips" aria-label={`${node.group.name} 게시판 고르기`}>
-          {#each chips(node, true) as chip (chip.key)}
+          {#each chips(node) as chip (chip.key)}
             <li class="chip-item" animate:flip in:fly out:fade>{@render chipButton(chip)}</li>
           {/each}
         </ul>
@@ -322,11 +329,9 @@
   .chip.group :global(svg) { transition: transform .15s; }
   .chip.group.open :global(svg) { transform: rotate(45deg); }
   .chip.group.open { border-color: var(--accent); color: var(--accent); background: var(--soft); }
-  .chip.group.off { border-style: dashed; color: var(--secondary); }
   .chip-count { font-size: 11.5px; color: var(--secondary); font-variant-numeric: tabular-nums; }
   .chip.board.on { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--accent-text); }
   .chip.board.on:hover:not(:disabled, [aria-disabled="true"]) { filter: brightness(1.08); }
-  .chip.action { border-style: dashed; color: var(--secondary); font-weight: 500; }
   .chip-item :global(.board-info) { position: static; margin-left: 2px; }
   @media (prefers-reduced-motion: reduce) { .chip, .chip.group :global(svg) { transition: none; } }
 </style>
