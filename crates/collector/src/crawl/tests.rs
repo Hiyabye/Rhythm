@@ -316,7 +316,7 @@ fn skipped(state: &State) -> Vec<String> {
 #[test]
 fn public_boards_are_every_supported_board_but_cybercampus() {
     let boards = public_boards();
-    assert_eq!(boards.len(), 172);
+    assert_eq!(boards.len(), 177);
     assert!(boards
         .iter()
         .all(|b| b.family != catalog::CYBERCAMPUS_FAMILY));
@@ -1868,4 +1868,53 @@ async fn the_admission_board_reads_through_its_html_robots_page() {
     assert_eq!((board.status.as_str(), board.failed), ("completed", 0));
     assert!(board.last_error.is_none() && skipped(&state).is_empty());
     assert!(state.seed_complete("admission-notice").unwrap());
+}
+
+/// 융합교육원 센터소식 (#316), an old CMS board of one page: every listed post
+/// is a captured article. The board's last row is number 1.
+#[tokio::test]
+async fn an_old_cms_board_archives_every_listed_post() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![]);
+    let board = definition("convedu-news");
+    let html = |text: &str| (text.to_string(), "text/html".to_string());
+    {
+        let mut extra = fake.extra.lock().unwrap();
+        extra.insert(
+            rhythm_sources::parser::list_url(&board, 1).unwrap().into(),
+            html(include_str!(
+                "../../../sources/src/fixtures/cms-convedu-news-list.html"
+            )),
+        );
+        for (id, body) in [
+            (
+                "911675",
+                include_str!("../../../sources/src/fixtures/cms-convedu-news-detail-911675.html"),
+            ),
+            (
+                "911673",
+                include_str!("../../../sources/src/fixtures/cms-convedu-news-detail-911673.html"),
+            ),
+            (
+                "882726",
+                include_str!("../../../sources/src/fixtures/cms-convedu-news-detail-882726.html"),
+            ),
+        ] {
+            extra.insert(
+                format!("https://convedu.sogang.ac.kr/front/cmsboardview.do?bbsConfigFK=5550&siteId=convedu&pkid={id}"),
+                html(body),
+            );
+        }
+    }
+
+    run(&state, &fake, "convedu-news", Budget::default())
+        .await
+        .unwrap();
+    let mut archived: Vec<_> = notices(&state).into_iter().map(|n| n.external_id).collect();
+    archived.sort();
+    assert_eq!(archived, ["882726", "911673", "911675"]);
+    let board = state.board("convedu-news").unwrap();
+    assert_eq!((board.status.as_str(), board.failed), ("completed", 0));
+    assert!(board.last_error.is_none() && skipped(&state).is_empty());
+    assert!(state.seed_complete("convedu-news").unwrap());
 }

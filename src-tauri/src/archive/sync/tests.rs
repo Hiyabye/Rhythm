@@ -1243,6 +1243,62 @@ async fn opening_a_vendor_notice_reads_its_article_files_and_images() {
 }
 
 #[tokio::test]
+async fn opening_an_old_cms_notice_reads_its_page_and_bound_files() {
+    const SOURCE: &str = "sweducenter-notice";
+    let (dir, store) = setup();
+    with_store(&store, |s| s.subscribe(SOURCE, true)).unwrap();
+    let fake = Fake::new();
+    // scc serves its robots.txt as unrendered ASP source.
+    *fake.robots.lock().unwrap() = "<%\nResponse.ContentType=\"text/plain\";\nif(Request.ServerVariables(\"HTTP_HOST\") == \"nbsm.sogang.ac.kr\"){\n%>\nUser-agent: *\nallow:/\n<%\n}else{\n%>\n\nUser-agent: *\nDisallow:/cgsi/\n\n<%\n<%\n}\n%>".into();
+    let page = include_str!(
+        "../../../../crates/sources/src/fixtures/cms-sweducenter-notice-detail-941077.html"
+    );
+    let entry = ListingEntry {
+        external_id: "941077".into(),
+        url: "https://scc.sogang.ac.kr/front/cmsboardview.do?bbsConfigFK=7250&siteId=sweducenter&pkid=941077".into(),
+        pinned: false,
+        modified_at: None,
+        title: None,
+    };
+    let definition = with_store(&store, |s| s.source(SOURCE)).unwrap().definition;
+    let article_url = parser::detail_url(&definition, &entry).unwrap();
+    let files: Vec<String> = parser::article(&definition, &entry, page)
+        .unwrap()
+        .resources
+        .into_iter()
+        .map(|r| r.url)
+        .collect();
+    assert_eq!(files.len(), 1);
+    assert!(files[0].starts_with("https://scc.sogang.ac.kr/Download?pathStr="));
+    {
+        let mut extra = fake.extra.lock().unwrap();
+        extra.insert(
+            article_url.to_string(),
+            Some((page.as_bytes().to_vec(), "text/html".into())),
+        );
+        extra.insert(
+            files[0].clone(),
+            Some((b"HWP Document File".to_vec(), "application/x-hwp".into())),
+        );
+    }
+    let id = mirror_board(&store, 1, SOURCE, &entry, page);
+    let bodies = body::Bodies::default();
+
+    assert!(!bodies.fetch(&store, dir.path(), &fake, id).await.unwrap());
+    bodies
+        .resources(&store, dir.path(), &fake, id)
+        .await
+        .unwrap();
+    let detail = with_store(&store, |s| s.document(id, None)).unwrap();
+    assert!(!detail.summary_only);
+    assert!(detail
+        .body_text
+        .contains("AI인턴십 참여 학생에게 장학금을 지원"));
+    assert_eq!(detail.resources.len(), 1);
+    assert_eq!(detail.resources[0].status, "downloaded");
+}
+
+#[tokio::test]
 async fn opening_a_wordpress_notice_reads_its_post_and_upload_images() {
     const SOURCE: &str = "creative-news";
     let (dir, store) = setup();
