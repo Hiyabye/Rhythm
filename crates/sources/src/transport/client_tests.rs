@@ -313,7 +313,7 @@ async fn a_body_past_its_deadline_is_reported_as_a_timeout() {
 }
 
 #[tokio::test]
-async fn only_klec_missing_robots_policy_becomes_empty() {
+async fn only_listed_hosts_missing_robots_policy_becomes_empty() {
     let source = |client: &Client, url: &Url| {
         let url = url.clone();
         let client = client.clone();
@@ -325,9 +325,10 @@ async fn only_klec_missing_robots_policy_becomes_empty() {
     };
     let addresses = vec!["8.8.8.8:443".parse().unwrap()];
     let klec = Url::parse("https://klec.sogang.ac.kr/robots.txt").unwrap();
-    for status in [404, 410] {
+    let convedu = Url::parse("https://convedu.sogang.ac.kr/robots.txt").unwrap();
+    for (url, status) in [(&klec, 404), (&klec, 410), (&convedu, 404), (&convedu, 410)] {
         let (client, script) = Script::client(addresses.clone(), vec![Reply::Http(status)]);
-        match source(&client, &klec).await.unwrap() {
+        match source(&client, url).await.unwrap() {
             Fetch::Body { bytes, mime, .. } => {
                 assert!(bytes.is_empty());
                 assert_eq!(mime.as_deref(), Some("text/plain"));
@@ -336,16 +337,19 @@ async fn only_klec_missing_robots_policy_becomes_empty() {
         }
         let requests = script.requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].url(), &klec);
+        assert_eq!(requests[0].url(), url);
     }
     let scec = Url::parse("https://scec.sogang.ac.kr/robots.txt").unwrap();
+    let scc = Url::parse("https://scc.sogang.ac.kr/robots.txt").unwrap();
     let page =
         Url::parse("https://klec.sogang.ac.kr/index.php?bbs_idx=1&pagekind=c&bbsid=00010").unwrap();
     for (url, status) in [
         (&klec, 401),
         (&klec, 403),
         (&klec, 429),
+        (&convedu, 403),
         (&scec, 404),
+        (&scc, 404),
         (&page, 404),
     ] {
         let (client, _) = Script::client(addresses.clone(), vec![Reply::Http(status)]);

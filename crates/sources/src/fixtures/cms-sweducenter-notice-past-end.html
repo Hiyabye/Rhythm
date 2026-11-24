@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+	<meta charset="utf-8">
+	<title>SW중심대학사업단 - 공지사항</title>
+</head>
+<body>
+<div id="body">
+	<div class="main">
+		<!--================================================== CMS START ==================================================-->
+			<!-- section -->
+			<div class="section">
+				<form class="search_box" name="searchForm" method="post" action="cmsboardlist.do">
+				<input type="hidden" name="currentPage" />
+				<input type="hidden" name="bbsConfigFK" value="7250"/>
+				<input type="hidden" name="siteId" value="sweducenter"/>
+
+				<select name="searchField">
+					<option value="D.TITLE" >Title</option>
+					<option value="D.CONTENT" >Content</option>
+					<option value="D.USERNAME" >Writer</option>
+				</select>
+				<input type="search" class="search_input" name="searchValue" value=""/>
+				<button class="btn_search">Search</button>
+				</form>
+			</div>
+			<!-- // section -->
+
+			<!-- section -->
+			<div class="section">
+				<div class="board_list_wrap">
+					<div class="list_box">
+						<ul>
+
+							<!-- List 시작 -->
+
+							<!-- List 끝 -->
+
+							<li class="nothing" style="line-height:161px;">검색된 게시물이 없습니다.</li>
+
+						</ul>
+					</div>
+				</div>
+			</div>
+			<!-- // section -->
+			<!-- section -->
+			<div class="section">
+				<div class="txtr" style="margin-top:20px;">
+
+					<a href="javascript:void(0);" onclick="goLogin();" class="bbtn bbtn0" style="width:110px;">등록</a>
+
+				</div>
+				<script type="text/javascript">
+function sendPage(formName,current){
+	document.pageForm.currentPage.value = current;
+	document.pageForm.submit();
+}
+</script>
+				<div class="board_paging">
+					<ul class="prev_btns btns">
+						<li class="btn_first"><a href="javascript:void(0);" onclick="sendPage('pageForm','1');return false"><span>first</span></a></li>
+						<li class="btn_prev"><a><span>prev</span></a></li>
+					</ul>
+					<ul class="num_btns">
+						<li><a href="javascript:void(0);" onclick="sendPage('pageForm','1');return false"><span>1</span></a></li>
+						<li><a href="javascript:void(0);" onclick="sendPage('pageForm','2');return false"><span>2</span></a></li>
+						<li><a href="javascript:void(0);" onclick="sendPage('pageForm','3');return false"><span>3</span></a></li>
+						<li><a href="javascript:void(0);" onclick="sendPage('pageForm','4');return false"><span>4</span></a></li>
+						<li><a href="javascript:void(0);" onclick="sendPage('pageForm','5');return false"><span>5</span></a></li>
+						<li><a href="javascript:void(0);" onclick="sendPage('pageForm','6');return false"><span>6</span></a></li>
+						<li><a href="javascript:void(0);" onclick="sendPage('pageForm','7');return false"><span>7</span></a></li>
+						<li class="on"><a><span>8</span></a></li>
+					</ul>
+					<div class="total_cnt">/ 8</div>
+					<ul class="next_btns btns">
+						<li class="btn_next"><a><span>next</span></a></li>
+						<li class="btn_last"><a href="javascript:void(0);" onclick="sendPage('pageForm','8');return false"><span>last</span></a></li>
+					</ul>
+				</div>
+
+			</div>
+			<!-- // section -->
+			<!--================================================== CMS END ==================================================-->
+	</div>
+</div>
+<form name="pageForm" method="post" action="cmsboardlist.do">
+<input type="hidden" name="currentPage" />
+<input type="hidden" name="searchField" value="ALL"/>
+<input type="hidden" name="searchValue" value=""/>
+<input type="hidden" name="searchLowItem" value="ALL"/>
+<input type="hidden" name="bbsConfigFK" value="7250"/>
+<input type="hidden" name="siteId" value="sweducenter"/>
+</form>
+</body>
+</html>
