@@ -128,3 +128,23 @@ test('a group that is off shows closed and opening it turns it on; the top group
   await expect(chips(page)).toHaveCount(0);
   await expect(page.getByRole('group', { name: '서강대학교', exact: true })).toContainText('꺼짐 · 게시판 5개');
 });
+
+test('toggling a board keeps its width, and open categories darken with breadth', async ({ page }) => {
+  // Reduced motion zeroes the entry scale, so sizes are measured at rest.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await open(page);
+  await category(page, '단과대학').click();
+  await category(page, '인문대학').click();
+  await category(page, '사학과').click();
+  // The status button sits inside the board's pill, after its name.
+  const pill = chips(page).locator('.chip.board').filter({ has: pick(page, '사학과 공지사항') });
+  await expect(pill.getByRole('button', { name: '사학과 공지사항 상태', exact: true })).toBeVisible();
+  const width = async () => (await pill.boundingBox())!.width;
+  const before = await width();
+  await pick(page, '사학과 공지사항').click();
+  await expect(pick(page, '사학과 공지사항')).toHaveAttribute('aria-pressed', 'true');
+  expect(await width()).toBe(before);
+  const fill = (name: string) => category(page, name).evaluate((node) => getComputedStyle(node).backgroundColor);
+  const colours = [await fill('단과대학'), await fill('인문대학'), await fill('사학과')];
+  expect(new Set(colours).size).toBe(3);
+});

@@ -8,7 +8,7 @@
   import Hint from './Hint.svelte';
   import Popover from './Popover.svelte';
   import CybercampusSettings from './CybercampusSettings.svelte';
-  import { fade, fly, flip } from './motion';
+  import { flip, pop } from './motion';
 
   // Each source extension's pane manages only the sources that extension owns.
   let { enabled, extension }: { enabled: boolean; extension: string } = $props();
@@ -77,14 +77,15 @@
 
   // One flat sequence per top-level group: a category chip is followed, while open, by its
   // sub-categories, then its own boards, so opening pushes the later chips along.
-  type Chip = { key: string; kind: 'group' | 'board'; node?: GroupNode; source?: SourceInfo; parent: string };
-  function chips(node: GroupNode): Chip[] {
+  // `depth` colours an open category: 1 for the categories under a card, deeper below.
+  type Chip = { key: string; kind: 'group' | 'board'; node?: GroupNode; source?: SourceInfo; parent: string; depth: number };
+  function chips(node: GroupNode, depth = 1): Chip[] {
     const items: Chip[] = [];
     for (const child of node.children) {
-      items.push({ key: `g-${child.group.id}`, kind: 'group', node: child, parent: node.group.name });
-      if (isOpen(child)) items.push(...chips(child));
+      items.push({ key: `g-${child.group.id}`, kind: 'group', node: child, parent: node.group.name, depth });
+      if (isOpen(child)) items.push(...chips(child, depth + 1));
     }
-    for (const source of node.boards) items.push({ key: `b-${source.id}`, kind: 'board', source, parent: node.group.name });
+    for (const source of node.boards) items.push({ key: `b-${source.id}`, kind: 'board', source, parent: node.group.name, depth });
     return items;
   }
 
@@ -266,18 +267,22 @@
       {@const node = chip.node}
       {@const on = node.total.filter((source) => source.subscribed).length}
       {@const expanded = isOpen(node)}
-      <button class="chip group" class:open={expanded} aria-expanded={expanded} aria-label={`${node.group.name}, 구독 ${on}/${node.total.length}`} aria-disabled={switchesLocked} onclick={() => toggleCategory(node)}>
+      <button class="chip group" class:open={expanded} data-depth={Math.min(chip.depth, 3)} aria-expanded={expanded} aria-label={`${node.group.name}, 구독 ${on}/${node.total.length}`} aria-disabled={switchesLocked} onclick={() => toggleCategory(node)}>
         <span>{node.group.name}</span><span class="chip-count" aria-hidden="true">{on}/{node.total.length}</span>
         <Icon name="plus" size={13} />
       </button>
     {:else if chip.kind === 'board' && chip.source}
       {@const source = chip.source}
       {@const alert = source.family === 'cybercampus' ? source.last_error && '최근 가져오기 오류' : source.feed?.failing && '서버가 계속 가져오지 못하는 게시판'}
-      <button class="chip board" class:on={source.selected} aria-pressed={source.selected} aria-label={`${chip.parent} ${source.name} 구독`} aria-describedby={alert ? `board-alert-${source.id}` : undefined} disabled={!source.supported} aria-disabled={switchesLocked} onclick={() => subscribe(source)}>
-        {#if source.subscribed}<Icon name="check" size={13} />{/if}<span>{source.name}</span>{#if alert}<Icon name="warning" size={13} />{/if}
-      </button>
+      <!-- One pill: the toggle and, at its right edge, the status button (a button cannot hold another). -->
+      <span class="chip board" class:on={source.selected}>
+        <button class="chip-toggle" aria-pressed={source.selected} aria-label={`${chip.parent} ${source.name} 구독`} aria-describedby={alert ? `board-alert-${source.id}` : undefined} disabled={!source.supported} aria-disabled={switchesLocked} onclick={() => subscribe(source)}>
+          <!-- Both states carry a same-size icon, so toggling never changes the chip's width. -->
+          <Icon name={source.subscribed ? 'check' : 'plus'} size={13} /><span>{source.name}</span>{#if alert}<Icon name="warning" size={13} />{/if}
+        </button>
+        {@render info(source, chip.parent, source.family === 'cybercampus')}
+      </span>
       {#if alert}<span class="sr-only" id={`board-alert-${source.id}`}>{alert}</span>{/if}
-      {@render info(source, chip.parent, source.family === 'cybercampus')}
     {/if}
   {/snippet}
 
@@ -292,7 +297,7 @@
       {#if node.group.enabled}
         <ul class="chips" aria-label={`${node.group.name} 게시판 고르기`}>
           {#each chips(node) as chip (chip.key)}
-            <li class="chip-item" animate:flip in:fly out:fade>{@render chipButton(chip)}</li>
+            <li class="chip-item" animate:flip in:pop>{@render chipButton(chip)}</li>
           {/each}
         </ul>
       {/if}
@@ -323,15 +328,31 @@
   .chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
   .chip-item { position: relative; display: inline-flex; align-items: center; }
   .chip { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 6px 14px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface); color: var(--text-2); font-size: 13px; font-weight: 550; transition: background .15s, border-color .15s, color .15s; }
-  .chip:hover:not(:disabled, [aria-disabled="true"]) { border-color: var(--secondary); }
-  /* aria-disabled while a save runs, so the pressed chip keeps keyboard focus. */
-  .chip:disabled, .chip[aria-disabled="true"] { cursor: default; opacity: .72; }
+  .chip:hover:not(:disabled, [aria-disabled="true"]), .chip.board:hover:has(.chip-toggle:not(:disabled, [aria-disabled="true"])) { border-color: var(--secondary); }
+  /* aria-disabled marks a save in flight, so the pressed chip keeps keyboard focus; it is too
+     brief to show, and dimming every chip at once reads as a flash. */
+  .chip[aria-disabled="true"], .chip-toggle[aria-disabled="true"] { cursor: default; }
+  .chip.board:has(.chip-toggle:disabled) { opacity: .6; }
+  .chip-count { font-size: 11.5px; color: var(--secondary); font-variant-numeric: tabular-nums; }
   .chip.group :global(svg) { transition: transform .15s; }
   .chip.group.open :global(svg) { transform: rotate(45deg); }
-  .chip.group.open { border-color: var(--accent); color: var(--accent); background: var(--soft); }
-  .chip-count { font-size: 11.5px; color: var(--secondary); font-variant-numeric: tabular-nums; }
+  /* Open categories darken with breadth: deep navy, then mid blue, then the light tint.
+     A subscribed board keeps the plain accent fill, so it never reads as a category. */
+  .chip.group.open[data-depth="1"] { background: color-mix(in srgb, var(--accent-fill) 55%, #001433); border-color: transparent; color: #fff; }
+  .chip.group.open[data-depth="1"] .chip-count { color: rgb(255 255 255 / .78); }
+  .chip.group.open[data-depth="2"] { background: color-mix(in srgb, var(--accent-fill) 40%, var(--surface)); border-color: var(--accent); color: var(--text); }
+  .chip.group.open[data-depth="2"] .chip-count { color: var(--text-2); }
+  .chip.group.open[data-depth="3"] { background: var(--soft); border-color: var(--accent); color: var(--accent); }
+  .chip.board { padding: 0; gap: 0; }
+  .chip-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 6px 14px 6px 12px; border: 0; border-radius: 999px; background: transparent; color: inherit; font: inherit; }
+  .chip.board:has(:global(.board-info)) .chip-toggle { padding-right: 2px; }
+  .chip-toggle:focus-visible { outline: none; }
+  .chip.board:has(.chip-toggle:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
   .chip.board.on { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--accent-text); }
-  .chip.board.on:hover:not(:disabled, [aria-disabled="true"]) { filter: brightness(1.08); }
-  .chip-item :global(.board-info) { position: static; margin-left: 2px; }
+  .chip.board.on:hover { filter: brightness(1.08); }
+  .chip.board :global(.board-info) { position: static; transform: none; width: 24px; height: 24px; margin-right: 5px; border-radius: 999px; color: var(--muted); }
+  .chip.board :global(.board-info:hover) { background: var(--hover); color: var(--text); }
+  .chip.board.on :global(.board-info) { color: rgb(255 255 255 / .85); }
+  .chip.board.on :global(.board-info:hover) { background: rgb(255 255 255 / .16); color: var(--accent-text); }
   @media (prefers-reduced-motion: reduce) { .chip, .chip.group :global(svg) { transition: none; } }
 </style>

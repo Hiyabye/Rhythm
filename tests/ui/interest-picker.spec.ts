@@ -135,3 +135,23 @@ test('the setup flow shows the picker in its compact interests step', async ({ p
   await expect(chip(page, '방문학생')).toBeVisible();
   await expect(page.getByRole('textbox', { name: '관심 주제 추가' })).toBeVisible();
 });
+
+test('picking a chip keeps its width, so picking alone never reflows the row', async ({ page }) => {
+  // Reduced motion zeroes the entry scale, so sizes are measured at rest.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await mockDesktop(page); await page.goto('/'); await openSettings(page, '개인화');
+  const target = chip(page, '창업');
+  const width = (await target.boundingBox())!.width;
+  const weight = () => target.evaluate((node) => getComputedStyle(node).fontWeight);
+  const before = await weight();
+  await target.click();
+  await expect(target).toHaveAttribute('aria-pressed', 'true');
+  expect((await target.boundingBox())!.width).toBe(width);
+  // Test browsers may fake bold without widening glyphs, so the weight is checked directly.
+  expect(await weight()).toBe(before);
+  // Unpicking removes its children at once, with no fade that holds their space.
+  await expect(chip(page, '창업 동아리')).toBeVisible();
+  await target.click();
+  await expect(chip(page, '창업 동아리')).toHaveCount(0);
+  expect((await target.boundingBox())!.width).toBe(width);
+});

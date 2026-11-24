@@ -21,6 +21,11 @@ export function slide(node: Element, { duration = 180, ...params }: base.SlidePa
   return base.slide(node, { easing: cubicOut, ...params, duration: quick(duration) });
 }
 
+// Chips entering a wrapping row grow in place; scale and opacity never move other chips.
+export function pop(node: Element, { duration = 160, start = 0.92, ...params }: base.ScaleParams = {}) {
+  return base.scale(node, { easing: cubicOut, start, ...params, duration: quick(duration) });
+}
+
 export function flip(node: Element, positions: { from: DOMRect; to: DOMRect }, { duration = 200, ...params }: Parameters<typeof baseFlip>[2] = {}) {
   return baseFlip(node, positions, { easing: cubicOut, ...params, duration: quick(Number(duration)) });
 }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { PersonalInterest } from './types';
   import { interestSuggestions, type InterestSuggestion } from './interest-suggestions';
-  import { fade, flip } from './motion';
+  import { flip, pop } from './motion';
 
   // Spotify-style picker: a chosen chip saves as an explicit interest and its related chips
   // open right after it. Openness is derived from the selection, so nothing else is stored.
@@ -19,8 +19,9 @@
 
   const chosen = (label: string) => positive.find((interest) => terms(interest).includes(fold(label)));
   const blocked = (label: string) => negative.some((interest) => terms(interest).includes(fold(label)));
-  const isOpen = (node: InterestSuggestion): boolean => !!node.children
-    && (!!chosen(node.label) || node.children.some(isOpen));
+  // Open while the chip or any chip below it is chosen, so a chosen child stays reachable.
+  const hasPick = (node: InterestSuggestion): boolean => !!chosen(node.label) || !!node.children?.some(hasPick);
+  const isOpen = (node: InterestSuggestion): boolean => !!node.children && hasPick(node);
 
   type Row = { node: InterestSuggestion; depth: number };
   function flatten(nodes: InterestSuggestion[], depth: number): Row[] {
@@ -44,12 +45,13 @@
   {#each rows as { node, depth } (node.label)}
     {@const picked = !!chosen(node.label)}
     {@const off = blocked(node.label)}
-    <li animate:flip in:fade out:fade>
+    <li animate:flip in:pop>
       <button
         type="button"
         class="suggest-chip"
         class:picked
         class:child={depth > 0}
+        class:off
         aria-pressed={picked}
         aria-expanded={node.children ? isOpen(node) : undefined}
         aria-disabled={busy || off}
@@ -91,9 +93,13 @@
     border-color: var(--accent);
     background: var(--soft);
     color: var(--accent);
-    font-weight: 600;
   }
+  /* Only an inert topic dims; a save in flight is too brief to show, and dimming every
+     chip at once reads as a flash. Weight never changes, so picking never reflows. */
   .suggest-chip[aria-disabled='true'] {
+    cursor: default;
+  }
+  .suggest-chip.off {
     cursor: default;
     opacity: .6;
   }
