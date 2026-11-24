@@ -47,7 +47,7 @@ The catalog memory value (2 GiB) is an estimate, not a measured peak. `verified`
 
 ## Embedding classification
 
-`intelligence/classification.rs` embeds the instruction, title and first 1000 body characters, then compares the unit vector against 78 authored Korean prototypes (the instruction, input builder, prototypes and scoring live in `crates/embed`) for the ten non-`기타` categories using the best (max) cosine. Prototypes are embedded with the same instruction prefix as notices. The best match below `0.68` becomes `기타` with a low-confidence marker. The prototype set, input shape, scoring and threshold form the config hash stored with each classification; vectors are stored per revision and embedding-model SHA-256 so a prototype change reclassifies without re-embedding. The tracing/evaluation harness is the ignored `actual_embedding_classification_evaluation` (run it with `RHYTHM_EMBEDDING_EVAL_PREFIX=qwen` to match production), which uses the same 18 synthetic fixtures and never touches the production profile.
+The classifier contract (input, the 78 authored prototypes in `crates/embed`, best-cosine scoring, the `0.68` threshold, config hash) is in [Architecture](ARCHITECTURE.md#embedding-classification). The tracing/evaluation harness is the ignored `actual_embedding_classification_evaluation` (run it with `RHYTHM_EMBEDDING_EVAL_PREFIX=qwen` to match production), which uses the same 18 synthetic fixtures and never touches the production profile.
 
 ### Archived notices
 
