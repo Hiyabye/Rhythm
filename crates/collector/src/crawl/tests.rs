@@ -1568,3 +1568,81 @@ async fn a_k2web_notice_over_its_limit_is_skipped_without_holding_the_board() {
     assert_eq!(board.status, "completed");
     assert!(state.seed_complete(INNOV).unwrap());
 }
+
+#[tokio::test]
+async fn a_skipped_notice_counts_as_known_for_the_frontier() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![(1..=50).collect()]);
+    fake.bad.lock().unwrap().insert(40);
+    historical(&state, &fake, Budget::default()).await;
+    assert_eq!(skipped(&state), ["40"]);
+    // Older notices the history import has not reached yet appear below.
+    fake.pages
+        .lock()
+        .unwrap()
+        .extend([(51..=100).collect(), (101..=150).collect()]);
+    fake.calls.lock().unwrap().clear();
+    run(&state, &fake, MAIN, Budget::default()).await.unwrap();
+    // Page 1 is the known frontier: the pass neither pages on nor fetches the
+    // older notices as new ones.
+    assert!(
+        !fake.paths().iter().any(|url| url.contains("pageNum=2")),
+        "{:?}",
+        fake.paths()
+    );
+    assert_eq!(notices(&state).len(), 49);
+    assert!(notices(&state).iter().all(|notice| notice.historical));
+    assert_eq!(
+        requests(&fake, &main_detail(40)),
+        0,
+        "not refetched by the pass"
+    );
+}
+
+#[tokio::test]
+async fn history_retries_a_notice_an_older_collector_version_skipped() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![vec![1, 2], vec![1, 3], vec![1, 4], vec![1, 5]]);
+    fake.bad.lock().unwrap().insert(3);
+    let crawl = Crawl {
+        state: &state,
+        transport: &fake,
+        cancel: &AtomicBool::new(false),
+        budget: Budget::default(),
+        policies: &Policies::default(),
+    };
+    let mut board = state.board(MAIN).unwrap();
+    crawl
+        .pass(&definition(MAIN), &mut board, Pass::Incremental)
+        .await
+        .unwrap();
+    assert_eq!(skipped(&state), ["3"]);
+    fake.bad.lock().unwrap().clear();
+
+    // Skipped by this version: history leaves it to the daily retry.
+    historical(
+        &state,
+        &fake,
+        Budget {
+            pages: Some(3),
+            ..Budget::default()
+        },
+    )
+    .await;
+    assert_eq!(requests(&fake, &main_detail(3)), 1);
+
+    // Skipped by an older version (a parser fix since): the next pass of
+    // history over its page retries it, the incremental pass does not.
+    exec(&state, "UPDATE boards SET next_page=1");
+    exec(&state, "UPDATE skipped SET collector_version='0.0.1'");
+    let mut board = state.board(MAIN).unwrap();
+    crawl
+        .pass(&definition(MAIN), &mut board, Pass::Incremental)
+        .await
+        .unwrap();
+    assert_eq!(requests(&fake, &main_detail(3)), 1);
+    historical(&state, &fake, Budget::default()).await;
+    assert_eq!(requests(&fake, &main_detail(3)), 2);
+    assert!(skipped(&state).is_empty());
+    assert!(notice(&state, "3").historical);
+}

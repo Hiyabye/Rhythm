@@ -618,10 +618,14 @@ impl<T: Transport> Crawl<'_, T> {
                 active(self.cancel)?;
                 let existing_id = state.notice_id(&definition.id, &entry.external_id)?;
                 let exists = existing_id.is_some();
+                let skipped_by = state.skipped_by(&definition.id, &entry.external_id)?;
                 let mut past_window = false;
                 if !entry.pinned {
                     known_regular_frontier = true;
-                    all_regular_known &= exists;
+                    // A skipped notice was fetched already. Counting it as
+                    // unknown would page an incremental pass through every
+                    // older page and fetch unimported history as new notices.
+                    all_regular_known &= exists || skipped_by.is_some();
                     past_window = windowed && regular_rows >= EDIT_ROWS;
                     regular_rows += 1;
                 }
@@ -631,8 +635,14 @@ impl<T: Transport> Crawl<'_, T> {
                     continue;
                 }
                 // A skipped notice is retried by `upkeep` once a day, not on
-                // every pass that lists it.
-                if state.is_skipped(&definition.id, &entry.external_id)? {
+                // every pass that lists it. The history pass also retries one an
+                // older collector version skipped, so a parser fix (with a
+                // `VERSION` bump) reaches the skipped notices at or past the
+                // history checkpoint within its budget instead of a few a day.
+                if skipped_by
+                    .as_deref()
+                    .is_some_and(|version| !historical || version == crate::VERSION)
+                {
                     continue;
                 }
                 // A sitemap-backed listing carries the site's own change time.

@@ -474,16 +474,16 @@ impl State {
         })
         .map(drop)
     }
-    pub fn is_skipped(&self, source_id: &str, external_id: &str) -> Result<bool, String> {
+    /// The collector version that last skipped this notice, if it is skipped.
+    pub fn skipped_by(&self, source_id: &str, external_id: &str) -> Result<Option<String>, String> {
         self.with(|c| {
             c.query_row(
-                "SELECT 1 FROM skipped WHERE source_id=?1 AND external_id=?2",
+                "SELECT collector_version FROM skipped WHERE source_id=?1 AND external_id=?2",
                 params![source_id, external_id],
-                |_| Ok(()),
+                |row| row.get(0),
             )
             .optional()
         })
-        .map(|row| row.is_some())
     }
     /// Records a transient fetch failure and returns on how many runs in a row
     /// the notice has failed.
