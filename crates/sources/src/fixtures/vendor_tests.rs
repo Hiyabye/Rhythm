@@ -415,10 +415,14 @@ fn tampered_list_links_fail() {
     );
     assert!(listing(&scec, 39, &other_host).is_err());
     // A pin after a regular row breaks the leading-slot layout.
-    let late_pin = SCEC_PAGE3.replacen(
-        "<tr class=\"\">\n\t\t\t\t\t\t\t<td class=\"numb\">354</td>",
-        "<tr class=\"bbs-bbs-noti\">\n\t\t\t\t\t\t\t<td class=\"numb\">공지</td>",
-        1,
+    // Edited without line endings, which a Windows checkout turns into CRLF.
+    let cell = SCEC_PAGE3.find("<td class=\"numb\">354</td>").unwrap();
+    let row = SCEC_PAGE3[..cell].rfind("<tr class=\"\">").unwrap();
+    let late_pin = format!(
+        "{}<tr class=\"bbs-bbs-noti\">{}<td class=\"numb\">공지</td>{}",
+        &SCEC_PAGE3[..row],
+        &SCEC_PAGE3[row + "<tr class=\"\">".len()..cell],
+        &SCEC_PAGE3[cell + "<td class=\"numb\">354</td>".len()..]
     );
     assert_ne!(late_pin, SCEC_PAGE3);
     assert!(listing(&scec, 3, &late_pin).is_err());
