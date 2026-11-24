@@ -818,3 +818,51 @@ fn list_titles_match_the_archived_article_titles() {
         );
     }
 }
+
+#[test]
+fn a_poster_only_notice_is_archived_metadata_only() {
+    let contests = board("sori-contests");
+    let entry = ListingEntry {
+        external_id: "347556".into(),
+        url: "https://new-cms.sogang.ac.kr/bbs/sori/2750/347556/artclView.do".into(),
+        pinned: false,
+        modified_at: None,
+        title: None,
+    };
+    let page = include_str!("k2web-sori-detail-347556.html");
+    let parsed = article(contests, &entry, page).unwrap();
+    assert!(parsed.unsupported_body);
+    assert_eq!(
+        parsed.title,
+        "[한국지능정보사회진흥원] 2026년도 스마트폰 과의존 예방교육 우수사례 공모전(기간연장)"
+    );
+    assert_eq!(parsed.published_at, "2026-10-26");
+    assert_eq!(parsed.author.as_deref(), Some("학생지원팀"));
+    assert!(parsed.body_html.is_empty() && parsed.body_text.is_empty());
+    assert!(parsed.resources.is_empty());
+    assert_eq!(parsed.original, page);
+    assert!(metadata_only_allowed("sori-contests"));
+
+    // Text beside the poster is a normal body.
+    let text = page.replace("<p><img", "<p>공모전 안내</p><p><img");
+    let parsed = article(contests, &entry, &text).unwrap();
+    assert!(!parsed.unsupported_body);
+    assert_eq!(parsed.body_text, "공모전 안내");
+
+    // A body without any image still fails, as does any other element.
+    for body in [
+        "<p> </p>",
+        "<p><img src=\"data:image/png;base64,AA\"></p><table></table>",
+    ] {
+        let changed = page.replace(
+            "<p><img style=\"max-width:100%!important;\" src=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAp0AAAO4CAYAAACQw00PAAAAAXNSR0IArs4c6QAA\" alt=\"\"></p>",
+            body,
+        );
+        assert_ne!(changed, page);
+        assert_eq!(
+            article(contests, &entry, &changed).unwrap_err(),
+            PARSER_ERROR,
+            "{body}"
+        );
+    }
+}

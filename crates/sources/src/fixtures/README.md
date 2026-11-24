@@ -177,6 +177,10 @@ was executed or retyped; line endings are LF and trailing whitespace is removed.
 - `k2web-gradsch-page3.html`: page 3 of `/gradsch/1244/subview.do` (일반대학원 공지사항, a
   catalogued board), captured 2026-11-23 the same way: ordinal 770 is a private post,
   `비공개된 게시물입니다.` with a `span.clsdr` marker and no link.
+- `k2web-sori-detail-347556.html`: 청년광장 공모전 (`sori-contests`), captured 2026-11-24
+  with one public GET and trimmed the same way: the whole body is one inline
+  `data:image/png;base64,` poster and there is no attachment (`no-file`). Only that
+  payload was cut to its first 64 base64 characters.
 
 A census of all 129 k2web boards active in 2026 (list page 1 and one detail each,
 through the department host names, not committed) parsed with this family: every list,

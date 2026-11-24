@@ -175,7 +175,7 @@ fn require_changed(changed: usize) -> Result<(), String> {
 pub(super) fn check_article(source_id: &str, article: &ArticleInput) -> Result<(), String> {
     let empty_body = article.body_text.trim().is_empty() && article.body_html.trim().is_empty();
     let invalid_unsupported_body = article.unsupported_body
-        && (crate::archive::parser::main_board(source_id).is_none()
+        && (!crate::archive::parser::metadata_only_allowed(source_id)
             || !empty_body
             || article.resources.iter().any(|r| r.kind == "image"));
     if !valid_id(&article.external_id)

@@ -925,7 +925,7 @@ impl<T: Transport> Crawl<'_, T> {
                 }
                 let mut article =
                     parser::article(definition, entry, text).map_err(|e| permanent(&e))?;
-                // An unsupported body (main-board iframe) never replaces readable
+                // An unsupported body (main-board iframe, k2web poster) never replaces readable
                 // content (approved Sogang exception). The collector never fills a
                 // body from a viewer PDF, so there is no newer PDF to wait for.
                 let keep = match existing_id {

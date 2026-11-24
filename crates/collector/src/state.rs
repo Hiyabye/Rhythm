@@ -934,9 +934,10 @@ fn https_url(value: &str) -> bool {
 /// fail here instead of publishing a malformed notice.
 fn validate(source_id: &str, article: &ArticleInput) -> Result<(), String> {
     let empty_body = article.body_text.trim().is_empty() && article.body_html.trim().is_empty();
-    // The approved metadata-only exception exists for the main site's boards alone.
+    // The approved metadata-only exceptions: main-site iframe bodies and k2web
+    // poster bodies.
     let invalid_unsupported_body = article.unsupported_body
-        && (rhythm_sources::parser::main_board(source_id).is_none()
+        && (!rhythm_sources::parser::metadata_only_allowed(source_id)
             || !empty_body
             || article.resources.iter().any(|r| r.kind == "image"));
     if !valid_id(&article.external_id)

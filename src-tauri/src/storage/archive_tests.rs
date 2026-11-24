@@ -2866,3 +2866,21 @@ fn schema_40_clears_public_board_crawl_state_and_keeps_cybercampus() {
         .collect();
     assert_eq!(tasks, ["source:cybercampus"]);
 }
+
+#[test]
+fn only_main_and_k2web_boards_archive_a_notice_metadata_only() {
+    let (_directory, store) = database();
+    store
+        .catalog(&[
+            definition("sori-contests", true),
+            definition("ee-general", true),
+        ])
+        .unwrap();
+    let mut poster = article("1", "공모전 포스터", "", "2026-11-02");
+    poster.body_html.clear();
+    poster.unsupported_body = true;
+    store
+        .upsert_article("sori-contests", &poster, false)
+        .unwrap();
+    assert!(store.upsert_article("ee-general", &poster, false).is_err());
+}

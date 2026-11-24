@@ -1543,3 +1543,31 @@ async fn a_k2web_notice_over_its_limit_is_skipped_without_holding_the_board() {
     assert_eq!(board.status, "completed");
     assert!(state.seed_complete(INNOV).unwrap());
 }
+
+#[tokio::test]
+async fn a_k2web_poster_only_notice_is_archived_metadata_only() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![]);
+    serve_innov(&fake, "서강의 혁신을 기록하다 Vol.5");
+    // The whole body one inline `data:` image, and no files.
+    let detail = include_str!("../../../sources/src/fixtures/k2web-innov-detail-405464.html");
+    let body = detail.find("<div class=\"txt\">").unwrap() + "<div class=\"txt\">".len();
+    let files = detail.find("<div class=\"attachment\">").unwrap();
+    let list_end = files + detail[files..].find("</ul>").unwrap() + "</ul>".len();
+    let poster = format!(
+        "{}<p><img src=\"data:image/png;base64,iVBORw0KGgo=\"></p></div>\
+         <div class=\"attachment\"><span class=\"no-file\">첨부파일이(가) 없습니다.</span>{}",
+        &detail[..body],
+        &detail[list_end..]
+    );
+    fake.extra
+        .lock()
+        .unwrap()
+        .insert(INNOV_DETAIL.into(), (poster, "text/html".into()));
+    run(&state, &fake, INNOV, Budget::default()).await.unwrap();
+    let archived = notice(&state, "405464");
+    assert_eq!(archived.body_state, "unsupported");
+    assert!(archived.body_text.is_empty());
+    assert!(skipped(&state).is_empty());
+    assert_eq!(state.board(INNOV).unwrap().failed, 0);
+}

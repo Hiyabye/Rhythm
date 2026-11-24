@@ -88,7 +88,7 @@ A records file is UTF-8 JSON Lines compressed with zstd. Each line is one object
 | `title`, `author`, `category` | string, string?, string? | As the board shows them |
 | `published_at` | string | `YYYY-MM-DD` |
 | `modified_at` | string? | The site's own change time (RFC 3339 UTC), when it reports one |
-| `body_state` | `normal` \| `unsupported` | `unsupported`: the body could not be read (an iframe, or a scanned or link-only PDF); the notice is metadata only |
+| `body_state` | `normal` \| `unsupported` | `unsupported`: the body could not be read (an iframe, a scanned or link-only PDF, or a poster of inline `data:` images); the notice is metadata only |
 | `excerpt` | string | The first 320 characters (Unicode scalar values) of the body text |
 | `body_hash` | string? | Since 1.1: `rhythm_feed::body_hash`, the SHA-256 (lowercase hex) of the UTF-8 body text, so a client can tell a body change beyond the excerpt from a metadata-only revision. Absent from a 1.0 publisher |
 | `resources[]` | `{url, filename, kind}` | `kind` is `attachment` or `image`. These are links only; the app fetches them under its own policy |
