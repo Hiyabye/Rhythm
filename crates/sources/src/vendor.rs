@@ -404,10 +404,10 @@ fn klec_table(
     let mut seen = HashSet::new();
     for row in rows {
         let number = one(row, "td[data-label='번호']")?;
+        // A post can have an empty title on the site itself (일반공지 1888); its
+        // row is still listed, and the article parser refuses the post, so
+        // it is recorded as skipped instead of failing the whole page.
         let anchor = one(row, "td[data-label='제목'] a.bbs-tit")?;
-        if text(anchor).is_empty() {
-            return invalid();
-        }
         date(&text(one(row, "td[data-label='작성일']")?))?;
         let href = anchor.value().attr("href").ok_or(PARSER_ERROR)?;
         let pin = number.select(selector("span.notice")).next().is_some();

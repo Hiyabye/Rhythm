@@ -65,6 +65,8 @@ const KLEC_ZIP: &str = include_str!("vendor-klec-notice-detail-2951.html");
 const KLEC_IMAGES: &str = include_str!("vendor-klec-notice-detail-2933.html");
 const KLEC_LINK: &str = include_str!("vendor-klec-notice-detail-2757.html");
 const KLEC_OLD: &str = include_str!("vendor-klec-notice-detail-344.html");
+const KLEC_UNTITLED: &str = include_str!("vendor-klec-notice-untitled.html");
+const KLEC_UNTITLED_ARTICLE: &str = include_str!("vendor-klec-notice-detail-1888.html");
 const KLEC_PHOTO: &str = include_str!("vendor-klec-news-detail-2988.html");
 const KLEC_WRONG_BOARD: &str = include_str!("vendor-klec-notice-wrong-board-2988.html");
 const KLEC_DENIED: &str = include_str!("vendor-klec-notice-denied.html");
@@ -233,6 +235,22 @@ fn klec_tables_keep_a_repeated_pin_once_and_count_down_to_one() {
     assert!(listing(&klec, 2, KLEC_LIST).is_err());
     // The other klec board's page is not this board's list.
     assert!(listing(&klec, 1, KLEC_NEWS_LIST).is_err());
+}
+
+#[test]
+fn klec_lists_an_untitled_post_whose_article_is_then_refused() {
+    let klec = source("klec-notice");
+    // Page 14 holds post 1888, which the site shows with an empty title; the
+    // page must still parse, or the board's history stops there.
+    let page = listing(&klec, 14, KLEC_UNTITLED).unwrap();
+    assert_eq!(
+        ids(&page),
+        ["1903", "1900", "1899", "1898", "1897", "1896", "1895", "1894", "1888", "1868"]
+    );
+    assert_eq!((page.total_pages, page.has_next), (24, true));
+    // The article has no title either, so it is refused as a permanent parse
+    // failure, which the collector records as skipped.
+    assert!(article(&klec, &klec_entry("1888", "00010"), KLEC_UNTITLED_ARTICLE).is_err());
 }
 
 #[test]
