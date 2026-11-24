@@ -38,6 +38,7 @@ pub fn groups() -> Vec<SourceGroup> {
         ("sogang-sbs", "경영대학", Some("sogang-colleges")),
         ("sogang-smas", "지식융합미디어대학", Some("sogang-colleges")),
         ("sogang-jas", "신문방송학과", Some("sogang-smas")),
+        ("sogang-axt", "아트&테크놀로지학과", Some("sogang-smas")),
         (
             "sogang-computing",
             "소프트웨어융합대학",
@@ -322,6 +323,17 @@ pub fn definitions() -> Vec<SourceDefinition> {
             true,
         );
     }
+    // The department's WordPress News category (#80 step 4), read through its
+    // REST API; `parser::WORDPRESS_BOARDS` holds the category.
+    add(
+        "creative-news",
+        "News & Events",
+        "서강대학교 · 아트&테크놀로지학과",
+        "wordpress",
+        "sogang-axt",
+        "https://creative.sogang.ac.kr/blog/newsevents/".into(),
+        true,
+    );
     // The logged-in user's own course notices, read through the eClass session
     // (#86); not a public board, so it has its own description.
     sources.push(SourceDefinition {

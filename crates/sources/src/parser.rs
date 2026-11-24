@@ -14,7 +14,13 @@ mod k2web;
 mod mechanical;
 #[path = "semiconductor.rs"]
 mod semiconductor;
+#[path = "wordpress.rs"]
+mod wordpress;
 pub use k2web::{K2webBoard, Skin, K2WEB_BOARDS};
+pub(crate) use wordpress::{
+    BOARDS as WORDPRESS_BOARDS, LIST_FIELDS as WORDPRESS_LIST_FIELDS,
+    PER_PAGE as WORDPRESS_PER_PAGE, POST_FIELDS as WORDPRESS_POST_FIELDS,
+};
 
 const PARSER_ERROR: &str = "학교 페이지 형식이 예상과 다릅니다. 기존 보관 자료는 유지됩니다.";
 fn invalid<T>() -> Result<T, String> {
@@ -173,6 +179,11 @@ pub fn metadata_only_allowed(source_id: &str) -> bool {
             .iter()
             .any(|board| board.source_id == source_id)
 }
+/// Whether a board's listings and notices are JSON documents (the main
+/// site's BbsData API and the WordPress REST API) rather than HTML pages.
+pub fn json_documents(source: &SourceDefinition) -> bool {
+    main_board(&source.id).is_some() || source.family == "wordpress"
+}
 pub fn main_board(source_id: &str) -> Option<&'static MainBoard> {
     MAIN_BOARDS
         .iter()
@@ -207,6 +218,7 @@ pub fn list_url(source: &SourceDefinition, page: u32) -> Result<Url, String> {
         "k2web" => return k2web::list_url(k2web::board(source)?, page),
         "mechanical" => return mechanical::list_url(source, page),
         "semiconductor" => return semiconductor::list_url(source, page),
+        "wordpress" => return wordpress::list_url(source, page),
         _ => {}
     }
     if let Some(board) = main_board(&source.id) {
@@ -243,6 +255,7 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
         "k2web" => return k2web::detail_url(k2web::board(source)?, entry),
         "mechanical" => return mechanical::detail_url(source, entry),
         "semiconductor" => return semiconductor::detail_url(source, entry),
+        "wordpress" => return wordpress::detail_url(source, entry),
         _ => {}
     }
     if let Some(board) = main_board(&source.id) {
@@ -274,7 +287,7 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
 /// `body` is the response text for a 200 answer and empty otherwise.
 pub fn missing(source: &SourceDefinition, status: u16, body: &str) -> bool {
     match source.family.as_str() {
-        "main" | "engineering" | "mechanical" => matches!(status, 404 | 410),
+        "main" | "engineering" | "mechanical" | "wordpress" => matches!(status, 404 | 410),
         "k2web" => status == 200 && k2web::missing(body),
         // The phrase also sits in the site's script bundle on every page, so
         // only the rendered empty-detail block counts.
@@ -297,6 +310,7 @@ pub fn listing(source: &SourceDefinition, page: u32, body: &str) -> Result<Listi
         "k2web" => k2web::listing(k2web::board(source)?, page, body),
         "mechanical" => mechanical::listing(source, page, body),
         "semiconductor" => semiconductor::listing(source, page, body),
+        "wordpress" => wordpress::listing(source, page, body),
         _ => match main_board(&source.id) {
             Some(board) => main_listing(board, page, body),
             None => computing_listing(source, page, body),
@@ -531,6 +545,7 @@ pub fn article(
         "k2web" => return k2web::article(k2web::board(source)?, entry, body),
         "mechanical" => return mechanical::article(source, entry, body),
         "semiconductor" => return semiconductor::article(source, entry, body),
+        "wordpress" => return wordpress::article(source, entry, body),
         _ => {}
     }
     let (title, author, category, published_at, modified_at, content, mut resources) =

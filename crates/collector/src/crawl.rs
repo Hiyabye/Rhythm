@@ -1020,7 +1020,7 @@ fn check_document_mime(
 ) -> Result<(), String> {
     // The mechanical sitemap is XML; article pages must still be HTML so a wrong
     // content type stays a transient block-page reading.
-    let expected = if rhythm_sources::parser::main_board(&source.id).is_some() {
+    let expected = if rhythm_sources::parser::json_documents(source) {
         mime == Some("application/json")
     } else if source.family == "mechanical" && listing {
         matches!(

@@ -316,7 +316,7 @@ fn skipped(state: &State) -> Vec<String> {
 #[test]
 fn public_boards_are_every_supported_board_but_cybercampus() {
     let boards = public_boards();
-    assert_eq!(boards.len(), 166);
+    assert_eq!(boards.len(), 167);
     assert!(boards
         .iter()
         .all(|b| b.family != catalog::CYBERCAMPUS_FAMILY));
@@ -485,6 +485,70 @@ async fn sitemap_entries_are_skipped_until_their_change_time_moves() {
     assert_eq!((notices(&state).len(), detail_requests(&fake)), (1, 2));
     assert!(state
         .listing_unchanged(MECHANICAL, "1", "2026-09-29T09:00:00.000Z")
+        .unwrap());
+}
+
+/// Serves the WordPress board: a one-post list envelope with the post changed
+/// at `modified_gmt`, and that post (the real fixture with the same time).
+fn serve_wordpress(fake: &Fake, modified_gmt: &str) -> (String, String) {
+    let board = definition("creative-news");
+    let list = rhythm_sources::parser::list_url(&board, 1).unwrap();
+    let entry = ListingEntry {
+        external_id: "47154".into(),
+        url: "https://creative.sogang.ac.kr/?p=47154".into(),
+        pinned: false,
+        modified_at: None,
+        title: None,
+    };
+    let post = rhythm_sources::parser::detail_url(&board, &entry).unwrap();
+    let envelope = json!({
+        "body": [{"id": 47154, "modified_gmt": modified_gmt}],
+        "status": 200,
+        "headers": {"X-WP-Total": 1, "X-WP-TotalPages": 1},
+    });
+    let body = include_str!("../../../sources/src/fixtures/wordpress-creative-post-47154.json")
+        .replace("2026-11-20T07:26:08", modified_gmt);
+    let mut extra = fake.extra.lock().unwrap();
+    extra.insert(
+        list.to_string(),
+        (envelope.to_string(), "application/json".into()),
+    );
+    extra.insert(post.to_string(), (body, "application/json".into()));
+    (list.to_string(), post.to_string())
+}
+
+#[tokio::test]
+async fn wordpress_posts_are_archived_from_json_and_skipped_while_unchanged() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![]);
+    let (_, post) = serve_wordpress(&fake, "2026-11-20T07:26:08");
+    let post_requests = |fake: &Fake| fake.paths().iter().filter(|url| **url == post).count();
+
+    run(&state, &fake, "creative-news", Budget::default())
+        .await
+        .unwrap();
+    assert_eq!((notices(&state).len(), post_requests(&fake)), (1, 1));
+    let archived = notice(&state, "47154");
+    assert_eq!(
+        archived.title,
+        "2026 Art & Technology Conference (ATC) 《레시피 바꾸지 말 것 *》"
+    );
+    run(&state, &fake, "creative-news", Budget::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        post_requests(&fake),
+        1,
+        "an unchanged post is not refetched"
+    );
+
+    serve_wordpress(&fake, "2026-11-21T01:00:00");
+    run(&state, &fake, "creative-news", Budget::default())
+        .await
+        .unwrap();
+    assert_eq!((notices(&state).len(), post_requests(&fake)), (1, 2));
+    assert!(state
+        .listing_unchanged("creative-news", "47154", "2026-11-21T01:00:00Z")
         .unwrap());
 }
 
