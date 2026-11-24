@@ -561,7 +561,7 @@ test('sidebar boards scope the inbox and badges describe their counts', async ({
   const sidebar = page.getByRole('navigation', { name: '기본 탐색', exact: true });
   await expect(sidebar).toContainText('구독한 게시판 없음');
   await expect(sidebar.getByRole('button', { name: '받은 소식', exact: true })).toHaveAccessibleDescription('읽지 않은 공지 3개');
-  await expect(sidebar.getByRole('button', { name: '검색', exact: true })).toHaveAccessibleDescription('보관된 공지 3개');
+  await expect(sidebar.getByRole('button', { name: '검색', exact: true })).toHaveAccessibleDescription('읽지 않은 공지 3개');
   await expect(sidebar.getByRole('button', { name: '보관함', exact: true })).toHaveAccessibleDescription('저장한 공지 3개');
   // Nothing arrived with the last sync, so 오늘 shows no badge rather than a zero.
   await expect(sidebar.getByRole('button', { name: '오늘', exact: true })).not.toHaveAttribute('aria-describedby');

@@ -357,11 +357,16 @@ export interface AiCategoryCounts {
 }
 export interface ArchiveSummary {
   documents: number;
+  /** Unread on subscribed sources (받은 소식). */
   unread: number;
+  /** Unread across the whole archive (검색). */
+  unread_all: number;
   saved: number;
   new_since_sync: number;
   resource_bytes: number;
   trashed: number;
+  /** 기회 notices whose deadline is today. */
+  due_today: number;
 }
 /** Boards on different hosts collect at once; `active` lists those collecting now. */
 export interface SyncStatus {

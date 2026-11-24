@@ -231,6 +231,8 @@ test('기회 lists opportunity categories by nearest open deadline and can show 
     aiCategoryOf: { 1: '공모전·대회', 2: '인턴·채용', 3: '교육·프로그램', 4: '행사·활동', 5: '공모전·대회', 6: '장학' },
     noticeDates: [deadline(1, 5), deadline(2, 1, '18:00'), deadline(3, 0), deadline(5, -1), deadline(6, 2)] });
   await page.goto('/');
+  // The badge counts what the page labels 오늘 마감, not every opportunity.
+  await expect(page.getByRole('button', { name: '기회', exact: true })).toHaveAccessibleDescription('오늘 마감 1개');
   await page.getByRole('button', { name: '기회', exact: true }).click();
   const rows = page.locator('.notice-list > li');
   // Nearest open deadline first, then the notice without one; closed and other categories stay out.

@@ -141,7 +141,8 @@
   function navCount(id: string): { count: number; label: string } | null {
     const entry = id === 'today' ? summary && { count: summary.new_since_sync, label: '최근 동기화로 새 공지' }
       : id === 'inbox' ? summary && { count: summary.unread, label: '읽지 않은 공지' }
-      : id === 'search' ? summary && { count: summary.documents, label: '보관된 공지' }
+      : id === 'search' ? summary && { count: summary.unread_all, label: '읽지 않은 공지' }
+      : id === 'opportunities' ? summary && { count: summary.due_today, label: '오늘 마감' }
       : id === 'bookmark' ? summary && { count: summary.saved, label: '저장한 공지' }
       : id === 'tasks' ? { count: openTasks, label: '남은 과제' }
       : id === 'trash' ? summary && { count: summary.trashed, label: '휴지통의 공지' } : null;

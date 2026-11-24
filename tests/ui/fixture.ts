@@ -683,8 +683,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'archive_summary': {
             // As the store: notices in 휴지통 count only as trashed.
             const live = entries.filter((x) => !x.trashed);
-            return { documents: live.length, unread: live.filter((x) => !x.is_read).length,
-              saved: live.filter((x) => x.saved).length, new_since_sync: 0, resource_bytes: 0, trashed: entries.length - live.length };
+            const unread = live.filter((x) => !x.is_read).length;
+            const now = new Date();
+            const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+            const aiEnabled = snapshot.extensions.some((extension) => extension.id === 'ai' && extension.enabled);
+            const due_today = aiEnabled ? live.filter((x) => ['공모전·대회', '인턴·채용', '교육·프로그램', '행사·활동'].includes(aiCategoryOf(x) ?? '')
+              && noticeDates.some((date) => date.document_id === x.id && date.kind === 'deadline' && date.day === today)).length : 0;
+            return { documents: live.length, unread, unread_all: unread,
+              saved: live.filter((x) => x.saved).length, new_since_sync: 0, resource_bytes: 0, trashed: entries.length - live.length, due_today };
           }
           case 'archive_status': return copy(sync);
           case 'feed_status': return copy(feed);
