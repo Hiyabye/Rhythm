@@ -2,7 +2,10 @@ use super::*;
 use crate::r2::Object;
 use rhythm_feed::{
     manifest::verify,
-    record::{decode_segment, decode_snapshot, Classification, Embedding, Entry, Event, Notice},
+    record::{
+        decode_segment, decode_snapshot, Classification, Embedding, Entry, Event, MealStatus,
+        MealWeek, Notice,
+    },
     test_keys::{other_signer, signer},
 };
 use rhythm_sources::model::ArticleInput;
@@ -146,6 +149,9 @@ struct Client {
     classifications: BTreeMap<Key, Classification>,
     /// By `(calendar_id, uid)` (format 1.2).
     events: BTreeMap<Key, Event>,
+    /// By week (format 1.3). Never removed by a record: a real client drops
+    /// weeks that ended over 7 days ago, which this one leaves to the tests.
+    meals: BTreeMap<String, MealWeek>,
     /// Records applied, to show which path a sync took.
     applied: usize,
     from_snapshot: bool,
@@ -268,6 +274,9 @@ impl Client {
                 Record::EventRemove(removal) => {
                     self.events.remove(&(removal.calendar_id, removal.uid));
                 }
+                Record::MealWeek(week) => {
+                    self.meals.insert(week.week.clone(), *week);
+                }
             }
         }
     }
@@ -318,6 +327,10 @@ impl Client {
             .map(|s| ((s.event.calendar_id.clone(), s.event.uid.clone()), s.event))
             .collect();
         assert_eq!(self.events, events);
+        // Every week the feed still carries is held as published.
+        for scanned in state.feed_meal_scan(&self.generated_at).unwrap() {
+            assert_eq!(self.meals.get(&scanned.week.week), Some(&scanned.week));
+        }
     }
 }
 fn fetch(bucket: &Bucket, file: &FileRef) -> Vec<u8> {
@@ -763,7 +776,7 @@ async fn calendar_events_reach_clients_through_segments_and_snapshots() {
     let report = run(&state, &bucket, &signer, "2026-11-18T03:00:00.000Z").await;
     assert_eq!(report.seqs, Some((1, 3)), "the notice and two events");
     let manifest = manifest_of(&bucket, key);
-    assert_eq!(manifest.format, "1.2");
+    assert_eq!(manifest.format, rhythm_feed::FORMAT);
     assert_eq!(manifest.calendars.len(), 1);
     assert_eq!(manifest.calendars[0].calendar_id, CALENDAR);
     assert_eq!(
@@ -828,4 +841,84 @@ async fn calendar_events_reach_clients_through_segments_and_snapshots() {
     stale.sync(&bucket, key);
     assert!(stale.from_snapshot);
     stale.assert_mirrors(&state);
+}
+
+fn meal_week(external_id: &str, week: &str) -> (crate::state::Offered, MealWeek) {
+    let image = crate::state::Offered {
+        image_url: format!(
+            "https://new-cms.sogang.ac.kr/CrossEditor/binary/images/000047/{external_id}.jpg"
+        ),
+        source_id: "dorm-menu".into(),
+        external_id: external_id.into(),
+        week: week.into(),
+        published_at: "2026-11-17".into(),
+        image_sha256: crate::sha256_hex(external_id),
+    };
+    let record = MealWeek {
+        week: week.into(),
+        source_id: image.source_id.clone(),
+        external_id: external_id.into(),
+        image_url: image.image_url.clone(),
+        status: MealStatus::Unreadable,
+        days: Vec::new(),
+        breakfast_common: None,
+        drinks: None,
+    };
+    (image, record)
+}
+
+#[tokio::test]
+async fn meal_weeks_reach_clients_and_old_weeks_leave_the_snapshot() {
+    let state = State::open_in_memory().unwrap();
+    let bucket = Bucket::default();
+    let signer = signer();
+    let key = signer.public_key();
+    add(&state, 1, "공지");
+    let (this, this_week) = meal_week("20", "2026-11-16");
+    let (next, next_week) = meal_week("21", "2026-11-23");
+    state
+        .meal_offer(&this, crate::meals::OCR_VERSION, "2026-11-18T01:00:00.000Z")
+        .unwrap();
+    state
+        .meal_record(&this, &this_week, Some("x"), "2026-11-18T01:00:00.000Z")
+        .unwrap();
+    state
+        .meal_record(&next, &next_week, Some("x"), "2026-11-18T01:00:00.000Z")
+        .unwrap();
+    let report = run(&state, &bucket, &signer, "2026-11-18T03:00:00.000Z").await;
+    assert_eq!(report.seqs, Some((1, 3)), "the notice and two weeks");
+    let manifest = manifest_of(&bucket, key);
+    assert_eq!(manifest.meals.len(), 1);
+    assert_eq!(manifest.meals[0].consecutive_failures, 1);
+    let mut first = Client::default();
+    first.sync(&bucket, key);
+    first.assert_mirrors(&state);
+    assert_eq!(first.meals.len(), 2);
+
+    // Unchanged weeks publish nothing; a changed week publishes once.
+    let report = run(&state, &bucket, &signer, "2026-11-18T04:00:00.000Z").await;
+    assert_eq!(report.seqs, None);
+    let (newer, mut replaced) = meal_week("22", "2026-11-23");
+    replaced.image_url.push_str("?v=2");
+    let newer = crate::state::Offered {
+        published_at: "2026-11-19".into(),
+        ..newer
+    };
+    state
+        .meal_record(&newer, &replaced, Some("x"), "2026-11-18T04:30:00.000Z")
+        .unwrap();
+    let report = run(&state, &bucket, &signer, "2026-11-18T05:00:00.000Z").await;
+    assert_eq!(report.seqs, Some((4, 4)));
+    first.sync(&bucket, key);
+    first.assert_mirrors(&state);
+    assert_eq!(first.meals["2026-11-23"].external_id, "22");
+
+    // 2026-12-01 in Korea: the week of 11-16 ended over 7 days ago and is
+    // not in that day's snapshot; the week of 11-23 still is.
+    run(&state, &bucket, &signer, "2026-11-30T16:00:00.000Z").await;
+    let mut fresh = Client::default();
+    fresh.sync(&bucket, key);
+    assert!(fresh.from_snapshot);
+    fresh.assert_mirrors(&state);
+    assert_eq!(fresh.meals.keys().collect::<Vec<_>>(), ["2026-11-23"]);
 }

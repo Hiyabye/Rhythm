@@ -1,7 +1,13 @@
 //! One bounded collector run: crawls every public board and the academic
 //! calendar into the state file.
 //!
-//! Usage: `rhythm-collector <state.sqlite3> [--r2 <prefix> [--init] [--publish <prefix> [--reset-feed]]] [--embed [--reset-canary]] [--pages N] [--articles N] [--history-minutes N]`
+//! Usage: `rhythm-collector <state.sqlite3> [--r2 <prefix> [--init] [--publish <prefix> [--reset-feed]]] [--embed [--reset-canary]] [--pages N] [--articles N] [--history-minutes N] [--meal-images <dir> | --meal-results <dir>]`
+//!
+//! With `--meal-images`, the crawl also writes the dormitory menu images that
+//! need OCR into that folder (`meals::offer`, #318). `--meal-results` is a
+//! run of its own after the OCR step: instead of crawling, it records the
+//! results in that folder (`meals::apply`), then uploads and publishes as
+//! usual.
 //!
 //! The budgets bound each pass of each board; history resumes from its
 //! checkpoint on the next run. Every board's new notices come first; with
@@ -32,6 +38,7 @@ use rhythm_collector::{
     calendar,
     crawl::{self, Budget},
     embedding::{self, Limits},
+    meals,
     measured::Measured,
     publish,
     r2::{self, R2},
@@ -42,14 +49,15 @@ use rhythm_collector::{
 use rhythm_sources::transport::Client;
 use std::{
     ffi::OsString,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::ExitCode,
     sync::atomic::AtomicBool,
     time::{Duration, Instant, SystemTime},
 };
 
 const USAGE: &str = "usage: rhythm-collector <state.sqlite3> [--r2 <prefix> [--init] \
-     [--publish <prefix> [--reset-feed]]] [--embed [--reset-canary]] [--pages N] [--articles N] [--history-minutes N]";
+     [--publish <prefix> [--reset-feed]]] [--embed [--reset-canary]] [--pages N] [--articles N] \
+     [--history-minutes N] [--meal-images <dir> | --meal-results <dir>]";
 
 /// The v1 client's user agent (#166 O16): Sogang sees one identity for
 /// Rhythm, with the same robots and per-server pacing.
@@ -69,6 +77,8 @@ struct Args {
     reset_feed: bool,
     embed: bool,
     reset_canary: bool,
+    meal_images: Option<PathBuf>,
+    meal_results: Option<PathBuf>,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
@@ -81,6 +91,8 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut reset_feed = false;
     let mut embed = false;
     let mut reset_canary = false;
+    let mut meal_images = None;
+    let mut meal_results = None;
     while let Some(arg) = args.next() {
         let limit = match arg.as_str() {
             "--pages" => &mut budget.pages,
@@ -114,6 +126,18 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
                 reset_canary = true;
                 continue;
             }
+            "--meal-images" if meal_images.is_none() => {
+                meal_images = Some(PathBuf::from(
+                    args.next().ok_or("--meal-images needs a folder")?,
+                ));
+                continue;
+            }
+            "--meal-results" if meal_results.is_none() => {
+                meal_results = Some(PathBuf::from(
+                    args.next().ok_or("--meal-results needs a folder")?,
+                ));
+                continue;
+            }
             _ if !arg.starts_with('-') && state.is_none() => {
                 state = Some(PathBuf::from(arg));
                 continue;
@@ -140,6 +164,16 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     if reset_canary && !embed {
         return Err("--reset-canary needs --embed".into());
     }
+    // A results run only records OCR results: it never crawls or embeds.
+    let crawls = embed
+        || init
+        || meal_images.is_some()
+        || budget.pages.is_some()
+        || budget.articles.is_some()
+        || history_minutes.is_some();
+    if meal_results.is_some() && crawls {
+        return Err("--meal-results runs without crawl, embedding or init options".into());
+    }
     Ok(Args {
         state: state.ok_or("missing state file")?,
         budget,
@@ -150,12 +184,26 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         reset_feed,
         embed,
         reset_canary,
+        meal_images,
+        meal_results,
     })
 }
 
-/// The crawl, then the embeddings when enabled.
+/// The crawl, then the embeddings when enabled; or only the menu results.
 async fn work(state: &State, args: &Args, ai: Option<&WorkersAi>) -> Result<(), String> {
-    crawl(state, args.budget, args.history_minutes).await?;
+    if let Some(folder) = &args.meal_results {
+        let now = publish::timestamp(SystemTime::now());
+        let applied = meals::apply(state, folder, &now)?;
+        println!("{}", meals::applied_summary(&applied));
+        return Ok(());
+    }
+    crawl(
+        state,
+        args.budget,
+        args.history_minutes,
+        args.meal_images.as_deref(),
+    )
+    .await?;
     let Some(ai) = ai else {
         return Ok(());
     };
@@ -191,6 +239,7 @@ async fn crawl(
     state: &State,
     mut budget: Budget,
     history_minutes: Option<u32>,
+    meal_images: Option<&Path>,
 ) -> Result<(), String> {
     let client = Measured::new(Client::new(USER_AGENT)?);
     let (boards, waiting) = crawl::admitted(state, crawl::public_boards())?;
@@ -235,6 +284,14 @@ async fn crawl(
         "{}",
         calendar::summary(&calendar::run(state, &client, &now, &cancel).await)
     );
+    // The dormitory menu images for the OCR step (#318): a failure is
+    // reported, never fatal.
+    if let Some(folder) = meal_images {
+        std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+        let today = meals::korean_day(&now).ok_or("invalid clock")?;
+        let offers = meals::offer(state, &client, folder, &today, &now, &cancel).await;
+        println!("{}", meals::offers_summary(&offers));
+    }
     for line in client.lines() {
         println!("{line}");
     }
@@ -393,5 +450,33 @@ mod tests {
         assert!(args(&["state.sqlite3", "--r2"]).is_err());
         assert!(args(&["state.sqlite3", "--r2", "state"]).is_err());
         assert!(args(&["state.sqlite3", "--r2", "a/", "--r2", "b/"]).is_err());
+    }
+
+    #[test]
+    fn a_meal_results_run_only_records_results() {
+        let crawl = args(&["w.sqlite3", "--meal-images", "meals"]).unwrap();
+        assert_eq!(crawl.meal_images, Some(PathBuf::from("meals")));
+        let results = args(&[
+            "w.sqlite3",
+            "--r2",
+            "s/",
+            "--publish",
+            "f/",
+            "--meal-results",
+            "m",
+        ])
+        .unwrap();
+        assert_eq!(results.meal_results, Some(PathBuf::from("m")));
+        for extra in [
+            &["--embed"][..],
+            &["--meal-images", "m"],
+            &["--pages", "1"],
+            &["--history-minutes", "5"],
+        ] {
+            let mut list = vec!["w.sqlite3", "--meal-results", "m"];
+            list.extend_from_slice(extra);
+            assert!(args(&list).is_err(), "{extra:?}");
+        }
+        assert!(args(&["w.sqlite3", "--meal-results"]).is_err());
     }
 }

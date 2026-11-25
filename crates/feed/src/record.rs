@@ -25,6 +25,9 @@ pub enum Record {
     Event(Event),
     #[serde(rename = "event.remove")]
     EventRemove(EventRemoval),
+    /// Format 1.3: one week of the dormitory menu (#318).
+    #[serde(rename = "meal.week")]
+    MealWeek(Box<MealWeek>),
 }
 
 /// A notice's current revision without its body: the first `EXCERPT_CHARS`
@@ -155,6 +158,68 @@ pub struct EventRemoval {
     pub removed_at: String,
 }
 
+/// One week of the Bellarmine dormitory menu, read by OCR from the image of
+/// the menu notice (format 1.3, #318). It replaces everything a client holds
+/// for that week, including a week it read from an older post.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MealWeek {
+    /// The week's Monday, `YYYY-MM-DD` (KST).
+    pub week: String,
+    /// The menu notice the week was read from.
+    pub source_id: String,
+    pub external_id: String,
+    /// The original menu image; a client always links it.
+    pub image_url: String,
+    pub status: MealStatus,
+    /// Monday to Sunday when `ok`; empty when `unreadable`.
+    pub days: Vec<MealDay>,
+    /// The rows printed once for the whole week; `None` when `unreadable`.
+    pub breakfast_common: Option<Meal>,
+    pub drinks: Option<Meal>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MealStatus {
+    Ok,
+    /// The image could not be read with certainty: show only its link.
+    Unreadable,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MealDay {
+    /// `YYYY-MM-DD`.
+    pub day: String,
+    /// 한식 breakfast.
+    pub breakfast_korean: Meal,
+    /// 간편식 breakfast.
+    pub breakfast_simple: Meal,
+    /// 컵밥.
+    pub cup_rice: Meal,
+    /// 석식.
+    pub dinner: Meal,
+}
+
+/// One cell of the menu.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Meal {
+    pub status: MealCell,
+    /// Items as printed (source typos kept); empty unless `available`.
+    pub items: Vec<String>,
+    /// `HH:MM` when the cell prints one time, such as a 컵밥 serving time.
+    pub time: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MealCell {
+    Available,
+    /// The menu says the meal is not served, such as `토요일석식미운영`.
+    Closed,
+    /// Blank, merged across days, or not readable.
+    Unknown,
+}
+
 /// One decoded line. `record` is `None` for a kind this version doesn't know,
 /// which a client skips (a minor format addition).
 #[derive(Clone, Debug, PartialEq)]
@@ -246,6 +311,7 @@ fn line_entry(line: &str) -> Result<Entry, String> {
             | "notice.remove"
             | "event.upsert"
             | "event.remove"
+            | "meal.week"
     );
     let record = if known {
         Some(serde_json::from_value(value).map_err(|e| e.to_string())?)

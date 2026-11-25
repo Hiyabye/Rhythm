@@ -30,6 +30,8 @@ const rules = {
     /^LICENSE$/, /^assets\/licenses\//],
   // The feed Worker is its own npm package.
   worker: [/^worker\//],
+  // The collector workflow's OCR step (#318); Python, tested on its own.
+  meal_ocr: [/^crates\/collector\/meal-ocr\//],
 };
 
 // Markdown under src-tauri/, crates/ or scripts/ is documentation; no Rust

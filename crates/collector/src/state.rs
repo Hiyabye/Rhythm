@@ -12,7 +12,7 @@ use std::{collections::HashSet, path::Path, sync::Mutex};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 /// Ordered schema migrations; index `n` upgrades `user_version` n to n+1.
-const MIGRATIONS: [&str; 8] = [
+const MIGRATIONS: [&str; 9] = [
     include_str!("../migrations/001_initial.sql"),
     include_str!("../migrations/002_notice_dates.sql"),
     include_str!("../migrations/003_deletions.sql"),
@@ -21,6 +21,7 @@ const MIGRATIONS: [&str; 8] = [
     include_str!("../migrations/006_feed.sql"),
     include_str!("../migrations/007_transient_failures.sql"),
     include_str!("../migrations/008_calendar_events.sql"),
+    include_str!("../migrations/009_meals.sql"),
 ];
 /// A second "not found" removes a notice only this long after the first.
 pub(crate) const MISSING_CONFIRM: &str = "-1 day";
@@ -1018,8 +1019,12 @@ fn revision_hash(article: &ArticleInput) -> Result<String, String> {
 
 mod calendar;
 mod feed;
+mod meals;
 pub use calendar::Applied as CalendarApplied;
-pub use feed::{Commit, FileRow, Published, PublishedEvent, Scanned, ScannedEvent, StoredRecord};
+pub use feed::{
+    Commit, FileRow, Published, PublishedEvent, Scanned, ScannedEvent, ScannedMeal, StoredRecord,
+};
+pub use meals::{MealNotice, Offered};
 
 #[cfg(test)]
 mod tests {
@@ -1042,10 +1047,10 @@ mod tests {
         assert_eq!((board.next_page, board.history_complete), (4, true));
         assert!(state.seed_complete("sogang-academic").unwrap());
         state
-            .with(|c| c.execute_batch("PRAGMA user_version=9;"))
+            .with(|c| c.execute_batch("PRAGMA user_version=10;"))
             .unwrap();
         drop(state);
-        assert!(State::open(&path).err().unwrap().contains("version 9"));
+        assert!(State::open(&path).err().unwrap().contains("version 10"));
     }
 
     #[test]

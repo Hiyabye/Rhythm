@@ -1035,8 +1035,9 @@ fn check_document_mime(
     }
     Ok(())
 }
-/// Requests a listing or notice, following at most three same-policy redirects.
-async fn fetch<T: Transport>(
+/// Requests a listing, notice or menu image, following at most three
+/// same-policy redirects.
+pub(crate) async fn fetch<T: Transport>(
     transport: &T,
     url: &Url,
     validators: Option<(Option<String>, Option<String>)>,

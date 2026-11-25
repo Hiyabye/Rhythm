@@ -2,7 +2,8 @@ use super::*;
 use manifest::{key_id, sha256_hex, Signature};
 use record::{
     decode_segment, decode_snapshot, BodyState, Classification, DateKind, Embedding, Event,
-    EventRemoval, Notice, NoticeDate, Removal, Resource, ResourceKind,
+    EventRemoval, Meal, MealCell, MealDay, MealStatus, MealWeek, Notice, NoticeDate, Removal,
+    Resource, ResourceKind,
 };
 use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
 use test_keys::unhex;
@@ -309,6 +310,59 @@ fn calendar_events_are_records_and_snapshots_hold_only_their_upserts() {
     let upsert = record::encode(&entries[..1]).unwrap();
     assert_eq!(decode_snapshot(&upsert, 3).unwrap().len(), 1);
     assert!(decode_snapshot(&bytes, 4).is_err(), "an event removal");
+}
+
+fn meal(status: MealCell, items: &[&str], time: Option<&str>) -> Meal {
+    Meal {
+        status,
+        items: items.iter().map(|item| item.to_string()).collect(),
+        time: time.map(str::to_string),
+    }
+}
+
+#[test]
+fn meal_weeks_are_records_in_segments_and_snapshots() {
+    let unknown = meal(MealCell::Unknown, &[], None);
+    let day = MealDay {
+        day: "2026-11-24".into(),
+        breakfast_korean: meal(MealCell::Available, &["전복죽", "동치미"], None),
+        breakfast_simple: unknown.clone(),
+        cup_rice: meal(MealCell::Available, &["돈까스덮밥"], Some("11:40")),
+        dinner: meal(MealCell::Closed, &[], None),
+    };
+    let week = MealWeek {
+        week: "2026-11-23".into(),
+        source_id: "dorm-menu".into(),
+        external_id: "313348".into(),
+        image_url: "https://new-cms.sogang.ac.kr/CrossEditor/binary/images/000047/a.jpg".into(),
+        status: MealStatus::Ok,
+        days: vec![day; 7],
+        breakfast_common: Some(meal(MealCell::Available, &["그린샐러드"], None)),
+        drinks: Some(unknown),
+    };
+    let entries = vec![(5, Record::MealWeek(Box::new(week)))];
+    let bytes = record::encode(&entries).unwrap();
+    assert_eq!(records(&decode_segment(&bytes, 5, 5).unwrap()), entries);
+    // A week is an upsert: snapshots carry it.
+    assert_eq!(records(&decode_snapshot(&bytes, 5).unwrap()), entries);
+    let text = String::from_utf8(zstd::decode_all(bytes.as_slice()).unwrap()).unwrap();
+    let line: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+    assert_eq!(line["kind"], "meal.week");
+    assert_eq!(line["status"], "ok");
+    assert_eq!(line["days"][0]["cup_rice"]["time"], "11:40");
+    assert_eq!(line["days"][0]["dinner"]["status"], "closed");
+    assert_eq!(line["days"][0]["breakfast_simple"]["status"], "unknown");
+    assert_eq!(line["breakfast_common"]["items"][0], "그린샐러드");
+}
+
+#[test]
+fn a_1_2_manifest_without_meals_still_parses() {
+    let mut value: serde_json::Value = serde_json::from_str(EXAMPLE).unwrap();
+    value["format"] = "1.2".into();
+    value.as_object_mut().unwrap().remove("meals");
+    let manifest = Manifest::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(manifest.meals.is_empty());
+    assert_eq!(example().meals[0].source_id, "dorm-menu");
 }
 
 #[test]

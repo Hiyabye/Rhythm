@@ -2,7 +2,7 @@
 
 The v2 collector publishes Sogang's public notices as a signed feed, and the app mirrors it into its own SQLite database (#166). This document is the contract between the two. `crates/feed` (`rhythm-feed`) implements it, and both sides depend on that crate.
 
-The feed is format **1.2** (1.1 added `body_hash`, 1.2 the academic calendar's events). It carries notice metadata, a 320-character body excerpt and a hash of the full body, extracted dates, resource links, embedding vectors, server categories and the school's academic calendar (학사 일정, #319). It never carries full bodies, original HTML or resource bytes (#166 D13). Nothing in the feed depends on who reads it, and requests carry no user data.
+The feed is format **1.3** (1.1 added `body_hash`, 1.2 the academic calendar's events, 1.3 the dormitory menu). It carries notice metadata, a 320-character body excerpt and a hash of the full body, extracted dates, resource links, embedding vectors, server categories, the school's academic calendar (학사 일정, #319) and the Bellarmine dormitory's weekly menu as read by OCR from its menu image (#318). It never carries full bodies, original HTML or resource bytes (#166 D13). Nothing in the feed depends on who reads it, and requests carry no user data.
 
 ## Files
 
@@ -43,7 +43,7 @@ Anything else is a major change: removing or renaming a field, changing a field'
 
 | Field | Meaning |
 | --- | --- |
-| `format` | `"1.2"` |
+| `format` | `"1.3"` |
 | `generated_at` | When this manifest was published (RFC 3339 UTC) |
 | `moved_to` | `null`, or the HTTPS base URL the feed moved to (#166 D22; must start with `https://`). The manifest there must verify like this one |
 | `embedding.model`, `embedding.scope` | The Workers AI model and the scope (model + `rhythm_embed::config_hash`) of new vectors |
@@ -51,6 +51,7 @@ Anything else is a major change: removing or renaming a field, changing a field'
 | `embedding.canary` | The latest drift check (#166 D27): `recorded`, `normal`, `warning`, `stopped`, or `null` before the first one |
 | `boards[]` | Per board: `source_id`, `last_success_at`, `consecutive_failures`, `history_complete` (#166 D19) |
 | `calendars[]` | Since 1.2, per calendar: `calendar_id`, `last_success_at`, `consecutive_failures`. Absent from an older publisher, which a client reads as empty |
+| `meals[]` | Since 1.3, per menu board: `source_id`, `last_success_at` (the last menu image read) and `consecutive_failures` (unreadable images since). Absent from an older publisher, which a client reads as empty |
 | `snapshot` | `through_seq`, `records` and `vectors` (`{path, sha256, size}`; `vectors` may be `null`) |
 | `segments[]` | `from_seq`, `to_seq`, `records`, `vectors` (may be `null`), in seq order |
 
@@ -116,6 +117,19 @@ A records file is UTF-8 JSON Lines compressed with zstd. Each line is one object
 
 Events are dates only and never relate to a notice: a client must not use them for ranking, recommendations or notice notifications.
 
+**`meal.week`** (since 1.3) carries one week of the Bellarmine dormitory menu (`dorm-menu`, #318), read by OCR from the image of the menu notice. It replaces everything the client holds for that week.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `week` | string | The week's Monday, `YYYY-MM-DD` (Korean dates); the week's identity |
+| `source_id`, `external_id` | string | The menu notice the week was read from: the newest post for that week |
+| `image_url` | string | The original menu image. A client always shows a link to it |
+| `status` | string | `ok`, or `unreadable` when the image could not be read with certainty (then `days` is empty and the shared rows are `null`; show only the image link) |
+| `days[]` | object | Monday to Sunday: `day` (`YYYY-MM-DD`) and the cells `breakfast_korean` (한식), `breakfast_simple` (간편식), `cup_rice` (컵밥) and `dinner` (석식) |
+| `breakfast_common`, `drinks` | object or `null` | The rows the menu prints once for the whole week (공통 breakfast, 음료) |
+
+A cell is `{status, items, time}`: `status` is `available`, `closed` (the menu says the meal is not served) or `unknown` (blank, merged across days, or unreadable); `items` are the printed items, typos kept, and are empty unless `available`; `time` is `HH:MM` when the cell prints one time, else `null`. OCR does not check spelling, so an item can differ from the image by a character; the image link is the reference. A client never shows another week, or an older post's reading of the same week, in place of a missing or `unreadable` one, and never uses menus for ranking, recommendations or notifications.
+
 The embedding and classification of a revision follow its `notice.upsert`, either in the same file or in a later one. A client applies them only while `revision_hash` matches the notice revision it holds.
 
 ## Vectors
@@ -132,7 +146,7 @@ A vectors file holds whole vectors and nothing else (#166 O19a). Each vector is 
 `seq` increases by one for every record the publisher writes.
 
 - **A segment** holds exactly the seqs from `from_seq` to `to_seq`, in order.
-- **A snapshot** holds the upserts of every notice and calendar event not removed, each with the seq that last set it, up to `through_seq`. Seqs in a snapshot increase but have gaps, and a snapshot never holds a `notice.remove` or `event.remove`.
+- **A snapshot** holds the upserts of every notice and calendar event not removed, and every menu week that ended at most 7 days before the snapshot's day in Korea, each with the seq that last set it, up to `through_seq`. Seqs in a snapshot increase but have gaps, and a snapshot never holds a `notice.remove` or `event.remove`.
 - **When files are written** (user decisions, 2026-11-18):
   - Each collector run that changes something publishes one run segment.
   - At the first publish of a new UTC day, the previous day's run segments are merged into one daily segment with the same seq range, so no seq is lost. A snapshot is written at the same time.
@@ -156,7 +170,8 @@ A vectors file holds whole vectors and nothing else (#166 O19a). Each vector is 
 Further rules:
 
 - **New boards:** a client skips records of boards it does not know, and its cursor moves past them. When an update adds a board, the client applies that board's records from the snapshot and every segment after it, then continues from its cursor for the other boards without those records again. Records that board already had would otherwise never arrive.
-- **Events from an older client's cursor:** a 1.1 client skipped `event.upsert` and `event.remove` while its cursor moved past them. A client that starts mirroring events applies the events from the snapshot and every segment after it, as for a new board, then continues from its cursor.
+- **Events from an older client's cursor:** a 1.1 client skipped `event.upsert` and `event.remove` while its cursor moved past them. A client that starts mirroring events applies the events from the snapshot and every segment after it, as for a new board, then continues from its cursor. The same holds for `meal.week`, which a 1.2 client skipped.
+- **Menu weeks** are never removed by a record. A client drops weeks that ended more than 7 days ago (Korean dates), so a week a snapshot no longer holds is not a removal.
 - **Notifications:** a first sync, a new board's backfill, and any notice marked `historical`, never notify.
 - **Removals:** a removal deletes the notice and everything derived from it. A saved notice keeps its row with a "원문 삭제됨" note (#166 client behavior).
 - **Plain text:** all text in the feed is plain text. The app escapes it and never renders it as HTML.

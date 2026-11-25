@@ -20,6 +20,9 @@ pub struct Manifest {
     /// Format 1.2: per calendar; empty from an older publisher.
     #[serde(default)]
     pub calendars: Vec<CalendarHealth>,
+    /// Format 1.3: per menu board (#318); empty from an older publisher.
+    #[serde(default)]
+    pub meals: Vec<MealHealth>,
     pub snapshot: Snapshot,
     /// Contiguous and in seq order.
     pub segments: Vec<Segment>,
@@ -47,6 +50,15 @@ pub struct BoardHealth {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CalendarHealth {
     pub calendar_id: String,
+    pub last_success_at: Option<String>,
+    pub consecutive_failures: u32,
+}
+
+/// The menu OCR's health: the last menu image read and how many images
+/// since were unreadable.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MealHealth {
+    pub source_id: String,
     pub last_success_at: Option<String>,
     pub consecutive_failures: u32,
 }
