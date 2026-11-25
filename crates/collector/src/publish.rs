@@ -21,12 +21,12 @@ use crate::{
     embedding,
     r2::{self, ObjectStore},
     sha256_hex,
-    state::{Commit, FileRow, Published, Scanned, State},
+    state::{Commit, FileRow, Published, PublishedEvent, Scanned, ScannedEvent, State},
     workers_ai::MODEL,
 };
 use rhythm_feed::{
     manifest::{EmbeddingInfo, Segment, Snapshot},
-    record::{self, Record, Removal},
+    record::{self, EventRemoval, Record, Removal},
     vector, FileRef, Manifest, Signer, DIMENSIONS, FORMAT, VECTOR_BYTES,
 };
 use std::{
@@ -105,8 +105,9 @@ pub async fn prepare<S: ObjectStore>(
 
     let day = &now[..10];
     let scan = state.feed_scan()?;
+    let events = state.feed_event_scan()?;
     let mut commit = Commit::default();
-    let (changes, current) = plan(&scan, next_seq, &mut commit)?;
+    let (changes, current) = plan(&scan, &events, next_seq, &mut commit)?;
     let mut uploads = Vec::new();
     let listed = state.feed_files(true)?;
 
@@ -233,6 +234,7 @@ fn manifest(state: &State, now: &str) -> Result<Manifest, String> {
             canary: state.canary_latest()?,
         },
         boards: state.feed_boards()?,
+        calendars: state.feed_calendars()?,
         snapshot: Snapshot {
             through_seq: snapshot.to_seq,
             records,
@@ -336,6 +338,7 @@ async fn clean<S: ObjectStore>(
 /// changes and every current upsert (for a snapshot), both in seq order.
 fn plan<'a>(
     scan: &'a [Scanned],
+    events: &[ScannedEvent],
     next_seq: u64,
     commit: &mut Commit,
 ) -> Result<(Vec<Pending<'a>>, Vec<Pending<'a>>), String> {
@@ -406,6 +409,46 @@ fn plan<'a>(
         }
         if published != notice.published {
             commit.published.push((notice.notice_id, published));
+        }
+    }
+    for scanned in events {
+        let event = &scanned.event;
+        let mut published = scanned.published.clone();
+        let mut emit = |record: Record| {
+            changes.push((seq, record, None));
+            seq += 1;
+            seq - 1
+        };
+        if let Some(removed_at) = &scanned.removed_at {
+            // As for notices: only an event clients hold is removed.
+            if published.event_seq.is_some() && published.removed_seq.is_none() {
+                let removal = Record::EventRemove(EventRemoval {
+                    calendar_id: event.calendar_id.clone(),
+                    uid: event.uid.clone(),
+                    removed_at: removed_at.clone(),
+                });
+                published = PublishedEvent {
+                    removed_seq: Some(emit(removal)),
+                    ..PublishedEvent::default()
+                };
+            }
+        } else {
+            let digest = sha256_hex(serde_json::to_vec(event).map_err(|e| e.to_string())?);
+            if published.event_digest.as_deref() != Some(digest.as_str()) {
+                published.event_seq = Some(emit(Record::Event(event.clone())));
+                published.event_digest = Some(digest);
+                published.removed_seq = None;
+            }
+            current.push((
+                published.event_seq.expect("published above"),
+                Record::Event(event.clone()),
+                None,
+            ));
+        }
+        if published != scanned.published {
+            commit
+                .published_events
+                .push(((event.calendar_id.clone(), event.uid.clone()), published));
         }
     }
     commit.next_seq = seq;

@@ -2,7 +2,7 @@
 
 The v2 collector publishes Sogang's public notices as a signed feed, and the app mirrors it into its own SQLite database (#166). This document is the contract between the two. `crates/feed` (`rhythm-feed`) implements it, and both sides depend on that crate.
 
-The feed is format **1.1** (1.1 added `body_hash`). It carries notice metadata, a 320-character body excerpt and a hash of the full body, extracted dates, resource links, embedding vectors and server categories. It never carries full bodies, original HTML or resource bytes (#166 D13). Nothing in the feed depends on who reads it, and requests carry no user data.
+The feed is format **1.2** (1.1 added `body_hash`, 1.2 the academic calendar's events). It carries notice metadata, a 320-character body excerpt and a hash of the full body, extracted dates, resource links, embedding vectors, server categories and the school's academic calendar (학사 일정, #319). It never carries full bodies, original HTML or resource bytes (#166 D13). Nothing in the feed depends on who reads it, and requests carry no user data.
 
 ## Files
 
@@ -43,13 +43,14 @@ Anything else is a major change: removing or renaming a field, changing a field'
 
 | Field | Meaning |
 | --- | --- |
-| `format` | `"1.1"` |
+| `format` | `"1.2"` |
 | `generated_at` | When this manifest was published (RFC 3339 UTC) |
 | `moved_to` | `null`, or the HTTPS base URL the feed moved to (#166 D22; must start with `https://`). The manifest there must verify like this one |
 | `embedding.model`, `embedding.scope` | The Workers AI model and the scope (model + `rhythm_embed::config_hash`) of new vectors |
 | `embedding.dimensions` | `1024` |
 | `embedding.canary` | The latest drift check (#166 D27): `recorded`, `normal`, `warning`, `stopped`, or `null` before the first one |
 | `boards[]` | Per board: `source_id`, `last_success_at`, `consecutive_failures`, `history_complete` (#166 D19) |
+| `calendars[]` | Since 1.2, per calendar: `calendar_id`, `last_success_at`, `consecutive_failures`. Absent from an older publisher, which a client reads as empty |
 | `snapshot` | `through_seq`, `records` and `vectors` (`{path, sha256, size}`; `vectors` may be `null`) |
 | `segments[]` | `from_seq`, `to_seq`, `records`, `vectors` (may be `null`), in seq order |
 
@@ -103,6 +104,18 @@ A records file is UTF-8 JSON Lines compressed with zstd. Each line is one object
 
 **`notice.remove`** has `source_id`, `external_id` and `removed_at`. It is sent once the collector has confirmed the notice was deleted at its source (#166 D24).
 
+**`event.upsert`** (since 1.2) carries the current state of one calendar event. It replaces every field the client holds for that event.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `calendar_id`, `uid` | string | The event identity: the calendar (`sogang-academic-calendar`, the school's published 학사 일정) and the event's iCalendar `UID` |
+| `title` | string | As the calendar writes it, whitespace collapsed. Times appear only inside titles, such as `(오전 11시)` |
+| `start_day`, `end_day` | string | `YYYY-MM-DD`; `end_day` is inclusive and equals `start_day` for a one-day event |
+
+**`event.remove`** has `calendar_id`, `uid` and `removed_at`. The collector sends it once a fetched calendar still lacks the event at least a day after it first went missing. An event that ended before the calendar's earliest listed event aged out of the published window: it is never removed.
+
+Events are dates only and never relate to a notice: a client must not use them for ranking, recommendations or notice notifications.
+
 The embedding and classification of a revision follow its `notice.upsert`, either in the same file or in a later one. A client applies them only while `revision_hash` matches the notice revision it holds.
 
 ## Vectors
@@ -119,7 +132,7 @@ A vectors file holds whole vectors and nothing else (#166 O19a). Each vector is 
 `seq` increases by one for every record the publisher writes.
 
 - **A segment** holds exactly the seqs from `from_seq` to `to_seq`, in order.
-- **A snapshot** holds the upserts of every notice not removed, each with the seq that last set it, up to `through_seq`. Seqs in a snapshot increase but have gaps, and a snapshot never holds a `notice.remove`.
+- **A snapshot** holds the upserts of every notice and calendar event not removed, each with the seq that last set it, up to `through_seq`. Seqs in a snapshot increase but have gaps, and a snapshot never holds a `notice.remove` or `event.remove`.
 - **When files are written** (user decisions, 2026-11-18):
   - Each collector run that changes something publishes one run segment.
   - At the first publish of a new UTC day, the previous day's run segments are merged into one daily segment with the same seq range, so no seq is lost. A snapshot is written at the same time.
@@ -136,13 +149,14 @@ A vectors file holds whole vectors and nothing else (#166 O19a). Each vector is 
 4. Choose where to start:
    - **A cursor `c` with `c + 1` inside the listed segments:** apply the segments from the one that holds `c + 1`.
    - **A cursor equal to the newest listed seq** (the last segment's `to_seq`, or `through_seq` when no segment is listed): nothing to apply.
-   - **Any other cursor, or none:** apply the snapshot. Notices the client holds but the snapshot lacks were removed meanwhile; delete them as for `notice.remove`. Embeddings and classifications the snapshot lacks are dropped too, since it carries every current one. Then apply the segments after `through_seq`.
+   - **Any other cursor, or none:** apply the snapshot. Notices and events the client holds but the snapshot lacks were removed meanwhile; delete them as for `notice.remove` and `event.remove`. Embeddings and classifications the snapshot lacks are dropped too, since it carries every current one. Then apply the segments after `through_seq`.
 5. Check each downloaded file's size and SHA-256 against the manifest (`FileRef::check`) before decoding it.
 6. Apply a file's records in one transaction, then store its last seq as the cursor.
 
 Further rules:
 
 - **New boards:** a client skips records of boards it does not know, and its cursor moves past them. When an update adds a board, the client applies that board's records from the snapshot and every segment after it, then continues from its cursor for the other boards without those records again. Records that board already had would otherwise never arrive.
+- **Events from an older client's cursor:** a 1.1 client skipped `event.upsert` and `event.remove` while its cursor moved past them. A client that starts mirroring events applies the events from the snapshot and every segment after it, as for a new board, then continues from its cursor.
 - **Notifications:** a first sync, a new board's backfill, and any notice marked `historical`, never notify.
 - **Removals:** a removal deletes the notice and everything derived from it. A saved notice keeps its row with a "원문 삭제됨" note (#166 client behavior).
 - **Plain text:** all text in the feed is plain text. The app escapes it and never renders it as HTML.

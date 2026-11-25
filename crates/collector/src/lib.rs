@@ -5,6 +5,7 @@
 //! The crawl rules are ported from the desktop app's `archive/sync` (user
 //! decision, #174): the app keeps its own copy until its board crawler is
 //! removed (#178), so a crawl-rule fix in the meantime belongs in both.
+pub mod calendar;
 pub mod crawl;
 pub mod embedding;
 pub mod measured;

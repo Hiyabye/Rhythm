@@ -352,3 +352,52 @@ async fn only_klec_missing_robots_policy_becomes_empty() {
         assert_eq!(source(&client, url).await.unwrap_err().status, Some(status));
     }
 }
+
+#[tokio::test]
+async fn only_the_calendar_hosts_missing_robots_policy_becomes_empty() {
+    let fetch = |client: &Client, url: &Url, access: Access| {
+        let url = url.clone();
+        let client = client.clone();
+        async move {
+            client
+                .get(&url, None, 1024, &AtomicBool::new(false), access)
+                .await
+        }
+    };
+    let addresses = vec!["8.8.8.8:443".parse().unwrap()];
+    let robots = Url::parse("https://outlook.office365.com/robots.txt").unwrap();
+    // Observed: 302 to the mail login, which answers 417.
+    for status in [302, 404, 417] {
+        let (client, script) = Script::client(addresses.clone(), vec![Reply::Http(status)]);
+        match fetch(&client, &robots, Access::Calendar).await.unwrap() {
+            Fetch::Body { bytes, mime, .. } => {
+                assert!(bytes.is_empty());
+                assert_eq!(mime.as_deref(), Some("text/plain"));
+            }
+            _ => panic!("missing robots policy must be an empty body"),
+        }
+        assert_eq!(script.requests.lock().unwrap().len(), 1);
+    }
+    // Denied or rate limited is never allow-all, and the ICS's own errors stay errors.
+    let ics = Url::parse(crate::calendar::ACADEMIC_CALENDAR_URL).unwrap();
+    for (url, status) in [(&robots, 401), (&robots, 403), (&robots, 429), (&ics, 404)] {
+        let (client, _) = Script::client(addresses.clone(), vec![Reply::Http(status)]);
+        assert_eq!(
+            fetch(&client, url, Access::Calendar)
+                .await
+                .unwrap_err()
+                .status,
+            Some(status)
+        );
+    }
+    // School-source access cannot reach the calendar host.
+    let (client, script) = Script::client(addresses.clone(), vec![Reply::Http(200)]);
+    assert_eq!(
+        fetch(&client, &ics, Access::Source)
+            .await
+            .unwrap_err()
+            .message,
+        BLOCKED
+    );
+    assert!(script.requests.lock().unwrap().is_empty());
+}

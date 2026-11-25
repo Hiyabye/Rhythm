@@ -20,6 +20,11 @@ pub enum Record {
     Classification(Classification),
     #[serde(rename = "notice.remove")]
     Remove(Removal),
+    /// Format 1.2: an academic calendar event (#319).
+    #[serde(rename = "event.upsert")]
+    Event(Event),
+    #[serde(rename = "event.remove")]
+    EventRemove(EventRemoval),
 }
 
 /// A notice's current revision without its body: the first `EXCERPT_CHARS`
@@ -127,6 +132,29 @@ pub struct Removal {
     pub removed_at: String,
 }
 
+/// A calendar event's current state (format 1.2). Dates only: the source
+/// calendar is all-day, and times appear only inside titles.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Event {
+    /// The calendar, `rhythm_sources::calendar::ACADEMIC_CALENDAR_ID`.
+    pub calendar_id: String,
+    /// The event's identity within its calendar (the ICS `UID`).
+    pub uid: String,
+    pub title: String,
+    /// `YYYY-MM-DD`.
+    pub start_day: String,
+    /// `YYYY-MM-DD`, inclusive; equal to `start_day` for a one-day event.
+    pub end_day: String,
+}
+
+/// The event was dropped from its calendar.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EventRemoval {
+    pub calendar_id: String,
+    pub uid: String,
+    pub removed_at: String,
+}
+
 /// One decoded line. `record` is `None` for a kind this version doesn't know,
 /// which a client skips (a minor format addition).
 #[derive(Clone, Debug, PartialEq)]
@@ -175,10 +203,12 @@ pub fn decode_snapshot(bytes: &[u8], through: u64) -> Result<Vec<Entry>, Error> 
             "snapshot seqs are not increasing up to {through}"
         )));
     }
-    if entries
-        .iter()
-        .any(|entry| matches!(entry.record, Some(Record::Remove(_))))
-    {
+    if entries.iter().any(|entry| {
+        matches!(
+            entry.record,
+            Some(Record::Remove(_) | Record::EventRemove(_))
+        )
+    }) {
         return Err(Error::Invalid("snapshot holds a removal".into()));
     }
     Ok(entries)
@@ -210,7 +240,12 @@ fn line_entry(line: &str) -> Result<Entry, String> {
     let kind = value["kind"].as_str().ok_or("no kind")?;
     let known = matches!(
         kind,
-        "notice.upsert" | "embedding.upsert" | "classification.upsert" | "notice.remove"
+        "notice.upsert"
+            | "embedding.upsert"
+            | "classification.upsert"
+            | "notice.remove"
+            | "event.upsert"
+            | "event.remove"
     );
     let record = if known {
         Some(serde_json::from_value(value).map_err(|e| e.to_string())?)

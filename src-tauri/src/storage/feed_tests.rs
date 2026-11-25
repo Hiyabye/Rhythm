@@ -531,6 +531,7 @@ fn manifest(generated_at: &str, boards: &[(&str, u32)]) -> rhythm_feed::Manifest
             dimensions: 1024,
             canary: None,
         },
+        calendars: Vec::new(),
         boards: boards
             .iter()
             .map(

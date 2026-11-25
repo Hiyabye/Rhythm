@@ -1,4 +1,5 @@
-//! One bounded collector run: crawls every public board into the state file.
+//! One bounded collector run: crawls every public board and the academic
+//! calendar into the state file.
 //!
 //! Usage: `rhythm-collector <state.sqlite3> [--r2 <prefix> [--init] [--publish <prefix> [--reset-feed]]] [--embed [--reset-canary]] [--pages N] [--articles N] [--history-minutes N]`
 //!
@@ -28,6 +29,7 @@
 //! the published seqs with a snapshot of this state, which brings every
 //! client to it (docs/FEED.md).
 use rhythm_collector::{
+    calendar,
     crawl::{self, Budget},
     embedding::{self, Limits},
     measured::Measured,
@@ -197,7 +199,8 @@ async fn crawl(
     }
     budget.history_until = history_minutes
         .map(|minutes| Instant::now() + Duration::from_secs(u64::from(minutes) * 60));
-    let report = crawl::run_boards(state, &client, &boards, budget, &AtomicBool::new(false)).await;
+    let cancel = AtomicBool::new(false);
+    let report = crawl::run_boards(state, &client, &boards, budget, &cancel).await;
     let mut failed = 0;
     for (id, outcome) in report.outcomes {
         match outcome {
@@ -226,6 +229,12 @@ async fn crawl(
             group.slowest.1.as_secs()
         );
     }
+    // The academic calendar (#319): a failure is recorded, never fatal.
+    let now = publish::timestamp(SystemTime::now());
+    println!(
+        "{}",
+        calendar::summary(&calendar::run(state, &client, &now, &cancel).await)
+    );
     for line in client.lines() {
         println!("{line}");
     }
