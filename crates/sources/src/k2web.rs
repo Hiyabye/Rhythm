@@ -389,10 +389,23 @@ fn table_rows(list: ElementRef<'_>, rows: &mut Rows<'_>) -> Result<(), String> {
         }
         let anchor = one(cell, "a")?;
         // A board with categories prints `[category]` beside the `strong`
-        // title, which is the title the article page confirms.
-        let title = match anchor.select(selector("strong")).count() {
-            0 => listed_title(anchor),
-            _ => listed_title(one(anchor, "strong")?),
+        // title, which is the title the article page confirms. A title saved
+        // with its own `<strong>` markup nests inside it (sociology-news
+        // 352050), so only the outermost one counts.
+        let outer: Vec<_> = anchor
+            .select(selector("strong"))
+            .filter(|strong| {
+                !strong
+                    .ancestors()
+                    .take_while(|ancestor| ancestor.id() != anchor.id())
+                    .filter_map(ElementRef::wrap)
+                    .any(|ancestor| ancestor.value().name() == "strong")
+            })
+            .collect();
+        let title = match outer.as_slice() {
+            [] => listed_title(anchor),
+            [strong] => listed_title(*strong),
+            _ => return invalid(),
         };
         if title.is_empty() {
             return invalid();
@@ -544,10 +557,13 @@ pub(super) fn listing(board: &K2webBoard, page: u32, body: &str) -> Result<Listi
 /// (with or without a `분류` item, which the prefix must then match), and a
 /// title may itself start with brackets, so the hidden title decides. Some
 /// sites escape the hidden value twice (`&amp;quot;`, even `&amp;#39S`), so it
-/// also counts after one more decoding as page text.
+/// also counts after one more decoding as page text. A title saved with markup
+/// (`<strong>…</strong>`, sociology-news 352050) keeps the tags in the hidden
+/// value and shows only its text.
 fn shown_title(shown: &str, hidden: &str, class: Option<&str>) -> Result<String, String> {
     let hidden = normalize(hidden);
     let decoded = text(Html::parse_fragment(&hidden.replace('<', "&lt;")).root_element());
+    let marked_up = text(Html::parse_fragment(&hidden).root_element());
     let prefixed = shown
         .strip_prefix('[')
         .and_then(|rest| rest.split_once("] "))
@@ -557,7 +573,9 @@ fn shown_title(shown: &str, hidden: &str, class: Option<&str>) -> Result<String,
     [Some(shown), prefixed]
         .into_iter()
         .flatten()
-        .find(|title| !title.is_empty() && (*title == hidden || *title == decoded))
+        .find(|title| {
+            !title.is_empty() && (*title == hidden || *title == decoded || *title == marked_up)
+        })
         .map(str::to_owned)
         .ok_or_else(|| PARSER_ERROR.into())
 }

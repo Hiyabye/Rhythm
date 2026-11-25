@@ -165,6 +165,12 @@ was executed or retyped; line endings are LF and trailing whitespace is removed.
   `k2web-sociology-detail-352078.html`, whose `og:url` is the literal `?`. The page
   is 17.4 MB: one inline `data:image/png;base64,` image. Only that payload was cut to
   its first 64 base64 characters; nothing else changed.
+- `k2web-sociology-news-page11.html`, `k2web-sociology-news-detail-352050.html`: page 11
+  of `/sociology/4376/subview.do` (catalogued `sociology-news`, table, 7 rows, total 85,
+  14 pins) and its notice 352050, captured 2026-11-25 with the collector's user agent
+  after production history passes kept failing on that page. The notice's title was
+  saved with `<strong>` markup: the list nests it in a second `strong`, and the
+  detail's hidden `artclViewTitle` keeps the escaped tags.
 - `k2web-sbs-list.html`, `k2web-sbs-detail-425296.html`: no `작성자` item, a `[행사]`
   title prefix without a `분류` item, a hidden title escaped twice and one
   `/CrossEditor/` image.
