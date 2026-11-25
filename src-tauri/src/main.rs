@@ -628,6 +628,7 @@ fn main() {
             commands::calendar_todos,
             commands::calendar_notice_dates,
             commands::calendar_set_all_deadlines,
+            commands::calendar_set_academic,
             commands::notice_dates,
             commands::calendar_create_todo,
             commands::calendar_update_todo,

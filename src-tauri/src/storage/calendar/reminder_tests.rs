@@ -1,8 +1,8 @@
 use super::*;
 use crate::extensions;
 use crate::storage::{
-    UNDO_BODY_HASH, UNDO_FEED, UNDO_FEED_SYNC, UNDO_KNOWN_BOARDS, UNDO_PREVIOUS_MANIFEST,
-    UNDO_REMINDERS,
+    UNDO_BODY_HASH, UNDO_CALENDAR_EVENTS, UNDO_FEED, UNDO_FEED_SYNC, UNDO_KNOWN_BOARDS,
+    UNDO_PREVIOUS_MANIFEST, UNDO_REMINDERS,
 };
 
 fn fixture() -> (tempfile::TempDir, Store) {
@@ -302,7 +302,7 @@ fn schema_thirty_four_upgrades_todos_without_reminders() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS} PRAGMA user_version=34;"
+                "{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS} PRAGMA user_version=34;"
             ))
             .unwrap();
     }

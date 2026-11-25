@@ -12,6 +12,8 @@ use serde::Serialize;
 const MAX_RANGE_DAYS: i64 = 62;
 /// Bounds one calendar request even with every notice's deadlines shown.
 const MAX_DATES: i64 = 2000;
+/// The school calendar has about 60 events a year.
+const MAX_EVENTS: i64 = 500;
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct NoticeDate {
@@ -27,10 +29,23 @@ pub struct NoticeDate {
     /// `deadline`, `start` or `date`.
     pub kind: String,
 }
+/// An academic calendar event from the feed (#319). `end_day` is inclusive.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct CalendarEvent {
+    pub calendar_id: String,
+    pub uid: String,
+    pub title: String,
+    pub start_day: String,
+    pub end_day: String,
+}
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct CalendarNoticeDates {
     pub all_deadlines: bool,
     pub dates: Vec<NoticeDate>,
+    /// Whether the 학사 일정 layer is shown (`settings.calendar_academic`).
+    pub academic: bool,
+    /// Events overlapping the range, empty while the layer is hidden.
+    pub events: Vec<CalendarEvent>,
 }
 
 fn kind_name(kind: Kind) -> &'static str {
@@ -199,10 +214,58 @@ impl Store {
                     .collect()
             })
             .map_err(|e| e.to_string())?;
+        let academic = self.calendar_academic()?;
+        let events = if academic {
+            self.connection
+                .prepare(
+                    "SELECT calendar_id,uid,title,start_day,end_day FROM calendar_events
+                     WHERE start_day<=?2 AND end_day>=?1
+                     ORDER BY start_day,end_day,title,uid LIMIT ?3",
+                )
+                .and_then(|mut statement| {
+                    statement
+                        .query_map(params![from, to, MAX_EVENTS], |r| {
+                            Ok(CalendarEvent {
+                                calendar_id: r.get(0)?,
+                                uid: r.get(1)?,
+                                title: r.get(2)?,
+                                start_day: r.get(3)?,
+                                end_day: r.get(4)?,
+                            })
+                        })?
+                        .collect()
+                })
+                .map_err(|e| e.to_string())?
+        } else {
+            Vec::new()
+        };
         Ok(CalendarNoticeDates {
             all_deadlines,
             dates,
+            academic,
+            events,
         })
+    }
+
+    pub(crate) fn calendar_academic(&self) -> Result<bool, String> {
+        self.connection
+            .query_row(
+                "SELECT calendar_academic FROM settings WHERE id=1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .map(|value| value.unwrap_or(true))
+            .map_err(|e| e.to_string())
+    }
+    pub(crate) fn set_calendar_academic(&self, enabled: bool) -> Result<(), String> {
+        self.connection
+            .execute(
+                "UPDATE settings SET calendar_academic=?1 WHERE id=1",
+                [enabled],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// A notice's own dates for its reader. A notice in 휴지통 has none to add.

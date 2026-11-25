@@ -55,6 +55,7 @@
     "allow-calendar-reminder-activation",
     "allow-calendar-notice-dates",
     "allow-calendar-set-all-deadlines",
+    "allow-calendar-set-academic",
     "allow-calendar-set-todo-done",
     "allow-calendar-todos",
     "allow-calendar-update-todo",

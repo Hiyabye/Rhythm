@@ -378,6 +378,15 @@ pub async fn calendar_set_all_deadlines(
     let _lease = state.operation_gate.shared().await?;
     locked(&state.store, |s| s.set_calendar_all_deadlines(enabled))
 }
+/// Shows or hides the academic calendar (학사 일정) layer (#319).
+#[tauri::command]
+pub async fn calendar_set_academic(
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    let _lease = state.operation_gate.shared().await?;
+    locked(&state.store, |s| s.set_calendar_academic(enabled))
+}
 #[tauri::command]
 pub async fn notice_dates(
     state: tauri::State<'_, AppState>,

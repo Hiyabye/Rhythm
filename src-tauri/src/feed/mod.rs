@@ -211,9 +211,11 @@ async fn fetch(
 }
 
 /// Brings in `boards`, whose records earlier syncs skipped because the
-/// catalog did not have them yet (#80): their records from the snapshot path
-/// (the snapshot and every segment after it), while the cursor and the other
-/// boards stay as they are.
+/// catalog did not have them yet (#80), and with `events` the calendar events
+/// a version without format 1.2 support skipped (#319): their records from
+/// the snapshot path (the snapshot and every segment after it), while the
+/// cursor and the other boards stay as they are.
+#[allow(clippy::too_many_arguments)]
 async fn backfill(
     store: &SharedStore,
     data_root: &Path,
@@ -221,6 +223,7 @@ async fn backfill(
     base: &Base,
     manifest: &Manifest,
     boards: &HashSet<String>,
+    events: bool,
     cancel: &AtomicBool,
 ) -> Result<Summary, Failure> {
     let mut summary = Summary::default();
@@ -235,7 +238,7 @@ async fn backfill(
         };
         let entries = entries.map_err(feed_error)?;
         let applied = with_store(store, |s| {
-            s.feed_backfill(boards, after, &entries, &vectors)
+            s.feed_backfill(boards, events, after, &entries, &vectors)
         })?;
         for path in &applied.orphaned {
             let _ = tokio::fs::remove_file(data_root.join(path)).await;
@@ -257,10 +260,13 @@ pub(crate) async fn sync(
     cancel: &AtomicBool,
 ) -> Result<Summary, Failure> {
     let state = with_store(store, |s| s.feed_state())?;
-    // A first sync takes the snapshot path, which covers every board.
-    let new_boards = match state.cursor {
-        Some(_) => with_store(store, |s| s.feed_new_boards())?,
-        None => HashSet::new(),
+    // A first sync takes the snapshot path, which covers every board and
+    // every calendar event.
+    let (new_boards, missing_events) = match state.cursor {
+        Some(_) => with_store(store, |s| {
+            Ok((s.feed_new_boards()?, !s.feed_events_known()?))
+        })?,
+        None => (HashSet::new(), false),
     };
     // A stored base that no longer parses falls back to the app's own.
     let base = state
@@ -273,8 +279,10 @@ pub(crate) async fn sync(
     let (steps, quiet) = plan(&manifest, state.cursor);
     // The cursor path leaves the backfilled boards out: their records up to
     // the newest seq are applied already, and an older revision must not
-    // follow a newer one.
-    let (mut summary, skip) = if quiet || new_boards.is_empty() {
+    // follow a newer one. Backfilled events need no skip: the cursor path
+    // replays their records after the cursor in order, which ends at the
+    // newest state the backfill reached.
+    let (mut summary, skip) = if quiet || (new_boards.is_empty() && !missing_events) {
         (Summary::default(), HashSet::new())
     } else {
         let summary = backfill(
@@ -284,6 +292,7 @@ pub(crate) async fn sync(
             &base,
             &manifest,
             &new_boards,
+            missing_events,
             cancel,
         )
         .await?;
@@ -322,7 +331,8 @@ pub(crate) async fn sync(
         summary.revised += applied.revised;
         summary.removed += applied.removed;
     }
-    // Only now: a sync that stopped early backfills the same boards again.
+    // Only now: a sync that stopped early backfills the same boards (and the
+    // events) again.
     with_store(store, |s| s.feed_remember_boards())?;
     Ok(summary)
 }

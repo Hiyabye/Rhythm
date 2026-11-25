@@ -2,16 +2,18 @@
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { save } from '@tauri-apps/plugin-dialog';
-  import type { CalendarExport, CalendarNoticeDates, CalendarTodo, CybercampusTask, NoticeDate, TodoInput, TodoPrefill } from './types';
-  import { archiveError, localDayKey, noticeDateMark, noticeDateMeta, noticeDateOn, noticeDateTodo, taskTodo, wallTime } from './archive-format';
+  import type { CalendarEvent, CalendarExport, CalendarNoticeDates, CalendarTodo, CybercampusTask, NoticeDate, TodoInput, TodoPrefill } from './types';
+  import { archiveError, calendarEventMeta, calendarEventOn, calendarEventTodo, localDayKey, noticeDateMark, noticeDateMeta, noticeDateOn, noticeDateTodo, taskTodo, wallTime } from './archive-format';
   import { confirmAction } from './confirm';
   import { clock } from './clock.svelte';
   import Icon from './Icon.svelte';
   import TimeField from './TimeField.svelte';
   import { fade, slide } from './motion';
 
-  let { desktop, selected = $bindable(), prefill = $bindable(), focus = $bindable(), tasks, ontasks, onopen }: {
+  let { desktop, notices, selected = $bindable(), prefill = $bindable(), focus = $bindable(), tasks, ontasks, onopen }: {
     desktop: boolean;
+    // Whether 서강 공지 is on; the academic calendar arrives only with its feed sync.
+    notices: boolean;
     // Owned by the archive view, so returning from the reader keeps the day.
     selected: string;
     // A form requested from another page; cleared once opened so returning from the reader does not reopen it.
@@ -32,6 +34,9 @@
   // Dates found in notice text: saved notices', plus every notice's deadlines when chosen.
   let dates = $state<NoticeDate[]>([]);
   let allDeadlines = $state(false);
+  // The school's academic calendar (학사 일정) and whether its layer is shown.
+  let events = $state<CalendarEvent[]>([]);
+  let academic = $state(true);
   let loading = $state(false);
   let error = $state('');
   let feedback = $state('');
@@ -120,6 +125,8 @@
         todos = rows;
         dates = notices.dates;
         allDeadlines = notices.all_deadlines;
+        events = notices.events;
+        academic = notices.academic;
         error = '';
         if (focus) {
           const target = focus;
@@ -140,6 +147,19 @@
     try {
       await invoke('calendar_set_all_deadlines', { enabled });
       feedback = enabled ? '모든 공지의 마감을 표시합니다.' : '저장한 공지의 날짜만 표시합니다.';
+      await load();
+    } catch (reason) {
+      error = archiveError(reason);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function setAcademic(enabled: boolean) {
+    busy = true;
+    try {
+      await invoke('calendar_set_academic', { enabled });
+      feedback = enabled ? '학사 일정을 표시합니다.' : '학사 일정을 숨깁니다.';
       await load();
     } catch (reason) {
       error = archiveError(reason);
@@ -181,11 +201,12 @@
     return {
       todos: todos.filter((todo) => todo.day === day),
       tasks: tasks.filter((task) => task.due_at!.slice(0, 10) === day),
+      events: events.filter((event) => calendarEventOn(event, day)),
       dates: dates.filter((entry) => noticeDateOn(entry, day)),
     };
   }
   let selectedItems = $derived(itemsOf(selected));
-  let selectedEmpty = $derived(!selectedItems.todos.length && !selectedItems.tasks.length && !selectedItems.dates.length);
+  let selectedEmpty = $derived(!selectedItems.todos.length && !selectedItems.tasks.length && !selectedItems.events.length && !selectedItems.dates.length);
 
   function label(day: string, withWeekday = true): string {
     const date = parse(day);
@@ -198,6 +219,7 @@
     if (day === today) parts.push('오늘');
     if (open) parts.push(`할 일 ${open}개`);
     if (items.tasks.length) parts.push(`마감 ${items.tasks.length}개`);
+    if (items.events.length) parts.push(`학사 일정 ${items.events.length}개`);
     if (items.dates.length) parts.push(`공지 날짜 ${items.dates.length}개`);
     return parts.join(', ');
   }
@@ -338,6 +360,10 @@
       <label class="calendar-toggle"><input type="checkbox" checked={allDeadlines} disabled={busy || !desktop} onchange={(event) => void setAllDeadlines(event.currentTarget.checked)} />모든 공지의 마감 표시</label>
       <span class="footnote">{allDeadlines ? '저장한 공지의 날짜와 모든 공지의 마감을 표시합니다.' : '저장한 공지의 본문에서 찾은 날짜를 표시합니다.'} 찾은 날짜는 틀릴 수 있으니 원문에서 확인하세요.</span>
     </div>
+    <div class="calendar-options">
+      <label class="calendar-toggle"><input type="checkbox" checked={academic} disabled={busy || !desktop} onchange={(event) => void setAcademic(event.currentTarget.checked)} />학사 일정 표시</label>
+      <span class="footnote">{notices ? '학교가 게시한 학사 일정을 표시합니다.' : '학사 일정은 서강 공지 확장 기능이 켜져 있을 때 받습니다. 지금 보이는 일정은 마지막으로 받은 것입니다.'}</span>
+    </div>
     <div class="calendar-grid" role="grid" aria-labelledby="calendar-month-heading" bind:this={grid} tabindex="-1">
       <div class="calendar-row calendar-head" role="row">
         {#each weekdays as weekday}<span role="columnheader" class="calendar-weekday">{weekday}</span>{/each}
@@ -349,6 +375,7 @@
             {@const entries = [
               ...items.tasks.map((task) => ({ kind: 'task', text: task.title, done: false })),
               ...items.todos.map((todo) => ({ kind: 'todo', text: todo.title, done: todo.done })),
+              ...items.events.map((event) => ({ kind: 'academic', text: event.title, done: false })),
               ...items.dates.map((entry) => ({ kind: 'notice', text: entry.title, done: false })),
             ]}
             <div role="gridcell" aria-selected={day === selected}>
@@ -401,6 +428,13 @@
           {/if}
         </li>
       {/each}
+      {#each selectedItems.events as event (`${event.calendar_id}-${event.uid}`)}
+        <li class="calendar-source"><div class="event event-academic">
+          <span class="event-bar" aria-hidden="true"></span>
+          <span class="event-title"><span class="ai-mark academic-mark">학사</span> {event.title}</span>
+          <span class="event-meta">{calendarEventMeta(event)}</span>
+        </div>{#if desktop}<button class="text-button" disabled={busy || editing !== null} aria-label={`${event.title} 할 일로 추가`} onclick={() => void startPrefill(calendarEventTodo(event))}>할 일로 추가</button>{/if}</li>
+      {/each}
       {#each selectedItems.dates as entry (`${entry.document_id}-${entry.ordinal}`)}
         {@const target = `calendar-notice-${entry.document_id}-${entry.ordinal}`}
         <li class="calendar-source"><button class="event event-notice" id={target} onclick={() => onopen(entry.document_id, target)}>
@@ -438,6 +472,7 @@
   .entry-task { border-left-color: var(--accent); }
   .entry-todo { border-left-color: var(--text-2); }
   .entry-notice { border-left-style: dashed; border-left-color: var(--muted); color: var(--secondary); }
+  .entry-academic { border-left: 3px double var(--secondary); }
   .calendar-entry.done { text-decoration: line-through; color: var(--muted); }
   .calendar-more { padding: 0 4px; font-size: 11px; color: var(--secondary); }
   .calendar-day-panel { position: sticky; top: 16px; display: grid; gap: 8px; }

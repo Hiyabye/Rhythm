@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test';
-import type { CalendarTodo, ClockFormat, FeedBoardHealth, FeedStatus, NoticeDate, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation, StudiumMiniStatus, StudiumSeatLayout, StudiumSnapshot, Theme } from '../../src/lib/types';
+import type { CalendarEvent, CalendarTodo, ClockFormat, FeedBoardHealth, FeedStatus, NoticeDate, CybercampusTask, DocumentItem, PersonalInterest, ResourceRecord, ProactiveHistoryItem, ProactiveSettings, ProactiveActivation, StudiumMiniStatus, StudiumSeatLayout, StudiumSnapshot, Theme } from '../../src/lib/types';
 
 // Invented regular marker origins, unrelated to the school's real floor plans.
 export function syntheticStudiumLayout(total: number): StudiumSeatLayout {
@@ -116,6 +116,9 @@ export interface FixtureOptions {
   // A single-day date may leave out end_day/end_time.
   noticeDates?: (Omit<NoticeDate, 'end_day' | 'end_time'> & Partial<NoticeDate> & { saved?: boolean })[];
   calendarAllDeadlines?: boolean;
+  // The academic calendar's events from the feed (#319) and whether their layer is shown.
+  calendarEvents?: CalendarEvent[];
+  calendarAcademic?: boolean;
   // Nested board groups; sources name theirs through `group`.
   sourceGroups?: { id: string; name: string; parent: string | null; enabled?: boolean }[];
   // Board IDs the notices cycle through, instead of all coming from 'computing-updates'.
@@ -317,6 +320,8 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     let calendarTodos = copy(options.calendarTodos ?? []);
     const noticeDates = copy(options.noticeDates ?? []);
     let calendarAllDeadlines = options.calendarAllDeadlines ?? false;
+    const calendarEvents = copy(options.calendarEvents ?? []);
+    let calendarAcademic = options.calendarAcademic ?? true;
     const noticeDate = ({ saved: _, ...date }: NonNullable<FixtureOptions['noticeDates']>[number]): NoticeDate => ({ end_day: null, end_time: null, ...date });
     let calendarId = Math.max(0, ...calendarTodos.map((todo) => todo.id));
     const cybercampus = { id: options.cybercampusId ?? null, rejected: false, courses: options.cybercampusId ? [{ course_key: 'A1', name: '자료구조실습', year: 2026, term: '3' }] : [] };
@@ -859,8 +864,13 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'calendar_notice_dates': return { all_deadlines: calendarAllDeadlines, dates: noticeDates
             // A multi-day date overlapping the range is included.
             .filter((date) => date.day <= args.to && (date.end_day ?? date.day) >= args.from && (date.saved !== false || (calendarAllDeadlines && date.kind === 'deadline')))
-            .sort((a, b) => a.day.localeCompare(b.day) || a.document_id - b.document_id || a.ordinal - b.ordinal).map(noticeDate) };
+            .sort((a, b) => a.day.localeCompare(b.day) || a.document_id - b.document_id || a.ordinal - b.ordinal).map(noticeDate),
+            // Events overlapping the range, only while the layer is shown.
+            academic: calendarAcademic,
+            events: calendarAcademic ? copy(calendarEvents.filter((event) => event.start_day <= args.to && event.end_day >= args.from)
+              .sort((a, b) => a.start_day.localeCompare(b.start_day) || a.end_day.localeCompare(b.end_day) || a.title.localeCompare(b.title))) : [] };
           case 'calendar_set_all_deadlines': calendarAllDeadlines = args.enabled; return null;
+          case 'calendar_set_academic': calendarAcademic = args.enabled; return null;
           case 'notice_dates': return noticeDates.filter((date) => date.document_id === args.documentId).map(noticeDate);
           case 'calendar_create_todo': {
             if (!args.todo.title.trim()) throw '할 일 제목은 1자에서 200자 사이로 입력해 주세요.';
