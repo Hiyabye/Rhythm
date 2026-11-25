@@ -11,6 +11,7 @@ pub const CALENDAR: &str = "calendar";
 pub const AI: &str = "ai";
 pub const PROACTIVE: &str = "proactive";
 pub const STUDIUM: &str = "studium";
+pub const MEALS: &str = "meals";
 
 #[derive(Serialize)]
 pub struct ExtensionInfo {
@@ -23,7 +24,7 @@ pub struct ExtensionInfo {
 
 /// Every feature beyond the core shell is a built-in extension, listed in the
 /// order the UI shows them. Nothing is loaded from outside the app.
-const BUILT_IN: [(&str, &str, &str); 10] = [
+const BUILT_IN: [(&str, &str, &str); 11] = [
     (
         NOTICES,
         "서강대학교 공지",
@@ -65,6 +66,11 @@ const BUILT_IN: [(&str, &str, &str); 10] = [
         STUDIUM,
         "열람실",
         "선택한 열람실의 빈 좌석 수와 번호를 직접 확인합니다.",
+    ),
+    (
+        MEALS,
+        "식단",
+        "벨라르미노 학사 식당의 주간 메뉴표를 글자로 읽어 요일별로 보여 줍니다.",
     ),
 ];
 
@@ -166,7 +172,8 @@ mod tests {
                 CALENDAR,
                 AI,
                 PROACTIVE,
-                STUDIUM
+                STUDIUM,
+                MEALS
             ]
         );
         // A new profile starts with every extension off.

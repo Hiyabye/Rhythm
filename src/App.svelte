@@ -14,6 +14,7 @@
   import ProactiveSettings from './lib/ProactiveSettings.svelte';
   import CybercampusTasks from './lib/CybercampusTasks.svelte';
   import StudiumView from './lib/StudiumView.svelte';
+  import MealsView from './lib/MealsView.svelte';
   import SetupFlow from './lib/SetupFlow.svelte';
   import ExtensionSettings from './lib/ExtensionSettings.svelte';
   import { contributed, enabledExtensions, navigation, settingsPanes, sourceExtensions, type SettingsPane } from './lib/extensions';
@@ -536,6 +537,8 @@
     {:else if page === 'tasks'}
       <CybercampusTasks {desktop} onsettings={() => openSettings('cybercampus')}
         oncalendar={enabled.has('calendar') ? (prefill) => void openCalendar(prefill.todo.day, prefill) : undefined} />
+    {:else if page === 'meals'}
+      <MealsView {desktop} notices={enabled.has('sogang_notices')} onsettings={() => openSettings('extensions')} />
     {:else if page === 'studium'}
       <StudiumView {desktop} activation={studiumActivation} proactiveEnabled={enabled.has('proactive')} onactivation={handleProactiveActivation} onsettings={() => openSettings(enabled.has('proactive') ? 'notifications' : 'extensions')} />
     {:else}

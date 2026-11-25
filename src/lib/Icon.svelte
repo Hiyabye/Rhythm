@@ -26,6 +26,7 @@
     warning: 'M12 4 2.5 20h19L12 4Zm0 6v4.5m0 3v.1',
     plus: 'M12 5v14M5 12h14',
     calendar: 'M4 6h16v14H4V6Zm0 4h16M8 3v4m8-4v4',
+    meals: 'M3 11h18a9 9 0 0 1-18 0Zm5-4c0-1.5 1-2 1-3.5M12 7c0-1.5 1-2 1-3.5M16 7c0-1.5 1-2 1-3.5',
     trash: 'M4 7h16M10 7V4h4v3m-8 0 1 13h10l1-13M10 11v6m4-6v6',
   };
 </script>

@@ -6,6 +6,7 @@ use crate::{
     extensions::{self, ExtensionInfo},
     storage::{
         calendar::{CalendarTodo, TodoInput},
+        meals::Meals,
         notice_dates::{CalendarNoticeDates, NoticeDate},
         proactive::ProactiveSettings,
         Settings, StorageInfo,
@@ -386,6 +387,20 @@ pub async fn calendar_set_academic(
 ) -> Result<(), String> {
     let _lease = state.operation_gate.shared().await?;
     locked(&state.store, |s| s.set_calendar_academic(enabled))
+}
+/// The dormitory menu's current and next week for the 식단 page (#318).
+/// Menu weeks come only from the feed; this starts no network work.
+#[tauri::command]
+pub async fn meal_weeks(state: tauri::State<'_, AppState>) -> Result<Meals, String> {
+    let _lease = state.operation_gate.shared().await?;
+    if !locked(&state.store, |s| s.enabled(extensions::MEALS))? {
+        return Err("식단 확장 기능이 꺼져 있습니다.".into());
+    }
+    // Menu weeks are Korean dates; the page opens on today there.
+    let today = (chrono::Utc::now() + chrono::Duration::hours(9))
+        .format("%Y-%m-%d")
+        .to_string();
+    locked(&state.store, |s| s.meal_weeks(&today))
 }
 #[tauri::command]
 pub async fn notice_dates(
