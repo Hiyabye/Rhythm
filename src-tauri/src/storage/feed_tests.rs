@@ -449,31 +449,232 @@ fn records_the_app_cannot_use_are_skipped() {
     assert_eq!(store.feed_cursor().unwrap(), Some(6));
 }
 
-#[test]
-fn menu_weeks_are_not_mirrored_yet() {
-    // Format 1.3 menu weeks (#318) pass without error until the app mirrors them.
-    let (_directory, store) = database();
-    let week = rhythm_feed::record::MealWeek {
-        week: "2026-11-23".into(),
+fn meal(status: rhythm_feed::record::MealCell, items: &[&str]) -> rhythm_feed::record::Meal {
+    rhythm_feed::record::Meal {
+        status,
+        items: items.iter().map(|&item| item.into()).collect(),
+        time: None,
+    }
+}
+
+/// A readable menu week starting on `monday`, whose 한식 breakfasts read `korean`.
+fn menu_week(monday: &str, external_id: &str, korean: &str) -> rhythm_feed::record::MealWeek {
+    use rhythm_feed::record::{MealCell, MealDay};
+    let start = calendar::day_number(monday).unwrap();
+    let days = (0..7)
+        .map(|offset| {
+            let day = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
+                + chrono::Duration::days(start + offset);
+            MealDay {
+                day: day.format("%Y-%m-%d").to_string(),
+                breakfast_korean: meal(MealCell::Available, &[korean, "배추김치"]),
+                breakfast_simple: meal(MealCell::Unknown, &[]),
+                cup_rice: rhythm_feed::record::Meal {
+                    time: Some("11:40".into()),
+                    ..meal(MealCell::Available, &["돈까스덮밥"])
+                },
+                dinner: meal(
+                    if offset == 5 {
+                        MealCell::Closed
+                    } else {
+                        MealCell::Available
+                    },
+                    if offset == 5 { &[] } else { &["제육볶음"] },
+                ),
+            }
+        })
+        .collect();
+    rhythm_feed::record::MealWeek {
+        week: monday.into(),
         source_id: "dorm-menu".into(),
-        external_id: "1".into(),
-        image_url: "https://new-cms.sogang.ac.kr/CrossEditor/binary/images/000047/a.jpg".into(),
-        status: rhythm_feed::record::MealStatus::Unreadable,
+        external_id: external_id.into(),
+        image_url: format!(
+            "https://new-cms.sogang.ac.kr/CrossEditor/binary/images/000047/{external_id}.jpg"
+        ),
+        status: rhythm_feed::record::MealStatus::Ok,
         low_resolution: false,
-        days: Vec::new(),
-        breakfast_common: None,
-        drinks: None,
-    };
-    let fine = feed_notice("fine", "본문");
+        days,
+        breakfast_common: Some(meal(MealCell::Available, &["시리얼"])),
+        drinks: Some(meal(MealCell::Available, &["우유"])),
+    }
+}
+
+fn unreadable(mut week: rhythm_feed::record::MealWeek) -> rhythm_feed::record::MealWeek {
+    week.status = rhythm_feed::record::MealStatus::Unreadable;
+    week.days.clear();
+    week.breakfast_common = None;
+    week.drinks = None;
+    week
+}
+
+fn week_entry(seq: u64, week: rhythm_feed::record::MealWeek) -> Entry {
+    entry(seq, Record::MealWeek(Box::new(week)))
+}
+
+/// Each listed week as (Monday, post, 한식 breakfast of its first day).
+fn listed_weeks(store: &Store, today: &str) -> Vec<(String, String, Option<String>)> {
+    store
+        .meal_weeks(today)
+        .unwrap()
+        .weeks
+        .into_iter()
+        .map(|w| {
+            let korean = w.days.first().map(|d| d.breakfast_korean.items[0].clone());
+            (w.week, w.external_id, korean)
+        })
+        .collect()
+}
+
+#[test]
+fn menu_weeks_are_mirrored_replaced_and_listed_from_todays_week() {
+    use rhythm_feed::record::{MealCell, MealStatus};
+    let (_directory, store) = database();
+    let mut low = menu_week("2099-11-16", "next", "북엇국");
+    low.low_resolution = true;
+    // Each is malformed in one way and is skipped, never stored.
+    let mut tuesday = menu_week("2099-11-10", "tuesday", "x");
+    tuesday.week = "2099-11-10".into();
+    let mut short = menu_week("2099-11-23", "short", "x");
+    short.days.pop();
+    let mut plain = menu_week("2099-11-23", "plain", "x");
+    plain.image_url = "http://new-cms.sogang.ac.kr/a.jpg".into();
+    let mut empty = menu_week("2099-11-23", "empty", "x");
+    empty.days[0].dinner = meal(MealCell::Available, &[]);
+    let mut late = menu_week("2099-11-23", "late", "x");
+    late.days[1].cup_rice.time = Some("25:00".into());
+    let mut shifted = menu_week("2099-11-23", "shifted", "x");
+    shifted.days.swap(0, 1);
+    let mut half = unreadable(menu_week("2099-11-23", "half", "x"));
+    half.low_resolution = true;
     let applied = store
         .feed_apply_snapshot(
-            2,
-            &[upsert(1, &fine), entry(2, Record::MealWeek(Box::new(week)))],
+            12,
+            &[
+                upsert(1, &feed_notice("1", "본문")),
+                week_entry(2, menu_week("2099-11-02", "old", "미역국")),
+                week_entry(3, menu_week("2099-11-09", "now", "된장국")),
+                week_entry(4, low),
+                // Weeks that ended long ago are dropped on every apply.
+                week_entry(5, menu_week("2020-01-06", "ancient", "콩나물국")),
+                week_entry(6, tuesday),
+                week_entry(7, short),
+                week_entry(8, plain),
+                week_entry(9, empty),
+                week_entry(10, late),
+                week_entry(11, shifted),
+                week_entry(12, half),
+            ],
             &[],
         )
         .unwrap();
-    assert_eq!((applied.revised, applied.skipped), (1, 0));
-    assert_eq!(store.feed_cursor().unwrap(), Some(2));
+    assert_eq!((applied.revised, applied.skipped), (1, 7));
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM meal_weeks"), 3);
+    // Wednesday and Sunday are in the 11-09 week; the earlier week never shows.
+    let both = vec![
+        ("2099-11-09".into(), "now".into(), Some("된장국".into())),
+        ("2099-11-16".into(), "next".into(), Some("북엇국".into())),
+    ];
+    assert_eq!(listed_weeks(&store, "2099-11-11"), both);
+    assert_eq!(listed_weeks(&store, "2099-11-15"), both);
+    assert_eq!(listed_weeks(&store, "2099-11-16"), both[1..]);
+    let meals = store.meal_weeks("2099-11-11").unwrap();
+    assert_eq!(meals.today, "2099-11-11");
+    let now = &meals.weeks[0];
+    assert_eq!(now.status, MealStatus::Ok);
+    assert!(!now.low_resolution && meals.weeks[1].low_resolution);
+    assert_eq!(now.days[5].dinner.status, MealCell::Closed);
+    assert_eq!(now.days[1].cup_rice.time.as_deref(), Some("11:40"));
+    assert_eq!(now.drinks.as_ref().unwrap().items, ["우유"]);
+    assert!(store.meal_weeks("2099-13-01").is_err());
+
+    // A repost of the current week that OCR could not read replaces it: the
+    // page then shows only the image link, never the older reading.
+    let applied = store
+        .feed_apply_segment(
+            13,
+            13,
+            &[week_entry(
+                13,
+                unreadable(menu_week("2099-11-09", "repost", "x")),
+            )],
+            &[],
+            false,
+            &Default::default(),
+        )
+        .unwrap();
+    assert_eq!((applied.revised, applied.skipped), (0, 0));
+    let meals = store.meal_weeks("2099-11-11").unwrap();
+    let now = &meals.weeks[0];
+    assert_eq!(
+        (now.status, now.external_id.as_str()),
+        (MealStatus::Unreadable, "repost")
+    );
+    assert!(now.days.is_empty() && now.breakfast_common.is_none() && now.drinks.is_none());
+    assert!(now.image_url.ends_with("/repost.jpg"));
+    // Menus never become notices or notification events.
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM documents"), 1);
+}
+
+#[test]
+fn a_schema_43_profile_gains_meals_off_and_backfills_them_once() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    {
+        let store = Store::open(&path).unwrap();
+        store.catalog(&[definition("one", "main")]).unwrap();
+        store
+            .feed_apply_snapshot(3, &[upsert(1, &feed_notice("1", "본문"))], &[])
+            .unwrap();
+        store.feed_remember_boards().unwrap();
+        store.set_enabled("calendar", true).unwrap();
+        store
+            .connection
+            .execute_batch(&format!("{UNDO_MEALS}PRAGMA user_version=43;"))
+            .unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
+    assert!(!store.enabled("meals").unwrap(), "off by default");
+    assert!(store.enabled("calendar").unwrap());
+    assert_eq!(
+        store.feed_unmirrored().unwrap(),
+        feed::Unmirrored {
+            events: false,
+            meals: true
+        },
+        "the next sync backfills menu weeks only"
+    );
+    assert_eq!(store.feed_cursor().unwrap(), Some(3));
+    store.feed_remember_boards().unwrap();
+    assert!(!store.feed_unmirrored().unwrap().any());
+    drop(store);
+
+    // A table left behind makes 044 fail; the open changes nothing.
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute_batch(&format!(
+            "{UNDO_MEALS}PRAGMA user_version=43; CREATE TABLE meal_weeks(sentinel TEXT);"
+        ))
+        .unwrap();
+    drop(connection);
+    assert!(Store::open(&path).is_err());
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 43);
+    assert!(connection
+        .query_row("SELECT meals_known FROM feed_state", [], |r| r
+            .get::<_, i64>(0))
+        .is_err());
+    let meals: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM extension_preferences WHERE extension_id='meals'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(meals, 0);
 }
 
 #[test]
@@ -512,7 +713,7 @@ fn a_populated_profile_upgrades_and_a_failed_upgrade_rolls_back() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}PRAGMA user_version=36;"
+                "{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}PRAGMA user_version=36;"
             ))
             .unwrap();
     }
@@ -532,7 +733,7 @@ fn a_populated_profile_upgrades_and_a_failed_upgrade_rolls_back() {
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}CREATE TABLE feed_state(id INTEGER); PRAGMA user_version=36;"
+            "{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}CREATE TABLE feed_state(id INTEGER); PRAGMA user_version=36;"
         ))
         .unwrap();
     assert!(Store::open(&path).is_err());
@@ -695,7 +896,7 @@ fn a_schema_37_profile_upgrades_and_a_failed_upgrade_rolls_back() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}PRAGMA user_version=37;"
+                "{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}PRAGMA user_version=37;"
             ))
             .unwrap();
     }
@@ -710,7 +911,7 @@ fn a_schema_37_profile_upgrades_and_a_failed_upgrade_rolls_back() {
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}CREATE TABLE feed_boards(id INTEGER); PRAGMA user_version=37;"
+            "{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}CREATE TABLE feed_boards(id INTEGER); PRAGMA user_version=37;"
         ))
         .unwrap();
     assert!(Store::open(&path).is_err());
@@ -1269,7 +1470,7 @@ fn a_schema_40_profile_starts_counting_at_the_next_manifest() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}PRAGMA user_version=40;"
+                "{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}PRAGMA user_version=40;"
             ))
             .unwrap();
     }
@@ -1598,7 +1799,7 @@ fn a_schema_41_profile_knows_the_boards_of_its_old_catalog() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}PRAGMA user_version=41;"
+                "{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}PRAGMA user_version=41;"
             ))
             .unwrap();
     }
@@ -1749,7 +1950,9 @@ fn a_schema_42_profile_shows_the_layer_and_backfills_events_once() {
             .unwrap();
         store
             .connection
-            .execute_batch(&format!("{UNDO_CALENDAR_EVENTS}PRAGMA user_version=42;"))
+            .execute_batch(&format!(
+                "{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}PRAGMA user_version=42;"
+            ))
             .unwrap();
     }
     let store = Store::open(&path).unwrap();
@@ -1768,7 +1971,7 @@ fn a_schema_42_profile_shows_the_layer_and_backfills_events_once() {
     let connection = rusqlite::Connection::open(&path).unwrap();
     connection
         .execute_batch(&format!(
-            "{UNDO_CALENDAR_EVENTS}PRAGMA user_version=42; CREATE TABLE calendar_events(sentinel TEXT);"
+            "{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}PRAGMA user_version=42; CREATE TABLE calendar_events(sentinel TEXT);"
         ))
         .unwrap();
     drop(connection);

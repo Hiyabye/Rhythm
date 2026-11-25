@@ -517,6 +517,41 @@ export interface CalendarEvent {
   // Inclusive; equal to start_day for a one-day event.
   end_day: string;
 }
+// One cell of the dormitory menu (rhythm_feed::record::Meal, #318): `closed` when
+// the menu says it is not served, `unknown` when blank, merged or unreadable.
+export interface Meal {
+  status: 'available' | 'closed' | 'unknown';
+  // As printed (typos kept); empty unless `available`.
+  items: string[];
+  // HH:MM when the cell prints one time, such as a 컵밥 serving time.
+  time: string | null;
+}
+export interface MealDay {
+  day: string;
+  breakfast_korean: Meal;
+  breakfast_simple: Meal;
+  cup_rice: Meal;
+  dinner: Meal;
+}
+// One menu week from the feed (rhythm_feed::record::MealWeek). An `unreadable`
+// week has no days and no shared rows: only its image link is shown.
+export interface MealWeek {
+  week: string;
+  source_id: string;
+  external_id: string;
+  image_url: string;
+  status: 'ok' | 'unreadable';
+  low_resolution: boolean;
+  days: MealDay[];
+  breakfast_common: Meal | null;
+  drinks: Meal | null;
+}
+// The 식단 page (storage::meals::Meals): today in Korea and at most two weeks,
+// none before today's week.
+export interface Meals {
+  today: string;
+  weeks: MealWeek[];
+}
 // Saved notices' dates, plus every notice's deadlines when `all_deadlines` is on,
 // and the academic calendar's events while `academic` is on.
 export interface CalendarNoticeDates {

@@ -5,7 +5,7 @@
 //! (user decision P2).
 use crate::{
     archive::sync::{with_store, SharedStore},
-    storage::feed::{FeedResult, FeedStatus},
+    storage::feed::{FeedResult, FeedStatus, Unmirrored},
 };
 use rhythm_feed::{record, FileRef, Manifest};
 use std::{
@@ -211,8 +211,8 @@ async fn fetch(
 }
 
 /// Brings in `boards`, whose records earlier syncs skipped because the
-/// catalog did not have them yet (#80), and with `events` the calendar events
-/// a version without format 1.2 support skipped (#319): their records from
+/// catalog did not have them yet (#80), and the record `kinds` an older
+/// version skipped (calendar events #319, menu weeks #318): their records from
 /// the snapshot path (the snapshot and every segment after it), while the
 /// cursor and the other boards stay as they are.
 #[allow(clippy::too_many_arguments)]
@@ -223,7 +223,7 @@ async fn backfill(
     base: &Base,
     manifest: &Manifest,
     boards: &HashSet<String>,
-    events: bool,
+    kinds: Unmirrored,
     cancel: &AtomicBool,
 ) -> Result<Summary, Failure> {
     let mut summary = Summary::default();
@@ -238,7 +238,7 @@ async fn backfill(
         };
         let entries = entries.map_err(feed_error)?;
         let applied = with_store(store, |s| {
-            s.feed_backfill(boards, events, after, &entries, &vectors)
+            s.feed_backfill(boards, kinds, after, &entries, &vectors)
         })?;
         for path in &applied.orphaned {
             let _ = tokio::fs::remove_file(data_root.join(path)).await;
@@ -260,13 +260,11 @@ pub(crate) async fn sync(
     cancel: &AtomicBool,
 ) -> Result<Summary, Failure> {
     let state = with_store(store, |s| s.feed_state())?;
-    // A first sync takes the snapshot path, which covers every board and
-    // every calendar event.
-    let (new_boards, missing_events) = match state.cursor {
-        Some(_) => with_store(store, |s| {
-            Ok((s.feed_new_boards()?, !s.feed_events_known()?))
-        })?,
-        None => (HashSet::new(), false),
+    // A first sync takes the snapshot path, which covers every board, every
+    // calendar event and every menu week.
+    let (new_boards, unmirrored) = match state.cursor {
+        Some(_) => with_store(store, |s| Ok((s.feed_new_boards()?, s.feed_unmirrored()?)))?,
+        None => (HashSet::new(), Unmirrored::default()),
     };
     // A stored base that no longer parses falls back to the app's own.
     let base = state
@@ -279,10 +277,10 @@ pub(crate) async fn sync(
     let (steps, quiet) = plan(&manifest, state.cursor);
     // The cursor path leaves the backfilled boards out: their records up to
     // the newest seq are applied already, and an older revision must not
-    // follow a newer one. Backfilled events need no skip: the cursor path
-    // replays their records after the cursor in order, which ends at the
-    // newest state the backfill reached.
-    let (mut summary, skip) = if quiet || (new_boards.is_empty() && !missing_events) {
+    // follow a newer one. Backfilled events and menu weeks need no skip: the
+    // cursor path replays their records after the cursor in order, which ends
+    // at the newest state the backfill reached.
+    let (mut summary, skip) = if quiet || (new_boards.is_empty() && !unmirrored.any()) {
         (Summary::default(), HashSet::new())
     } else {
         let summary = backfill(
@@ -292,7 +290,7 @@ pub(crate) async fn sync(
             &base,
             &manifest,
             &new_boards,
-            missing_events,
+            unmirrored,
             cancel,
         )
         .await?;

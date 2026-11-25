@@ -17,8 +17,8 @@ use crate::archive::model::{ArticleInput, ListingEntry, ResourceRecord};
 use rhythm_embed::CATEGORIES;
 use rhythm_feed::{
     record::{
-        BodyState, Classification, Embedding, Entry, Event, EventRemoval, Notice, Record,
-        ResourceKind,
+        BodyState, Classification, Embedding, Entry, Event, EventRemoval, Meal, MealCell, MealDay,
+        MealStatus, MealWeek, Notice, Record, ResourceKind,
     },
     vector, Revision, VECTOR_BYTES,
 };
@@ -33,6 +33,31 @@ pub use state::FeedStatus;
 const MAX_TEXT: usize = 16_384;
 const MAX_RESOURCES: usize = 256;
 const MAX_DATES: usize = 64;
+
+/// Record kinds that a version without their format support skipped while
+/// its cursor moved past them; a sync with a cursor backfills them from the
+/// snapshot path until a complete sync records them as known.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Unmirrored {
+    /// Calendar events (format 1.2, #319).
+    pub events: bool,
+    /// Menu weeks (format 1.3, #318).
+    pub meals: bool,
+}
+
+impl Unmirrored {
+    pub(crate) fn any(self) -> bool {
+        self.events || self.meals
+    }
+
+    fn covers(self, entry: &Entry) -> bool {
+        match entry.record {
+            Some(Record::Event(_) | Record::EventRemove(_)) => self.events,
+            Some(Record::MealWeek(_)) => self.meals,
+            _ => false,
+        }
+    }
+}
 
 /// What one applied file changed.
 #[derive(Debug, Default, PartialEq)]
@@ -167,17 +192,18 @@ impl Store {
         self.finish(transaction, Some(to_seq), applied)
     }
 
-    /// Applies the records of `boards`, and with `events` the calendar
-    /// events, with a seq above `after` from one file of the snapshot path
-    /// (the snapshot, then each later segment), leaving the cursor and every
-    /// other board alone. It brings in boards the catalog gained after earlier
-    /// syncs skipped their records (#80), and the events a version before
-    /// format 1.2 support skipped (#319): like a first sync, what it adds
-    /// starts read and never becomes a notification.
+    /// Applies the records of `boards`, and those of the `kinds` an older
+    /// version skipped, with a seq above `after` from one file of the snapshot
+    /// path (the snapshot, then each later segment), leaving the cursor and
+    /// every other board alone. It brings in boards the catalog gained after
+    /// earlier syncs skipped their records (#80), the events a version before
+    /// format 1.2 support skipped (#319) and the menu weeks one before 1.3
+    /// skipped (#318): like a first sync, what it adds starts read and never
+    /// becomes a notification.
     pub(crate) fn feed_backfill(
         &self,
         boards: &HashSet<String>,
-        events: bool,
+        kinds: Unmirrored,
         after: u64,
         entries: &[Entry],
         vectors: &[u8],
@@ -190,7 +216,7 @@ impl Store {
         let mut applied = Applied::default();
         for entry in entries.iter().filter(|e| {
             e.seq > after
-                && (record_source(e).is_some_and(|s| boards.contains(s)) || events && is_event(e))
+                && (record_source(e).is_some_and(|s| boards.contains(s)) || kinds.covers(e))
         }) {
             apply(&transaction, entry, &vectors, true, &mut applied)?;
         }
@@ -212,11 +238,37 @@ impl Store {
 
     /// Whether a complete sync has mirrored calendar events; until then a
     /// sync with a cursor backfills them (`feed_backfill`).
+    #[cfg(test)]
     pub(crate) fn feed_events_known(&self) -> Result<bool, String> {
         self.connection
             .query_row("SELECT events_known FROM feed_state WHERE id=1", [], |r| {
                 r.get(0)
             })
+            .map_err(|e| e.to_string())
+    }
+
+    /// The record kinds a sync with a cursor still has to backfill.
+    pub(crate) fn feed_unmirrored(&self) -> Result<Unmirrored, String> {
+        self.connection
+            .query_row(
+                "SELECT events_known,meals_known FROM feed_state WHERE id=1",
+                [],
+                |r| {
+                    Ok(Unmirrored {
+                        events: !r.get::<_, bool>(0)?,
+                        meals: !r.get::<_, bool>(1)?,
+                    })
+                },
+            )
+            .map_err(|e| e.to_string())
+    }
+
+    /// Leaves the mirror as a version without format 1.3 support did: its
+    /// cursor passed the menu weeks without storing them.
+    #[cfg(test)]
+    pub(crate) fn feed_forget_meals(&self) -> Result<(), String> {
+        self.connection
+            .execute_batch("DELETE FROM meal_weeks; UPDATE feed_state SET meals_known=0;")
             .map_err(|e| e.to_string())
     }
 
@@ -229,8 +281,8 @@ impl Store {
             .map_err(|e| e.to_string())
     }
 
-    /// Records the catalog's public boards and the calendar events as known,
-    /// after a sync that applied every file it planned.
+    /// Records the catalog's public boards, the calendar events and the menu
+    /// weeks as known, after a sync that applied every file it planned.
     pub(crate) fn feed_remember_boards(&self) -> Result<(), String> {
         let transaction = self
             .connection
@@ -241,7 +293,7 @@ impl Store {
                 "DELETE FROM feed_known_boards;
                  INSERT INTO feed_known_boards(source_id)
                    SELECT id FROM sources WHERE supported=1 AND family<>'cybercampus';
-                 UPDATE feed_state SET events_known=1 WHERE id=1;",
+                 UPDATE feed_state SET events_known=1,meals_known=1 WHERE id=1;",
             )
             .map_err(|e| e.to_string())?;
         transaction.commit().map_err(|e| e.to_string())
@@ -262,6 +314,13 @@ impl Store {
                 .map_err(|e| e.to_string())?;
         }
         applied.orphaned = unused(&transaction, std::mem::take(&mut applied.orphaned))?;
+        // Weeks that ended more than 7 days ago in Korea (FEED.md, `meal.week`).
+        transaction
+            .execute(
+                "DELETE FROM meal_weeks WHERE week < date('now','+9 hours','-13 days')",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
         transaction.commit().map_err(|e| e.to_string())?;
         if applied.removed > 0 {
             self.recompute_learned()?;
@@ -283,13 +342,6 @@ fn record_source(entry: &Entry) -> Option<&str> {
     }
 }
 
-fn is_event(entry: &Entry) -> bool {
-    matches!(
-        entry.record,
-        Some(Record::Event(_) | Record::EventRemove(_))
-    )
-}
-
 /// The vectors file as whole vectors, each checked as the feed defines them.
 fn chunks(bytes: &[u8]) -> Result<Vec<&[u8; VECTOR_BYTES]>, String> {
     vector::decode(bytes).map_err(|e| e.to_string())?;
@@ -304,9 +356,9 @@ fn apply(
     applied: &mut Applied,
 ) -> Result<(), String> {
     let applied_one = match &entry.record {
-        // A record kind of a newer minor version, or a menu week (format
-        // 1.3), which this version does not mirror yet (#318).
-        None | Some(Record::MealWeek(_)) => return Ok(()),
+        // A record kind of a newer minor version.
+        None => return Ok(()),
+        Some(Record::MealWeek(week)) => upsert_meal_week(transaction, week)?,
         Some(Record::Event(event)) => upsert_event(transaction, event)?,
         Some(Record::EventRemove(removal)) => {
             let EventRemoval {
@@ -1069,4 +1121,111 @@ fn remove_event(transaction: &Connection, calendar_id: &str, uid: &str) -> Resul
         )
         .map(drop)
         .map_err(|e| e.to_string())
+}
+
+/// Bounds a menu cell must stay within; a real week has a handful of items.
+const MAX_MEAL_ITEMS: usize = 24;
+const MAX_MEAL_ITEM: usize = 200;
+
+/// The days and week-shared rows of a readable week, stored as `menu`.
+#[derive(serde::Serialize)]
+struct StoredMenu<'a> {
+    days: &'a [MealDay],
+    breakfast_common: &'a Meal,
+    drinks: &'a Meal,
+}
+
+/// Stores a menu week (#318), replacing whatever the mirror held for that
+/// week; a malformed one is skipped and counted.
+fn upsert_meal_week(transaction: &Connection, week: &MealWeek) -> Result<bool, String> {
+    let Some(monday) = super::calendar::day_number(&week.week) else {
+        return Ok(false);
+    };
+    let short =
+        |text: &str| !text.is_empty() && text.len() <= 512 && !text.contains(char::is_control);
+    // 1970-01-01 was a Thursday, so day numbers of Mondays are 4 mod 7.
+    let valid = monday.rem_euclid(7) == 4
+        && short(&week.source_id)
+        && short(&week.external_id)
+        && web_url(&week.image_url, false);
+    if !valid {
+        return Ok(false);
+    }
+    let menu = match (week.status, &week.breakfast_common, &week.drinks) {
+        (MealStatus::Unreadable, None, None) if week.days.is_empty() && !week.low_resolution => {
+            None
+        }
+        (MealStatus::Ok, Some(breakfast_common), Some(drinks))
+            if week.days.len() == 7
+                && week.days.iter().zip(monday..).all(|(day, number)| {
+                    super::calendar::day_number(&day.day) == Some(number)
+                        && [
+                            &day.breakfast_korean,
+                            &day.breakfast_simple,
+                            &day.cup_rice,
+                            &day.dinner,
+                        ]
+                        .into_iter()
+                        .all(valid_meal)
+                })
+                && valid_meal(breakfast_common)
+                && valid_meal(drinks) =>
+        {
+            Some(
+                serde_json::to_string(&StoredMenu {
+                    days: &week.days,
+                    breakfast_common,
+                    drinks,
+                })
+                .map_err(|e| e.to_string())?,
+            )
+        }
+        _ => return Ok(false),
+    };
+    transaction
+        .execute(
+            "INSERT INTO meal_weeks(week,source_id,external_id,image_url,status,low_resolution,menu)
+             VALUES(?1,?2,?3,?4,?5,?6,?7)
+             ON CONFLICT(week) DO UPDATE SET source_id=excluded.source_id,
+               external_id=excluded.external_id,image_url=excluded.image_url,
+               status=excluded.status,low_resolution=excluded.low_resolution,menu=excluded.menu",
+            params![
+                week.week,
+                week.source_id,
+                week.external_id,
+                week.image_url,
+                if menu.is_some() { "ok" } else { "unreadable" },
+                week.low_resolution,
+                menu
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+fn valid_meal(meal: &Meal) -> bool {
+    let items = match meal.status {
+        MealCell::Available => {
+            !meal.items.is_empty()
+                && meal.items.len() <= MAX_MEAL_ITEMS
+                && meal.items.iter().all(|item| {
+                    !item.trim().is_empty()
+                        && item.len() <= MAX_MEAL_ITEM
+                        && !item.contains(char::is_control)
+                })
+        }
+        MealCell::Closed | MealCell::Unknown => meal.items.is_empty(),
+    };
+    let time = meal.time.as_deref().is_none_or(|time| {
+        let bytes = time.as_bytes();
+        bytes.len() == 5
+            && bytes[2] == b':'
+            && time[..2].parse::<u8>().is_ok_and(|h| h < 24)
+            && time[3..].parse::<u8>().is_ok_and(|m| m < 60)
+            && bytes
+                .iter()
+                .enumerate()
+                .all(|(i, b)| i == 2 || b.is_ascii_digit())
+    });
+    items && time
 }

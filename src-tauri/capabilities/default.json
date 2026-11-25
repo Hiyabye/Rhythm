@@ -72,6 +72,7 @@
     "allow-lifecycle-set-launch-at-login",
     "allow-lifecycle-set-start-hidden",
     "allow-lifecycle-status",
+    "allow-meal-weeks",
     "allow-notice-dates",
     "allow-notification-authorization",
     "allow-notification-request-permission",

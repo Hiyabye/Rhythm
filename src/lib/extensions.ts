@@ -15,6 +15,8 @@ export const navigation: { id: string; label: string; extension?: string }[] = [
   { id: 'tasks', label: '과제·마감', extension: 'cybercampus' },
   { id: 'calendar', label: '캘린더', extension: 'calendar' },
   { id: 'studium', label: '열람실', extension: 'studium' },
+  // The dormitory menu from the feed (#318).
+  { id: 'meals', label: '식단', extension: 'meals' },
   // App shows it only while a source extension is on or it still holds notices.
   { id: 'trash', label: '휴지통' },
 ];

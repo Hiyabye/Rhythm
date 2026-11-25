@@ -760,3 +760,92 @@ async fn events_an_older_version_skipped_are_backfilled_once() {
     // Events never touch notices or unread counts.
     assert_eq!(titles(&store), ["첫 공지"]);
 }
+
+/// A menu week whose image OCR could not read; `post` tells readings apart.
+fn menu(week: &str, post: &str) -> Record {
+    Record::MealWeek(Box::new(rhythm_feed::record::MealWeek {
+        week: week.into(),
+        source_id: "dorm-menu".into(),
+        external_id: post.into(),
+        image_url: format!("https://new-cms.sogang.ac.kr/CrossEditor/binary/images/{post}.jpg"),
+        status: rhythm_feed::record::MealStatus::Unreadable,
+        low_resolution: false,
+        days: Vec::new(),
+        breakfast_common: None,
+        drinks: None,
+    }))
+}
+
+fn menu_posts(store: &SharedStore) -> Vec<String> {
+    store
+        .lock()
+        .unwrap()
+        .meal_weeks("2099-11-04")
+        .unwrap()
+        .weeks
+        .into_iter()
+        .map(|w| w.external_id)
+        .collect()
+}
+
+#[tokio::test]
+async fn menu_weeks_an_older_version_skipped_are_backfilled_once() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(&directory.path().join("rhythm.sqlite3")).unwrap();
+    store.catalog(&[definition("one")]).unwrap();
+    let store: SharedStore = Arc::new(Mutex::new(store));
+    let fake = Fake::default();
+    let feed = Feed {
+        fake: &fake,
+        base: BASE.into(),
+    };
+    let snapshot = Snapshot {
+        through_seq: 2,
+        records: feed.records(
+            SNAPSHOT,
+            &[
+                (1, notice_on("one", "1", "첫 공지")),
+                (2, menu("2099-11-02", "first")),
+            ],
+        ),
+        vectors: None,
+    };
+    let mut manifest = manifest(
+        "2026-11-18T12:00:00.000Z",
+        snapshot,
+        vec![segment(
+            &feed,
+            3,
+            4,
+            &[
+                (3, menu("2099-11-02", "repost")),
+                (4, menu("2099-11-09", "next")),
+            ],
+        )],
+    );
+    feed.publish(&manifest, &signer());
+    let controller = Controller::default();
+    run(&controller, &store, directory.path(), &fake).await;
+    assert_eq!(menu_posts(&store), ["repost", "next"]);
+    assert!(!store.lock().unwrap().feed_unmirrored().unwrap().any());
+
+    // As a version before format 1.3 left it: the cursor passed the weeks.
+    store.lock().unwrap().feed_forget_meals().unwrap();
+    manifest.generated_at = "2026-11-18T12:30:00.000Z".into();
+    feed.publish(&manifest, &signer());
+    assert!(run(&controller, &store, directory.path(), &fake).await);
+    assert_eq!(menu_posts(&store), ["repost", "next"], "the newest reading");
+    assert!(!store.lock().unwrap().feed_unmirrored().unwrap().meals);
+
+    // A backfill together with a newer segment ends at the newest reading.
+    store.lock().unwrap().feed_forget_meals().unwrap();
+    manifest.generated_at = "2026-11-18T13:00:00.000Z".into();
+    manifest
+        .segments
+        .push(segment(&feed, 5, 5, &[(5, menu("2099-11-09", "fixed"))]));
+    feed.publish(&manifest, &signer());
+    assert!(run(&controller, &store, directory.path(), &fake).await);
+    assert_eq!(menu_posts(&store), ["repost", "fixed"]);
+    // Menus never touch notices or unread counts.
+    assert_eq!(titles(&store), ["첫 공지"]);
+}

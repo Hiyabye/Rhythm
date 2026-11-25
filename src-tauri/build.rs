@@ -62,6 +62,7 @@ fn main() {
         "calendar_notice_dates",
         "calendar_set_all_deadlines",
         "calendar_set_academic",
+        "meal_weeks",
         "notice_dates",
         "calendar_create_todo",
         "calendar_update_todo",
