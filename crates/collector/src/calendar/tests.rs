@@ -243,3 +243,21 @@ async fn robots_rules_are_obeyed_and_a_policy_error_stops_the_fetch() {
         assert_eq!(health(&state).1, 1);
     }
 }
+
+/// Live: the real transport against Outlook, two requests (robots.txt and
+/// the ICS) into an in-memory state. Needs approval (crates/collector/AGENTS.md).
+#[tokio::test]
+#[ignore]
+async fn live_academic_calendar() {
+    let client = rhythm_sources::transport::Client::new(concat!(
+        "Rhythm/",
+        env!("CARGO_PKG_VERSION"),
+        " (local university notice archive)"
+    ))
+    .unwrap();
+    let state = State::open_in_memory().unwrap();
+    let report = run(&state, &client, T0, &AtomicBool::new(false))
+        .await
+        .unwrap();
+    println!("{}", summary(&Ok(report)));
+}
