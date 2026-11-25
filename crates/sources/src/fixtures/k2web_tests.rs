@@ -891,3 +891,36 @@ fn a_poster_only_notice_is_archived_metadata_only() {
         );
     }
 }
+
+#[test]
+fn a_title_saved_with_markup_parses_on_the_list_and_the_article() {
+    // sociology-news 352050 (page 11 of 13): its title was saved as
+    // `<strong>…</strong>`, so the list nests it in the template's own
+    // `strong` and the article's hidden title keeps the tags. Production
+    // failed every history pass on this page (2026-11-24/25).
+    let board = board("sociology-news");
+    let list = include_str!("k2web-sociology-news-page11.html");
+    let page = listing(board, 11, list).unwrap();
+    assert_eq!(page.total_pages, 13);
+    let entry = entry_of(&page, "352050");
+    assert!(!entry.pinned);
+    assert_eq!(
+        entry.title.as_deref(),
+        Some("2017년도 봄학기 사회학과 총MT")
+    );
+    let detail = include_str!("k2web-sociology-news-detail-352050.html");
+    let parsed = article(board, &entry, detail).unwrap();
+    assert_eq!(parsed.title, "2017년도 봄학기 사회학과 총MT");
+    assert_eq!(parsed.published_at, "2017-05-02");
+
+    // Two titles side by side in one link are still not one title.
+    let nested = "<strong><strong>2017년도 봄학기 사회학과 총MT</strong></strong>";
+    let doubled = list.replacen(nested, "<strong>A</strong><strong>B</strong>", 1);
+    assert_ne!(doubled, list);
+    assert!(listing(board, 11, &doubled).is_err());
+    // The shown title must still be the hidden title's text.
+    let shown = "<strong>2017년도 봄학기 사회학과 총MT</strong>";
+    let renamed = detail.replacen(shown, "<strong>다른 제목</strong>", 1);
+    assert_ne!(renamed, detail);
+    assert!(article(board, &entry, &renamed).is_err());
+}
