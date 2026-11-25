@@ -860,6 +860,7 @@ fn meal_week(external_id: &str, week: &str) -> (crate::state::Offered, MealWeek)
         external_id: external_id.into(),
         image_url: image.image_url.clone(),
         status: MealStatus::Unreadable,
+        low_resolution: false,
         days: Vec::new(),
         breakfast_common: None,
         drinks: None,

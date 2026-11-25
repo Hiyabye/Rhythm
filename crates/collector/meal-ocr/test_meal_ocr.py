@@ -223,6 +223,34 @@ class GeometryTests(unittest.TestCase):
         with self.assertRaisesRegex(meal_ocr.Rejected, "unsupported_horizontal_grid"):
             meal_ocr.detect_geometry(image)
 
+    def test_a_rule_cut_by_a_merged_cell_and_light_borders_is_still_found(self):
+        # The 2026-11-30 inline PNG: Saturday's dinner merges into its calorie
+        # row, and light-gray borders leave a one-pixel gap at every column.
+        picture = grid()
+        draw = ImageDraw.Draw(picture)
+        draw.rectangle((1406, 854, 1614, 858), fill="white")
+        for x in [180, 300, 520, 740, 960, 1180]:
+            draw.line((x, 854, x, 858), fill=(200, 200, 200), width=1)
+        geometry = meal_ocr.detect_geometry(picture)
+        self.assertEqual(len(geometry["rules"]), 11)
+        self.assertLessEqual(abs(geometry["rules"][8] - 856), 3)
+        # Pieces that short with wider gaps are still no rule.
+        for x in range(150, 1400, 100):
+            draw.rectangle((x, 853, x + 12, 859), fill="white")
+        with self.assertRaisesRegex(meal_ocr.Rejected, "unsupported_horizontal_grid"):
+            meal_ocr.detect_geometry(picture)
+
+    def test_real_weeks_have_eleven_rules_and_seven_columns(self):
+        # No engine: the table geometry of both image kinds the board posts,
+        # a 3508x2480 JPEG and a 1088x787 inline PNG (Saturday dinner merged
+        # into its calorie row, light-gray cell borders).
+        for name in ("week-2026-11-23.jpg", "week-2026-11-30.png"):
+            with self.subTest(name=name), Image.open(HERE / "fixtures" / name) as image:
+                geometry = meal_ocr.detect_geometry(image)
+                self.assertEqual(len(geometry["rules"]), 11)
+                self.assertEqual(len(geometry["day_boundaries"]), 8)
+                self.assertTrue(all(not cells for cells in geometry["unknown_cells"].values()))
+
     def test_merged_cells_are_unknown(self):
         image = grid()
         ImageDraw.Draw(image).rectangle((957, 616, 963, 666), fill="white")
@@ -263,6 +291,7 @@ class GeometryTests(unittest.TestCase):
 
     def test_whole_week(self):
         result = self.extract(grid(), self.fake())
+        self.assertEqual(result["image_size"], [2000, 1000])
         self.assertEqual([day["day"] for day in result["days"]], [f"2026-10-{i}" for i in range(12, 19)])
         self.assertEqual(result["days"][0]["breakfast_korean"]["items"], ["계란짐"])
         self.assertEqual(result["days"][0]["cup_rice"]["status"], "unknown")

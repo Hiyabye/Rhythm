@@ -459,6 +459,7 @@ fn menu_weeks_are_not_mirrored_yet() {
         external_id: "1".into(),
         image_url: "https://new-cms.sogang.ac.kr/CrossEditor/binary/images/000047/a.jpg".into(),
         status: rhythm_feed::record::MealStatus::Unreadable,
+        low_resolution: false,
         days: Vec::new(),
         breakfast_common: None,
         drinks: None,

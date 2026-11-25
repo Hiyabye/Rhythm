@@ -35,6 +35,10 @@ const MAX_RESULT_BYTES: u64 = 256 * 1024;
 const AHEAD_DAYS: i64 = 28;
 /// A title's week lies this close to the post's publication.
 const NEAR_PUBLICATION_DAYS: i64 = 45;
+/// Narrower menu images (the board's inline PNGs, about 1,088 px) are read
+/// with many more wrong letters than its 3,508 px JPEGs (#318, 2026-11-25).
+const LOW_RESOLUTION_WIDTH: u32 = 2000;
+const MAX_PIXELS: u64 = 20_000_000;
 const MAX_ITEMS: usize = 20;
 const MAX_ITEM_CHARS: usize = 150;
 const WEEKDAYS: [&str; 7] = ["월", "화", "수", "목", "금", "토", "일"];
@@ -293,6 +297,7 @@ struct OcrResult {
     image_sha256: String,
     status: String,
     reason: Option<String>,
+    image_size: Option<[u32; 2]>,
     #[serde(default)]
     banner: Vec<String>,
     #[serde(default)]
@@ -360,7 +365,14 @@ fn validate(result: OcrResult, image: &Offered) -> Option<MealWeek> {
     ]
     .iter()
     .any(|text| contains_number_text(&banner, text));
-    if !start_named || !end_named || result.headers.len() != 7 || result.days.len() != 7 {
+    let [width, height] = result.image_size?;
+    let pixels = u64::from(width) * u64::from(height);
+    if !start_named
+        || !end_named
+        || result.headers.len() != 7
+        || result.days.len() != 7
+        || !(1..=MAX_PIXELS).contains(&pixels)
+    {
         return None;
     }
     let mut days = Vec::new();
@@ -389,6 +401,7 @@ fn validate(result: OcrResult, image: &Offered) -> Option<MealWeek> {
         external_id: image.external_id.clone(),
         image_url: image.image_url.clone(),
         status: MealStatus::Ok,
+        low_resolution: width < LOW_RESOLUTION_WIDTH,
         days,
         breakfast_common: Some(cell(result.breakfast_common?)?),
         drinks: Some(cell(result.drinks?)?),
@@ -403,6 +416,7 @@ fn unreadable(image: &Offered) -> MealWeek {
         external_id: image.external_id.clone(),
         image_url: image.image_url.clone(),
         status: MealStatus::Unreadable,
+        low_resolution: false,
         days: Vec::new(),
         breakfast_common: None,
         drinks: None,

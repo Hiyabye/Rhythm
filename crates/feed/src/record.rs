@@ -171,6 +171,10 @@ pub struct MealWeek {
     /// The original menu image; a client always links it.
     pub image_url: String,
     pub status: MealStatus,
+    /// The image was small (under 2,000 px wide), where OCR misreads more
+    /// letters: a client notes that items may differ from the image. Always
+    /// `false` when `unreadable`.
+    pub low_resolution: bool,
     /// Monday to Sunday when `ok`; empty when `unreadable`.
     pub days: Vec<MealDay>,
     /// The rows printed once for the whole week; `None` when `unreadable`.

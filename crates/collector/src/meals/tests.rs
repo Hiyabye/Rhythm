@@ -369,6 +369,7 @@ fn accepted(sha: &str) -> serde_json::Value {
         .collect();
     serde_json::json!({
         "version": OCR_VERSION, "image_sha256": sha, "status": "ok", "reason": null,
+        "image_size": [3508, 2480],
         "banner": ["주간메뉴표", "2026.11.23~ 11.29"], "headers": headers, "days": days,
         "breakfast_common": cell(&["그린샐러드&드레싱"]), "drinks": cell(&["디톡스워터"]),
     })
@@ -420,6 +421,7 @@ fn an_accepted_result_becomes_the_week() {
     assert_eq!((applied.ok, applied.unreadable, applied.missing), (1, 0, 0));
     let (_, week) = stored_week(&state, "2026-11-23").unwrap();
     assert_eq!(week.status, MealStatus::Ok);
+    assert!(!week.low_resolution);
     assert_eq!(week.image_url, image.image_url);
     assert_eq!(week.days.len(), 7);
     assert_eq!(week.days[6].day, "2026-11-29");
@@ -432,6 +434,22 @@ fn an_accepted_result_becomes_the_week() {
         apply(&state, folder.path(), NOW).unwrap(),
         Applied::default()
     );
+}
+
+#[test]
+fn a_small_image_is_read_but_flagged() {
+    let image = offered("10", "2026-11-23", "2026-11-18");
+    let mut result = accepted(&image.image_sha256);
+    result["image_size"] = serde_json::json!([1088, 787]);
+    let week = read_result(result.to_string().as_bytes(), &image)
+        .unwrap()
+        .unwrap();
+    assert_eq!((week.status, week.low_resolution), (MealStatus::Ok, true));
+    result["image_size"] = serde_json::json!([2000, 1412]);
+    let week = read_result(result.to_string().as_bytes(), &image)
+        .unwrap()
+        .unwrap();
+    assert!(!week.low_resolution);
 }
 
 #[test]

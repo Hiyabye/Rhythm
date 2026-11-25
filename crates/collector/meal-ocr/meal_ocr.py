@@ -97,8 +97,15 @@ def detect_geometry(image):
     red, green, blue = rgb[:, :, 0], rgb[:, :, 1], rgb[:, :, 2]
     # Orange/red rules vary by week. Text does not survive the long-line opening.
     warm = (red > 170) & (green < 190) & (blue < 130)
-    dark = rgb.max(axis=2) < 120
-    mask = (warm | dark).astype("uint8") * 255
+    dark = (rgb.max(axis=2) < 120).astype("uint8") * 255
+    # Lighter cell borders cross the black rules, leaving 1-2 px gaps; on a
+    # small inline PNG (1088x787, 2026-11-30) they cut a rule that a merged
+    # cell already shortens into pieces under the kernel below. Close such
+    # gaps in the dark mask only: closing the orange header would fill its
+    # white text into one solid band. Words stay far shorter than 35%.
+    gap = max(3, round(width * .003))
+    dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, np.ones((1, gap), np.uint8))
+    mask = ((warm * 255) | dark).astype("uint8")
     # Highlight borders can shift a row rule by a few pixels mid-table. Keep
     # long segments before grouping nearby rows; require >55% total coverage.
     line = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((1, round(width * .35)), np.uint8))
@@ -331,6 +338,7 @@ def extract_week(image_path, job, infer):
             raise Rejected("unsupported_image_format")
         if image.width * image.height > MAX_PIXELS:
             raise Rejected("unsupported_image_dimensions")
+        width, height = image.size
         geometry = detect_geometry(image)
         image.load()
         image = image.convert("RGB")
@@ -353,7 +361,7 @@ def extract_week(image_path, job, infer):
                         cells[field] = offering(read(f"{field}_{index}"))
                 days.append(cells)
             shared = {field: offering(read(field)) for field in SHARED_FIELDS}
-    return {"banner": banner, "headers": headers, "days": days, **shared}
+    return {"image_size": [width, height], "banner": banner, "headers": headers, "days": days, **shared}
 
 
 def load_engine():

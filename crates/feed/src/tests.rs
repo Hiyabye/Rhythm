@@ -336,6 +336,7 @@ fn meal_weeks_are_records_in_segments_and_snapshots() {
         external_id: "313348".into(),
         image_url: "https://new-cms.sogang.ac.kr/CrossEditor/binary/images/000047/a.jpg".into(),
         status: MealStatus::Ok,
+        low_resolution: false,
         days: vec![day; 7],
         breakfast_common: Some(meal(MealCell::Available, &["그린샐러드"], None)),
         drinks: Some(unknown),
@@ -349,6 +350,7 @@ fn meal_weeks_are_records_in_segments_and_snapshots() {
     let line: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
     assert_eq!(line["kind"], "meal.week");
     assert_eq!(line["status"], "ok");
+    assert_eq!(line["low_resolution"], false);
     assert_eq!(line["days"][0]["cup_rice"]["time"], "11:40");
     assert_eq!(line["days"][0]["dinner"]["status"], "closed");
     assert_eq!(line["days"][0]["breakfast_simple"]["status"], "unknown");

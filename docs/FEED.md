@@ -125,6 +125,7 @@ Events are dates only and never relate to a notice: a client must not use them f
 | `source_id`, `external_id` | string | The menu notice the week was read from: the newest post for that week |
 | `image_url` | string | The original menu image. A client always shows a link to it |
 | `status` | string | `ok`, or `unreadable` when the image could not be read with certainty (then `days` is empty and the shared rows are `null`; show only the image link) |
+| `low_resolution` | bool | The image is under 2,000 px wide (the board's inline PNGs), where OCR misreads noticeably more letters: a client says the items may differ from the image. `false` when `unreadable` |
 | `days[]` | object | Monday to Sunday: `day` (`YYYY-MM-DD`) and the cells `breakfast_korean` (한식), `breakfast_simple` (간편식), `cup_rice` (컵밥) and `dinner` (석식) |
 | `breakfast_common`, `drinks` | object or `null` | The rows the menu prints once for the whole week (공통 breakfast, 음료) |
 
