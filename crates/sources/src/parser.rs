@@ -6,8 +6,6 @@ use url::Url;
 
 #[path = "admission.rs"]
 mod admission;
-#[path = "cms.rs"]
-mod cms;
 #[path = "community.rs"]
 mod community;
 #[path = "engineering.rs"]
@@ -24,10 +22,6 @@ mod vendor;
 mod wordpress;
 pub(crate) use admission::{
     stored_file as admission_stored_file, NAME as ADMISSION_NAME, SOURCE_ID as ADMISSION_SOURCE_ID,
-};
-pub use cms::{
-    board_url as cms_board_url, download_key as cms_download_key, CmsBoard, Site as CmsSite,
-    BOARDS as CMS_BOARDS,
 };
 pub use k2web::{K2webBoard, Skin, K2WEB_BOARDS};
 pub use vendor::{
@@ -258,7 +252,6 @@ pub fn list_url(source: &SourceDefinition, page: u32) -> Result<Url, String> {
         "wordpress" => return wordpress::list_url(source, page),
         "vendor" => return vendor::list_url(vendor::board(source)?, page),
         "admission" => return admission::list_url(page),
-        "cms" => return cms::list_url(cms::board(source)?, page),
         _ => {}
     }
     if let Some(board) = main_board(&source.id) {
@@ -298,7 +291,6 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
         "wordpress" => return wordpress::detail_url(source, entry),
         "vendor" => return vendor::detail_url(vendor::board(source)?, entry),
         "admission" => return admission::detail_url(entry),
-        "cms" => return cms::detail_url(cms::board(source)?, entry),
         _ => {}
     }
     if let Some(board) = main_board(&source.id) {
@@ -327,8 +319,7 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
 /// them, or the site's own missing-post page. Community and semiconductor
 /// boards answer a missing notice with a generic redirect or an empty template
 /// that an error page could also produce, so nothing from them counts; klec
-/// answers one with its members-only page, and the old CMS (`cms`) with a
-/// redirect to a generic message page.
+/// answers one with its members-only page.
 /// `body` is the response text for a 200 answer and empty otherwise.
 pub fn missing(source: &SourceDefinition, status: u16, body: &str) -> bool {
     match source.family.as_str() {
@@ -362,7 +353,6 @@ pub fn listing(source: &SourceDefinition, page: u32, body: &str) -> Result<Listi
         "wordpress" => wordpress::listing(source, page, body),
         "vendor" => vendor::listing(vendor::board(source)?, page, body),
         "admission" => admission::listing(page, body),
-        "cms" => cms::listing(cms::board(source)?, page, body),
         _ => match main_board(&source.id) {
             Some(board) => main_listing(board, page, body),
             None => computing_listing(source, page, body),
@@ -600,7 +590,6 @@ pub fn article(
         "wordpress" => return wordpress::article(source, entry, body),
         "vendor" => return vendor::article(vendor::board(source)?, entry, body),
         "admission" => return admission::article(entry, body),
-        "cms" => return cms::article(cms::board(source)?, entry, body),
         _ => {}
     }
     let (title, author, category, published_at, modified_at, content, mut resources) =

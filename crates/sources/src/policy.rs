@@ -356,8 +356,7 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
         }
         // The CMS file route behind the main board's PDF-viewer iframes
         // (user decision): a notice whose whole body is that viewer is archived
-        // from the PDF's text. Also SW중심대학사업단's old CMS boards (#316).
-        // Article images on this host stay unsupported.
+        // from the PDF's text. Article images on this host stay unsupported.
         "scc.sogang.ac.kr" => {
             let pdf = path == "/Download3"
                 && exact_query(
@@ -374,11 +373,7 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
                         ("gubun", |v| v == "cmsfile"),
                     ],
                 );
-            pdf || cms_route(url, crate::parser::CmsSite::Sweducenter) || path == "/robots.txt"
-        }
-        // 융합교육원's old CMS boards (#316); no robots.txt (404).
-        "convedu.sogang.ac.kr" => {
-            cms_route(url, crate::parser::CmsSite::Convedu) || path == "/robots.txt"
+            pdf || path == "/robots.txt"
         }
         _ => false,
     };
@@ -395,63 +390,6 @@ pub fn validate_url(url: &Url) -> Result<(), String> {
         return Err(BLOCKED.into());
     }
     Ok(())
-}
-/// The old CMS (#316): a catalogued board's list and article routes with
-/// every query key bound, and `/Download` whose key names a catalogued board
-/// of the same site (the parser binds it to the post).
-fn cms_route(url: &Url, site: crate::parser::CmsSite) -> bool {
-    use crate::parser::{CmsSite, CMS_BOARDS};
-    fn board_of(site: CmsSite, value: &str) -> bool {
-        CMS_BOARDS
-            .iter()
-            .any(|board| board.site == site && board.config.to_string() == value)
-    }
-    fn sweducenter_board(value: &str) -> bool {
-        board_of(CmsSite::Sweducenter, value)
-    }
-    fn convedu_board(value: &str) -> bool {
-        board_of(CmsSite::Convedu, value)
-    }
-    fn sweducenter_key(value: &str) -> bool {
-        crate::parser::cms_download_key(value)
-            .is_some_and(|key| board_of(CmsSite::Sweducenter, &key.config.to_string()))
-    }
-    fn convedu_key(value: &str) -> bool {
-        crate::parser::cms_download_key(value)
-            .is_some_and(|key| board_of(CmsSite::Convedu, &key.config.to_string()))
-    }
-    type Check = fn(&str) -> bool;
-    let (site_check, board, key): (Check, Check, Check) = match site {
-        CmsSite::Sweducenter => (|v| v == "sweducenter", sweducenter_board, sweducenter_key),
-        CmsSite::Convedu => (|v| v == "convedu", convedu_board, convedu_key),
-    };
-    match url.path() {
-        "/front/cmsboardlist.do" => exact_query(
-            url,
-            &[
-                ("siteId", site_check),
-                ("bbsConfigFK", board),
-                ("currentPage", positive_id),
-            ],
-        ),
-        "/front/cmsboardview.do" => exact_query(
-            url,
-            &[
-                ("bbsConfigFK", board),
-                ("siteId", site_check),
-                ("pkid", positive_id),
-            ],
-        ),
-        "/Download" => exact_query(
-            url,
-            &[
-                ("pathStr", key),
-                ("fileName", downloadable_name),
-                ("gubun", |v| v == "board"),
-            ],
-        ),
-        _ => false,
-    }
 }
 fn positive_id(value: &str) -> bool {
     !value.is_empty()
