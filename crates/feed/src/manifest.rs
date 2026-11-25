@@ -17,6 +17,9 @@ pub struct Manifest {
     pub moved_to: Option<String>,
     pub embedding: EmbeddingInfo,
     pub boards: Vec<BoardHealth>,
+    /// Format 1.2: per calendar; empty from an older publisher.
+    #[serde(default)]
+    pub calendars: Vec<CalendarHealth>,
     pub snapshot: Snapshot,
     /// Contiguous and in seq order.
     pub segments: Vec<Segment>,
@@ -39,6 +42,13 @@ pub struct BoardHealth {
     pub last_success_at: Option<String>,
     pub consecutive_failures: u32,
     pub history_complete: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CalendarHealth {
+    pub calendar_id: String,
+    pub last_success_at: Option<String>,
+    pub consecutive_failures: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

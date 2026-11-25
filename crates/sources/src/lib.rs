@@ -7,6 +7,7 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
+pub mod calendar;
 pub mod catalog;
 pub mod dates;
 pub mod model;

@@ -1,8 +1,8 @@
 use super::*;
 use manifest::{key_id, sha256_hex, Signature};
 use record::{
-    decode_segment, decode_snapshot, BodyState, Classification, DateKind, Embedding, Notice,
-    NoticeDate, Removal, Resource, ResourceKind,
+    decode_segment, decode_snapshot, BodyState, Classification, DateKind, Embedding, Event,
+    EventRemoval, Notice, NoticeDate, Removal, Resource, ResourceKind,
 };
 use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
 use test_keys::unhex;
@@ -271,6 +271,57 @@ fn malformed_vectors_are_rejected() {
     zero[..4].copy_from_slice(&1f32.to_le_bytes());
     assert!(vector::decode(&zero).is_err());
     assert!(vector::decode(&[]).unwrap().is_empty());
+}
+
+fn event(uid: &str) -> Event {
+    Event {
+        calendar_id: "sogang-academic-calendar".into(),
+        uid: uid.into(),
+        title: "학기말성적 확인".into(),
+        start_day: "2025-12-30".into(),
+        end_day: "2026-01-02".into(),
+    }
+}
+
+#[test]
+fn calendar_events_are_records_and_snapshots_hold_only_their_upserts() {
+    let entries = vec![
+        (3, Record::Event(event("a"))),
+        (
+            4,
+            Record::EventRemove(EventRemoval {
+                calendar_id: "sogang-academic-calendar".into(),
+                uid: "b".into(),
+                removed_at: "2026-11-25T00:00:00.000Z".into(),
+            }),
+        ),
+    ];
+    let bytes = record::encode(&entries).unwrap();
+    assert_eq!(records(&decode_segment(&bytes, 3, 4).unwrap()), entries);
+    let text = String::from_utf8(zstd::decode_all(bytes.as_slice()).unwrap()).unwrap();
+    let lines: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines[0]["kind"], "event.upsert");
+    assert_eq!(lines[0]["end_day"], "2026-01-02");
+    assert_eq!(lines[1]["kind"], "event.remove");
+    let upsert = record::encode(&entries[..1]).unwrap();
+    assert_eq!(decode_snapshot(&upsert, 3).unwrap().len(), 1);
+    assert!(decode_snapshot(&bytes, 4).is_err(), "an event removal");
+}
+
+#[test]
+fn a_1_1_manifest_without_calendars_still_parses() {
+    let mut value: serde_json::Value = serde_json::from_str(EXAMPLE).unwrap();
+    value["format"] = "1.1".into();
+    value.as_object_mut().unwrap().remove("calendars");
+    let manifest = Manifest::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(manifest.calendars.is_empty());
+    assert_eq!(
+        example().calendars[0].calendar_id,
+        "sogang-academic-calendar"
+    );
 }
 
 fn signer() -> Signer {

@@ -14,9 +14,9 @@ pub use manifest::{verify, FileRef, Manifest, Signer};
 pub use record::{Entry, Record};
 
 pub const FORMAT_MAJOR: u32 = 1;
-pub const FORMAT_MINOR: u32 = 1;
+pub const FORMAT_MINOR: u32 = 2;
 /// `FORMAT_MAJOR.FORMAT_MINOR`, as the manifest writes it.
-pub const FORMAT: &str = "1.1";
+pub const FORMAT: &str = "1.2";
 /// Body characters a notice record carries instead of its body (#166 O2).
 pub const EXCERPT_CHARS: usize = 320;
 pub const DIMENSIONS: usize = 1024;

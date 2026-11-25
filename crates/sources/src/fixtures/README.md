@@ -323,3 +323,7 @@ or retyped; line endings are LF and trailing whitespace is removed.
 - `admission-notice-detail-29514.html` (a PDF and an HWP through `download.File.asp`)
   and `admission-notice-detail-24472.html` (2023, one PDF).
 - `admission-notice-missing.html`: the whole answer for `idx=99999999`, unchanged.
+- `academic-calendar.ics` (2026-11-25, #319): the unchanged public ICS of the school's
+  학사 일정 (`calendar::ACADEMIC_CALENDAR_URL`, the 캘린더 구독 link on
+  `https://www.sogang.ac.kr/ko/academic-support/calendar`), 65 all-day events from
+  2025-11 to 2027-02. Its CRLF line endings are kept.

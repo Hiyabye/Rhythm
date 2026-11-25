@@ -4,8 +4,8 @@
 //! this only reads and commits.
 use super::State;
 use rhythm_feed::{
-    manifest::BoardHealth,
-    record::{BodyState, Classification, DateKind, Embedding, Notice, NoticeDate, Resource},
+    manifest::{BoardHealth, CalendarHealth},
+    record::{BodyState, Classification, DateKind, Embedding, Event, Notice, NoticeDate, Resource},
 };
 use rusqlite::{params, OptionalExtension};
 use std::collections::HashMap;
@@ -34,6 +34,21 @@ pub struct Scanned {
     pub published: Published,
 }
 
+/// What a calendar event last published.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PublishedEvent {
+    pub event_seq: Option<u64>,
+    pub event_digest: Option<String>,
+    pub removed_seq: Option<u64>,
+}
+
+/// A calendar event as the feed would publish it now.
+pub struct ScannedEvent {
+    pub event: Event,
+    pub removed_at: Option<String>,
+    pub published: PublishedEvent,
+}
+
 /// One published records file and its vectors file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileRow {
@@ -55,6 +70,8 @@ pub type StoredRecord = (u64, String, Option<Vec<u8>>);
 pub struct Commit {
     pub next_seq: u64,
     pub published: Vec<(i64, Published)>,
+    /// By `(calendar_id, uid)`.
+    pub published_events: Vec<((String, String), PublishedEvent)>,
     /// New run records kept until their day is compacted.
     pub records: Vec<StoredRecord>,
     /// Compacted records up to this seq are dropped.
@@ -122,7 +139,9 @@ impl State {
     ) -> Result<(), String> {
         self.with(|c| {
             let transaction = c.unchecked_transaction()?;
-            transaction.execute_batch("DELETE FROM feed_records; DELETE FROM feed_notices;")?;
+            transaction.execute_batch(
+                "DELETE FROM feed_records; DELETE FROM feed_notices; DELETE FROM feed_events;",
+            )?;
             transaction.execute(
                 "UPDATE feed_files SET retired_at=?1 WHERE retired_at IS NULL",
                 [now],
@@ -261,6 +280,55 @@ impl State {
         })
     }
 
+    /// Every calendar event with what it last published, by calendar and UID.
+    pub fn feed_event_scan(&self) -> Result<Vec<ScannedEvent>, String> {
+        self.with(|c| {
+            c.prepare(
+                "SELECT e.calendar_id,e.uid,e.title,e.start_day,e.end_day,e.removed_at,
+                   p.event_seq,p.event_digest,p.removed_seq
+                 FROM calendar_events e
+                 LEFT JOIN feed_events p ON p.calendar_id=e.calendar_id AND p.uid=e.uid
+                 ORDER BY e.calendar_id,e.start_day,e.uid",
+            )?
+            .query_map([], |row| {
+                Ok(ScannedEvent {
+                    event: Event {
+                        calendar_id: row.get(0)?,
+                        uid: row.get(1)?,
+                        title: row.get(2)?,
+                        start_day: row.get(3)?,
+                        end_day: row.get(4)?,
+                    },
+                    removed_at: row.get(5)?,
+                    published: PublishedEvent {
+                        event_seq: opt(row, 6)?,
+                        event_digest: row.get(7)?,
+                        removed_seq: opt(row, 8)?,
+                    },
+                })
+            })?
+            .collect()
+        })
+    }
+
+    /// Calendar health for the manifest.
+    pub fn feed_calendars(&self) -> Result<Vec<CalendarHealth>, String> {
+        self.with(|c| {
+            c.prepare(
+                "SELECT calendar_id,last_success_at,consecutive_failures
+                 FROM calendars ORDER BY calendar_id",
+            )?
+            .query_map([], |row| {
+                Ok(CalendarHealth {
+                    calendar_id: row.get(0)?,
+                    last_success_at: row.get(1)?,
+                    consecutive_failures: row.get(2)?,
+                })
+            })?
+            .collect()
+        })
+    }
+
     /// Files the manifest lists (`listed`) or every file the state knows.
     pub fn feed_files(&self, listed: bool) -> Result<Vec<FileRow>, String> {
         let filter = if listed {
@@ -366,6 +434,21 @@ impl State {
                         p.embedding_digest,
                         sql(p.classification_seq),
                         p.classification_digest,
+                        sql(p.removed_seq)
+                    ],
+                )?;
+            }
+            for ((calendar_id, uid), p) in &commit.published_events {
+                transaction.execute(
+                    "INSERT INTO feed_events(calendar_id,uid,event_seq,event_digest,removed_seq)
+                     VALUES(?1,?2,?3,?4,?5)
+                     ON CONFLICT(calendar_id,uid) DO UPDATE SET event_seq=excluded.event_seq,
+                       event_digest=excluded.event_digest,removed_seq=excluded.removed_seq",
+                    params![
+                        calendar_id,
+                        uid,
+                        sql(p.event_seq),
+                        p.event_digest,
                         sql(p.removed_seq)
                     ],
                 )?;

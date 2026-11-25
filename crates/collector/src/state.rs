@@ -12,7 +12,7 @@ use std::{collections::HashSet, path::Path, sync::Mutex};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 /// Ordered schema migrations; index `n` upgrades `user_version` n to n+1.
-const MIGRATIONS: [&str; 7] = [
+const MIGRATIONS: [&str; 8] = [
     include_str!("../migrations/001_initial.sql"),
     include_str!("../migrations/002_notice_dates.sql"),
     include_str!("../migrations/003_deletions.sql"),
@@ -20,9 +20,10 @@ const MIGRATIONS: [&str; 7] = [
     include_str!("../migrations/005_classifications.sql"),
     include_str!("../migrations/006_feed.sql"),
     include_str!("../migrations/007_transient_failures.sql"),
+    include_str!("../migrations/008_calendar_events.sql"),
 ];
 /// A second "not found" removes a notice only this long after the first.
-const MISSING_CONFIRM: &str = "-1 day";
+pub(crate) const MISSING_CONFIRM: &str = "-1 day";
 /// The audit re-fetches a notice about this often (user decision).
 const AUDIT_INTERVAL: &str = "-7 days";
 /// Notices published this recently are audited on boards without a complete listing.
@@ -1015,8 +1016,10 @@ fn revision_hash(article: &ArticleInput) -> Result<String, String> {
     }))
 }
 
+mod calendar;
 mod feed;
-pub use feed::{Commit, FileRow, Published, Scanned, StoredRecord};
+pub use calendar::Applied as CalendarApplied;
+pub use feed::{Commit, FileRow, Published, PublishedEvent, Scanned, ScannedEvent, StoredRecord};
 
 #[cfg(test)]
 mod tests {
@@ -1039,10 +1042,10 @@ mod tests {
         assert_eq!((board.next_page, board.history_complete), (4, true));
         assert!(state.seed_complete("sogang-academic").unwrap());
         state
-            .with(|c| c.execute_batch("PRAGMA user_version=8;"))
+            .with(|c| c.execute_batch("PRAGMA user_version=9;"))
             .unwrap();
         drop(state);
-        assert!(State::open(&path).err().unwrap().contains("version 8"));
+        assert!(State::open(&path).err().unwrap().contains("version 9"));
     }
 
     #[test]

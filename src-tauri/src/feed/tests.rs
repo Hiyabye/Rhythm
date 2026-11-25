@@ -109,6 +109,7 @@ fn manifest(generated_at: &str, snapshot: Snapshot, segments: Vec<Segment>) -> M
             dimensions: 1024,
             canary: None,
         },
+        calendars: Vec::new(),
         boards: vec![
             BoardHealth {
                 source_id: "one".into(),

@@ -30,6 +30,9 @@ pub enum Access {
     /// Manual reading-room lookup, exact host/port/routes only. No retries.
     #[cfg(feature = "studium")]
     Studium,
+    /// The academic calendar ICS and its host's robots.txt only
+    /// (`calendar::validate_url`); used by the collector, never the app (#319).
+    Calendar,
 }
 /// Hosts a job collects from at once, and so requests one client has in flight.
 pub const MAX_HOSTS: usize = 3;
@@ -258,6 +261,8 @@ impl Client {
             header::ACCEPT,
             if url.path() == "/robots.txt" {
                 "text/plain,*/*;q=0.1"
+            } else if access == Access::Calendar {
+                "text/calendar"
             } else if url.path().starts_with("/api/") {
                 "application/json"
             } else {
@@ -285,6 +290,21 @@ impl Client {
         drop(gate);
         let mut response = response?;
         let status = response.status();
+        // The calendar host has no robots.txt: it redirects to its mail login,
+        // which answers 417. That means no rules, and only the exact ICS URL is
+        // reachable anyway (user decision, #319).
+        if access == Access::Calendar
+            && url.path() == "/robots.txt"
+            && (status.is_redirection() || status.is_client_error())
+            && !matches!(status.as_u16(), 401 | 403 | 429)
+        {
+            return Ok(Fetch::Body {
+                bytes: Vec::new(),
+                etag: None,
+                last_modified: None,
+                mime: Some("text/plain".into()),
+            });
+        }
         if [301, 302, 307, 308].contains(&status.as_u16()) || status.as_u16() == 303 {
             if is_studium(access) {
                 return Err(Failure::Fatal(
@@ -482,6 +502,9 @@ pub fn validate(url: &Url, access: Access) -> Result<(), String> {
     #[cfg(feature = "studium")]
     if access == Access::Studium {
         return crate::studium::validate_url(url);
+    }
+    if access == Access::Calendar {
+        return crate::calendar::validate_url(url);
     }
     if validate_url(url).is_ok() || (access == Access::EmbeddedImage && third_party_image(url)) {
         Ok(())

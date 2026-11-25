@@ -2,7 +2,7 @@ use super::*;
 use crate::r2::Object;
 use rhythm_feed::{
     manifest::verify,
-    record::{decode_segment, decode_snapshot, Classification, Embedding, Entry, Notice},
+    record::{decode_segment, decode_snapshot, Classification, Embedding, Entry, Event, Notice},
     test_keys::{other_signer, signer},
 };
 use rhythm_sources::model::ArticleInput;
@@ -144,6 +144,8 @@ struct Client {
     notices: BTreeMap<Key, Notice>,
     embeddings: BTreeMap<Key, (Embedding, Vec<f32>)>,
     classifications: BTreeMap<Key, Classification>,
+    /// By `(calendar_id, uid)` (format 1.2).
+    events: BTreeMap<Key, Event>,
     /// Records applied, to show which path a sync took.
     applied: usize,
     from_snapshot: bool,
@@ -188,6 +190,17 @@ impl Client {
                     self.drop_notice(&key);
                 }
             }
+            // Events the snapshot lacks were removed meanwhile, like notices.
+            let events: Vec<Key> = entries
+                .iter()
+                .filter_map(|e| match &e.record {
+                    Some(Record::Event(event)) => {
+                        Some((event.calendar_id.clone(), event.uid.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            self.events.retain(|key, _| events.contains(key));
             // The snapshot carries every current vector and category.
             self.embeddings.clear();
             self.classifications.clear();
@@ -248,6 +261,13 @@ impl Client {
                 Record::Remove(removal) => {
                     self.drop_notice(&(removal.source_id, removal.external_id))
                 }
+                Record::Event(event) => {
+                    self.events
+                        .insert((event.calendar_id.clone(), event.uid.clone()), event);
+                }
+                Record::EventRemove(removal) => {
+                    self.events.remove(&(removal.calendar_id, removal.uid));
+                }
             }
         }
     }
@@ -290,6 +310,14 @@ impl Client {
             .filter_map(|s| s.classification.clone().map(|c| (key(&s.notice), c)))
             .collect();
         assert_eq!(self.classifications, classifications);
+        let events: BTreeMap<Key, Event> = state
+            .feed_event_scan()
+            .unwrap()
+            .into_iter()
+            .filter(|s| s.removed_at.is_none())
+            .map(|s| ((s.event.calendar_id.clone(), s.event.uid.clone()), s.event))
+            .collect();
+        assert_eq!(self.events, events);
     }
 }
 fn fetch(bucket: &Bucket, file: &FileRef) -> Vec<u8> {
@@ -706,4 +734,98 @@ fn the_signing_key_is_read_from_openssl_pem() {
 fn timestamps_are_rfc3339_with_milliseconds() {
     let time = UNIX_EPOCH + Duration::from_millis(1_795_489_200_123);
     assert_eq!(timestamp(time), "2026-11-24T03:00:00.123Z");
+}
+
+fn calendar_event(uid: &str, title: &str, day: &str) -> rhythm_sources::calendar::Event {
+    rhythm_sources::calendar::Event {
+        uid: uid.into(),
+        title: title.into(),
+        start_day: day.into(),
+        end_day: day.into(),
+    }
+}
+
+#[tokio::test]
+async fn calendar_events_reach_clients_through_segments_and_snapshots() {
+    const CALENDAR: &str = rhythm_sources::calendar::ACADEMIC_CALENDAR_ID;
+    let state = State::open_in_memory().unwrap();
+    let bucket = Bucket::default();
+    let signer = signer();
+    let key = signer.public_key();
+    add(&state, 1, "공지");
+    let events = [
+        calendar_event("a", "개강", "2026-09-01"),
+        calendar_event("b", "중간시험", "2026-10-20"),
+    ];
+    state
+        .calendar_apply(CALENDAR, &events, "2026-11-18T02:00:00.000Z")
+        .unwrap();
+    let report = run(&state, &bucket, &signer, "2026-11-18T03:00:00.000Z").await;
+    assert_eq!(report.seqs, Some((1, 3)), "the notice and two events");
+    let manifest = manifest_of(&bucket, key);
+    assert_eq!(manifest.format, "1.2");
+    assert_eq!(manifest.calendars.len(), 1);
+    assert_eq!(manifest.calendars[0].calendar_id, CALENDAR);
+    assert_eq!(
+        manifest.calendars[0].last_success_at.as_deref(),
+        Some("2026-11-18T02:00:00.000Z")
+    );
+    let mut first = Client::default();
+    first.sync(&bucket, key);
+    first.assert_mirrors(&state);
+    assert_eq!(first.events.len(), 2);
+
+    // A changed title republishes the event; an unchanged one does not.
+    let changed = [
+        calendar_event("a", "개강미사", "2026-09-01"),
+        events[1].clone(),
+    ];
+    state
+        .calendar_apply(CALENDAR, &changed, "2026-11-18T03:30:00.000Z")
+        .unwrap();
+    let report = run(&state, &bucket, &signer, "2026-11-18T04:00:00.000Z").await;
+    assert_eq!(report.seqs, Some((4, 4)));
+    first.sync(&bucket, key);
+    first.assert_mirrors(&state);
+
+    // Absent twice a day apart: one removal.
+    let only_a = &changed[..1];
+    state
+        .calendar_apply(CALENDAR, only_a, "2026-11-18T04:30:00.000Z")
+        .unwrap();
+    let report = run(&state, &bucket, &signer, "2026-11-18T05:00:00.000Z").await;
+    assert_eq!(report.seqs, None, "missing is not removed yet");
+    state
+        .calendar_apply(CALENDAR, only_a, "2026-11-19T05:00:00.000Z")
+        .unwrap();
+    let report = run(&state, &bucket, &signer, "2026-11-19T06:00:00.000Z").await;
+    assert_eq!(report.seqs, Some((5, 5)));
+    assert!(report.snapshot);
+    first.sync(&bucket, key);
+    first.assert_mirrors(&state);
+    assert_eq!(first.events.len(), 1);
+
+    // A client starting now gets the events from the snapshot, which holds
+    // no removal, and one holding the removed event drops it there.
+    let mut fresh = Client::default();
+    fresh.sync(&bucket, key);
+    assert!(fresh.from_snapshot);
+    fresh.assert_mirrors(&state);
+    let mut stale = Client {
+        cursor: Some(u64::MAX - 1),
+        ..Client::default()
+    };
+    stale.events.insert(
+        (CALENDAR.into(), "b".into()),
+        Event {
+            calendar_id: CALENDAR.into(),
+            uid: "b".into(),
+            title: "중간시험".into(),
+            start_day: "2026-10-20".into(),
+            end_day: "2026-10-20".into(),
+        },
+    );
+    stale.sync(&bucket, key);
+    assert!(stale.from_snapshot);
+    stale.assert_mirrors(&state);
 }
