@@ -168,6 +168,11 @@ was executed or retyped; line endings are LF and trailing whitespace is removed.
 - `k2web-sbs-list.html`, `k2web-sbs-detail-425296.html`: no `작성자` item, a `[행사]`
   title prefix without a `분류` item, a hidden title escaped twice and one
   `/CrossEditor/` image.
+- `k2web-gscom-alumni-list.html`: page 1 of `/gscom/8106/subview.do` (catalogued
+  `gscom-alumni`, table, 7 rows, total 124), captured 2026-11-25 with the collector's user
+  agent after production runs began failing it. Six pins: five of this board (`2712`),
+  all repeated among the regular rows, and one labelled `전체게시판공지` that links to
+  `gscom-notice`'s article `/bbs/gscom/2710/345497/artclView.do`.
 - `k2web-science-list.html`, `k2web-science-detail-347256.html`: `board-table horizon4`
   (other column order), 12 rows.
 - `k2web-gsinfo-list.html`, `k2web-gsinfo-detail-374796.html`: 52 pins, two attachments.
