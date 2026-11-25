@@ -436,11 +436,10 @@ async fn cancelled(cancel: &AtomicBool) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
-/// School hosts whose robots.txt is absent (HTTP 404), read as no rules
-/// (user decisions): 한국어교육원, observed 2026-11-24, and 융합교육원
-/// (#316), observed 2026-11-25. Every other school host's robots error stays
-/// an error, so a broken policy server never becomes allow-all.
-const ABSENT_ROBOTS_HOSTS: [&str; 2] = ["klec.sogang.ac.kr", "convedu.sogang.ac.kr"];
+/// School hosts whose robots.txt is absent (HTTP 404), read as no rules:
+/// 한국어교육원, observed 2026-11-24. Every other school host's robots error
+/// stays an error, so a broken policy server never becomes allow-all.
+const ABSENT_ROBOTS_HOSTS: [&str; 1] = ["klec.sogang.ac.kr"];
 #[cfg(feature = "studium")]
 fn is_studium(access: Access) -> bool {
     access == Access::Studium

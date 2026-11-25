@@ -71,11 +71,6 @@ pub fn groups() -> Vec<SourceGroup> {
             "HUSS 포용사회사업단",
             Some("sogang-offices"),
         ),
-        (
-            "sogang-sweducenter",
-            "SW중심대학사업단",
-            Some("sogang-offices"),
-        ),
         ("sogang-kyomok", "교목처", Some("sogang-offices")),
         ("sogang-purchase", "구매팀", Some("sogang-offices")),
         (
@@ -108,7 +103,6 @@ pub fn groups() -> Vec<SourceGroup> {
             Some("sogang-offices"),
         ),
         ("sogang-yebigun", "예비군연대", Some("sogang-offices")),
-        ("sogang-convedu", "융합교육원", Some("sogang-offices")),
         ("sogang-hrgec", "인권·성평등센터", Some("sogang-offices")),
         ("sogang-character", "인성교육센터", Some("sogang-offices")),
         ("sogang-admission", "입학처", Some("sogang-offices")),
@@ -366,25 +360,6 @@ pub fn definitions() -> Vec<SourceDefinition> {
             "vendor",
             board.group,
             crate::parser::vendor_board_url(board),
-            true,
-        );
-    }
-    // The old CMS boards of SW중심대학사업단 and 융합교육원 (#316), one row each
-    // of `parser::CMS_BOARDS`.
-    for board in crate::parser::CMS_BOARDS.iter() {
-        let (organization, group) = match board.site {
-            crate::parser::CmsSite::Sweducenter => {
-                ("서강대학교 · SW중심대학사업단", "sogang-sweducenter")
-            }
-            crate::parser::CmsSite::Convedu => ("서강대학교 · 융합교육원", "sogang-convedu"),
-        };
-        add(
-            board.source_id,
-            board.name,
-            organization,
-            "cms",
-            group,
-            crate::parser::cms_board_url(board),
             true,
         );
     }
