@@ -223,6 +223,37 @@ fn table_boards_of_other_sites_page_through_their_history() {
 }
 
 #[test]
+fn a_site_wide_pin_of_another_board_is_left_to_that_board() {
+    let list = include_str!("k2web-gscom-alumni-list.html");
+    let page = listing(board("gscom-alumni"), 1, list).unwrap();
+    // Five of the six pins are this board's (all repeated as regular rows);
+    // the sixth is gscom-notice's 345497, shown as 전체게시판공지.
+    assert_eq!(
+        (page.total_pages, pins(&page), page.entries.len()),
+        (18, 5, 7)
+    );
+    assert!(page
+        .entries
+        .iter()
+        .all(|entry| entry.external_id != "345497"));
+    assert_eq!(
+        entry_of(&page, "386514").url,
+        "https://new-cms.sogang.ac.kr/bbs/gscom/2712/386514/artclView.do"
+    );
+
+    // Only that label and only another board of the same site are skipped.
+    let foreign = "/bbs/gscom/2710/345497/artclView.do";
+    for changed in [
+        list.replacen("전체게시판공지", "일반공지", 1),
+        list.replacen(foreign, "/bbs/gsinfo/2710/345497/artclView.do", 1),
+        list.replacen(foreign, "/bbs/gscom/2710/345497/artclView.do?x=1", 1),
+    ] {
+        assert_ne!(changed, list);
+        assert!(listing(board("gscom-alumni"), 1, &changed).is_err());
+    }
+}
+
+#[test]
 fn gallery_boards_read_cards_and_their_ordinals() {
     let first = listing(
         board("liberalarts-posters"),

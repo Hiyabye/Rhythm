@@ -249,6 +249,28 @@ fn article_link(board: &K2webBoard, href: &str) -> Result<(String, Url), String>
     }
     Ok((external, url))
 }
+/// The label of a pin the site shows on every board of the site.
+const SITE_WIDE_PIN: &str = "전체게시판공지";
+/// Whether `href` is an article of another board of this board's site
+/// (`/bbs/<site>/<other bbs>/<id>/artclView.do` on the CMS host). A site-wide
+/// pin links there; that board owns the notice (gscom 2712 shows one of 2710).
+fn other_board_article(board: &K2webBoard, href: &str) -> bool {
+    let Some(url) = safe_url(&format!("https://{HOST}"), href) else {
+        return false;
+    };
+    let parts: Vec<_> = url.path().trim_start_matches('/').split('/').collect();
+    url.scheme() == "https"
+        && url.host_str() == Some(HOST)
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && parts.len() == 5
+        && parts[0] == "bbs"
+        && parts[1] == board.site
+        && positive(parts[2])
+        && parts[2] != board.bbs.to_string()
+        && positive(parts[3])
+        && parts[4] == "artclView.do"
+}
 /// A row's title text without the `새글` (new post) badge, which galleries
 /// print inside the title element.
 fn listed_title(element: ElementRef<'_>) -> String {
@@ -377,6 +399,14 @@ fn table_rows(list: ElementRef<'_>, rows: &mut Rows<'_>) -> Result<(), String> {
         }
         let href = anchor.value().attr("href").ok_or(PARSER_ERROR)?;
         let pinned = row.value().classes().any(|class| class == "notice");
+        // Another board's site-wide pin is not this board's notice and takes
+        // no ordinal; any other foreign link still fails the page.
+        if pinned
+            && text(one(number, "span.notice-title")?) == SITE_WIDE_PIN
+            && other_board_article(rows.board, href)
+        {
+            continue;
+        }
         if !pinned && link_post(href) {
             rows.count(text(number).parse::<u32>().map_err(|_| PARSER_ERROR)?)?;
             continue;
