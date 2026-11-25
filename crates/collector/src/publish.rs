@@ -21,7 +21,9 @@ use crate::{
     embedding,
     r2::{self, ObjectStore},
     sha256_hex,
-    state::{Commit, FileRow, Published, PublishedEvent, Scanned, ScannedEvent, State},
+    state::{
+        Commit, FileRow, Published, PublishedEvent, Scanned, ScannedEvent, ScannedMeal, State,
+    },
     workers_ai::MODEL,
 };
 use rhythm_feed::{
@@ -106,8 +108,9 @@ pub async fn prepare<S: ObjectStore>(
     let day = &now[..10];
     let scan = state.feed_scan()?;
     let events = state.feed_event_scan()?;
+    let meals = state.feed_meal_scan(now)?;
     let mut commit = Commit::default();
-    let (changes, current) = plan(&scan, &events, next_seq, &mut commit)?;
+    let (changes, current) = plan(&scan, &events, &meals, next_seq, &mut commit)?;
     let mut uploads = Vec::new();
     let listed = state.feed_files(true)?;
 
@@ -235,6 +238,7 @@ fn manifest(state: &State, now: &str) -> Result<Manifest, String> {
         },
         boards: state.feed_boards()?,
         calendars: state.feed_calendars()?,
+        meals: state.feed_meals_health()?,
         snapshot: Snapshot {
             through_seq: snapshot.to_seq,
             records,
@@ -339,6 +343,7 @@ async fn clean<S: ObjectStore>(
 fn plan<'a>(
     scan: &'a [Scanned],
     events: &[ScannedEvent],
+    meals: &[ScannedMeal],
     next_seq: u64,
     commit: &mut Commit,
 ) -> Result<(Vec<Pending<'a>>, Vec<Pending<'a>>), String> {
@@ -450,6 +455,24 @@ fn plan<'a>(
                 .published_events
                 .push(((event.calendar_id.clone(), event.uid.clone()), published));
         }
+    }
+    // Menu weeks are never removed by a record: a client drops weeks that
+    // ended over 7 days ago, and the snapshot holds only the later ones.
+    for scanned in meals {
+        let record = Record::MealWeek(Box::new(scanned.week.clone()));
+        let digest = sha256_hex(serde_json::to_vec(&scanned.week).map_err(|e| e.to_string())?);
+        let meal_seq = match &scanned.published {
+            Some((published, last)) if *last == digest => *published,
+            _ => {
+                changes.push((seq, record.clone(), None));
+                commit
+                    .published_meals
+                    .push((scanned.week.week.clone(), seq, digest));
+                seq += 1;
+                seq - 1
+            }
+        };
+        current.push((meal_seq, record, None));
     }
     commit.next_seq = seq;
     current.sort_by_key(|(seq, _, _)| *seq);

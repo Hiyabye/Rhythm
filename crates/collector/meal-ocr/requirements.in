@@ -1,0 +1,4 @@
+# The OCR step of the collector workflow (#318). Resolved into requirements.lock.
+paddleocr==3.3.2
+paddlepaddle==3.2.2
+pillow==11.3.0

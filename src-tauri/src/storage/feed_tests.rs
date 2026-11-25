@@ -450,6 +450,33 @@ fn records_the_app_cannot_use_are_skipped() {
 }
 
 #[test]
+fn menu_weeks_are_not_mirrored_yet() {
+    // Format 1.3 menu weeks (#318) pass without error until the app mirrors them.
+    let (_directory, store) = database();
+    let week = rhythm_feed::record::MealWeek {
+        week: "2026-11-23".into(),
+        source_id: "dorm-menu".into(),
+        external_id: "1".into(),
+        image_url: "https://new-cms.sogang.ac.kr/CrossEditor/binary/images/000047/a.jpg".into(),
+        status: rhythm_feed::record::MealStatus::Unreadable,
+        low_resolution: false,
+        days: Vec::new(),
+        breakfast_common: None,
+        drinks: None,
+    };
+    let fine = feed_notice("fine", "본문");
+    let applied = store
+        .feed_apply_snapshot(
+            2,
+            &[upsert(1, &fine), entry(2, Record::MealWeek(Box::new(week)))],
+            &[],
+        )
+        .unwrap();
+    assert_eq!((applied.revised, applied.skipped), (1, 0));
+    assert_eq!(store.feed_cursor().unwrap(), Some(2));
+}
+
+#[test]
 fn a_snapshot_never_becomes_notifications_and_keeps_the_feed_dates() {
     let (_directory, store) = database();
     store
@@ -532,6 +559,7 @@ fn manifest(generated_at: &str, boards: &[(&str, u32)]) -> rhythm_feed::Manifest
             canary: None,
         },
         calendars: Vec::new(),
+        meals: Vec::new(),
         boards: boards
             .iter()
             .map(

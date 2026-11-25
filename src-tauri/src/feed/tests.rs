@@ -110,6 +110,7 @@ fn manifest(generated_at: &str, snapshot: Snapshot, segments: Vec<Segment>) -> M
             canary: None,
         },
         calendars: Vec::new(),
+        meals: Vec::new(),
         boards: vec![
             BoardHealth {
                 source_id: "one".into(),

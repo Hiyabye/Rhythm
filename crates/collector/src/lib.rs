@@ -8,6 +8,7 @@
 pub mod calendar;
 pub mod crawl;
 pub mod embedding;
+pub mod meals;
 pub mod measured;
 pub mod publish;
 pub mod r2;

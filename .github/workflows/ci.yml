@@ -26,6 +26,7 @@ jobs:
       rust: ${{ steps.classify.outputs.rust }}
       packaging: ${{ steps.classify.outputs.packaging }}
       worker: ${{ steps.classify.outputs.worker }}
+      meal_ocr: ${{ steps.classify.outputs.meal_ocr }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -75,6 +76,23 @@ jobs:
       # The tests need only TypeScript; wrangler's install scripts never run here.
       - run: npm ci --ignore-scripts
       - run: npm test
+
+  # The collector workflow's OCR step (#318), with the hashed lockfile it runs
+  # with in rhythm-fetch/collector. Engines are injected: no model downloads.
+  meal-ocr:
+    name: Meal OCR step
+    needs: changes
+    if: needs.changes.outputs.meal_ocr == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: crates/collector/meal-ocr/requirements.lock
+      - run: pip install --require-hashes --no-deps -r crates/collector/meal-ocr/requirements.lock
+      - run: python -m unittest discover -s crates/collector/meal-ocr -p 'test_*.py' -v
 
   rust-fmt:
     name: Rust formatting
@@ -187,7 +205,7 @@ jobs:
   ci-ok:
     name: CI passed
     if: always()
-    needs: [changes, frontend, worker, rust-fmt, desktop, windows]
+    needs: [changes, frontend, worker, meal-ocr, rust-fmt, desktop, windows]
     runs-on: ubuntu-24.04
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')

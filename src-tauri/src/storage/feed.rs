@@ -277,8 +277,9 @@ fn record_source(entry: &Entry) -> Option<&str> {
         Record::Embedding(embedding) => Some(&embedding.source_id),
         Record::Classification(classification) => Some(&classification.source_id),
         Record::Remove(removal) => Some(&removal.source_id),
-        // Calendar events (format 1.2) belong to no board.
-        Record::Event(_) | Record::EventRemove(_) => None,
+        // Calendar events (format 1.2) and menu weeks (1.3) belong to no
+        // board's mirror.
+        Record::Event(_) | Record::EventRemove(_) | Record::MealWeek(_) => None,
     }
 }
 
@@ -303,8 +304,9 @@ fn apply(
     applied: &mut Applied,
 ) -> Result<(), String> {
     let applied_one = match &entry.record {
-        // A record kind of a newer minor version.
-        None => return Ok(()),
+        // A record kind of a newer minor version, or a menu week (format
+        // 1.3), which this version does not mirror yet (#318).
+        None | Some(Record::MealWeek(_)) => return Ok(()),
         Some(Record::Event(event)) => upsert_event(transaction, event)?,
         Some(Record::EventRemove(removal)) => {
             let EventRemoval {

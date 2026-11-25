@@ -5,7 +5,10 @@
 use super::State;
 use rhythm_feed::{
     manifest::{BoardHealth, CalendarHealth},
-    record::{BodyState, Classification, DateKind, Embedding, Event, Notice, NoticeDate, Resource},
+    record::{
+        BodyState, Classification, DateKind, Embedding, Event, MealWeek, Notice, NoticeDate,
+        Resource,
+    },
 };
 use rusqlite::{params, OptionalExtension};
 use std::collections::HashMap;
@@ -49,6 +52,13 @@ pub struct ScannedEvent {
     pub published: PublishedEvent,
 }
 
+/// A menu week as the feed would publish it now, with the seq and digest it
+/// last published.
+pub struct ScannedMeal {
+    pub week: MealWeek,
+    pub published: Option<(u64, String)>,
+}
+
 /// One published records file and its vectors file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileRow {
@@ -72,6 +82,8 @@ pub struct Commit {
     pub published: Vec<(i64, Published)>,
     /// By `(calendar_id, uid)`.
     pub published_events: Vec<((String, String), PublishedEvent)>,
+    /// By week: the seq and digest last published.
+    pub published_meals: Vec<(String, u64, String)>,
     /// New run records kept until their day is compacted.
     pub records: Vec<StoredRecord>,
     /// Compacted records up to this seq are dropped.
@@ -140,7 +152,8 @@ impl State {
         self.with(|c| {
             let transaction = c.unchecked_transaction()?;
             transaction.execute_batch(
-                "DELETE FROM feed_records; DELETE FROM feed_notices; DELETE FROM feed_events;",
+                "DELETE FROM feed_records; DELETE FROM feed_notices; DELETE FROM feed_events;
+                 DELETE FROM feed_meals;",
             )?;
             transaction.execute(
                 "UPDATE feed_files SET retired_at=?1 WHERE retired_at IS NULL",
@@ -311,6 +324,28 @@ impl State {
         })
     }
 
+    /// The menu weeks a client still shows at `now` (RFC 3339 UTC): those that
+    /// ended at most 7 days before today in Korea (docs/FEED.md).
+    pub fn feed_meal_scan(&self, now: &str) -> Result<Vec<ScannedMeal>, String> {
+        let rows: Vec<(String, Option<u64>, Option<String>)> = self.with(|c| {
+            c.prepare(
+                "SELECT w.record,p.meal_seq,p.meal_digest FROM meal_weeks w
+                 LEFT JOIN feed_meals p ON p.week=w.week
+                 WHERE w.week>=date(?1,'+9 hours','-13 days') ORDER BY w.week",
+            )?
+            .query_map([now], |row| Ok((row.get(0)?, opt(row, 1)?, row.get(2)?)))?
+            .collect()
+        })?;
+        rows.into_iter()
+            .map(|(record, seq, digest)| {
+                Ok(ScannedMeal {
+                    week: serde_json::from_str(&record).map_err(|e| e.to_string())?,
+                    published: seq.zip(digest),
+                })
+            })
+            .collect()
+    }
+
     /// Calendar health for the manifest.
     pub fn feed_calendars(&self) -> Result<Vec<CalendarHealth>, String> {
         self.with(|c| {
@@ -451,6 +486,14 @@ impl State {
                         p.event_digest,
                         sql(p.removed_seq)
                     ],
+                )?;
+            }
+            for (week, seq, digest) in &commit.published_meals {
+                transaction.execute(
+                    "INSERT INTO feed_meals(week,meal_seq,meal_digest) VALUES(?1,?2,?3)
+                     ON CONFLICT(week) DO UPDATE SET meal_seq=excluded.meal_seq,
+                       meal_digest=excluded.meal_digest",
+                    params![week, *seq as i64, digest],
                 )?;
             }
             for (seq, record, vector) in &commit.records {
