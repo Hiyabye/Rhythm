@@ -485,7 +485,7 @@ fn a_populated_profile_upgrades_and_a_failed_upgrade_rolls_back() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}PRAGMA user_version=36;"
+                "{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}PRAGMA user_version=36;"
             ))
             .unwrap();
     }
@@ -505,7 +505,7 @@ fn a_populated_profile_upgrades_and_a_failed_upgrade_rolls_back() {
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}CREATE TABLE feed_state(id INTEGER); PRAGMA user_version=36;"
+            "{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}CREATE TABLE feed_state(id INTEGER); PRAGMA user_version=36;"
         ))
         .unwrap();
     assert!(Store::open(&path).is_err());
@@ -667,7 +667,7 @@ fn a_schema_37_profile_upgrades_and_a_failed_upgrade_rolls_back() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}PRAGMA user_version=37;"
+                "{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}PRAGMA user_version=37;"
             ))
             .unwrap();
     }
@@ -682,7 +682,7 @@ fn a_schema_37_profile_upgrades_and_a_failed_upgrade_rolls_back() {
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}CREATE TABLE feed_boards(id INTEGER); PRAGMA user_version=37;"
+            "{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}CREATE TABLE feed_boards(id INTEGER); PRAGMA user_version=37;"
         ))
         .unwrap();
     assert!(Store::open(&path).is_err());
@@ -1241,7 +1241,7 @@ fn a_schema_40_profile_starts_counting_at_the_next_manifest() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}PRAGMA user_version=40;"
+                "{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}PRAGMA user_version=40;"
             ))
             .unwrap();
     }
@@ -1569,7 +1569,9 @@ fn a_schema_41_profile_knows_the_boards_of_its_old_catalog() {
             .unwrap();
         store
             .connection
-            .execute_batch(&format!("{UNDO_KNOWN_BOARDS}PRAGMA user_version=41;"))
+            .execute_batch(&format!(
+                "{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}PRAGMA user_version=41;"
+            ))
             .unwrap();
     }
     // The migration records the catalog it finds; the new one arrives after it.
@@ -1604,4 +1606,156 @@ fn a_schema_41_profile_knows_the_boards_of_its_old_catalog() {
         )
         .unwrap();
     assert_eq!((version, cursor, known), (41, Some(3), 2));
+}
+
+fn academic(uid: &str, title: &str, start: &str, end: &str) -> Record {
+    Record::Event(rhythm_feed::record::Event {
+        calendar_id: "sogang-academic-calendar".into(),
+        uid: uid.into(),
+        title: title.into(),
+        start_day: start.into(),
+        end_day: end.into(),
+    })
+}
+
+fn shown(store: &Store, from: &str, to: &str) -> Vec<(String, String, String)> {
+    store
+        .calendar_notice_dates(from, to)
+        .unwrap()
+        .events
+        .into_iter()
+        .map(|e| (e.title, e.start_day, e.end_day))
+        .collect()
+}
+
+#[test]
+fn calendar_events_are_mirrored_and_shown_in_their_range_while_the_layer_is_on() {
+    let (directory, store) = database();
+    store
+        .feed_apply_snapshot(
+            2,
+            &[
+                entry(1, academic("a", "개강", "2026-09-01", "2026-09-01")),
+                entry(2, academic("b", "중간시험", "2026-10-20", "2026-10-27")),
+            ],
+            &[],
+        )
+        .unwrap();
+    let applied = store
+        .feed_apply_segment(
+            3,
+            6,
+            &[
+                entry(3, academic("a", "개강미사", "2026-08-31", "2026-09-02")),
+                // Ends before it starts: skipped and counted, never stored.
+                entry(4, academic("x", "역순", "2026-09-10", "2026-09-09")),
+                entry(5, academic("c", "수강신청", "2026-09-10", "2026-09-10")),
+                entry(
+                    6,
+                    Record::EventRemove(rhythm_feed::record::EventRemoval {
+                        calendar_id: "sogang-academic-calendar".into(),
+                        uid: "b".into(),
+                        removed_at: "2026-10-01T00:00:00.000Z".into(),
+                    }),
+                ),
+            ],
+            &[],
+            false,
+            &Default::default(),
+        )
+        .unwrap();
+    assert_eq!((applied.revised, applied.skipped), (0, 1));
+    // A span that starts before the range still shows; the removal is gone.
+    assert_eq!(
+        shown(&store, "2026-09-01", "2026-10-31"),
+        [
+            ("개강미사".into(), "2026-08-31".into(), "2026-09-02".into()),
+            ("수강신청".into(), "2026-09-10".into(), "2026-09-10".into()),
+        ]
+    );
+    assert!(shown(&store, "2026-09-03", "2026-09-09").is_empty());
+    assert!(
+        store
+            .calendar_notice_dates("2026-09-01", "2026-09-30")
+            .unwrap()
+            .academic
+    );
+
+    // Hidden: no events, and the choice survives a reopen.
+    store.set_calendar_academic(false).unwrap();
+    let hidden = store
+        .calendar_notice_dates("2026-09-01", "2026-09-30")
+        .unwrap();
+    assert!(!hidden.academic && hidden.events.is_empty());
+    drop(store);
+    let store = Store::open(&directory.path().join("db")).unwrap();
+    assert!(!store.calendar_academic().unwrap());
+    store.set_calendar_academic(true).unwrap();
+
+    // A snapshot that no longer lists an event removes it.
+    store
+        .feed_apply_snapshot(
+            9,
+            &[entry(
+                9,
+                academic("c", "수강신청", "2026-09-10", "2026-09-10"),
+            )],
+            &[],
+        )
+        .unwrap();
+    assert_eq!(
+        shown(&store, "2026-09-01", "2026-10-31"),
+        [("수강신청".into(), "2026-09-10".into(), "2026-09-10".into())]
+    );
+}
+
+#[test]
+fn a_schema_42_profile_shows_the_layer_and_backfills_events_once() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    {
+        let store = Store::open(&path).unwrap();
+        store.catalog(&[definition("one", "main")]).unwrap();
+        store
+            .feed_apply_snapshot(3, &[upsert(1, &feed_notice("1", "본문"))], &[])
+            .unwrap();
+        store
+            .connection
+            .execute_batch(&format!("{UNDO_CALENDAR_EVENTS}PRAGMA user_version=42;"))
+            .unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.info().unwrap().schema_version, SCHEMA_VERSION);
+    assert!(store.calendar_academic().unwrap(), "on by default");
+    assert!(
+        !store.feed_events_known().unwrap(),
+        "the next sync backfills"
+    );
+    assert_eq!(store.feed_cursor().unwrap(), Some(3));
+    store.feed_remember_boards().unwrap();
+    assert!(store.feed_events_known().unwrap());
+    drop(store);
+
+    // A table left behind makes 043 fail; the open changes nothing.
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute_batch(&format!(
+            "{UNDO_CALENDAR_EVENTS}PRAGMA user_version=42; CREATE TABLE calendar_events(sentinel TEXT);"
+        ))
+        .unwrap();
+    drop(connection);
+    assert!(Store::open(&path).is_err());
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 42);
+    assert!(connection
+        .query_row("SELECT calendar_academic FROM settings", [], |r| r
+            .get::<_, i64>(0))
+        .is_err());
+    assert!(connection
+        .query_row("SELECT events_known FROM feed_state", [], |r| r
+            .get::<_, i64>(0))
+        .is_err());
 }

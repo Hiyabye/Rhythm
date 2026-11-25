@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { mockDesktop, openSettings } from './fixture';
-import type { CalendarTodo, CybercampusTask, NoticeDate } from '../../src/lib/types';
+import type { CalendarEvent, CalendarTodo, CybercampusTask, NoticeDate } from '../../src/lib/types';
 
 test.use({ timezoneId: 'Asia/Seoul' });
 const board = { id: 'cybercampus', name: '강의 공지', organization: '서강대학교 · 사이버캠퍼스', supported: true, family: 'cybercampus', subscribed: true };
@@ -8,6 +8,9 @@ const deadline: CybercampusTask = { course_key: 'A1', course_name: '자료구조
   opens_at: null, due_at: '2026-10-26T23:59', late_due_at: null, status: null, submitted_at: null, pending: true, updated_at: '2026-10-20T00:00:00Z' };
 const noticeDate = (overrides: Partial<NoticeDate & { saved: boolean }>): NoticeDate & { saved?: boolean } => ({
   document_id: 1, ordinal: 0, title: '한국어 공지 01', day: '2026-10-30', time: '18:00', end_day: null, end_time: null, label: '신청 마감', kind: 'deadline', ...overrides });
+const academic = (uid: string, title: string, start_day: string, end_day = start_day): CalendarEvent =>
+  ({ calendar_id: 'sogang-academic-calendar', uid, title, start_day, end_day });
+const academicEvents = [academic('exam', '중간시험', '2026-10-26', '2026-10-28'), academic('fest', '개교기념일', '2026-10-30')];
 const todo = (overrides: Partial<CalendarTodo>): CalendarTodo => ({ id: 1, title: '장학금 서류', day: '2026-10-25', time: null, memo: '', done: false, document_id: null, reminder_minutes: null, ...overrides });
 
 async function openCalendar(page: Page) {
@@ -354,4 +357,73 @@ test('without the calendar extension no page offers to add a todo', async ({ pag
   const dates = page.getByRole('region', { name: /공지 속 날짜/ });
   await expect(dates).toContainText('신청 마감');
   await expect(dates.getByRole('button')).toHaveCount(0);
+});
+
+test('the academic calendar shows school events on every day they cover until the user hides it', async ({ page }) => {
+  await mockDesktop(page, { calendarEvents: academicEvents });
+  await page.goto('/');
+  await openCalendar(page);
+  for (const day of ['2026-10-26', '2026-10-27', '2026-10-28']) await expect(page.locator(`[data-day="${day}"]`)).toHaveAccessibleName(/학사 일정 1개/);
+  await expect(page.locator('[data-day="2026-10-29"]')).toHaveAccessibleName('10월 29일 목요일');
+  await page.locator('[data-day="2026-10-27"]').click();
+  const panel = page.getByRole('region', { name: /10월 27일 화요일/ });
+  await expect(panel).toContainText('학사 중간시험');
+  await expect(panel).toContainText('10월 26일 ~ 28일 · 학교 학사 일정');
+  await expect(page.locator('.calendar-options').nth(1)).toContainText('학교가 게시한 학사 일정을 표시합니다.');
+
+  const toggle = page.getByRole('checkbox', { name: '학사 일정 표시' });
+  await expect(toggle).toBeChecked();
+  await toggle.uncheck();
+  await expect(page.locator('.calendar-feedback')).toHaveText('학사 일정을 숨깁니다.');
+  await expect(page.locator('[data-day="2026-10-27"]')).toHaveAccessibleName('10월 27일 화요일');
+  await expect(panel).toContainText('일정 없음');
+  const calls = await page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'calendar_set_academic').map((call: any) => call.args));
+  expect(calls).toEqual([{ enabled: false }]);
+  await page.getByRole('button', { name: '받은 소식', exact: true }).click();
+  await openCalendar(page);
+  await expect(page.getByRole('checkbox', { name: '학사 일정 표시' })).not.toBeChecked();
+});
+
+test('the week pane shows school events and opens the calendar on their day', async ({ page }) => {
+  await mockDesktop(page, { calendarEvents: academicEvents });
+  await page.goto('/');
+  const week = page.getByRole('complementary', { name: '앞으로 7일', exact: true });
+  // The window runs from 10월 24일; the exam covers its third to fifth days.
+  for (const index of [2, 3, 4]) await expect(week.locator('.week-day').nth(index).locator('.event-academic')).toContainText('학사 중간시험');
+  await expect(week.locator('.week-day').nth(6).locator('.event-academic')).toContainText('학사 개교기념일');
+  await expect(week.locator('.event-academic')).toHaveCount(4);
+  await expect(week).toContainText('학교 학사 일정');
+  await week.locator('.week-day').nth(3).locator('.event-academic').click();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('캘린더');
+  await expect(page.getByRole('region', { name: /10월 27일 화요일/ })).toContainText('학사 중간시험');
+});
+
+test('the academic calendar says it needs 서강 공지, and the week leaves it out without the calendar', async ({ page }) => {
+  await mockDesktop(page, { enabled: false, calendarEvents: academicEvents });
+  await page.goto('/');
+  await openCalendar(page);
+  await expect(page.locator('.calendar-options').nth(1)).toContainText('학사 일정은 서강 공지 확장 기능이 켜져 있을 때 받습니다.');
+  // What was received before stays visible.
+  await expect(page.locator('[data-day="2026-10-27"]')).toHaveAccessibleName(/학사 일정 1개/);
+
+  await mockDesktop(page, { extensions: { calendar: false }, calendarEvents: academicEvents });
+  await page.goto('/');
+  const week = page.getByRole('complementary', { name: '앞으로 7일', exact: true });
+  await expect(week.locator('.week-day')).toHaveCount(7);
+  await expect(week.locator('.event-academic')).toHaveCount(0);
+  await expect(week).not.toContainText('학사 일정');
+});
+
+test('a school event becomes a todo after the user checks the prefilled form', async ({ page }) => {
+  await mockDesktop(page, { calendarEvents: academicEvents });
+  await page.goto('/');
+  await openCalendar(page);
+  await page.locator('[data-day="2026-10-28"]').click();
+  await page.getByRole('button', { name: '중간시험 할 일로 추가' }).click();
+  await expect(page.getByRole('note')).toContainText('학교 학사 일정을 옮겨 적은 할 일입니다.');
+  await expect(page.getByRole('textbox', { name: '제목' })).toHaveValue('중간시험');
+  await page.getByRole('button', { name: '추가', exact: true }).click();
+  await expect(page.locator('.calendar-feedback')).toHaveText('할 일을 추가했습니다.');
+  // The todo starts on the event's first day.
+  await expect(page.locator('[data-day="2026-10-26"]')).toHaveAccessibleName(/할 일 1개/);
 });

@@ -1,4 +1,4 @@
-import type { ClockFormat, CybercampusTask, ItemDeadline, NoticeDate, StudiumRoomState, TodoPrefill } from './types';
+import type { CalendarEvent, ClockFormat, CybercampusTask, ItemDeadline, NoticeDate, StudiumRoomState, TodoPrefill } from './types';
 
 export function archiveError(reason: unknown): string {
   if (typeof reason !== 'string') return '작업을 완료하지 못했습니다. 다시 시도해 주세요.';
@@ -93,6 +93,28 @@ export function noticeDateMeta(date: NoticeDate, format: ClockFormat): string {
 /** Whether a notice date falls on `day`, counting every day of a multi-day date. */
 export function noticeDateOn(date: NoticeDate, day: string): boolean {
   return date.day <= day && day <= (date.end_day ?? date.day);
+}
+
+/** Whether an academic calendar event falls on `day`, counting every day it spans. */
+export function calendarEventOn(event: CalendarEvent, day: string): boolean {
+  return event.start_day <= day && day <= event.end_day;
+}
+
+/** The line under an academic calendar event: its span when it has more than one day, then its source. */
+export function calendarEventMeta(event: CalendarEvent): string {
+  if (event.end_day === event.start_day) return '학교 학사 일정';
+  const [startYear, startMonth, startDay] = event.start_day.split('-').map(Number);
+  const [endYear, endMonth, endDay] = event.end_day.split('-').map(Number);
+  const end = endYear !== startYear ? `${endYear}년 ${endMonth}월 ${endDay}일` : endMonth !== startMonth ? `${endMonth}월 ${endDay}일` : `${endDay}일`;
+  return `${startMonth}월 ${startDay}일 ~ ${end} · 학교 학사 일정`;
+}
+
+/** A todo form for an academic calendar event, on its first day. */
+export function calendarEventTodo(event: CalendarEvent): TodoPrefill {
+  return {
+    todo: { title: todoTitle(event.title), day: event.start_day, time: null, memo: '', document_id: null },
+    caution: '학교 학사 일정을 옮겨 적은 할 일입니다. 일정이 바뀌어도 이 할 일은 그대로이니 캘린더에서 확인하세요.',
+  };
 }
 
 /** A todo form for a date found in a notice's text. Matching is lexical, so the user checks it first. */

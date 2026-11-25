@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { AiSnapshot, ArchivePage, ArchiveQuery, ArchiveSummary, AiClassification, CalendarNoticeDates, CalendarTodo, CybercampusTask, NoticeDate, TodoPrefill, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceGroup, SourceInfo, SyncStatus, FeedStatus } from './types';
-  import { archiveDate, archiveDay, archiveError, deadlineLabel, groupScope, kstInstant, localDayKey, noticeDateMark, noticeDateMeta, noticeDateOn, scopeGroup, wallTime } from './archive-format';
+  import type { AiSnapshot, ArchivePage, ArchiveQuery, ArchiveSummary, AiClassification, CalendarEvent, CalendarNoticeDates, CalendarTodo, CybercampusTask, NoticeDate, TodoPrefill, DocumentItem, DuplicateNotices, SimilarNotice, PersonalizedRecommendation, PersonalizationRecommendations, SourceGroup, SourceInfo, SyncStatus, FeedStatus } from './types';
+  import { archiveDate, archiveDay, archiveError, calendarEventMeta, calendarEventOn, deadlineLabel, groupScope, kstInstant, localDayKey, noticeDateMark, noticeDateMeta, noticeDateOn, scopeGroup, wallTime } from './archive-format';
   import { clock } from './clock.svelte';
   import { confirmAction } from './confirm';
   import CalendarView from './CalendarView.svelte';
@@ -43,6 +43,8 @@
   // Dates found in notice text from today through two months ahead, for the week and what follows it.
   let weekDates = $state<NoticeDate[]>([]);
   let weekAllDeadlines = $state(false);
+  // The academic calendar's events, empty while its layer is hidden.
+  let weekEvents = $state<CalendarEvent[]>([]);
   let calendarDay = $state(localDayKey(new Date()));
   let calendarPrefill = $state<TodoPrefill | null>(null);
   // The row the calendar focuses after returning from the reader.
@@ -259,10 +261,10 @@
     const to = localDayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 62));
     try {
       const value = await invoke<CalendarNoticeDates>('calendar_notice_dates', { from, to });
-      if (active) { weekDates = value.dates; weekAllDeadlines = value.all_deadlines; }
+      if (active) { weekDates = value.dates; weekAllDeadlines = value.all_deadlines; weekEvents = value.events; }
     } catch {
       // Notice dates are a supplement to the week; the calendar page reports load failures.
-      if (active) weekDates = [];
+      if (active) { weekDates = []; weekEvents = []; }
     }
   }
 
@@ -521,6 +523,8 @@
         tasks: openTasks.filter((task) => task.due_at!.slice(0, 10) === key),
         // Done todos need no planning, like submitted deadlines.
         todos: calendarOn ? weekTodos.filter((todo) => todo.day === key && !todo.done) : [],
+        // The 학사 일정 layer belongs to the calendar extension, like todos.
+        events: calendarOn ? weekEvents.filter((event) => calendarEventOn(event, key)) : [],
         dates: weekDates.filter((entry) => noticeDateOn(entry, key)) };
     });
   });
@@ -630,6 +634,13 @@
                       <span class="event-meta">캘린더에서 보기</span>
                     </button></li>
                   {/each}
+                  {#each day.events as event (`${event.calendar_id}-${event.uid}`)}
+                    <li><button class="event event-academic" id={`week-academic-${day.key}-${event.uid}`} onclick={() => oncalendar(day.key)}>
+                      <span class="event-bar" aria-hidden="true"></span>
+                      <span class="event-title"><span class="ai-mark academic-mark">학사</span> {event.title}</span>
+                      <span class="event-meta">{calendarEventMeta(event)}</span>
+                    </button></li>
+                  {/each}
                   {#each day.notices.slice(0, weekDayLimit) as item (item.id)}
                     <li><button class="event" class:notice-unread={!item.is_read} id={`week-${item.id}`} onclick={() => void open(item, `week-${item.id}`)}>
                       <span class={`event-bar family-${familyOf(item.source_id)}`} aria-hidden="true"></span>
@@ -646,7 +657,7 @@
                       <span class="event-meta">{noticeDateMeta(entry, clock.format)}</span>
                     </button></li>
                   {/each}
-                  {#if !day.tasks.length && !day.todos.length && !day.notices.length && !day.dates.length}<li class="day-empty">일정 없음</li>{/if}
+                  {#if !day.tasks.length && !day.todos.length && !day.events.length && !day.notices.length && !day.dates.length}<li class="day-empty">일정 없음</li>{/if}
                 </ul>
               </li>
             {/each}
@@ -665,12 +676,12 @@
               {/each}
             </ul>
           {/if}
-          <p class="pane-footnote">오늘 게시된 공지{#if showTasks}, 사이버캠퍼스에서 마지막으로 가져온 과제 마감{/if}{#if calendarOn}, 캘린더에 직접 만든 할 일{/if}{showTasks || calendarOn ? '과' : '와'} {weekAllDeadlines ? '저장한 공지의 날짜, 모든 공지의 마감' : '저장한 공지의 본문에서 찾은 날짜'}입니다. 찾은 날짜는 틀릴 수 있으니 원문에서 확인하세요.</p>
+          <p class="pane-footnote">오늘 게시된 공지{#if showTasks}, 사이버캠퍼스에서 마지막으로 가져온 과제 마감{/if}{#if calendarOn}, 캘린더에 직접 만든 할 일{#if weekEvents.length}, 학교 학사 일정{/if}{/if}{showTasks || calendarOn ? '과' : '와'} {weekAllDeadlines ? '저장한 공지의 날짜, 모든 공지의 마감' : '저장한 공지의 본문에서 찾은 날짜'}입니다. 찾은 날짜는 틀릴 수 있으니 원문에서 확인하세요.</p>
         </aside>
         {/if}
       </div>
     {:else if page === 'calendar'}
-      <CalendarView {desktop} bind:selected={calendarDay} bind:prefill={calendarPrefill} bind:focus={calendarFocus} tasks={openTasks} {ontasks} onopen={(id, target) => void openDocument(id, target)} />
+      <CalendarView {desktop} notices={enabled.has('sogang_notices')} bind:selected={calendarDay} bind:prefill={calendarPrefill} bind:focus={calendarFocus} tasks={openTasks} {ontasks} onopen={(id, target) => void openDocument(id, target)} />
     {:else}
     {#if page === 'search'}
       <form class="search-form archive-search" onsubmit={search} role="search"><Icon name="search" size={21} /><label class="sr-only" for="local-query">보관된 공지 검색</label><input id="local-query" type="search" bind:value={draft} maxlength="512" placeholder="제목과 본문에서 검색" autocomplete="off" disabled={!desktop} /><button class="text-button" type="submit" disabled={!desktop || loading}>검색</button></form>

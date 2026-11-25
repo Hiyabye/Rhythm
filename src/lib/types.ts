@@ -508,8 +508,20 @@ export interface NoticeDate {
   label: string;
   kind: 'deadline' | 'start' | 'date';
 }
-// Saved notices' dates, plus every notice's deadlines when `all_deadlines` is on.
+// An event of the school's academic calendar from the feed (storage::notice_dates::CalendarEvent, #319).
+export interface CalendarEvent {
+  calendar_id: string;
+  uid: string;
+  title: string;
+  start_day: string;
+  // Inclusive; equal to start_day for a one-day event.
+  end_day: string;
+}
+// Saved notices' dates, plus every notice's deadlines when `all_deadlines` is on,
+// and the academic calendar's events while `academic` is on.
 export interface CalendarNoticeDates {
   all_deadlines: boolean;
   dates: NoticeDate[];
+  academic: boolean;
+  events: CalendarEvent[];
 }

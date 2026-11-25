@@ -16,7 +16,10 @@ use super::{
 use crate::archive::model::{ArticleInput, ListingEntry, ResourceRecord};
 use rhythm_embed::CATEGORIES;
 use rhythm_feed::{
-    record::{BodyState, Classification, Embedding, Entry, Notice, Record, ResourceKind},
+    record::{
+        BodyState, Classification, Embedding, Entry, Event, EventRemoval, Notice, Record,
+        ResourceKind,
+    },
     vector, Revision, VECTOR_BYTES,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
@@ -77,11 +80,32 @@ impl Store {
             .map_err(|e| e.to_string())?;
         let mut applied = Applied::default();
         let mut listed: HashSet<(String, String)> = HashSet::new();
+        let mut events: HashSet<(String, String)> = HashSet::new();
         for entry in entries {
-            if let Some(Record::Notice(notice)) = &entry.record {
-                listed.insert((notice.source_id.clone(), notice.external_id.clone()));
+            match &entry.record {
+                Some(Record::Notice(notice)) => {
+                    listed.insert((notice.source_id.clone(), notice.external_id.clone()));
+                }
+                Some(Record::Event(event)) => {
+                    events.insert((event.calendar_id.clone(), event.uid.clone()));
+                }
+                _ => {}
             }
             apply(&transaction, entry, &vectors, true, &mut applied)?;
+        }
+        // Events the snapshot no longer lists were removed meanwhile.
+        let held: Vec<(String, String)> = transaction
+            .prepare("SELECT calendar_id,uid FROM calendar_events")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect()
+            })
+            .map_err(|e| e.to_string())?;
+        for (calendar_id, uid) in held {
+            if !events.contains(&(calendar_id.clone(), uid.clone())) {
+                remove_event(&transaction, &calendar_id, &uid)?;
+            }
         }
         let held: Vec<(i64, String, String)> = transaction
             .prepare("SELECT id,source_id,external_id FROM documents WHERE from_feed=1")
@@ -143,14 +167,17 @@ impl Store {
         self.finish(transaction, Some(to_seq), applied)
     }
 
-    /// Applies the records of `boards` with a seq above `after` from one file
-    /// of the snapshot path (the snapshot, then each later segment), leaving
-    /// the cursor and every other board alone. It brings in boards the catalog
-    /// gained after earlier syncs skipped their records (#80): like a first
-    /// sync, what it adds starts read and never becomes a notification.
+    /// Applies the records of `boards`, and with `events` the calendar
+    /// events, with a seq above `after` from one file of the snapshot path
+    /// (the snapshot, then each later segment), leaving the cursor and every
+    /// other board alone. It brings in boards the catalog gained after earlier
+    /// syncs skipped their records (#80), and the events a version before
+    /// format 1.2 support skipped (#319): like a first sync, what it adds
+    /// starts read and never becomes a notification.
     pub(crate) fn feed_backfill(
         &self,
         boards: &HashSet<String>,
+        events: bool,
         after: u64,
         entries: &[Entry],
         vectors: &[u8],
@@ -161,10 +188,10 @@ impl Store {
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
         let mut applied = Applied::default();
-        for entry in entries
-            .iter()
-            .filter(|e| e.seq > after && record_source(e).is_some_and(|s| boards.contains(s)))
-        {
+        for entry in entries.iter().filter(|e| {
+            e.seq > after
+                && (record_source(e).is_some_and(|s| boards.contains(s)) || events && is_event(e))
+        }) {
             apply(&transaction, entry, &vectors, true, &mut applied)?;
         }
         proactive::advance_baseline(&transaction)?;
@@ -183,8 +210,27 @@ impl Store {
             .map_err(|e| e.to_string())
     }
 
-    /// Records the catalog's public boards as known, after a sync that
-    /// applied every file it planned.
+    /// Whether a complete sync has mirrored calendar events; until then a
+    /// sync with a cursor backfills them (`feed_backfill`).
+    pub(crate) fn feed_events_known(&self) -> Result<bool, String> {
+        self.connection
+            .query_row("SELECT events_known FROM feed_state WHERE id=1", [], |r| {
+                r.get(0)
+            })
+            .map_err(|e| e.to_string())
+    }
+
+    /// Leaves the mirror as a version without format 1.2 support did: its
+    /// cursor passed the events without storing them.
+    #[cfg(test)]
+    pub(crate) fn feed_forget_events(&self) -> Result<(), String> {
+        self.connection
+            .execute_batch("DELETE FROM calendar_events; UPDATE feed_state SET events_known=0;")
+            .map_err(|e| e.to_string())
+    }
+
+    /// Records the catalog's public boards and the calendar events as known,
+    /// after a sync that applied every file it planned.
     pub(crate) fn feed_remember_boards(&self) -> Result<(), String> {
         let transaction = self
             .connection
@@ -194,7 +240,8 @@ impl Store {
             .execute_batch(
                 "DELETE FROM feed_known_boards;
                  INSERT INTO feed_known_boards(source_id)
-                   SELECT id FROM sources WHERE supported=1 AND family<>'cybercampus';",
+                   SELECT id FROM sources WHERE supported=1 AND family<>'cybercampus';
+                 UPDATE feed_state SET events_known=1 WHERE id=1;",
             )
             .map_err(|e| e.to_string())?;
         transaction.commit().map_err(|e| e.to_string())
@@ -235,6 +282,13 @@ fn record_source(entry: &Entry) -> Option<&str> {
     }
 }
 
+fn is_event(entry: &Entry) -> bool {
+    matches!(
+        entry.record,
+        Some(Record::Event(_) | Record::EventRemove(_))
+    )
+}
+
 /// The vectors file as whole vectors, each checked as the feed defines them.
 fn chunks(bytes: &[u8]) -> Result<Vec<&[u8; VECTOR_BYTES]>, String> {
     vector::decode(bytes).map_err(|e| e.to_string())?;
@@ -249,9 +303,16 @@ fn apply(
     applied: &mut Applied,
 ) -> Result<(), String> {
     let applied_one = match &entry.record {
-        // A record kind of a newer minor version, or a calendar event, which
-        // this version does not mirror yet (#319).
-        None | Some(Record::Event(_) | Record::EventRemove(_)) => return Ok(()),
+        // A record kind of a newer minor version.
+        None => return Ok(()),
+        Some(Record::Event(event)) => upsert_event(transaction, event)?,
+        Some(Record::EventRemove(removal)) => {
+            let EventRemoval {
+                calendar_id, uid, ..
+            } = removal;
+            remove_event(transaction, calendar_id, uid)?;
+            true
+        }
         Some(Record::Notice(notice)) => upsert(transaction, notice, quiet, applied)?,
         Some(Record::Embedding(embedding)) => embed(transaction, embedding, vectors)?,
         Some(Record::Classification(classification)) => classify(transaction, classification)?,
@@ -964,4 +1025,46 @@ fn remove(
     applied.orphaned.extend(paths);
     applied.removed += 1;
     Ok(())
+}
+
+/// Stores a calendar event (#319); a malformed one is skipped and counted.
+fn upsert_event(transaction: &Connection, event: &Event) -> Result<bool, String> {
+    let short =
+        |text: &str| !text.is_empty() && text.len() <= 512 && !text.contains(char::is_control);
+    let valid = short(&event.calendar_id)
+        && short(&event.uid)
+        && !event.title.trim().is_empty()
+        && event.title.len() <= MAX_TEXT
+        && super::calendar::day_number(&event.start_day).is_some()
+        && super::calendar::day_number(&event.end_day).is_some()
+        && event.end_day >= event.start_day;
+    if !valid {
+        return Ok(false);
+    }
+    transaction
+        .execute(
+            "INSERT INTO calendar_events(calendar_id,uid,title,start_day,end_day)
+             VALUES(?1,?2,?3,?4,?5)
+             ON CONFLICT(calendar_id,uid) DO UPDATE SET title=excluded.title,
+               start_day=excluded.start_day,end_day=excluded.end_day",
+            params![
+                event.calendar_id,
+                event.uid,
+                event.title,
+                event.start_day,
+                event.end_day
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+fn remove_event(transaction: &Connection, calendar_id: &str, uid: &str) -> Result<(), String> {
+    transaction
+        .execute(
+            "DELETE FROM calendar_events WHERE calendar_id=?1 AND uid=?2",
+            params![calendar_id, uid],
+        )
+        .map(drop)
+        .map_err(|e| e.to_string())
 }

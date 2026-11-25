@@ -650,3 +650,112 @@ async fn a_backfill_that_stops_early_runs_again() {
     assert_eq!(status(&store).result.as_deref(), Some("ok"));
     assert!(store.lock().unwrap().feed_new_boards().unwrap().is_empty());
 }
+
+fn academic(uid: &str, title: &str, day: &str) -> Record {
+    Record::Event(rhythm_feed::record::Event {
+        calendar_id: "sogang-academic-calendar".into(),
+        uid: uid.into(),
+        title: title.into(),
+        start_day: day.into(),
+        end_day: day.into(),
+    })
+}
+
+fn academic_titles(store: &SharedStore) -> Vec<String> {
+    store
+        .lock()
+        .unwrap()
+        .calendar_notice_dates("2026-09-01", "2026-10-31")
+        .unwrap()
+        .events
+        .into_iter()
+        .map(|e| e.title)
+        .collect()
+}
+
+#[tokio::test]
+async fn events_an_older_version_skipped_are_backfilled_once() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(&directory.path().join("rhythm.sqlite3")).unwrap();
+    store.catalog(&[definition("one")]).unwrap();
+    let store: SharedStore = Arc::new(Mutex::new(store));
+    let fake = Fake::default();
+    let feed = Feed {
+        fake: &fake,
+        base: BASE.into(),
+    };
+    let snapshot = Snapshot {
+        through_seq: 2,
+        records: feed.records(
+            SNAPSHOT,
+            &[
+                (1, notice_on("one", "1", "첫 공지")),
+                (2, academic("a", "개강", "2026-09-01")),
+            ],
+        ),
+        vectors: None,
+    };
+    let mut manifest = manifest(
+        "2026-11-18T12:00:00.000Z",
+        snapshot,
+        vec![segment(
+            &feed,
+            3,
+            5,
+            &[
+                (3, academic("a", "개강미사", "2026-09-01")),
+                (4, academic("b", "중간시험", "2026-10-20")),
+                (
+                    5,
+                    Record::EventRemove(rhythm_feed::record::EventRemoval {
+                        calendar_id: "sogang-academic-calendar".into(),
+                        uid: "b".into(),
+                        removed_at: "2026-11-18T11:00:00.000Z".into(),
+                    }),
+                ),
+            ],
+        )],
+    );
+    feed.publish(&manifest, &signer());
+    let controller = Controller::default();
+    // A first sync takes the snapshot path: events arrive and are known.
+    run(&controller, &store, directory.path(), &fake).await;
+    assert_eq!(academic_titles(&store), ["개강미사"]);
+    assert!(store.lock().unwrap().feed_events_known().unwrap());
+
+    // As an older version left it: the cursor passed the events unseen.
+    store.lock().unwrap().feed_forget_events().unwrap();
+    // Nothing new: the backfill still runs, from the snapshot and segments.
+    manifest.generated_at = "2026-11-18T12:30:00.000Z".into();
+    feed.publish(&manifest, &signer());
+    assert!(run(&controller, &store, directory.path(), &fake).await);
+    assert_eq!(academic_titles(&store), ["개강미사"]);
+    assert!(store.lock().unwrap().feed_events_known().unwrap());
+
+    // A later segment on the cursor path: new and changed events apply.
+    manifest.generated_at = "2026-11-18T13:00:00.000Z".into();
+    manifest.segments.push(segment(
+        &feed,
+        6,
+        7,
+        &[
+            (6, academic("c", "수강신청", "2026-09-10")),
+            (7, academic("a", "개강미사(오전 10시)", "2026-09-01")),
+        ],
+    ));
+    feed.publish(&manifest, &signer());
+    assert!(run(&controller, &store, directory.path(), &fake).await);
+    assert_eq!(
+        academic_titles(&store),
+        ["개강미사(오전 10시)", "수강신청"],
+        "the newest state of each event"
+    );
+    // A backfill together with newer segments ends at the same state.
+    store.lock().unwrap().feed_forget_events().unwrap();
+    manifest.generated_at = "2026-11-18T13:30:00.000Z".into();
+    feed.publish(&manifest, &signer());
+    assert!(run(&controller, &store, directory.path(), &fake).await);
+    assert_eq!(academic_titles(&store), ["개강미사(오전 10시)", "수강신청"]);
+    // Events never touch notices or unread counts.
+    assert_eq!(titles(&store), ["첫 공지"]);
+}
