@@ -396,20 +396,8 @@ fn main() {
     let app = builder
         .setup(|app| {
             core::install_menu(app.handle())?;
-            // Windows keeps the archive and model weights in the non-roaming
-            // profile; on macOS both resolve to Application Support.
-            #[cfg(windows)]
-            let default_root = app.path().app_local_data_dir()?;
-            #[cfg(not(windows))]
-            let default_root = app.path().app_data_dir()?;
-            let data_root = if app.config().identifier.ends_with(".validation") {
-                std::env::var_os("RHYTHM_VALIDATION_DATA_DIR")
-                    .map(PathBuf::from)
-                    .filter(|path| path.is_absolute())
-                    .unwrap_or(default_root)
-            } else {
-                default_root
-            };
+            let data_root = rhythm_core::paths::data_root(&app.config().identifier)
+                .map_err(std::io::Error::other)?;
             let instance_lock = match core::lock_data_dir(&data_root) {
                 Ok(lock) => lock,
                 Err(error) => {
@@ -436,8 +424,8 @@ fn main() {
                 }
             };
             backup::remove_stale_backup_snapshots(&data_root);
-            let store =
-                Store::open(&data_root.join("rhythm.sqlite3")).map_err(std::io::Error::other)?;
+            let store = Store::open(&rhythm_core::paths::database(&data_root))
+                .map_err(std::io::Error::other)?;
             store
                 .catalog(&archive::definitions())
                 .map_err(std::io::Error::other)?;
@@ -493,12 +481,10 @@ fn main() {
             );
             // Bundled llama.cpp builds; the private runtime directory holds the
             // embedding server's socket or per-launch access key.
-            let llama = app
-                .path()
-                .resource_dir()
-                .map_err(std::io::Error::other)?
-                .join("llama");
-            let runtime = data_root.join("run").join("embedding");
+            let llama = rhythm_core::paths::llama(
+                &rhythm_core::paths::resource_dir().map_err(std::io::Error::other)?,
+            );
+            let runtime = rhythm_core::paths::embedding_runtime(&data_root);
             // A server that a killed or crashed Rhythm left running still holds
             // its model in memory (#273).
             #[cfg(unix)]

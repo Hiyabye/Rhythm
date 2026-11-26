@@ -3,5 +3,6 @@
 
 pub mod archive;
 pub mod extensions;
+pub mod paths;
 pub mod storage;
 pub mod studium;

@@ -16,6 +16,7 @@ test-support = ["dep:tempfile"]
 rusqlite = { version = "0.38", default-features = false, features = ["bundled", "backup"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+dirs = "7"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 url = "2"
 tempfile = { version = "3", optional = true }
