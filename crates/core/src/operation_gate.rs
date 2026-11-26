@@ -9,7 +9,7 @@ const CLOSED: &str = "백업, 복원 또는 업데이트를 진행 중입니다.
 
 /// App-wide gate for work that can observe or mutate the live data directory.
 /// Every accepted operation holds a shared lease for its complete lifetime.
-pub(crate) struct AdmissionGate {
+pub struct AdmissionGate {
     accepting: AtomicBool,
     lock: Arc<RwLock<()>>,
 }
@@ -27,7 +27,7 @@ impl AdmissionGate {
     /// Admit work unless maintenance has closed the boundary. The second check
     /// closes the race with an exclusive caller between the first check and
     /// acquiring the lock.
-    pub(crate) async fn shared(self: &Arc<Self>) -> Result<AdmissionLease, String> {
+    pub async fn shared(self: &Arc<Self>) -> Result<AdmissionLease, String> {
         if !self.accepting.load(Ordering::Acquire) {
             return Err(CLOSED.into());
         }
@@ -39,7 +39,7 @@ impl AdmissionGate {
         Ok(AdmissionLease { _guard: guard })
     }
 
-    pub(crate) fn ensure_open(&self) -> Result<(), String> {
+    pub fn ensure_open(&self) -> Result<(), String> {
         if self.accepting.load(Ordering::Acquire) {
             Ok(())
         } else {
@@ -50,7 +50,7 @@ impl AdmissionGate {
     /// Close admission before waiting for existing leases to drain. Dropping
     /// the returned guard reopens admission; cancellation while waiting also
     /// reopens it through `Closing`'s drop implementation.
-    pub(crate) fn close(self: &Arc<Self>) -> Result<MaintenanceReservation, String> {
+    pub fn close(self: &Arc<Self>) -> Result<MaintenanceReservation, String> {
         self.accepting
             .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| "다른 백업, 복원 또는 업데이트 작업이 이미 진행 중입니다.".to_string())?;
@@ -60,12 +60,12 @@ impl AdmissionGate {
     }
 }
 
-pub(crate) struct MaintenanceReservation {
+pub struct MaintenanceReservation {
     closing: Closing,
 }
 
 impl MaintenanceReservation {
-    pub(crate) async fn acquire(self) -> Result<MaintenanceGuard, String> {
+    pub async fn acquire(self) -> Result<MaintenanceGuard, String> {
         let guard = self.closing.0.lock.clone().write_owned().await;
         Ok(MaintenanceGuard {
             _guard: guard,
@@ -74,7 +74,7 @@ impl MaintenanceReservation {
     }
 }
 
-pub(crate) struct AdmissionLease {
+pub struct AdmissionLease {
     _guard: OwnedRwLockReadGuard<()>,
 }
 
@@ -85,7 +85,7 @@ impl Drop for Closing {
     }
 }
 
-pub(crate) struct MaintenanceGuard {
+pub struct MaintenanceGuard {
     _guard: OwnedRwLockWriteGuard<()>,
     _closing: Closing,
 }

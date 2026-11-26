@@ -9,7 +9,7 @@ mod extensions;
 mod feed;
 mod intelligence;
 mod notification_permission;
-pub(crate) mod operation_gate;
+pub(crate) use rhythm_core::operation_gate;
 mod personalization;
 mod platform_support;
 mod proactive;
@@ -511,7 +511,10 @@ fn main() {
                 feed,
                 network,
                 classifier,
-                models: intelligence::models::Controller::default(),
+                models: intelligence::models::Controller::new(concat!(
+                    "Rhythm/",
+                    env!("CARGO_PKG_VERSION")
+                )),
                 hardware,
                 ai_gate: tokio::sync::Mutex::new(()),
                 maintenance_shutdown: maintenance_shutdown.clone(),
@@ -536,8 +539,12 @@ fn main() {
                 app.handle().clone(),
                 maintenance_shutdown.clone(),
             ));
+            let state = app.state::<AppState>();
             tauri::async_runtime::spawn(intelligence::classification::run(
-                app.handle().clone(),
+                state.classifier.clone(),
+                state.store.clone(),
+                state.models.clone(),
+                state.data_root.clone(),
                 maintenance_shutdown.clone(),
             ));
             tauri::async_runtime::spawn(archive::run_auto_trash(

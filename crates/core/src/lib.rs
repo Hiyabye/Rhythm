@@ -3,6 +3,8 @@
 
 pub mod archive;
 pub mod extensions;
+pub mod intelligence;
+pub mod operation_gate;
 pub mod paths;
 pub mod storage;
 pub mod studium;

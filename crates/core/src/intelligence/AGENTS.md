@@ -1,12 +1,12 @@
 # Intelligence (embedding model and classification)
 
-Area instructions for `src-tauri/src/intelligence/`, `crates/core/src/storage/intelligence*.rs`, `AiSettings.svelte` and `crates/embed`. The root `AGENTS.md` (project-wide rules) applies too.
+Area instructions for `crates/core/src/intelligence/`, `src-tauri/src/intelligence/commands.rs`, `crates/core/src/storage/intelligence*.rs`, `AiSettings.svelte` and `crates/embed`. The root `AGENTS.md` (project-wide rules) applies too.
 
-- `src-tauri/src/intelligence/`: `Worker` (`mod.rs`) and its embedding `llama-server` supervisor `server.rs`, `models/` (`catalog`, `hardware`, `transport`, `download`, `gguf`) with the pinned `catalog.json`, `model_storage.rs`, the `classification.rs` embedding controller/loop (its only `Worker` user; the inputs, prototypes and scoring come from `crates/embed`) and Tauri `commands.rs`. AI summaries, the remote engine, backlog analysis and model registration were retired (#226). Test-only synthetic fixtures are `evaluation.json` loaded by `evaluation.rs` (also read by `crates/sources/src/dates/tests.rs`); the opt-in embedding evaluations are `embedding_evaluation.rs`. Collection never waits for AI.
+- `crates/core/src/intelligence/` (crate `rhythm-core`, re-exported in the app as `crate::intelligence`): `Worker` (`mod.rs`) and its embedding `llama-server` supervisor `server.rs`, `models/` (`catalog`, `hardware`, `transport`, `download`, `gguf`) with the pinned `catalog.json`, `model_storage.rs`, the `classification.rs` embedding controller/loop (its only `Worker` user; the inputs, prototypes and scoring come from `crates/embed`); the Tauri commands stay in `src-tauri/src/intelligence/commands.rs`. The loop and `query_vector` take the store, `models::Controller` and data root explicitly; never pass app or UI state into core. AI summaries, the remote engine, backlog analysis and model registration were retired (#226). Test-only synthetic fixtures are `evaluation.json` loaded by `evaluation.rs` (also read by `crates/sources/src/dates/tests.rs`); the opt-in embedding evaluations are `embedding_evaluation.rs`. Collection never waits for AI.
 
 ## Process and engine
 
-`intelligence::tests::real_server_lifecycle_without_model_weights` runs the staged real `llama-server` (or `RHYTHM_LLAMA_TEST_DIR`) and returns early when neither exists; a passing suite alone does not establish process integration. Other process tests use the fake `llama-server` in `src-tauri/src/intelligence/test_worker.rs` (same flags, log lines, socket/loopback listener, API-key check and embedding response shapes): compiled once per test process from fixed source, with first launch completed before any request deadline, then hard-linked per test with its `mode` and control files beside it. macOS holds each newly created executable before its first instruction for an execution-policy check; per-test unique binaries launched in parallel exceeded the 8-second status deadline. Pass per-test behavior through files beside a hard link, never by baking paths into source. Do not raise request deadlines to hide launch latency. Actual-model embedding runs only in the ignored evaluations in `embedding_evaluation.rs`; never claim it verified without real output.
+`intelligence::tests::real_server_lifecycle_without_model_weights` runs the staged real `llama-server` (or `RHYTHM_LLAMA_TEST_DIR`) and returns early when neither exists; a passing suite alone does not establish process integration. Other process tests use the fake `llama-server` in `crates/core/src/intelligence/test_worker.rs` (same flags, log lines, socket/loopback listener, API-key check and embedding response shapes): compiled once per test process from fixed source, with first launch completed before any request deadline, then hard-linked per test with its `mode` and control files beside it. macOS holds each newly created executable before its first instruction for an execution-policy check; per-test unique binaries launched in parallel exceeded the 8-second status deadline. Pass per-test behavior through files beside a hard link, never by baking paths into source. Do not raise request deadlines to hide launch latency. Actual-model embedding runs only in the ignored evaluations in `embedding_evaluation.rs`; never claim it verified without real output.
 
 **Inference engine:** Rhythm supervises upstream `llama-server` as an embedding server only, pinned to one llama.cpp build number with per-archive size/SHA-256 in `scripts/llama-cpp.json` (macOS arm64 Metal; Windows CPU). Change the build and all checksums together, then rerun the real-model checks. Process flags, the socket/loopback key, timeouts and bounds, request reaping and orphan handling (`stop_orphan`, #273) are specified in `docs/ARCHITECTURE.md` "Inference process"; change that section together with `server.rs`. Never reuse a server after an abandoned request, and never let it listen anywhere but the private socket or keyed loopback.
 
@@ -18,13 +18,13 @@ Focused deterministic checks:
 
 ```sh
 cargo test --locked -p rhythm-core storage::intelligence_tests
-cargo test --locked -p rhythm intelligence::classification
-cargo test --locked -p rhythm intelligence::models
-cargo test --locked -p rhythm intelligence::model_storage
-cargo test --locked -p rhythm intelligence::tests
-cargo test --locked -p rhythm intelligence::server
+cargo test --locked -p rhythm-core intelligence::classification
+cargo test --locked -p rhythm-core intelligence::models
+cargo test --locked -p rhythm-core intelligence::model_storage
+cargo test --locked -p rhythm-core intelligence::tests
+cargo test --locked -p rhythm-core intelligence::server
 cargo test --locked -p rhythm-core storage::personalization_tests
-cargo test --locked -p rhythm ranking_candidate_retrieval_is_bounded -- --nocapture
+cargo test --locked -p rhythm-core ranking_candidate_retrieval_is_bounded -- --nocapture
 ```
 
 Normal tests must not download weights. The explicitly ignored `real_curated_model_install` exercises the production downloader with a pinned catalog entry only for validation. With approved weight/disk budget, set `RHYTHM_MODEL_INSTALL_ID` and `RHYTHM_MODEL_INSTALL_DIR` to a dedicated test directory. Never target production app data. The ignored `real_curated_model_cancel_resume` downloads the pinned GGUF into `RHYTHM_MODEL_RESUME_DIR` (a new isolated directory) and needs the same approval. The ignored `actual_embedding_classification_evaluation` and `actual_semantic_search_evaluation` take `RHYTHM_EMBEDDING_EVAL_MODEL` (with the staged build or `RHYTHM_LLAMA_TEST_DIR`, e.g. a bundle's `Contents/Resources/llama`); details and bounds are in `docs/AI_EVALUATION.md`.

@@ -26,7 +26,7 @@ use catalog::*;
 pub use catalog::{catalog, CatalogEntry};
 use download::*;
 pub use gguf::verify_file;
-pub(crate) use hardware::available_space;
+pub use hardware::available_space;
 use hardware::*;
 pub use hardware::{hardware, refresh_disk_space, Hardware};
 use transport::*;
@@ -52,11 +52,25 @@ async fn cancelled(cancel: &AtomicBool) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Controller {
     active: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    /// Sent with model downloads, e.g. `Rhythm/2.4.0`; the app names its version.
+    user_agent: &'static str,
+}
+#[cfg(test)]
+impl Default for Controller {
+    fn default() -> Self {
+        Self::new("Rhythm/test")
+    }
 }
 impl Controller {
+    pub fn new(user_agent: &'static str) -> Self {
+        Self {
+            active: Default::default(),
+            user_agent,
+        }
+    }
     pub fn busy(&self) -> bool {
         self.active.lock().map(|s| s.is_some()).unwrap_or(true)
     }
@@ -108,7 +122,15 @@ impl Controller {
         entry: CatalogEntry,
         lease: Option<crate::operation_gate::AdmissionLease>,
     ) -> Result<(), String> {
-        self.start_entry_with_transport(store, root, entry, lease, HttpsTransport)
+        self.start_entry_with_transport(
+            store,
+            root,
+            entry,
+            lease,
+            HttpsTransport {
+                user_agent: self.user_agent,
+            },
+        )
     }
     fn start_entry_with_transport<T: Transport + Send + 'static>(
         &self,

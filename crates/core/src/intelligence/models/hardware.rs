@@ -56,7 +56,7 @@ pub(super) fn ram_bytes() -> u64 {
 pub(super) fn ram_bytes() -> u64 {
     0
 }
-pub(crate) fn available_space(root: &Path) -> Result<u64, String> {
+pub fn available_space(root: &Path) -> Result<u64, String> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;

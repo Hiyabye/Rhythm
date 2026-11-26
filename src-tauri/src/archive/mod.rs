@@ -119,7 +119,10 @@ pub async fn archive_ranked_query(
 ) -> Result<ArchivePage, String> {
     let _lease = state.operation_gate.shared().await?;
     crate::storage::search_terms(&query.query)?;
-    let semantic = state.classifier.query_vector(&state, &query.query).await;
+    let semantic = state
+        .classifier
+        .query_vector(&state.store, &state.models, &state.data_root, &query.query)
+        .await;
     let store = state.store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_store(&store, |s| {

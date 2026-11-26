@@ -8,11 +8,13 @@
 use crate::{
     intelligence::{
         model_storage::resolve_model_path,
-        models::{catalog, verify_file},
+        models::{self, catalog, verify_file},
         Worker,
     },
-    storage::intelligence::{AiModel, AiPreferences},
-    AppState,
+    storage::{
+        intelligence::{AiModel, AiPreferences},
+        Store,
+    },
 };
 pub use rhythm_embed::config_hash;
 use rhythm_embed::{classify_with, input, prototype_inputs, SEARCH_INSTRUCTION};
@@ -25,7 +27,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tauri::Manager;
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 
 const BATCH: u32 = 8;
@@ -240,12 +241,18 @@ impl Controller {
 
     /// Reads current preferences and processes at most one bounded batch. The
     /// SQLite guard is never held across embedding.
-    pub async fn advance(&self, app: &AppState, shutdown: &AtomicBool) {
+    pub async fn advance(
+        &self,
+        store: &Mutex<Store>,
+        models: &models::Controller,
+        data_root: &Path,
+        shutdown: &AtomicBool,
+    ) {
         if self.paused.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire) {
             return;
         }
         let preferences = {
-            let Ok(store) = app.store.try_lock() else {
+            let Ok(store) = store.try_lock() else {
                 return;
             };
             let Ok(preferences) = store.ai_effective_preferences() else {
@@ -254,7 +261,7 @@ impl Controller {
             preferences
         };
         let model = {
-            let Ok(store) = app.store.try_lock() else {
+            let Ok(store) = store.try_lock() else {
                 return;
             };
             preferences
@@ -270,11 +277,11 @@ impl Controller {
             self.unload_if_idle(false).await;
             return;
         }
-        if app.models.busy() || self.paused.load(Ordering::Acquire) {
+        if models.busy() || self.paused.load(Ordering::Acquire) {
             return;
         }
         let candidates = {
-            let Ok(store) = app.store.try_lock() else {
+            let Ok(store) = store.try_lock() else {
                 return;
             };
             match store.ai_embedding_candidates(&identity, config_hash(), BATCH) {
@@ -301,8 +308,7 @@ impl Controller {
         if self.paused.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire) {
             return;
         }
-        let Some((mut worker, path)) = self.local_engine(&app.data_root, &model, &identity).await
-        else {
+        let Some((mut worker, path)) = self.local_engine(data_root, &model, &identity).await else {
             return;
         };
         // Prototype vectors depend on the embedding model, not on the scoring
@@ -354,7 +360,7 @@ impl Controller {
         let mut targets = Vec::new();
         for (document_id, revision_id) in candidates {
             let stored = {
-                let Ok(store) = app.store.try_lock() else {
+                let Ok(store) = store.try_lock() else {
                     break;
                 };
                 store
@@ -370,7 +376,7 @@ impl Controller {
                 }
                 _ => {
                     let text = {
-                        let Ok(store) = app.store.try_lock() else {
+                        let Ok(store) = store.try_lock() else {
                             break;
                         };
                         store
@@ -402,7 +408,7 @@ impl Controller {
         drop(worker);
         let mut written = 0u64;
         {
-            let Ok(store) = app.store.try_lock() else {
+            let Ok(store) = store.try_lock() else {
                 return;
             };
             for (document_id, revision_id, vector) in results {
@@ -487,9 +493,15 @@ impl Controller {
     /// comparison with stored notice vectors of the same model identity.
     /// `None` means search stays text-only: classification is off, no model
     /// is installed, or the engine is busy with an inventory operation.
-    pub async fn query_vector(&self, app: &AppState, query: &str) -> Option<(String, Vec<f32>)> {
+    pub async fn query_vector(
+        &self,
+        store: &Mutex<Store>,
+        models: &models::Controller,
+        data_root: &Path,
+        query: &str,
+    ) -> Option<(String, Vec<f32>)> {
         let (preferences, model) = {
-            let store = app.store.lock().ok()?;
+            let store = store.lock().ok()?;
             let preferences = store.ai_effective_preferences().ok()?;
             let model = preferences
                 .embedding_model_id
@@ -498,11 +510,11 @@ impl Controller {
             (preferences, model)
         };
         let (model, identity) = select_model(&preferences, model)?;
-        if app.models.busy() {
+        if models.busy() {
             return None;
         }
         let vector = self
-            .embed_query(&app.data_root, &model, &identity, query)
+            .embed_query(data_root, &model, &identity, query)
             .await?;
         Some((identity, vector))
     }
@@ -557,27 +569,28 @@ impl Controller {
     }
 }
 
-pub async fn run(handle: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
+/// The background loop: one bounded batch at a time, woken by new work or
+/// every five seconds, until `shutdown`; then the engine is stopped.
+pub async fn run(
+    classifier: Arc<Controller>,
+    store: Arc<Mutex<Store>>,
+    models: models::Controller,
+    data_root: std::path::PathBuf,
+    shutdown: Arc<AtomicBool>,
+) {
     loop {
-        if let Some(state) = handle.try_state::<AppState>() {
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(5)) => {}
-                _ = state.classifier.wake.notified() => {}
-            }
-            if shutdown.load(Ordering::Acquire) {
-                break;
-            }
-            state.classifier.advance(&state, &shutdown).await;
-        } else {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            if shutdown.load(Ordering::Acquire) {
-                break;
-            }
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+            _ = classifier.wake.notified() => {}
         }
+        if shutdown.load(Ordering::Acquire) {
+            break;
+        }
+        classifier
+            .advance(&store, &models, &data_root, &shutdown)
+            .await;
     }
-    if let Some(state) = handle.try_state::<AppState>() {
-        state.classifier.shutdown().await;
-    }
+    classifier.shutdown().await;
 }
 
 #[cfg(test)]

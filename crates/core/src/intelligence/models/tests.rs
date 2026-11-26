@@ -1070,9 +1070,11 @@ async fn real_curated_model_cancel_resume() {
             etag: Option<&str>,
             cancel: &AtomicBool,
         ) -> Result<DownloadResponse, String> {
-            let response = HttpsTransport
-                .response(url, total, offset, etag, cancel)
-                .await?;
+            let response = HttpsTransport {
+                user_agent: "Rhythm/test",
+            }
+            .response(url, total, offset, etag, cancel)
+            .await?;
             self.0.lock().unwrap().push(Observation {
                 offset,
                 request_etag: etag.map(str::to_owned),
@@ -1096,7 +1098,10 @@ async fn real_curated_model_cancel_resume() {
         std::env::var_os("RHYTHM_MODEL_RESUME_DIR").expect("set RHYTHM_MODEL_RESUME_DIR"),
     );
     assert!(supplied.is_absolute(), "resume directory must be absolute");
+    // The checkout's parent directory, as when this test lived in src-tauri.
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
         .parent()
         .unwrap()
         .parent()
