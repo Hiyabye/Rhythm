@@ -10,7 +10,9 @@ const rules = {
   frontend: [/^src\//, /^tests\//, /^scripts\//, /^package(-lock)?\.json$/, /^index\.html$/,
     /^vite\.config\.ts$/, /^tsconfig\.json$/, /^playwright(\.screenshots)?\.config\.ts$/,
     // tests/capabilities.test.mjs compares these Rust-side files with src/.
-    /^src-tauri\/(build\.rs|src\/main\.rs|capabilities\/)/],
+    /^src-tauri\/(build\.rs|src\/main\.rs|capabilities\/)/,
+    // tests/ui/interest-picker.spec.ts reads the sensitive-topic markers.
+    /^crates\/core\/src\/storage\/personalization\/topics\.rs$/],
   rust: [/^src-tauri\//, /^crates\//, /^Cargo\.(toml|lock)$/, /^\.cargo\//, /^rust-toolchain/,
     /^(rustfmt|clippy)\.toml$/,
     // Windows CI runs these PowerShell scripts before its Rust tests.

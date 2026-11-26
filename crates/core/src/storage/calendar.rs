@@ -338,10 +338,7 @@ impl Store {
     }
     /// Reminders due at local `now`, while the 캘린더 extension and notifications
     /// are on. A sent reminder stays latched until the todo moves.
-    pub(crate) fn calendar_due_reminders(
-        &self,
-        now: NaiveDateTime,
-    ) -> Result<Vec<DueReminder>, String> {
+    pub fn calendar_due_reminders(&self, now: NaiveDateTime) -> Result<Vec<DueReminder>, String> {
         if !self.reminders_allowed()? {
             return Ok(Vec::new());
         }
@@ -373,7 +370,7 @@ impl Store {
     /// rechecks the todo, quiet hours and the shared rate limit, then records the
     /// attempt, the click token and the latch together. A reminder held back here
     /// stays due, so it goes out on a later pass while the todo is still ahead.
-    pub(crate) fn calendar_reminder_reserve(
+    pub fn calendar_reminder_reserve(
         &self,
         todo_id: i64,
         token: &str,
@@ -450,7 +447,7 @@ impl Store {
     /// A clicked reminder's one-use token: the todo's current day, or `None`
     /// when the token is unknown, expired or used, or the calendar or
     /// notifications were turned off since.
-    pub(crate) fn calendar_reminder_consume(&self, token: &str) -> Result<Option<String>, String> {
+    pub fn calendar_reminder_consume(&self, token: &str) -> Result<Option<String>, String> {
         if !valid_token(token) {
             return Ok(None);
         }
@@ -484,7 +481,7 @@ impl Store {
         transaction.commit().map_err(|e| e.to_string())?;
         Ok(day.filter(|_| allowed))
     }
-    pub(crate) fn calendar_reminder_invalidate_tokens(&self) -> Result<(), String> {
+    pub fn calendar_reminder_invalidate_tokens(&self) -> Result<(), String> {
         self.connection
             .execute("DELETE FROM calendar_reminder_tokens", [])
             .map_err(|e| e.to_string())?;

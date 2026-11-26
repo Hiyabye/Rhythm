@@ -18,7 +18,7 @@ Focused lifecycle/proactive checks:
 
 ```sh
 cargo test --locked -p rhythm core::lifecycle
-cargo test --locked -p rhythm storage::proactive_tests
+cargo test --locked -p rhythm-core storage::proactive_tests
 cargo test --locked -p rhythm proactive::tests
 ```
 

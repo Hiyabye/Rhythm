@@ -4,7 +4,7 @@ use super::*;
 macro_rules! sql_text_enum {
     ($name:ident { $($variant:ident => $value:literal),+ $(,)? }) => {
         impl $name {
-            pub(crate) fn as_str(self) -> &'static str {
+            pub fn as_str(self) -> &'static str {
                 match self {
                     $(Self::$variant => $value),+
                 }

@@ -13,7 +13,7 @@ pub(crate) mod operation_gate;
 mod personalization;
 mod platform_support;
 mod proactive;
-mod storage;
+use rhythm_core::storage;
 mod studium;
 mod updater;
 use extensions::Registry;

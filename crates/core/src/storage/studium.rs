@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 /// Position uses physical screen coordinates; window size uses logical pixels.
 /// Open/always-on-top state and seat data are deliberately absent.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct MiniGeometry {
+pub struct MiniGeometry {
     pub x: i32,
     pub y: i32,
     pub width: u32,
@@ -29,7 +29,7 @@ impl MiniGeometry {
 }
 
 impl Store {
-    pub(crate) fn studium_mini_geometry(&self) -> Result<Option<MiniGeometry>, String> {
+    pub fn studium_mini_geometry(&self) -> Result<Option<MiniGeometry>, String> {
         let geometry: Option<MiniGeometry> = self
             .connection
             .query_row(
@@ -55,7 +55,7 @@ impl Store {
     /// Native close/cleanup captures geometry under admission before calling
     /// this internal method. It must also work just after extension disable.
     /// No raw geometry write command is exposed to a WebView.
-    pub(crate) fn studium_save_mini_geometry(&self, geometry: &MiniGeometry) -> Result<(), String> {
+    pub fn studium_save_mini_geometry(&self, geometry: &MiniGeometry) -> Result<(), String> {
         geometry.validate()?;
         let transaction = self
             .connection

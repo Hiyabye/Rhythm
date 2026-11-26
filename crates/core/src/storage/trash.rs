@@ -6,10 +6,10 @@ use rusqlite::params_from_iter;
 
 /// SQL condition, for a query whose documents are aliased `d`, that keeps only
 /// notices outside 휴지통.
-pub(crate) const NOT_TRASHED: &str =
+pub const NOT_TRASHED: &str =
     "NOT EXISTS(SELECT 1 FROM trashed_documents trash WHERE trash.document_id=d.id)";
 /// Choices for moving old notices to 휴지통 automatically, in months; 0 never.
-pub(crate) const AUTO_TRASH_MONTHS: [u32; 6] = [0, 1, 3, 6, 12, 24];
+pub const AUTO_TRASH_MONTHS: [u32; 6] = [0, 1, 3, 6, 12, 24];
 /// One list selection; a page holds at most 100 notices.
 const MAX_SELECTION: usize = 200;
 
@@ -25,7 +25,7 @@ fn selection(ids: &[i64]) -> Result<(), String> {
 
 impl Store {
     /// Moves notices to 휴지통. Already trashed notices keep their original time.
-    pub(crate) fn trash_documents(&self, ids: &[i64]) -> Result<(), String> {
+    pub fn trash_documents(&self, ids: &[i64]) -> Result<(), String> {
         selection(ids)?;
         let tx = self
             .connection
@@ -59,7 +59,7 @@ impl Store {
         // Saved or interested notices in 휴지통 no longer teach topics.
         self.recompute_learned()
     }
-    pub(crate) fn restore_documents(&self, ids: &[i64]) -> Result<(), String> {
+    pub fn restore_documents(&self, ids: &[i64]) -> Result<(), String> {
         selection(ids)?;
         self.connection
             .execute(
@@ -75,7 +75,7 @@ impl Store {
     /// Permanently deletes the given trashed notices, or all of 휴지통 when
     /// `ids` is `None`. Returns the downloaded files no remaining resource
     /// uses; the caller removes them after the store lock is released.
-    pub(crate) fn purge_trashed(&self, ids: Option<&[i64]>) -> Result<Vec<String>, String> {
+    pub fn purge_trashed(&self, ids: Option<&[i64]>) -> Result<Vec<String>, String> {
         if let Some(ids) = ids {
             selection(ids)?;
         }
@@ -177,7 +177,7 @@ impl Store {
     /// 휴지통. `published_at` is a Korean calendar date, so the cutoff is too.
     /// Saved notices stay, and a notice without a date is never treated as old.
     /// Returns how many notices moved.
-    pub(crate) fn auto_trash_old(&self) -> Result<usize, String> {
+    pub fn auto_trash_old(&self) -> Result<usize, String> {
         let moved = self
             .connection
             .execute(
@@ -199,7 +199,7 @@ impl Store {
         Ok(moved)
     }
     /// Whether the user permanently deleted this notice.
-    pub(crate) fn notice_deleted(&self, source: &str, external: &str) -> Result<bool, String> {
+    pub fn notice_deleted(&self, source: &str, external: &str) -> Result<bool, String> {
         self.connection
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM deleted_notices WHERE source_id=?1 AND external_id=?2)",

@@ -24,7 +24,7 @@ const MIN_TASK_INTERVAL: u32 = 5;
 const MAX_TASK_INTERVAL: u32 = 1440;
 const DEFAULT_QUIET_START: u32 = 22 * 60;
 const DEFAULT_QUIET_END: u32 = 7 * 60;
-pub(crate) const MAX_DELIVERY_ATTEMPTS: u32 = 3;
+pub const MAX_DELIVERY_ATTEMPTS: u32 = 3;
 const DELIVERY_CLAIM_LEASE_MINUTES: u32 = 5;
 const MAX_FAILURE_DELAY_MINUTES: i64 = 240;
 const HISTORY_LIMIT: i64 = 200;
@@ -41,7 +41,7 @@ const MAX_TASK_ID_CHARS: usize = 128;
 /// Advance the persisted rate-window clock monotonically, then discard rows
 /// older than every supported query window. A wall-clock rollback therefore
 /// pauses aging instead of resurrecting deleted attempts.
-pub(crate) fn advance_delivery_clock(connection: &Connection) -> Result<String, String> {
+pub fn advance_delivery_clock(connection: &Connection) -> Result<String, String> {
     connection
         .execute(
             &format!(
@@ -78,7 +78,7 @@ pub(crate) fn advance_delivery_clock(connection: &Connection) -> Result<String, 
     Ok(watermark)
 }
 
-pub(crate) fn delivery_attempt_count(
+pub fn delivery_attempt_count(
     connection: &Connection,
     watermark: &str,
     seconds: u64,
@@ -379,7 +379,7 @@ impl Store {
         read_settings(&self.connection)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn proactive_baseline(&self) -> Result<i64, String> {
         self.connection
             .query_row(
@@ -407,7 +407,7 @@ impl Store {
     }
 
     /// Test helper for advancing the baseline outside the settings opt-in path.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn proactive_establish_baseline(&self) -> Result<i64, String> {
         advance_baseline(&self.connection)?;
         self.proactive_baseline()
@@ -514,7 +514,7 @@ impl Store {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn proactive_event(&self, id: i64) -> Result<ProactiveEvent, String> {
         event_by_id(&self.connection, id)
     }
@@ -907,7 +907,7 @@ impl Store {
     /// Records that a notification was handed to the OS but no receipt was
     /// observed. Terminal and honest: use this instead of `mark_delivered`
     /// when the platform cannot confirm display.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn proactive_mark_attempted(
         &self,
         id: i64,
@@ -961,7 +961,7 @@ impl Store {
 
     /// Records a confirmed display. Also promotes an `attempted` event when
     /// the platform confirms the receipt later.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn proactive_mark_delivered(
         &self,
         id: i64,
@@ -1227,7 +1227,7 @@ impl Store {
     // Seed bootstrap state lives with schema 5 but is consumed by archive
     // sync. True means the initial bounded seed (or a completed historical
     // import) already established the frontier; it is not history_complete.
-    pub(crate) fn seed_complete(&self, id: &str) -> Result<bool, String> {
+    pub fn seed_complete(&self, id: &str) -> Result<bool, String> {
         self.connection
             .query_row(
                 "SELECT seed_complete FROM sources WHERE id=?1",
@@ -1237,7 +1237,7 @@ impl Store {
             .map_err(|_| "등록된 정보원을 찾을 수 없습니다.".into())
     }
 
-    pub(crate) fn mark_seed_complete(&self, id: &str) -> Result<(), String> {
+    pub fn mark_seed_complete(&self, id: &str) -> Result<(), String> {
         let changed = self
             .connection
             .execute("UPDATE sources SET seed_complete=1 WHERE id=?1", [id])

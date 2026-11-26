@@ -8,7 +8,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 mod ranking;
 mod topics;
 use ranking::*;
-pub(crate) use topics::*;
+pub use topics::*;
 
 const EXPLICIT_INTEREST_LIMIT: i64 = 50;
 const LEARNED_INTEREST_LIMIT: i64 = 50;
@@ -148,7 +148,7 @@ fn current_activity_sequence(tx: &Transaction<'_>) -> Result<i64, String> {
     .map_err(|e| e.to_string())
 }
 
-pub(crate) fn next_activity_sequence(tx: &Transaction<'_>) -> Result<i64, String> {
+pub fn next_activity_sequence(tx: &Transaction<'_>) -> Result<i64, String> {
     tx.execute(
         "UPDATE personalization_activity SET sequence=sequence+1 WHERE id=1",
         [],
@@ -157,7 +157,7 @@ pub(crate) fn next_activity_sequence(tx: &Transaction<'_>) -> Result<i64, String
     current_activity_sequence(tx)
 }
 
-pub(crate) fn insert_evidence(
+pub fn insert_evidence(
     tx: &Transaction<'_>,
     document_id: i64,
     kind: &str,
@@ -598,7 +598,7 @@ impl Store {
         self.personalization_feedback(id)
     }
 
-    pub(crate) fn recompute_learned(&self) -> Result<(), String> {
+    pub fn recompute_learned(&self) -> Result<(), String> {
         let tx = self
             .connection
             .unchecked_transaction()

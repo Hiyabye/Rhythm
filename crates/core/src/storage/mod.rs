@@ -15,10 +15,10 @@ macro_rules! source_label {
 mod archive;
 pub mod calendar;
 pub mod cybercampus;
-pub(crate) mod feed;
+pub mod feed;
 #[cfg(test)]
 mod feed_tests;
-pub(crate) use archive::search_terms;
+pub use archive::search_terms;
 #[cfg(test)]
 mod archive_tests;
 pub mod intelligence;
@@ -26,8 +26,8 @@ pub mod intelligence;
 mod intelligence_tests;
 pub mod meals;
 pub mod notice_dates;
-#[cfg(any(windows, test))]
-pub(crate) mod notification_activation;
+#[cfg(any(windows, test, feature = "test-support"))]
+pub mod notification_activation;
 pub mod personalization;
 #[cfg(test)]
 mod personalization_tests;
@@ -35,67 +35,66 @@ pub mod proactive;
 #[cfg(test)]
 mod proactive_tests;
 pub mod studium;
-pub(crate) mod studium_alerts;
-pub(crate) mod trash;
+pub mod studium_alerts;
+pub mod trash;
 /// A fresh store in a temporary directory that lives as long as the guard.
-#[cfg(test)]
-pub(crate) fn temp_store() -> (tempfile::TempDir, Store) {
+#[cfg(any(test, feature = "test-support"))]
+pub fn temp_store() -> (tempfile::TempDir, Store) {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(&directory.path().join("rhythm.sqlite3")).unwrap();
     (directory, store)
 }
 
-pub(crate) const SCHEMA_VERSION: i64 = 44;
+pub const SCHEMA_VERSION: i64 = 44;
 
 // Statements that roll a test profile back below the migration that added each
 // object, newest first; a rollback test joins the ones that migration needs
 // and keeps its own `PRAGMA user_version`. 036 needs none: it rebuilds
 // `notice_classifications` and can run again; nor does 040, which only clears
 // data. 037 and later add their fragment here.
-#[cfg(test)]
-pub(crate) const UNDO_MEALS: &str = "DROP TABLE meal_weeks; ALTER TABLE feed_state DROP COLUMN meals_known; DELETE FROM extension_preferences WHERE extension_id='meals'; ";
-#[cfg(test)]
-pub(crate) const UNDO_CALENDAR_EVENTS: &str = "DROP TABLE calendar_events; ALTER TABLE feed_state DROP COLUMN events_known; ALTER TABLE settings DROP COLUMN calendar_academic; ";
-#[cfg(test)]
-pub(crate) const UNDO_KNOWN_BOARDS: &str = "DROP TABLE feed_known_boards; ";
-#[cfg(test)]
-pub(crate) const UNDO_PREVIOUS_MANIFEST: &str =
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_MEALS: &str = "DROP TABLE meal_weeks; ALTER TABLE feed_state DROP COLUMN meals_known; DELETE FROM extension_preferences WHERE extension_id='meals'; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_CALENDAR_EVENTS: &str = "DROP TABLE calendar_events; ALTER TABLE feed_state DROP COLUMN events_known; ALTER TABLE settings DROP COLUMN calendar_academic; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_KNOWN_BOARDS: &str = "DROP TABLE feed_known_boards; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_PREVIOUS_MANIFEST: &str =
     "ALTER TABLE feed_state DROP COLUMN previous_generated_at; ";
-#[cfg(test)]
-pub(crate) const UNDO_BODY_HASH: &str = "ALTER TABLE document_revisions DROP COLUMN body_hash; ";
-#[cfg(test)]
-pub(crate) const UNDO_FEED_SYNC: &str = "DROP TABLE feed_boards; ALTER TABLE feed_state DROP COLUMN error; ALTER TABLE feed_state DROP COLUMN result; ALTER TABLE feed_state DROP COLUMN checked_at; ALTER TABLE feed_state DROP COLUMN base; ";
-#[cfg(test)]
-pub(crate) const UNDO_FEED: &str = "DROP TABLE feed_classifications; DROP TABLE feed_embeddings; DROP TABLE feed_state; ALTER TABLE document_revisions DROP COLUMN revision_hash; ALTER TABLE documents DROP COLUMN removed_at; ALTER TABLE documents DROP COLUMN from_feed; ALTER TABLE documents DROP COLUMN body_pending; ALTER TABLE documents DROP COLUMN body_state; ALTER TABLE documents DROP COLUMN revision_hash; ";
-#[cfg(test)]
-pub(crate) const UNDO_REMINDERS: &str = "DROP TABLE calendar_reminder_tokens; DROP TABLE calendar_reminder_attempts; ALTER TABLE calendar_todos DROP COLUMN reminder_sent; ALTER TABLE calendar_todos DROP COLUMN reminder_minutes; ";
-#[cfg(test)]
-pub(crate) const UNDO_DATES: &str = "DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; ";
-#[cfg(test)]
-pub(crate) const UNDO_TODO_DOCUMENT: &str = "DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; ";
-#[cfg(test)]
-pub(crate) const UNDO_TODOS: &str =
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_BODY_HASH: &str = "ALTER TABLE document_revisions DROP COLUMN body_hash; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_FEED_SYNC: &str = "DROP TABLE feed_boards; ALTER TABLE feed_state DROP COLUMN error; ALTER TABLE feed_state DROP COLUMN result; ALTER TABLE feed_state DROP COLUMN checked_at; ALTER TABLE feed_state DROP COLUMN base; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_FEED: &str = "DROP TABLE feed_classifications; DROP TABLE feed_embeddings; DROP TABLE feed_state; ALTER TABLE document_revisions DROP COLUMN revision_hash; ALTER TABLE documents DROP COLUMN removed_at; ALTER TABLE documents DROP COLUMN from_feed; ALTER TABLE documents DROP COLUMN body_pending; ALTER TABLE documents DROP COLUMN body_state; ALTER TABLE documents DROP COLUMN revision_hash; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_REMINDERS: &str = "DROP TABLE calendar_reminder_tokens; DROP TABLE calendar_reminder_attempts; ALTER TABLE calendar_todos DROP COLUMN reminder_sent; ALTER TABLE calendar_todos DROP COLUMN reminder_minutes; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_DATES: &str = "DROP TABLE notice_dates; DROP TABLE notice_date_extractions; ALTER TABLE settings DROP COLUMN calendar_all_deadlines; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_TODO_DOCUMENT: &str = "DROP TRIGGER calendar_todos_document_deleted; DROP INDEX calendar_todos_document; ALTER TABLE calendar_todos DROP COLUMN document_id; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_TODOS: &str =
     "DROP TRIGGER calendar_todos_document_deleted; DROP TABLE calendar_todos; ";
-#[cfg(test)]
-pub(crate) const UNDO_MINI_GEOMETRY: &str = "DROP TABLE studium_mini_geometry; ";
-#[cfg(test)]
-pub(crate) const UNDO_ALERTS: &str = "DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; ";
-#[cfg(test)]
-pub(crate) const UNDO_FAVORITES: &str = "DROP TABLE studium_favorite_seats; ";
-#[cfg(test)]
-pub(crate) const UNDO_INTERVAL: &str =
-    "ALTER TABLE studium_preferences DROP COLUMN interval_minutes; ";
-#[cfg(test)]
-pub(crate) const UNDO_AUTO_TRASH: &str = "ALTER TABLE settings DROP COLUMN auto_trash_months; ";
-#[cfg(test)]
-pub(crate) const UNDO_TRASH: &str = "DROP TABLE trashed_documents; DROP TABLE deleted_notices; ";
-#[cfg(test)]
-pub(crate) const UNDO_CLOCK: &str = "ALTER TABLE settings DROP COLUMN clock_format; ";
-#[cfg(test)]
-pub(crate) const UNDO_STUDIUM: &str =
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_MINI_GEOMETRY: &str = "DROP TABLE studium_mini_geometry; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_ALERTS: &str = "DROP TABLE studium_alert_tokens; DROP TABLE studium_alert_attempts; DROP TABLE studium_alert_rules; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_FAVORITES: &str = "DROP TABLE studium_favorite_seats; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_INTERVAL: &str = "ALTER TABLE studium_preferences DROP COLUMN interval_minutes; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_AUTO_TRASH: &str = "ALTER TABLE settings DROP COLUMN auto_trash_months; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_TRASH: &str = "DROP TABLE trashed_documents; DROP TABLE deleted_notices; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_CLOCK: &str = "ALTER TABLE settings DROP COLUMN clock_format; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_STUDIUM: &str =
     "DROP TABLE studium_preferences; DROP TABLE studium_selected_rooms; ";
-#[cfg(test)]
-pub(crate) const UNDO_GROUPS: &str = "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; ";
+#[cfg(any(test, feature = "test-support"))]
+pub const UNDO_GROUPS: &str = "ALTER TABLE sources DROP COLUMN group_id; ALTER TABLE sources DROP COLUMN selected; DROP TABLE source_groups; ";
 
 /// Ordered schema migrations; index `n` upgrades `user_version` n to n+1.
 pub(super) const MIGRATIONS: [&str; 44] = [
@@ -388,7 +387,7 @@ impl Store {
                 .map_err(|e| e.to_string())?,
         })
     }
-    pub(crate) fn backup_to(&self, destination: &Path) -> Result<(), String> {
+    pub fn backup_to(&self, destination: &Path) -> Result<(), String> {
         let mut target = Connection::open(destination).map_err(|e| e.to_string())?;
         let backup = rusqlite::backup::Backup::new(&self.connection, &mut target)
             .map_err(|e| e.to_string())?;
@@ -403,7 +402,7 @@ impl Store {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
-    pub(crate) fn backup_summary(&self) -> Result<(i64, u64), String> {
+    pub fn backup_summary(&self) -> Result<(i64, u64), String> {
         let schema = self
             .connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))

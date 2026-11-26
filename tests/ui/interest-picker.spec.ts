@@ -20,7 +20,7 @@ test('the built-in suggestions are unique, short and avoid the backend sensitive
   const walk = (nodes: InterestSuggestion[]) => nodes.forEach((node) => { all.push(node.label); walk(node.children ?? []); });
   walk(interestSuggestions);
   expect(new Set(all).size).toBe(all.length);
-  const topics = readFileSync(new URL('../../src-tauri/src/storage/personalization/topics.rs', import.meta.url), 'utf8');
+  const topics = readFileSync(new URL('../../crates/core/src/storage/personalization/topics.rs', import.meta.url), 'utf8');
   const block = topics.match(/SENSITIVE_TOPIC_MARKERS[^=]*=\s*&\[([\s\S]*?)\];/)![1];
   const markers = [...block.matchAll(/"([^"]+)"/g)].map((match) => match[1].toLowerCase());
   expect(markers.length).toBeGreaterThan(20);

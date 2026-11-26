@@ -14,8 +14,8 @@ use crate::{
     storage::intelligence::{AiModel, AiPreferences},
     AppState,
 };
+pub use rhythm_embed::config_hash;
 use rhythm_embed::{classify_with, input, prototype_inputs, SEARCH_INSTRUCTION};
-pub use rhythm_embed::{config_hash, CATEGORIES};
 use serde::Serialize;
 use std::{
     path::Path,

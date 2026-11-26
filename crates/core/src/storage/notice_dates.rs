@@ -151,7 +151,7 @@ impl Store {
     /// or stale, and returns how many it processed. A feed notice not yet
     /// opened keeps the feed's dates: its text is only the excerpt. Callers repeat it with the
     /// store unlocked between batches until it returns 0.
-    pub(crate) fn refresh_notice_dates(&self, limit: i64) -> Result<usize, String> {
+    pub fn refresh_notice_dates(&self, limit: i64) -> Result<usize, String> {
         let stale: Vec<i64> = self
             .connection
             .prepare(
@@ -182,7 +182,7 @@ impl Store {
     /// of a saved notice, plus every notice's deadlines when the user chose so.
     /// A multi-day date that overlaps the range is included; it starts at most
     /// `MAX_SPAN_DAYS` before `from`, which keeps the day index usable.
-    pub(crate) fn calendar_notice_dates(
+    pub fn calendar_notice_dates(
         &self,
         from: &str,
         to: &str,
@@ -247,7 +247,7 @@ impl Store {
         })
     }
 
-    pub(crate) fn calendar_academic(&self) -> Result<bool, String> {
+    pub fn calendar_academic(&self) -> Result<bool, String> {
         self.connection
             .query_row(
                 "SELECT calendar_academic FROM settings WHERE id=1",
@@ -258,7 +258,7 @@ impl Store {
             .map(|value| value.unwrap_or(true))
             .map_err(|e| e.to_string())
     }
-    pub(crate) fn set_calendar_academic(&self, enabled: bool) -> Result<(), String> {
+    pub fn set_calendar_academic(&self, enabled: bool) -> Result<(), String> {
         self.connection
             .execute(
                 "UPDATE settings SET calendar_academic=?1 WHERE id=1",
@@ -269,7 +269,7 @@ impl Store {
     }
 
     /// A notice's own dates for its reader. A notice in 휴지통 has none to add.
-    pub(crate) fn notice_dates(&self, document_id: i64) -> Result<Vec<NoticeDate>, String> {
+    pub fn notice_dates(&self, document_id: i64) -> Result<Vec<NoticeDate>, String> {
         self.connection
             .prepare(&format!(
                 "SELECT {COLUMNS} FROM notice_dates n JOIN documents d ON d.id=n.document_id
@@ -279,7 +279,7 @@ impl Store {
             .map_err(|e| e.to_string())
     }
 
-    pub(crate) fn calendar_all_deadlines(&self) -> Result<bool, String> {
+    pub fn calendar_all_deadlines(&self) -> Result<bool, String> {
         self.connection
             .query_row(
                 "SELECT calendar_all_deadlines FROM settings WHERE id=1",
@@ -290,7 +290,7 @@ impl Store {
             .map(Option::unwrap_or_default)
             .map_err(|e| e.to_string())
     }
-    pub(crate) fn set_calendar_all_deadlines(&self, enabled: bool) -> Result<(), String> {
+    pub fn set_calendar_all_deadlines(&self, enabled: bool) -> Result<(), String> {
         self.connection
             .execute(
                 "UPDATE settings SET calendar_all_deadlines=?1 WHERE id=1",

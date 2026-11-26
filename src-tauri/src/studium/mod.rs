@@ -1,10 +1,8 @@
 pub(crate) mod commands;
 pub(crate) mod controller;
-pub(crate) mod model;
+pub(crate) use rhythm_core::studium::{model, parser, rooms};
 pub(crate) mod network;
 pub(crate) mod notification;
-pub(crate) mod parser;
-pub(crate) mod rooms;
 pub(crate) mod views;
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 //! Persistent AI model inventory, preferences, notice vectors and classifications.
 //! No filesystem or inference work.
 use super::{trash::NOT_TRASHED, Store};
-use crate::intelligence::classification::config_hash;
+use rhythm_embed::config_hash;
 use rusqlite::{params, params_from_iter, types::Value as SqlValue, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
@@ -428,7 +428,10 @@ fn changed(count: usize) -> Result<(), String> {
 
 /// Service name the retired remote engine stored its API key under, keyed by
 /// the normalized origin.
-#[cfg(all(not(test), any(target_os = "macos", windows)))]
+#[cfg(all(
+    not(any(test, feature = "test-support")),
+    any(target_os = "macos", windows)
+))]
 const RETIRED_REMOTE_KEY_SERVICE: &str = "io.github.hiyabye.rhythm.remote-ai";
 
 /// Deletes the retired remote engine's API key (#226) while migration 033 can
@@ -457,20 +460,23 @@ pub(super) fn clear_retired_remote_key(connection: &rusqlite::Connection) {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Origins whose key a test migration deleted; tests never touch the real store.
     pub(super) static DELETED_REMOTE_KEYS: std::cell::RefCell<Vec<String>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn delete_remote_key(origin: &str) -> Result<(), String> {
     DELETED_REMOTE_KEYS.with(|keys| keys.borrow_mut().push(origin.to_owned()));
     Ok(())
 }
 
-#[cfg(all(not(test), any(target_os = "macos", windows)))]
+#[cfg(all(
+    not(any(test, feature = "test-support")),
+    any(target_os = "macos", windows)
+))]
 fn delete_remote_key(origin: &str) -> Result<(), String> {
     let error = match keyring::Entry::new(RETIRED_REMOTE_KEY_SERVICE, origin)
         .map_err(|error| error.to_string())?
@@ -489,7 +495,7 @@ fn delete_remote_key(origin: &str) -> Result<(), String> {
 /// refuses to let one binary delete an item another binary saved (-25244), so
 /// the key an earlier Rhythm saved can't be deleted through `keyring`. Apple's
 /// `security` tool can delete it without a prompt. Fixed arguments, no shell.
-#[cfg(all(not(test), target_os = "macos"))]
+#[cfg(all(not(any(test, feature = "test-support")), target_os = "macos"))]
 fn delete_with_security_tool(origin: &str) -> Result<(), String> {
     let output = std::process::Command::new("/usr/bin/security")
         .args([
@@ -511,7 +517,10 @@ fn delete_with_security_tool(origin: &str) -> Result<(), String> {
 }
 
 /// Other hosts never had a credential store backend, so no key was saved.
-#[cfg(all(not(test), not(any(target_os = "macos", windows))))]
+#[cfg(all(
+    not(any(test, feature = "test-support")),
+    not(any(target_os = "macos", windows))
+))]
 fn delete_remote_key(_origin: &str) -> Result<(), String> {
     Ok(())
 }
@@ -613,7 +622,7 @@ impl Store {
     }
     /// Projector rows only come from the retired vision install, so only tests
     /// write or list them; removal and restore read one through `ai_projector`.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn ai_projectors(&self) -> Result<Vec<AiProjector>, String> {
         self.connection
             .prepare(&format!(
@@ -636,7 +645,7 @@ impl Store {
             .map_err(|e| e.to_string())
     }
     /// Caller owns filesystem validation; `installed` requires the actual artifact identity.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn ai_upsert_projector(&self, projector: &AiProjector) -> Result<(), String> {
         if projector.path.is_empty()
             || projector.path.len() > MAX_FIELD_BYTES

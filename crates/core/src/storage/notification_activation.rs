@@ -8,13 +8,13 @@ const MAX_TOKENS: i64 = 1024;
 const MAX_EVENTS: usize = 3;
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ActivatedBatch {
+pub struct ActivatedBatch {
     pub document_id: i64,
     pub revision_id: i64,
     pub attempts: Vec<(i64, u32)>,
 }
 
-pub(crate) fn valid_token(token: &str) -> bool {
+pub fn valid_token(token: &str) -> bool {
     token.len() == 64
         && token
             .bytes()
@@ -27,7 +27,7 @@ fn digest(token: &str) -> String {
 
 impl Store {
     /// Save a random token before OS handoff; a failed handoff revokes it.
-    pub(crate) fn notification_token_create(
+    pub fn notification_token_create(
         &self,
         token: &str,
         attempts: &[(i64, u32)],
@@ -69,7 +69,7 @@ impl Store {
         tx.commit().map_err(|e| e.to_string())
     }
 
-    pub(crate) fn notification_token_revoke(&self, token: &str) -> Result<(), String> {
+    pub fn notification_token_revoke(&self, token: &str) -> Result<(), String> {
         if !valid_token(token) {
             return Ok(());
         }
@@ -84,7 +84,7 @@ impl Store {
 
     /// Consume and mark every event delivered in one transaction. Missing, stale,
     /// expired or repeated activations cannot mark a different attempt delivered.
-    pub(crate) fn notification_token_consume(
+    pub fn notification_token_consume(
         &self,
         token: &str,
     ) -> Result<Option<ActivatedBatch>, String> {
