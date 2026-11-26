@@ -467,6 +467,11 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
+// Test builds swap the credential store for the fake above, but the
+// platform dependency stays linked.
+#[cfg(all(feature = "test-support", any(target_os = "macos", windows)))]
+use keyring as _;
+
 #[cfg(any(test, feature = "test-support"))]
 fn delete_remote_key(origin: &str) -> Result<(), String> {
     DELETED_REMOTE_KEYS.with(|keys| keys.borrow_mut().push(origin.to_owned()));

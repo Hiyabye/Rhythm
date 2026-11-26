@@ -3984,6 +3984,7 @@ name = "rhythm-core"
 version = "0.0.0"
 dependencies = [
  "chrono",
+ "dirs 7.0.0",
  "encoding_rs",
  "keyring",
  "rhythm-embed",
