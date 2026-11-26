@@ -270,7 +270,7 @@ impl Server {
 /// Only a process whose command line is a `llama-server` naming this runtime
 /// directory is signalled, so a reused pid is left alone.
 #[cfg(unix)]
-pub(crate) fn stop_orphan(runtime: &Path) {
+pub fn stop_orphan(runtime: &Path) {
     let file = runtime.join(PID_FILE);
     let Ok(text) = std::fs::read_to_string(&file) else {
         return;

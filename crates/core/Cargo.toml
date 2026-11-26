@@ -17,6 +17,9 @@ rusqlite = { version = "0.38", default-features = false, features = ["bundled", 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "7"
+tokio = { version = "1", features = ["process", "io-util", "time", "sync", "rt-multi-thread", "macros", "fs", "net"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+getrandom = "0.3"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 url = "2"
 tempfile = { version = "3", optional = true }
@@ -31,8 +34,11 @@ sha2 = "0.10"
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "4.2", default-features = false, features = ["v1", "apple-native-keyring-store"] }
 [target.'cfg(windows)'.dependencies]
+# Job objects tie the embedding server to Rhythm; disk and memory checks.
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_System_JobObjects", "Win32_Security"] }
 keyring = { version = "4.2", default-features = false, features = ["v1", "windows-native-keyring-store"] }
 
 [dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
 rhythm-feed = { path = "../feed", features = ["test-keys"] }
 tempfile = "3"

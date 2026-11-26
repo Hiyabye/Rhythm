@@ -92,7 +92,9 @@ impl Body {
         }
     }
 }
-pub(super) struct HttpsTransport;
+pub(super) struct HttpsTransport {
+    pub(super) user_agent: &'static str,
+}
 impl Transport for HttpsTransport {
     async fn response(
         &self,
@@ -128,7 +130,7 @@ impl Transport for HttpsTransport {
                 .connect_timeout(Duration::from_secs(15))
                 .read_timeout(Duration::from_secs(45))
                 .pool_max_idle_per_host(0)
-                .user_agent(concat!("Rhythm/", env!("CARGO_PKG_VERSION")))
+                .user_agent(self.user_agent)
                 .build()
                 .map_err(|_| "모델 HTTPS 연결을 준비하지 못했습니다.")?;
             let mut request = client
