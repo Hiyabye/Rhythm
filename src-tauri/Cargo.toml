@@ -21,7 +21,6 @@ zip = { version = "9.2.2", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
-encoding_rs = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 scraper = { version = "0.24", default-features = false }
 sha2 = "0.10"
@@ -32,6 +31,7 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
+rhythm-core = { path = "../crates/core" }
 rhythm-embed = { path = "../crates/embed" }
 rhythm-feed = { path = "../crates/feed" }
 rhythm-sources = { path = "../crates/sources", features = ["studium"] }
@@ -55,6 +55,8 @@ windows = { version = "0.61", features = ["Data_Xml_Dom", "UI_Notifications", "F
 
 
 [dev-dependencies]
+encoding_rs = "0.8"
+rhythm-core = { path = "../crates/core", features = ["test-support"] }
 rhythm-feed = { path = "../crates/feed", features = ["test-keys"] }
 minisign-verify = "=0.3.0"
 tempfile = "3"

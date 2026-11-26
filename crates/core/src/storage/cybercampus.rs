@@ -71,7 +71,7 @@ fn identifier(value: &str) -> bool {
 impl Store {
     /// Makes `courses` the course list of the synced term. Courses that are no
     /// longer listed lose their deadlines; their archived notices stay.
-    pub(crate) fn cybercampus_set_courses(
+    pub fn cybercampus_set_courses(
         &self,
         year: i32,
         term: &str,
@@ -126,7 +126,7 @@ impl Store {
         }
         transaction.commit().map_err(|e| e.to_string())
     }
-    pub(crate) fn cybercampus_courses(&self) -> Result<Vec<CybercampusCourse>, String> {
+    pub fn cybercampus_courses(&self) -> Result<Vec<CybercampusCourse>, String> {
         let mut statement = self
             .connection
             .prepare(&format!(
@@ -153,7 +153,7 @@ impl Store {
         rows
     }
     /// Replaces one course's deadlines with the current eClass state.
-    pub(crate) fn cybercampus_replace_tasks(
+    pub fn cybercampus_replace_tasks(
         &self,
         course_key: &str,
         tasks: &[TaskInput],
@@ -225,7 +225,7 @@ impl Store {
         transaction.commit().map_err(|e| e.to_string())
     }
     /// Stored rows of one course, so a sync can skip pages it already read.
-    pub(crate) fn cybercampus_stored_tasks(
+    pub fn cybercampus_stored_tasks(
         &self,
         course_key: &str,
     ) -> Result<HashMap<(String, String), TaskInput>, String> {
@@ -262,7 +262,7 @@ impl Store {
     }
     /// Whether the calendar shows eClass deadlines: stored tasks outlive the
     /// subscription, so the connector must be on and subscribed, as in the UI.
-    pub(crate) fn cybercampus_deadlines_shown(&self) -> Result<bool, String> {
+    pub fn cybercampus_deadlines_shown(&self) -> Result<bool, String> {
         if !self.enabled(crate::extensions::CYBERCAMPUS)? {
             return Ok(false);
         }
@@ -275,7 +275,7 @@ impl Store {
             .map_err(|e| e.to_string())
     }
     /// Unfinished items with a deadline first (soonest first), then the rest.
-    pub(crate) fn cybercampus_tasks(&self) -> Result<Vec<CybercampusTask>, String> {
+    pub fn cybercampus_tasks(&self) -> Result<Vec<CybercampusTask>, String> {
         let mut statement = self
             .connection
             .prepare(

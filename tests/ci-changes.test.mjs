@@ -71,6 +71,12 @@ test('the command permission check runs for every file it reads', () => {
   assert.equal(classify(['src-tauri/src/commands.rs']).frontend, false);
 });
 
+test('the interest suggestion check runs when the sensitive-topic markers change', () => {
+  assert.deepEqual(classify(['crates/core/src/storage/personalization/topics.rs']),
+    { ...none, frontend: true, rust: true });
+  assert.equal(classify(['crates/core/src/storage/personalization/ranking.rs']).frontend, false);
+});
+
 test('workflow changes and unknown change sets run everything', () => {
   assert.deepEqual(classify(['.github/workflows/ci.yml']), all);
   assert.deepEqual(classify(['.github/actions/windows-build-tools/action.yml']), all);

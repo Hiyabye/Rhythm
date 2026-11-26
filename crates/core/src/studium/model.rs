@@ -95,7 +95,7 @@ pub struct AlertRuleInput {
 
 /// A transient, validated observation. None of its seat data is durable.
 #[derive(Clone, Debug)]
-pub(crate) struct AlertCandidate {
+pub struct AlertCandidate {
     pub room_id: String,
     pub version: i64,
     pub job_id: u64,

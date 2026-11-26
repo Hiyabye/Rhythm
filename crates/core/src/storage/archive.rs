@@ -5,7 +5,7 @@ use super::intelligence::{
 use super::trash::NOT_TRASHED;
 use super::Store;
 use crate::archive::model::*;
-use crate::intelligence::classification::CATEGORIES;
+use rhythm_embed::CATEGORIES;
 use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, Row};
 use sha2::{Digest, Sha256};
 
@@ -27,7 +27,7 @@ const ITEM_COLUMNS: &str = item_columns!("d.body_text");
 const ITEM_PREVIEW_COLUMNS: &str = item_columns!("substr(d.body_text,1,241)");
 const ITEM_FROM: &str = "documents d JOIN sources s ON s.id=d.source_id LEFT JOIN document_state u ON u.document_id=d.id";
 /// The AI categories the 기회 page lists (user decision, #87).
-pub(crate) const OPPORTUNITY_CATEGORIES: [&str; 4] =
+pub const OPPORTUNITY_CATEGORIES: [&str; 4] =
     ["공모전·대회", "인턴·채용", "교육·프로그램", "행사·활동"];
 /// A notice's nearest deadline on or after the bound day, as `day` + `T` +
 /// time (an untimed deadline sorts after timed ones on its day).
@@ -235,7 +235,7 @@ const SEARCH_MIN_SCORE: f32 = 0.20;
 const SEARCH_MARGIN: f32 = 0.08;
 
 /// Validated whitespace-separated search terms.
-pub(crate) fn search_terms(query: &str) -> Result<Vec<&str>, String> {
+pub fn search_terms(query: &str) -> Result<Vec<&str>, String> {
     // SQLite LIKE/FTS treat NUL as a terminator even in bound values.
     if query.contains('\0') {
         return Err("검색어에 사용할 수 없는 문자가 포함되어 있습니다.".into());
@@ -307,10 +307,7 @@ fn excerpt(text: &str, terms: &[&str]) -> String {
 }
 
 impl Store {
-    pub(crate) fn catalog(
-        &self,
-        definitions: &[SourceDefinition],
-    ) -> Result<Vec<SourceInfo>, String> {
+    pub fn catalog(&self, definitions: &[SourceDefinition]) -> Result<Vec<SourceInfo>, String> {
         // Each source belongs to the extension of its family.
         for extension in [crate::extensions::NOTICES, crate::extensions::CYBERCAMPUS] {
             let owned: Vec<_> = definitions
@@ -322,7 +319,7 @@ impl Store {
         }
         self.sources()
     }
-    pub(crate) fn catalog_for_extension(
+    pub fn catalog_for_extension(
         &self,
         extension_id: &str,
         definitions: &[SourceDefinition],
@@ -363,7 +360,7 @@ impl Store {
         transaction.commit().map_err(|e| e.to_string())?;
         self.sources()
     }
-    pub(crate) fn source_groups(&self) -> Result<Vec<SourceGroup>, String> {
+    pub fn source_groups(&self) -> Result<Vec<SourceGroup>, String> {
         let mut statement = self
             .connection
             .prepare("SELECT id,name,parent_id,enabled FROM source_groups ORDER BY position,id")
@@ -384,11 +381,7 @@ impl Store {
     }
     /// Turns a settings group on or off and returns the boards whose effective
     /// subscription changed, so the caller can stop or join their collection.
-    pub(crate) fn set_source_group(
-        &self,
-        id: &str,
-        enabled: bool,
-    ) -> Result<Vec<SourceInfo>, String> {
+    pub fn set_source_group(&self, id: &str, enabled: bool) -> Result<Vec<SourceInfo>, String> {
         let transaction = self
             .connection
             .unchecked_transaction()
@@ -411,7 +404,7 @@ impl Store {
             .query_row("SELECT 1 FROM source_groups WHERE id=?1", [id], |_| Ok(()))
             .map_err(|_| "게시판 그룹을 찾을 수 없습니다.".into())
     }
-    pub(crate) fn sources(&self) -> Result<Vec<SourceInfo>, String> {
+    pub fn sources(&self) -> Result<Vec<SourceInfo>, String> {
         let mut statement = self
             .connection
             .prepare(&format!(
@@ -456,7 +449,7 @@ impl Store {
     }
     /// Documents of a source whose current revision has a file to (re)download,
     /// newest first. Terminal states (unsupported, too large) are not retried.
-    pub(crate) fn documents_missing_resources(&self, source: &str) -> Result<Vec<i64>, String> {
+    pub fn documents_missing_resources(&self, source: &str) -> Result<Vec<i64>, String> {
         let mut statement = self
             .connection
             .prepare(
@@ -476,7 +469,7 @@ impl Store {
     }
     /// Records a notice whose response was rejected for its content. A repeated
     /// rejection keeps the first skip time and the original historical marking.
-    pub(crate) fn record_skipped(
+    pub fn record_skipped(
         &self,
         source: &str,
         entry: &ListingEntry,
@@ -504,7 +497,7 @@ impl Store {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
-    pub(crate) fn clear_skipped(&self, source: &str, external: &str) -> Result<(), String> {
+    pub fn clear_skipped(&self, source: &str, external: &str) -> Result<(), String> {
         self.connection
             .execute(
                 "DELETE FROM skipped_articles WHERE source_id=?1 AND external_id=?2",
@@ -513,7 +506,7 @@ impl Store {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
-    pub(crate) fn source(&self, id: &str) -> Result<SourceInfo, String> {
+    pub fn source(&self, id: &str) -> Result<SourceInfo, String> {
         self.connection
             .query_row(
                 &format!("SELECT {SOURCE_COLUMNS} FROM sources WHERE id=?1"),
@@ -524,7 +517,7 @@ impl Store {
     }
     /// Whether the extension that owns a source is on. A source that no
     /// extension maps never syncs.
-    pub(crate) fn source_extension_enabled(&self, id: &str) -> Result<bool, String> {
+    pub fn source_extension_enabled(&self, id: &str) -> Result<bool, String> {
         self.connection
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM source_extensions se
@@ -535,7 +528,7 @@ impl Store {
             )
             .map_err(|e| e.to_string())
     }
-    pub(crate) fn resource_source(&self, id: i64) -> Result<String, String> {
+    pub fn resource_source(&self, id: i64) -> Result<String, String> {
         self.connection
             .query_row(
                 "SELECT d.source_id FROM resources r JOIN documents d ON d.id=r.document_id WHERE r.id=?1",
@@ -544,7 +537,7 @@ impl Store {
             )
             .map_err(|_| "첨부 자료를 찾을 수 없습니다.".into())
     }
-    pub(crate) fn subscribe(&self, id: &str, subscribed: bool) -> Result<(), String> {
+    pub fn subscribe(&self, id: &str, subscribed: bool) -> Result<(), String> {
         let source = self.source(id)?;
         if subscribed && !source.definition.supported {
             return Err("아직 지원하지 않는 정보원입니다.".into());
@@ -571,7 +564,7 @@ impl Store {
         Ok(())
     }
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn source_progress(
+    pub fn source_progress(
         &self,
         id: &str,
         status: &str,
@@ -602,11 +595,11 @@ impl Store {
         }
         require_changed(self.connection.execute(&format!("UPDATE sources SET status=?2,next_page=?3,history_complete=?4,discovered=?5,archived=?6,failed=?7,last_error=?8,last_attempt=CASE WHEN ?2='running' AND status<>'running' THEN {NOW} ELSE last_attempt END,previous_success=CASE WHEN ?9 THEN last_success ELSE previous_success END,last_success=CASE WHEN ?9 THEN {NOW} ELSE last_success END WHERE id=?1"),params![id,status,next_page,history_complete,discovered as i64,archived as i64,failed as i64,error,success]).map_err(|e|e.to_string())?)
     }
-    pub(crate) fn reset_interrupted(&self) -> Result<(), String> {
+    pub fn reset_interrupted(&self) -> Result<(), String> {
         self.connection.execute("UPDATE sources SET status='interrupted',last_error='이전 가져오기가 중단되었습니다. 이어서 가져올 수 있습니다.' WHERE status='running'",[]).map_err(|e|e.to_string())?;
         Ok(())
     }
-    pub(crate) fn document_id(&self, source: &str, external: &str) -> Result<Option<i64>, String> {
+    pub fn document_id(&self, source: &str, external: &str) -> Result<Option<i64>, String> {
         self.connection
             .query_row(
                 "SELECT id FROM documents WHERE source_id=?1 AND external_id=?2",
@@ -616,7 +609,7 @@ impl Store {
             .optional()
             .map_err(|e| e.to_string())
     }
-    pub(crate) fn latest_original(&self, document_id: i64) -> Result<String, String> {
+    pub fn latest_original(&self, document_id: i64) -> Result<String, String> {
         self.connection
             .query_row(
                 "SELECT original FROM document_revisions
@@ -628,7 +621,7 @@ impl Store {
     }
     /// Adds references the latest revision lacks because an earlier parser did
     /// not recognize them in the same stored response. Existing rows keep their state.
-    pub(crate) fn attach_resources(
+    pub fn attach_resources(
         &self,
         document_id: i64,
         resources: &[ResourceInput],
@@ -651,7 +644,7 @@ impl Store {
         Ok(())
     }
     /// The newest downloaded copy of a document's attachment at this URL.
-    pub(crate) fn downloaded_attachment(
+    pub fn downloaded_attachment(
         &self,
         document_id: i64,
         url: &str,
@@ -673,11 +666,7 @@ impl Store {
     /// revision are dropped so classification recomputes them. Returns false,
     /// changing nothing, when the latest revision already has a body; the
     /// caller then archives the text as a new revision instead.
-    pub(crate) fn fill_body(
-        &self,
-        document_id: i64,
-        article: &ArticleInput,
-    ) -> Result<bool, String> {
+    pub fn fill_body(&self, document_id: i64, article: &ArticleInput) -> Result<bool, String> {
         if article.body_text.trim().is_empty()
             || article.body_html.len() > 8 * 1024 * 1024
             || article.body_text.len() > 8 * 1024 * 1024
@@ -731,10 +720,7 @@ impl Store {
         Ok(true)
     }
     /// The source and listing identity a document was archived under.
-    pub(crate) fn document_entry(
-        &self,
-        document_id: i64,
-    ) -> Result<(String, ListingEntry), String> {
+    pub fn document_entry(&self, document_id: i64) -> Result<(String, ListingEntry), String> {
         self.connection
             .query_row(
                 "SELECT source_id,external_id,canonical_url FROM documents WHERE id=?1",
@@ -754,7 +740,7 @@ impl Store {
             )
             .map_err(|_| "보관된 항목을 찾을 수 없습니다.".into())
     }
-    pub(crate) fn resource_document(&self, resource_id: i64) -> Result<i64, String> {
+    pub fn resource_document(&self, resource_id: i64) -> Result<i64, String> {
         self.connection
             .query_row(
                 "SELECT document_id FROM resources WHERE id=?1",
@@ -766,7 +752,7 @@ impl Store {
     /// True when the archived notice already carries the listing's own change
     /// timestamp. A sitemap-backed family uses this to skip a request instead of
     /// revalidating every article on each incremental run.
-    pub(crate) fn listing_unchanged(
+    pub fn listing_unchanged(
         &self,
         source: &str,
         external: &str,
@@ -782,7 +768,7 @@ impl Store {
             .map(|stored| stored.flatten().is_some_and(|value| value == modified_at))
             .map_err(|e| e.to_string())
     }
-    pub(crate) fn upsert_article(
+    pub fn upsert_article(
         &self,
         source_id: &str,
         article: &ArticleInput,
@@ -922,7 +908,7 @@ impl Store {
         }
         Ok((filters, values))
     }
-    pub(crate) fn archive_query(&self, query: &ArchiveQuery) -> Result<ArchivePage, String> {
+    pub fn archive_query(&self, query: &ArchiveQuery) -> Result<ArchivePage, String> {
         let terms = search_terms(&query.query)?;
         let (mut filters, mut values) = self.archive_filters(query)?;
         push_text_filters(&terms, &mut filters, &mut values);
@@ -1217,7 +1203,7 @@ impl Store {
     /// first `RANKED_TEXT_HEAD` text matches with semantic hits when a query
     /// vector is given; later text matches follow in text order, so no text
     /// match is ever dropped. Without a query this is the date-ordered list.
-    pub(crate) fn archive_ranked_query(
+    pub fn archive_ranked_query(
         &self,
         query: &ArchiveQuery,
         semantic: Option<(&str, &[f32])>,
@@ -1327,7 +1313,7 @@ impl Store {
     /// feed sync has no previous manifest and counts nothing.
     /// Unread and new counts follow subscriptions like the feed pages;
     /// `unread_all` (검색), the archive and saved counts cover every notice.
-    pub(crate) fn archive_summary(&self) -> Result<ArchiveSummary, String> {
+    pub fn archive_summary(&self) -> Result<ArchiveSummary, String> {
         const CYBERCAMPUS: &str = crate::archive::catalog::CYBERCAMPUS_SOURCE_ID;
         let due_today = self.opportunities_due_today()?;
         self.connection.query_row(&format!("SELECT COUNT(*),COALESCE(SUM(s.subscribed=1 AND COALESCE(u.is_read,0)=0),0),COALESCE(SUM(COALESCE(u.is_read,0)=0),0),COALESCE(SUM(COALESCE(u.saved,0)=1),0),COALESCE(SUM(s.subscribed=1 AND d.historical=0 AND CASE WHEN d.source_id='{CYBERCAMPUS}' THEN d.collected_at>=COALESCE(s.previous_success,'1970') ELSE d.from_feed=1 AND d.collected_at>COALESCE((SELECT previous_generated_at FROM feed_state WHERE id=1),'9999') END),0),(SELECT COALESCE(SUM(bytes),0) FROM (SELECT MAX(bytes) bytes FROM resources WHERE status='downloaded' GROUP BY local_path)),(SELECT COUNT(*) FROM trashed_documents) FROM documents d JOIN sources s ON s.id=d.source_id LEFT JOIN document_state u ON u.document_id=d.id WHERE {NOT_TRASHED}"),[],|r|Ok(ArchiveSummary {documents:r.get::<_,i64>(0)? as u64,unread:r.get::<_,i64>(1)? as u64,unread_all:r.get::<_,i64>(2)? as u64,saved:r.get::<_,i64>(3)? as u64,new_since_sync:r.get::<_,i64>(4)? as u64,resource_bytes:r.get::<_,i64>(5)? as u64,trashed:r.get::<_,i64>(6)? as u64,due_today})).map_err(|e|e.to_string())
@@ -1360,11 +1346,7 @@ impl Store {
             )
             .map_err(|e| e.to_string())
     }
-    pub(crate) fn document(
-        &self,
-        id: i64,
-        revision_id: Option<i64>,
-    ) -> Result<DocumentDetail, String> {
+    pub fn document(&self, id: i64, revision_id: Option<i64>) -> Result<DocumentDetail, String> {
         let mut item = self
             .connection
             .query_row(
@@ -1426,7 +1408,7 @@ impl Store {
             resources,
         })
     }
-    pub(crate) fn set_document_state(
+    pub fn set_document_state(
         &self,
         id: i64,
         is_read: Option<bool>,
@@ -1509,7 +1491,7 @@ impl Store {
         }
         Ok(())
     }
-    pub(crate) fn resource(&self, id: i64) -> Result<ResourceRecord, String> {
+    pub fn resource(&self, id: i64) -> Result<ResourceRecord, String> {
         self.connection
             .query_row(
                 &format!("SELECT {RESOURCE_COLUMNS} FROM resources WHERE id=?1"),
@@ -1518,10 +1500,7 @@ impl Store {
             )
             .map_err(|_| "보관된 첨부 자료를 찾을 수 없습니다.".into())
     }
-    pub(crate) fn pending_resources(
-        &self,
-        document_id: i64,
-    ) -> Result<Vec<ResourceRecord>, String> {
+    pub fn pending_resources(&self, document_id: i64) -> Result<Vec<ResourceRecord>, String> {
         let mut statement=self.connection.prepare(&format!("SELECT {RESOURCE_COLUMNS} FROM resources WHERE document_id=?1 AND revision_id=(SELECT MAX(id) FROM document_revisions WHERE document_id=?1) AND status<>'downloaded' ORDER BY id")).map_err(|e|e.to_string())?;
         let result = statement
             .query_map([document_id], resource_row)
@@ -1531,8 +1510,8 @@ impl Store {
         result
     }
     /// Inserts one resource row for deterministic tests, outside the sync path.
-    #[cfg(test)]
-    pub(crate) fn add_resource_for_test(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn add_resource_for_test(
         &self,
         document_id: i64,
         revision_id: i64,
@@ -1549,7 +1528,7 @@ impl Store {
         Ok(self.connection.last_insert_rowid())
     }
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn resource_result(
+    pub fn resource_result(
         &self,
         id: i64,
         status: &str,

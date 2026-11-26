@@ -2,7 +2,7 @@
 
 Area instructions for `src-tauri/src/studium/`, `src/lib/StudiumView.svelte`, `src/lib/StudiumMini.svelte`, `src/lib/StudiumSeatMap.svelte` and the `storage/studium*.rs` modules. The root `AGENTS.md` (project-wide rules) applies too.
 
-- `src-tauri/src/studium/`: separate fixed reading-room catalog (`rooms.rs`), pure UTF-8/CP949 seat parsers (`parser.rs`, optional geometry in `parser_layout.rs`), bounded seat session over the crate transport (`network.rs`; the route validator is `rhythm_sources::studium`), shared manual/automatic in-memory job controller (`controller.rs`, timer in `controller/automatic.rs`), payloads (`model.rs`), commands (`commands.rs`), seat-alert runtime (`notification.rs`) and native mini/tray owner (`views.rs`). `src/lib/StudiumView.svelte` owns its multi-room selection, automatic controls, favorite/alert editors and seat results. Its collection is separate from archive sources and AI; seat alerts share proactive permission, quiet hours, rate policy and native senders.
+- `src-tauri/src/studium/`: separate fixed reading-room catalog (`rooms.rs`), pure UTF-8/CP949 seat parsers (`parser.rs`, optional geometry in `parser_layout.rs`) and the `model.rs` types (these three in `crates/core/src/studium/`, re-exported as `crate::studium::{model, parser, rooms}`), bounded seat session over the crate transport (`network.rs`; the route validator is `rhythm_sources::studium`), shared manual/automatic in-memory job controller (`controller.rs`, timer in `controller/automatic.rs`), payloads (`model.rs`), commands (`commands.rs`), seat-alert runtime (`notification.rs`) and native mini/tray owner (`views.rs`). `src/lib/StudiumView.svelte` owns its multi-room selection, automatic controls, favorite/alert editors and seat results. Its collection is separate from archive sources and AI; seat alerts share proactive permission, quiet hours, rate policy and native senders.
 - **Contracts live in `docs/ARCHITECTURE.md`:** "Studium seat checks" (preferences, favorites, controller, automatic timer, result states, source-time age policy, disable/maintenance), "Studium seat map", "Studium seat alerts", "Studium mini window and tray", and under "Transport, resources and safe rendering" the `Access::Studium` routes and the seat-origin TLS paragraph. Read the matching section before changing that part, and change the doc with the code.
 
 ## Rules
@@ -21,6 +21,7 @@ Area instructions for `src-tauri/src/studium/`, `src/lib/StudiumView.svelte`, `s
 
 ```sh
 cargo test --locked -p rhythm studium
+cargo test --locked -p rhythm-core studium
 npx playwright test tests/ui/studium.spec.ts tests/ui/studium-mini.spec.ts tests/ui/studium-map.spec.ts
 ```
 

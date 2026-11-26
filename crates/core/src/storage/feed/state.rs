@@ -12,17 +12,17 @@ use serde::Serialize;
 const STALE_AFTER: chrono::Duration = chrono::Duration::hours(3);
 /// Consecutive collector failures before a board is listed as failing (user
 /// decision, 2026-11-18): about 1.5 hours of failed runs.
-pub(crate) const FAILING_AFTER: u32 = 3;
+pub const FAILING_AFTER: u32 = 3;
 
 #[derive(Debug, Default, PartialEq)]
-pub(crate) struct FeedState {
+pub struct FeedState {
     pub base: Option<String>,
     pub cursor: Option<u64>,
 }
 
 /// How a sync attempt ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FeedResult {
+pub enum FeedResult {
     Ok,
     Offline,
     Failed,
@@ -72,7 +72,7 @@ fn parse_time(text: &str) -> Option<DateTime<Utc>> {
 }
 
 impl Store {
-    pub(crate) fn feed_state(&self) -> Result<FeedState, String> {
+    pub fn feed_state(&self) -> Result<FeedState, String> {
         self.connection
             .query_row("SELECT base,cursor FROM feed_state WHERE id=1", [], |row| {
                 Ok(FeedState {
@@ -86,7 +86,7 @@ impl Store {
     /// Accepts a verified manifest fetched from `base` (FEED.md step 2): one
     /// older than the last accepted is refused, so an old signed manifest
     /// cannot roll the mirror back. Stores its time, base and board health.
-    pub(crate) fn feed_accept(&self, manifest: &Manifest, base: &str) -> Result<(), String> {
+    pub fn feed_accept(&self, manifest: &Manifest, base: &str) -> Result<(), String> {
         let generated = parse_time(&manifest.generated_at)
             .ok_or("공지 피드의 생성 시각이 올바르지 않습니다.")?;
         let transaction = self
@@ -135,11 +135,7 @@ impl Store {
         transaction.commit().map_err(|e| e.to_string())
     }
 
-    pub(crate) fn feed_record(
-        &self,
-        result: FeedResult,
-        error: Option<&str>,
-    ) -> Result<(), String> {
+    pub fn feed_record(&self, result: FeedResult, error: Option<&str>) -> Result<(), String> {
         self.connection
             .execute(
                 "UPDATE feed_state SET result=?1,error=?2,
@@ -151,7 +147,7 @@ impl Store {
             .map_err(|e| e.to_string())
     }
 
-    pub(crate) fn feed_status(&self, now: DateTime<Utc>) -> Result<FeedStatus, String> {
+    pub fn feed_status(&self, now: DateTime<Utc>) -> Result<FeedStatus, String> {
         let (generated_at, checked_at, result, error) = self
             .connection
             .query_row(

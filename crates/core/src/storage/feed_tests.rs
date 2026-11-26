@@ -1180,7 +1180,7 @@ fn feed_vectors_and_categories_back_ai_and_local_rows_cover_other_notices() {
     let (_directory, store) = database();
     store.set_enabled(crate::extensions::AI, true).unwrap();
     let local = "a".repeat(64);
-    let config = crate::intelligence::classification::config_hash();
+    let config = rhythm_embed::config_hash();
     // Vectors 0 and 1 point the same way; 2 is orthogonal to them.
     let base: Vec<f32> = (0..DIMENSIONS)
         .map(|i| if i < 512 { 1.0 } else { 0.0 })

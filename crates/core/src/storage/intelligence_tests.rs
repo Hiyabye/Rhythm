@@ -1386,10 +1386,7 @@ fn schema_thirty_six_accepts_revised_categories_and_keeps_old_rows() {
             low_confidence: false,
         })
     };
-    for (index, category) in crate::intelligence::classification::CATEGORIES
-        .iter()
-        .enumerate()
-    {
+    for (index, category) in rhythm_embed::CATEGORIES.iter().enumerate() {
         write(category, &format!("{index:064}")).unwrap();
     }
     assert!(write("없는 분류", &"c".repeat(64)).is_err());
@@ -1401,7 +1398,7 @@ fn ai_category_filter_and_counts_use_latest_revision_under_the_installed_model()
     store.set_enabled(crate::extensions::AI, true).unwrap();
     let model = "a".repeat(64);
     let other_model = "b".repeat(64);
-    let config = crate::intelligence::classification::config_hash();
+    let config = rhythm_embed::config_hash();
     let mut embedding = super::intelligence_tests::model("embedding-test", "external");
     embedding.kind = "embedding".into();
     embedding.sha256 = Some(model.clone());
@@ -1473,7 +1470,7 @@ fn ai_category_filter_and_counts_use_latest_revision_under_the_installed_model()
             .iter()
             .map(|row| row.category.as_str())
             .collect::<Vec<_>>(),
-        crate::intelligence::classification::CATEGORIES
+        rhythm_embed::CATEGORIES
     );
     assert_eq!(
         (

@@ -260,7 +260,7 @@ pub(super) fn is_sensitive_topic(topic: &str) -> bool {
         .any(|marker| topic.contains(marker))
 }
 
-pub(crate) fn topics(title: &str, category: Option<&str>) -> BTreeSet<String> {
+pub fn topics(title: &str, category: Option<&str>) -> BTreeSet<String> {
     let text = format!("{title} {}", category.unwrap_or_default());
     let mut out = BTreeSet::new();
     for raw in text.split(|c: char| !(c.is_alphanumeric() || ('가'..='힣').contains(&c))) {

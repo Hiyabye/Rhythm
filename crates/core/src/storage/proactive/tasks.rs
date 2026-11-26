@@ -51,7 +51,7 @@ impl Store {
             .map_err(|e| e.to_string())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn proactive_task(&self, task_id: &str) -> Result<Option<ProactiveTask>, String> {
         task_by_id(&self.connection, task_id)
     }
@@ -104,7 +104,7 @@ impl Store {
         task.ok_or_else(|| "예약 작업을 찾을 수 없습니다.".to_string())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn proactive_set_task_enabled(
         &self,
         task_id: &str,

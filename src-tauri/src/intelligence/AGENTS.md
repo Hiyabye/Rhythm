@@ -1,6 +1,6 @@
 # Intelligence (embedding model and classification)
 
-Area instructions for `src-tauri/src/intelligence/`, `src-tauri/src/storage/intelligence*.rs`, `AiSettings.svelte` and `crates/embed`. The root `AGENTS.md` (project-wide rules) applies too.
+Area instructions for `src-tauri/src/intelligence/`, `crates/core/src/storage/intelligence*.rs`, `AiSettings.svelte` and `crates/embed`. The root `AGENTS.md` (project-wide rules) applies too.
 
 - `src-tauri/src/intelligence/`: `Worker` (`mod.rs`) and its embedding `llama-server` supervisor `server.rs`, `models/` (`catalog`, `hardware`, `transport`, `download`, `gguf`) with the pinned `catalog.json`, `model_storage.rs`, the `classification.rs` embedding controller/loop (its only `Worker` user; the inputs, prototypes and scoring come from `crates/embed`) and Tauri `commands.rs`. AI summaries, the remote engine, backlog analysis and model registration were retired (#226). Test-only synthetic fixtures are `evaluation.json` loaded by `evaluation.rs` (also read by `crates/sources/src/dates/tests.rs`); the opt-in embedding evaluations are `embedding_evaluation.rs`. Collection never waits for AI.
 
@@ -17,13 +17,13 @@ Area instructions for `src-tauri/src/intelligence/`, `src-tauri/src/storage/inte
 Focused deterministic checks:
 
 ```sh
-cargo test --locked -p rhythm storage::intelligence_tests
+cargo test --locked -p rhythm-core storage::intelligence_tests
 cargo test --locked -p rhythm intelligence::classification
 cargo test --locked -p rhythm intelligence::models
 cargo test --locked -p rhythm intelligence::model_storage
 cargo test --locked -p rhythm intelligence::tests
 cargo test --locked -p rhythm intelligence::server
-cargo test --locked -p rhythm storage::personalization_tests
+cargo test --locked -p rhythm-core storage::personalization_tests
 cargo test --locked -p rhythm ranking_candidate_retrieval_is_bounded -- --nocapture
 ```
 

@@ -109,7 +109,7 @@ fn valid_fresh_data(room_id: &str, data: &SeatData) -> bool {
 }
 
 impl Store {
-    pub(crate) fn studium_alert_rules(&self) -> Result<BTreeMap<String, AlertRule>, String> {
+    pub fn studium_alert_rules(&self) -> Result<BTreeMap<String, AlertRule>, String> {
         rooms::all()
             .into_iter()
             .map(|room| {
@@ -118,7 +118,7 @@ impl Store {
             .collect()
     }
 
-    pub(crate) fn studium_save_alert_rule(
+    pub fn studium_save_alert_rule(
         &self,
         room_id: &str,
         input: &AlertRuleInput,
@@ -159,7 +159,7 @@ impl Store {
 
     /// Unknown observations preserve the latch. Only a fresh successful
     /// non-match rearms it; a match merely returns a transient candidate.
-    pub(crate) fn studium_alert_observe(
+    pub fn studium_alert_observe(
         &self,
         job_id: u64,
         state: &RoomState,
@@ -236,7 +236,7 @@ impl Store {
     /// Called under the same Store boundary as the final OS handoff. Runtime
     /// additionally fences current controller generation/cancellation/permission.
     /// Reservation consumes the latch even when the handoff result is unknown.
-    pub(crate) fn studium_alert_reserve(
+    pub fn studium_alert_reserve(
         &self,
         candidate: &AlertCandidate,
         token: &str,
@@ -310,7 +310,7 @@ impl Store {
         Ok(true)
     }
 
-    pub(crate) fn studium_alert_invalidate_tokens(&self) -> Result<(), String> {
+    pub fn studium_alert_invalidate_tokens(&self) -> Result<(), String> {
         self.connection
             .execute("DELETE FROM studium_alert_tokens", [])
             .map_err(|e| e.to_string())?;
@@ -319,7 +319,7 @@ impl Store {
 
     /// One-use capabilities never expand the selected lookup targets or fetch.
     /// Invalidated rules, disabled extensions and old/unknown tokens fail closed.
-    pub(crate) fn studium_alert_consume(&self, token: &str) -> Result<Option<String>, String> {
+    pub fn studium_alert_consume(&self, token: &str) -> Result<Option<String>, String> {
         if !valid_token(token) {
             return Ok(None);
         }

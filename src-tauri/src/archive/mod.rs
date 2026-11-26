@@ -1,7 +1,7 @@
 pub mod cybercampus;
-pub mod model;
+pub use rhythm_core::archive::{definitions, model};
 pub mod sync;
-pub(crate) use rhythm_sources::{catalog, dates, parser, pdf, selector, tls, transport as network};
+pub(crate) use rhythm_sources::{catalog, parser, pdf, selector, tls, transport as network};
 #[cfg(windows)]
 mod windows_reveal;
 
@@ -17,12 +17,6 @@ use sync::with_store;
 use tauri::{Manager, State};
 use url::Url;
 
-pub fn definitions() -> Vec<SourceDefinition> {
-    catalog::definitions()
-}
-pub fn groups() -> Vec<SourceGroup> {
-    catalog::groups()
-}
 /// Whether the app collects this source itself: only Cybercampus. Public
 /// boards arrive through the feed (#177, #178).
 pub(crate) fn app_collected(id: &str) -> bool {

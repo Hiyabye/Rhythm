@@ -1453,8 +1453,8 @@ fn large_archive_operations() {
     }
     // AI categories (#177 PR 5): even notices from the feed, odd ones under
     // the installed local model, so the filter and counts read both tables.
-    let categories = crate::intelligence::classification::CATEGORIES;
-    let config = crate::intelligence::classification::config_hash();
+    let categories = rhythm_embed::CATEGORIES;
+    let config = rhythm_embed::config_hash();
     let sha = "a".repeat(64);
     let mut embedding = super::intelligence_tests::model("bench-embedding", "external");
     embedding.kind = "embedding".into();

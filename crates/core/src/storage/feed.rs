@@ -25,8 +25,8 @@ use rhythm_feed::{
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::collections::HashSet;
 
-pub(crate) mod state;
-pub(crate) use state::FeedResult;
+pub mod state;
+pub use state::FeedResult;
 pub use state::FeedStatus;
 
 /// Bounds a record must stay within; the feed's own limits are smaller.
@@ -38,7 +38,7 @@ const MAX_DATES: usize = 64;
 /// its cursor moved past them; a sync with a cursor backfills them from the
 /// snapshot path until a complete sync records them as known.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct Unmirrored {
+pub struct Unmirrored {
     /// Calendar events (format 1.2, #319).
     pub events: bool,
     /// Menu weeks (format 1.3, #318).
@@ -46,7 +46,7 @@ pub(crate) struct Unmirrored {
 }
 
 impl Unmirrored {
-    pub(crate) fn any(self) -> bool {
+    pub fn any(self) -> bool {
         self.events || self.meals
     }
 
@@ -61,7 +61,7 @@ impl Unmirrored {
 
 /// What one applied file changed.
 #[derive(Debug, Default, PartialEq)]
-pub(crate) struct Applied {
+pub struct Applied {
     /// Notices inserted or given a new revision.
     pub revised: usize,
     /// Notices deleted or, if saved, marked removed.
@@ -74,7 +74,7 @@ pub(crate) struct Applied {
 
 impl Store {
     /// The last seq applied, or `None` before the first sync.
-    pub(crate) fn feed_cursor(&self) -> Result<Option<u64>, String> {
+    pub fn feed_cursor(&self) -> Result<Option<u64>, String> {
         self.connection
             .query_row("SELECT cursor FROM feed_state WHERE id=1", [], |row| {
                 row.get::<_, Option<i64>>(0)
@@ -89,7 +89,7 @@ impl Store {
     /// Its vectors and categories replace every earlier one, and nothing it
     /// carries becomes a notification candidate, and the notices it adds
     /// start read: a first sync is a backfill, not news.
-    pub(crate) fn feed_apply_snapshot(
+    pub fn feed_apply_snapshot(
         &self,
         through_seq: u64,
         entries: &[Entry],
@@ -159,7 +159,7 @@ impl Store {
     /// `quiet` (a sync that began from the snapshot) keeps its notices out of
     /// notifications and unread counts too, so a first sync never notifies.
     /// Records of the `skip` boards are left out: this sync backfilled them.
-    pub(crate) fn feed_apply_segment(
+    pub fn feed_apply_segment(
         &self,
         from_seq: u64,
         to_seq: u64,
@@ -200,7 +200,7 @@ impl Store {
     /// format 1.2 support skipped (#319) and the menu weeks one before 1.3
     /// skipped (#318): like a first sync, what it adds starts read and never
     /// becomes a notification.
-    pub(crate) fn feed_backfill(
+    pub fn feed_backfill(
         &self,
         boards: &HashSet<String>,
         kinds: Unmirrored,
@@ -226,7 +226,7 @@ impl Store {
 
     /// Public boards in the catalog that the mirror did not know at its last
     /// complete sync.
-    pub(crate) fn feed_new_boards(&self) -> Result<HashSet<String>, String> {
+    pub fn feed_new_boards(&self) -> Result<HashSet<String>, String> {
         self.connection
             .prepare(
                 "SELECT id FROM sources WHERE supported=1 AND family<>'cybercampus'
@@ -238,8 +238,8 @@ impl Store {
 
     /// Whether a complete sync has mirrored calendar events; until then a
     /// sync with a cursor backfills them (`feed_backfill`).
-    #[cfg(test)]
-    pub(crate) fn feed_events_known(&self) -> Result<bool, String> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn feed_events_known(&self) -> Result<bool, String> {
         self.connection
             .query_row("SELECT events_known FROM feed_state WHERE id=1", [], |r| {
                 r.get(0)
@@ -248,7 +248,7 @@ impl Store {
     }
 
     /// The record kinds a sync with a cursor still has to backfill.
-    pub(crate) fn feed_unmirrored(&self) -> Result<Unmirrored, String> {
+    pub fn feed_unmirrored(&self) -> Result<Unmirrored, String> {
         self.connection
             .query_row(
                 "SELECT events_known,meals_known FROM feed_state WHERE id=1",
@@ -265,8 +265,8 @@ impl Store {
 
     /// Leaves the mirror as a version without format 1.3 support did: its
     /// cursor passed the menu weeks without storing them.
-    #[cfg(test)]
-    pub(crate) fn feed_forget_meals(&self) -> Result<(), String> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn feed_forget_meals(&self) -> Result<(), String> {
         self.connection
             .execute_batch("DELETE FROM meal_weeks; UPDATE feed_state SET meals_known=0;")
             .map_err(|e| e.to_string())
@@ -274,8 +274,8 @@ impl Store {
 
     /// Leaves the mirror as a version without format 1.2 support did: its
     /// cursor passed the events without storing them.
-    #[cfg(test)]
-    pub(crate) fn feed_forget_events(&self) -> Result<(), String> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn feed_forget_events(&self) -> Result<(), String> {
         self.connection
             .execute_batch("DELETE FROM calendar_events; UPDATE feed_state SET events_known=0;")
             .map_err(|e| e.to_string())
@@ -283,7 +283,7 @@ impl Store {
 
     /// Records the catalog's public boards, the calendar events and the menu
     /// weeks as known, after a sync that applied every file it planned.
-    pub(crate) fn feed_remember_boards(&self) -> Result<(), String> {
+    pub fn feed_remember_boards(&self) -> Result<(), String> {
         let transaction = self
             .connection
             .unchecked_transaction()
@@ -673,7 +673,7 @@ fn unused(connection: &Connection, paths: Vec<String>) -> Result<Vec<String>, St
 }
 
 /// The feed's `revision_hash` of a fetched article, as the collector computes it.
-pub(crate) fn article_revision_hash(article: &ArticleInput) -> String {
+pub fn article_revision_hash(article: &ArticleInput) -> String {
     let resources: Vec<(&str, &str, &str)> = article
         .resources
         .iter()
@@ -692,7 +692,7 @@ pub(crate) fn article_revision_hash(article: &ArticleInput) -> String {
 
 /// What filling an opened notice's body changed.
 #[derive(Debug, Default, PartialEq)]
-pub(crate) struct Filled {
+pub struct Filled {
     /// The school's text is not the revision the feed described.
     pub revised: bool,
     /// Resource files no remaining notice uses, as in `Applied`.
@@ -703,10 +703,7 @@ impl Store {
     /// The source and listing identity of a notice whose body has not been
     /// fetched yet, or `None` when there is nothing to fetch: the body is
     /// here, or the source deleted the notice.
-    pub(crate) fn pending_body(
-        &self,
-        document_id: i64,
-    ) -> Result<Option<(String, ListingEntry)>, String> {
+    pub fn pending_body(&self, document_id: i64) -> Result<Option<(String, ListingEntry)>, String> {
         let pending: Option<bool> = self
             .connection
             .query_row(
@@ -728,7 +725,7 @@ impl Store {
     /// is nothing to download: the body has not arrived (its fetch brings
     /// the final references), the source deleted the notice, or every file
     /// was tried. Failed files wait for an explicit retry.
-    pub(crate) fn pending_downloads(
+    pub fn pending_downloads(
         &self,
         document_id: i64,
     ) -> Result<Option<(String, ListingEntry, Vec<ResourceRecord>)>, String> {
@@ -768,7 +765,7 @@ impl Store {
     /// revised text takes its own hashes, so the feed's later record of that
     /// revision keeps this body. Nothing changes when the body arrived
     /// meanwhile (another open) or the notice left the feed.
-    pub(crate) fn fill_feed_body(
+    pub fn fill_feed_body(
         &self,
         document_id: i64,
         article: &ArticleInput,

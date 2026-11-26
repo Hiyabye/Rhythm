@@ -3937,6 +3937,7 @@ dependencies = [
  "minisign-verify",
  "objc2-user-notifications",
  "reqwest 0.12.28",
+ "rhythm-core",
  "rhythm-embed",
  "rhythm-feed",
  "rhythm-sources",
@@ -3976,6 +3977,25 @@ dependencies = [
  "tokio",
  "url",
  "zstd",
+]
+
+[[package]]
+name = "rhythm-core"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "encoding_rs",
+ "keyring",
+ "rhythm-embed",
+ "rhythm-feed",
+ "rhythm-sources",
+ "rusqlite",
+ "scraper",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "url",
 ]
 
 [[package]]
