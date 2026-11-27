@@ -14,7 +14,7 @@ use std::{
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Notify;
 
-#[cfg(any(windows, test))]
+#[cfg(test)]
 pub(crate) fn token_prefix() -> &'static str {
     crate::core::windows_identity::current()
         .studium_prefix
