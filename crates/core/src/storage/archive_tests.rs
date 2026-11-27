@@ -2941,3 +2941,64 @@ fn feed_pages_and_unread_counts_keep_to_subscribed_sources() {
     assert_eq!(sources(&feed).len(), 2);
     assert_eq!(store.archive_summary().unwrap().unread, 2);
 }
+
+#[tokio::test(start_paused = true)]
+async fn notice_date_backfill_waits_out_a_closed_gate_and_still_stops_on_shutdown() {
+    use crate::operation_gate::AdmissionGate;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    let (_directory, store) = database();
+    store
+        .upsert_article(
+            "one",
+            &article("1", "모집", "접수 마감 11월 20일", "2026-11-02"),
+            false,
+        )
+        .unwrap();
+    store
+        .connection
+        .execute_batch("DELETE FROM notice_date_extractions;")
+        .unwrap();
+    let store = Arc::new(Mutex::new(store));
+    let extracted = |store: &Arc<Mutex<Store>>| {
+        store
+            .lock()
+            .unwrap()
+            .connection
+            .query_row("SELECT COUNT(*) FROM notice_date_extractions", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap()
+    };
+
+    let gate = Arc::new(AdmissionGate::default());
+    let maintenance = gate.close().unwrap().acquire().await.unwrap();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let task = tokio::spawn(crate::archive::run_notice_dates(
+        store.clone(),
+        gate.clone(),
+        shutdown.clone(),
+    ));
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert!(!task.is_finished(), "a closed gate must not end the backfill");
+    assert_eq!(extracted(&store), 0);
+
+    drop(maintenance);
+    task.await.unwrap();
+    assert_eq!(extracted(&store), 1);
+
+    // Shutdown ends a loop that is waiting on a closed gate.
+    let maintenance = gate.close().unwrap().acquire().await.unwrap();
+    let task = tokio::spawn(crate::archive::run_notice_dates(
+        store.clone(),
+        gate.clone(),
+        shutdown.clone(),
+    ));
+    tokio::time::sleep(Duration::from_secs(30)).await;
+    shutdown.store(true, Ordering::Release);
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert!(task.is_finished());
+    drop(maintenance);
+}
