@@ -11,6 +11,8 @@ const rules = {
     /^vite\.config\.ts$/, /^tsconfig\.json$/, /^playwright(\.screenshots)?\.config\.ts$/,
     // tests/capabilities.test.mjs compares these Rust-side files with src/.
     /^src-tauri\/(build\.rs|src\/main\.rs|capabilities\/)/,
+    // tests/desktop-windows.test.mjs checks that every license notice is bundled.
+    /^src-tauri\/tauri[^/]*\.conf\.json$/, /^assets\/licenses\//,
     // tests/ui/interest-picker.spec.ts reads the sensitive-topic markers.
     /^crates\/core\/src\/storage\/personalization\/topics\.rs$/],
   rust: [/^src-tauri\//, /^crates\//, /^Cargo\.(toml|lock)$/, /^\.cargo\//, /^rust-toolchain/,
@@ -51,18 +53,20 @@ export function classify(files, { pullRequest = false } = {}) {
   return flags;
 }
 
-// Changed files for this event, or null when they cannot be determined.
+// Changed files for this event, or null when they cannot be determined. A
+// rename is listed as its old and its new path, so a file moved out of an
+// area still runs that area's checks.
 function changedFiles({ event, before }) {
   const git = (...args) => execFileSync('git', args, { encoding: 'utf8' });
   // A pull request checks out its merge commit; the first parent is the base tip.
-  if (event === 'pull_request') return git('diff', '--name-only', 'HEAD^1', 'HEAD').split('\n').filter(Boolean);
+  if (event === 'pull_request') return git('diff', '--name-only', '--no-renames', 'HEAD^1', 'HEAD').split('\n').filter(Boolean);
   if (event !== 'push' || !before || /^0+$/.test(before)) return null;
   try {
     git('fetch', '--quiet', '--depth=1', 'origin', before);
   } catch {
     return null; // force-pushed or otherwise unreachable
   }
-  return git('diff', '--name-only', before, 'HEAD').split('\n').filter(Boolean);
+  return git('diff', '--name-only', '--no-renames', before, 'HEAD').split('\n').filter(Boolean);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
