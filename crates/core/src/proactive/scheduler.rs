@@ -1,5 +1,5 @@
 use super::notification::{self, DeliveryItem};
-use crate::shell::{Event, Shell};
+use crate::shell::{Event, Ui};
 use crate::{
     archive::{
         self,
@@ -36,7 +36,7 @@ pub struct Scheduler {
     archive: Arc<Controller>,
     feed: Arc<crate::feed::Controller>,
     root: PathBuf,
-    shell: Arc<dyn Shell>,
+    shell: Ui,
     /// Where the loop runs; `start` is called from setup, outside any runtime.
     runtime: Handle,
     /// The app's `Rhythm/<version>` for the feed and eClass requests.
@@ -103,7 +103,7 @@ impl Scheduler {
         archive: Arc<Controller>,
         feed: Arc<crate::feed::Controller>,
         root: PathBuf,
-        shell: Arc<dyn Shell>,
+        shell: Ui,
         runtime: Handle,
         user_agent: &'static str,
         operation_gate: Arc<AdmissionGate>,
@@ -571,7 +571,7 @@ async fn cycle(
     store: &sync::SharedStore,
     archive: &Arc<Controller>,
     root: &Path,
-    shell: &Arc<dyn Shell>,
+    shell: &Ui,
     user_agent: &'static str,
     notifications: &mut NotificationState,
     stop: &mut watch::Receiver<bool>,
@@ -664,7 +664,7 @@ async fn cycle(
 async fn wait_for_scheduled_task_and_notifications<F>(
     task: F,
     store: &sync::SharedStore,
-    shell: &Arc<dyn Shell>,
+    shell: &Ui,
     notifications: &mut NotificationState,
     stop: &mut watch::Receiver<bool>,
 ) -> Result<(ProactiveOutcome, Option<String>), String>
@@ -886,7 +886,7 @@ pub(super) fn handoff_validated<P>(
 async fn discover_and_deliver(
     store: &sync::SharedStore,
     prefs: &ProactiveSettings,
-    shell: &Arc<dyn Shell>,
+    shell: &Ui,
     notifications: &mut NotificationState,
     stop: &mut watch::Receiver<bool>,
 ) -> Result<(), String> {

@@ -1,5 +1,6 @@
 pub mod lifecycle;
-pub use rhythm_core::data_lock::{lock_data_dir, DataDirLock};
+#[cfg(all(test, windows))]
+pub use rhythm_core::data_lock::lock_data_dir;
 #[cfg(windows)]
 pub use rhythm_core::{windows_autostart, windows_identity};
 

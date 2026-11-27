@@ -3,7 +3,7 @@ mod archive;
 mod backup;
 mod calendar_export;
 mod commands;
-pub(crate) use commands::storage_error;
+pub(crate) use rhythm_core::app::storage_error;
 mod core;
 mod extensions;
 mod feed;
@@ -17,11 +17,8 @@ mod shell;
 use rhythm_core::storage;
 mod studium;
 mod updater;
-use extensions::Registry;
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use rhythm_core::app::{App, OpenError};
+use std::sync::{Arc, Mutex};
 use storage::{proactive::ProactiveSettings, Store};
 use tauri::Manager;
 
@@ -29,137 +26,22 @@ use tauri::Manager;
 /// `rhythm-core` cannot name it itself; its package version is 0.0.0.
 pub(crate) const USER_AGENT: &str = concat!("Rhythm/", env!("CARGO_PKG_VERSION"));
 
+/// The core app plus what only this Tauri shell owns: tray, login item and
+/// the native Studium mini window. It derefs to the core `App`, so commands
+/// still reach core handles as `state.store`, `state.settings()` and so on.
 pub(crate) struct AppState {
-    _instance_lock: core::DataDirLock,
-    pub(crate) store: Arc<Mutex<Store>>,
-    pub(crate) data_root: PathBuf,
+    core: App,
     lifecycle: Arc<dyn core::lifecycle::LifecyclePreferences>,
     tray_available: bool,
-    launch_at_login: Mutex<()>,
-    pub(crate) proactive: Arc<proactive::Scheduler>,
-    pub(crate) archive: Arc<archive::sync::Controller>,
-    pub(crate) feed: Arc<feed::Controller>,
-    pub(crate) studium: Arc<studium::controller::Controller>,
-    pub(crate) studium_notifications: Arc<studium::notification::Notifications>,
+    /// Serializes login-item changes, which span an OS call and a store write.
+    launch_at_login: tokio::sync::Mutex<()>,
     pub(crate) studium_views: Arc<studium::views::Views>,
-    network: archive::Client,
-    registry: Registry,
-    pub(crate) classifier: Arc<intelligence::classification::Controller>,
-    pub(crate) models: intelligence::models::Controller,
-    hardware: intelligence::models::Hardware,
-    ai_gate: tokio::sync::Mutex<()>,
-    maintenance_shutdown: Arc<std::sync::atomic::AtomicBool>,
-    pub(crate) operation_gate: Arc<operation_gate::AdmissionGate>,
-    pub(crate) restore_outcome: Option<backup::RestoreOutcome>,
 }
 
-pub(crate) struct AppMaintenanceGuard {
-    _gate: operation_gate::MaintenanceGuard,
-    proactive: Arc<proactive::Scheduler>,
-    studium_notifications: Arc<studium::notification::Notifications>,
-    studium_views: Arc<studium::views::Views>,
-    classifier_guard: Option<intelligence::classification::PauseGuard>,
-}
-
-impl AppMaintenanceGuard {
-    /// Keeps maintenance closed and work stopped for the rest of the process.
-    /// `RunEvent::Exit` stops the classifier by taking its batch guard, so an
-    /// exit requested while this guard is held must release that guard first,
-    /// or the main thread blocks forever and the window stops responding.
-    pub(crate) fn hold_until_exit(mut self) {
-        if let Some(classifier_guard) = self.classifier_guard.take() {
-            classifier_guard.release_for_exit();
-        }
-        std::mem::forget(self);
-    }
-}
-
-impl Drop for AppMaintenanceGuard {
-    fn drop(&mut self) {
-        drop(self.classifier_guard.take());
-        if let Err(error) = self.proactive.start() {
-            eprintln!("Proactive: 유지보수 후 스케줄러를 다시 시작하지 못했습니다: {error}");
-        }
-        if let Err(error) = self.studium_notifications.start() {
-            eprintln!("Studium: 유지보수 후 알림 수신을 다시 시작하지 못했습니다: {error}");
-        }
-        if let Err(error) = self.studium_views.start() {
-            eprintln!("Studium: 표시 재개 실패: {error}");
-        }
-    }
-}
-
-struct MaintenancePreparation {
-    reservation: Option<operation_gate::MaintenanceReservation>,
-    proactive: Arc<proactive::Scheduler>,
-    studium_notifications: Arc<studium::notification::Notifications>,
-    studium_views: Arc<studium::views::Views>,
-    armed: bool,
-}
-
-impl Drop for MaintenancePreparation {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        let proactive = self.proactive.clone();
-        let studium_notifications = self.studium_notifications.clone();
-        let studium_views = self.studium_views.clone();
-        tauri::async_runtime::spawn(async move {
-            proactive.resume_after_quiesce().await;
-            studium_notifications.resume_after_quiesce().await;
-            studium_views.resume_after_quiesce().await;
-        });
-    }
-}
-
-impl AppState {
-    pub(crate) async fn exclusive_maintenance(&self) -> Result<AppMaintenanceGuard, String> {
-        let (reservation, studium_completion) =
-            studium::jobs::reserve_maintenance(&self.operation_gate, &self.store, &self.studium)?;
-        let mut preparation = MaintenancePreparation {
-            reservation: Some(reservation),
-            proactive: self.proactive.clone(),
-            studium_notifications: self.studium_notifications.clone(),
-            studium_views: self.studium_views.clone(),
-            armed: true,
-        };
-        self.archive.cancel();
-        self.archive.bodies.cancel();
-        self.feed.cancel();
-        self.models.cancel();
-        // A command admitted before the reservation may start a download
-        // under the AI gate; cancel again once it has released the gate.
-        let ai_gate = self.ai_gate.lock().await;
-        self.models.cancel();
-        drop(ai_gate);
-        self.proactive.quiesce().await;
-        self.studium_notifications.quiesce().await;
-        self.studium_views.quiesce().await;
-        self.archive.wait().await;
-        self.archive.bodies.wait().await;
-        self.feed.wait().await;
-        if let Some(completion) = studium_completion {
-            completion.wait().await;
-        }
-        self.models.wait().await;
-        let gate = preparation
-            .reservation
-            .take()
-            .expect("maintenance reservation remains until exclusive acquisition")
-            .acquire()
-            .await?;
-        preparation.armed = false;
-        // A classification batch writes SQLite; exclude it from backup/restore
-        // snapshots and wait for one already in flight before returning.
-        let classifier_guard = self.classifier.quiesce().await;
-        Ok(AppMaintenanceGuard {
-            _gate: gate,
-            proactive: self.proactive.clone(),
-            studium_notifications: self.studium_notifications.clone(),
-            studium_views: self.studium_views.clone(),
-            classifier_guard: Some(classifier_guard),
-        })
+impl std::ops::Deref for AppState {
+    type Target = App;
+    fn deref(&self) -> &App {
+        &self.core
     }
 }
 
@@ -398,21 +280,22 @@ fn main() {
     let app = builder
         .setup(|app| {
             core::install_menu(app.handle())?;
-            let data_root = rhythm_core::paths::data_root(&app.config().identifier)
-                .map_err(std::io::Error::other)?;
-            let instance_lock = match core::lock_data_dir(&data_root) {
-                Ok(lock) => lock,
-                Err(error) => {
+            let opened = App::open(rhythm_core::app::Config {
+                identifier: app.config().identifier.clone(),
+                user_agent: USER_AGENT,
+                runtime: tauri::async_runtime::handle().inner().clone(),
+                shell: Arc::new(shell::AppShell(app.handle().clone())),
+            });
+            let core = match opened {
+                Ok(core) => core,
+                Err(OpenError::Locked(error)) => {
                     // Tauri panics for an Err returned from setup. An already-owned
                     // data directory is an ordinary rejected launch, not a crash.
                     eprintln!("{error}");
                     app.handle().exit(1);
                     return Ok(());
                 }
-            };
-            let restore_outcome = match backup::recover_pending_restore(&data_root) {
-                Ok(outcome) => outcome,
-                Err(error) => {
+                Err(OpenError::Restore(error)) => {
                     // The journal and every previous file stay in place, so a later
                     // launch retries. Explain instead of panicking out of setup.
                     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
@@ -424,14 +307,8 @@ fn main() {
                         .show(move |_| handle.exit(1));
                     return Ok(());
                 }
+                Err(error) => return Err(error.into()),
             };
-            backup::remove_stale_backup_snapshots(&data_root);
-            let store = Store::open(&rhythm_core::paths::database(&data_root))
-                .map_err(std::io::Error::other)?;
-            store
-                .catalog(&archive::definitions())
-                .map_err(std::io::Error::other)?;
-            let store = Arc::new(Mutex::new(store));
             let tray_available = match core::lifecycle::install_tray(app.handle()) {
                 Ok(()) => true,
                 Err(error) => {
@@ -442,7 +319,7 @@ fn main() {
                 }
             };
             let lifecycle: Arc<dyn core::lifecycle::LifecyclePreferences> =
-                Arc::new(StoredLifecycle(store.clone()));
+                Arc::new(StoredLifecycle(core.store.clone()));
             let launch = core::lifecycle::LaunchMode::current();
             // A hidden login launch requires the tray as its restore path.
             // Without it reveal the window without taking focus; manual
@@ -454,80 +331,23 @@ fn main() {
                     core::lifecycle::show_main_window(app.handle())?;
                 }
             }
-            let operation_gate = Arc::new(operation_gate::AdmissionGate::default());
-            let archive = archive::sync::Controller::new();
-            let studium = studium::controller::Controller::new();
-            let studium_notifications = studium::notification::Notifications::new(
-                store.clone(),
-                Arc::downgrade(&studium),
-                operation_gate.clone(),
-                Arc::new(shell::AppShell(app.handle().clone())),
-                tauri::async_runtime::handle().inner().clone(),
-            );
-            studium.attach_notifications(&studium_notifications);
             let studium_views = studium::views::Views::new(
-                store.clone(),
-                Arc::downgrade(&studium),
-                operation_gate.clone(),
+                core.store.clone(),
+                Arc::downgrade(&core.studium),
+                core.operation_gate.clone(),
                 app.handle().clone(),
             );
-            let network = archive::client().map_err(std::io::Error::other)?;
-            let feed = Arc::new(feed::Controller::default());
-            let proactive = proactive::Scheduler::new(
-                store.clone(),
-                archive.clone(),
-                feed.clone(),
-                data_root.clone(),
-                Arc::new(shell::AppShell(app.handle().clone())),
-                tauri::async_runtime::handle().inner().clone(),
-                USER_AGENT,
-                operation_gate.clone(),
-            );
-            // Bundled llama.cpp builds; the private runtime directory holds the
-            // embedding server's socket or per-launch access key.
-            let llama = rhythm_core::paths::llama(
-                &rhythm_core::paths::resource_dir().map_err(std::io::Error::other)?,
-            );
-            let runtime = rhythm_core::paths::embedding_runtime(&data_root);
-            // A server that a killed or crashed Rhythm left running still holds
-            // its model in memory (#273).
-            #[cfg(unix)]
-            intelligence::stop_orphan(&runtime);
-            let classifier = Arc::new(intelligence::classification::Controller::new(
-                &llama, &runtime,
-            ));
-            let hardware = intelligence::models::hardware(&data_root);
-            let maintenance_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            shell::forward_events(app.handle().clone(), core.events());
             app.manage(updater::State::default());
             app.manage(AppState {
-                launch_at_login: Mutex::new(()),
-                _instance_lock: instance_lock,
-                store,
-                data_root,
+                core,
                 lifecycle,
                 tray_available,
-                proactive: Arc::new(proactive),
-                registry: Registry::new(archive.clone(), studium.clone(), feed.clone()),
-                studium,
-                studium_notifications: studium_notifications.clone(),
-                studium_views: studium_views.clone(),
-                archive,
-                feed,
-                network,
-                classifier,
-                models: intelligence::models::Controller::new(USER_AGENT),
-                hardware,
-                ai_gate: tokio::sync::Mutex::new(()),
-                maintenance_shutdown: maintenance_shutdown.clone(),
-                operation_gate,
-                restore_outcome,
+                launch_at_login: tokio::sync::Mutex::new(()),
+                studium_views,
             });
-            if let Err(error) = studium_notifications.start() {
-                eprintln!("Studium: 알림 수신을 시작하지 못했습니다: {error}");
-            }
-            if let Err(error) = studium_views.start() {
-                eprintln!("Studium: 표시 수신 시작 실패: {error}");
-            }
+            let state = app.state::<AppState>();
+            state.start(Some(state.studium_views.clone()));
             dispatch_notification_arguments(
                 app.handle(),
                 &std::env::args_os()
@@ -538,31 +358,8 @@ fn main() {
             notification_launches_ready(app.handle());
             tauri::async_runtime::spawn(updater::run_auto_check(
                 app.handle().clone(),
-                maintenance_shutdown.clone(),
+                state.maintenance_shutdown.clone(),
             ));
-            let state = app.state::<AppState>();
-            tauri::async_runtime::spawn(intelligence::classification::run(
-                state.classifier.clone(),
-                state.store.clone(),
-                state.models.clone(),
-                state.data_root.clone(),
-                maintenance_shutdown.clone(),
-            ));
-            tauri::async_runtime::spawn(archive::run_auto_trash(
-                state.store.clone(),
-                state.operation_gate.clone(),
-                maintenance_shutdown.clone(),
-            ));
-            tauri::async_runtime::spawn(archive::run_notice_dates(
-                state.store.clone(),
-                state.operation_gate.clone(),
-                maintenance_shutdown,
-            ));
-            if let Err(error) = app.state::<AppState>().proactive.start() {
-                // Proactive operation is optional. A scheduler start failure must
-                // not take away archive, AI or settings access.
-                eprintln!("Proactive: 스케줄러를 시작하지 못했습니다: {error}");
-            }
             #[cfg(unix)]
             tauri::async_runtime::spawn(quit_on_signal(app.handle().clone()));
             Ok(())
@@ -694,34 +491,7 @@ fn main() {
                 return; // A rejected second launch never opened the store or worker.
             };
             state.studium_views.save_exit_geometry();
-            state
-                .maintenance_shutdown
-                .store(true, std::sync::atomic::Ordering::Release);
-            // Serialize cancellation against a start already admitted by the
-            // gate but not yet registered. Starts recheck shutdown under Store.
-            let studium_completion =
-                studium::jobs::cancel_at_boundary(&state.store, &state.studium)
-                    .ok()
-                    .flatten();
-            state.registry.stop_all();
-            state.models.cancel();
-            tauri::async_runtime::block_on(async {
-                state.studium_views.shutdown().await;
-                state.studium_notifications.shutdown().await;
-                state.proactive.shutdown().await;
-                state.archive.wait().await;
-                state.archive.bodies.wait().await;
-                state.feed.wait().await;
-                if let Some(completion) = studium_completion {
-                    completion.wait().await;
-                } else {
-                    // A poisoned Store prevented capture, but Registry still
-                    // signalled cancellation; exit must join that job as well.
-                    state.studium.wait().await;
-                }
-                state.models.wait().await;
-                state.classifier.shutdown().await;
-            });
+            tauri::async_runtime::block_on(state.shutdown());
         }
         _ => {}
     });
