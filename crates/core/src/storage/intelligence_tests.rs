@@ -753,6 +753,9 @@ fn classification_roundtrip_is_model_and_config_scoped() {
     assert!(store.ai_save_preferences(&preferences).is_err());
     preferences.embedding_model_id = None;
     store.ai_save_preferences(&preferences).unwrap();
+    // The generation row shares the hash, so removing it keeps the vectors.
+    store.ai_remove_model(&generation.id).unwrap();
+    assert!(store.ai_embedding(1, revision, &model_a).unwrap().is_some());
     store.ai_remove_model(&model.id).unwrap();
     assert!(store.ai_embedding(1, revision, &model_a).unwrap().is_none());
     assert!(store

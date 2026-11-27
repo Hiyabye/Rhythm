@@ -149,7 +149,11 @@ fn reminder_window(
         Some(time) => {
             let at = day.and_time(NaiveTime::parse_from_str(time, "%H:%M").ok()?);
             // An on-time reminder would otherwise have an empty window.
-            let grace = if minutes == 0 { ON_TIME_GRACE_MINUTES } else { 0 };
+            let grace = if minutes == 0 {
+                ON_TIME_GRACE_MINUTES
+            } else {
+                0
+            };
             (at, at + Duration::minutes(grace))
         }
         None => (
