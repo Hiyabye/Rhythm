@@ -20,40 +20,26 @@ rusqlite = { version = "0.38", default-features = false, features = ["bundled", 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-scraper = { version = "0.24", default-features = false }
 sha2 = "0.10"
 url = "2"
 base64 = "0.22"
-getrandom = "0.3"
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 rhythm-core = { path = "../crates/core" }
-rhythm-embed = { path = "../crates/embed" }
-rhythm-feed = { path = "../crates/feed" }
-rhythm-sources = { path = "../crates/sources", features = ["studium"] }
 
 # sha2 0.10 otherwise uses its software compressor on ARM. Retain full-file
 # verification; enable the reviewed accelerator only on the tested Apple target.
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 sha2 = { version = "0.10", features = ["asm"] }
-[target.'cfg(target_os = "macos")'.dependencies]
-# Credentials (the eClass login) stay in the OS credential store, never SQLite or a file.
-keyring = { version = "4.2", default-features = false, features = ["v1", "apple-native-keyring-store"] }
 # Windows registers login startup in the per-user Run key instead.
 [target.'cfg(not(windows))'.dependencies]
 tauri-plugin-autostart = "2.7"
-[target.'cfg(windows)'.dependencies]
-keyring = { version = "4.2", default-features = false, features = ["v1", "windows-native-keyring-store"] }
 
 
 [dev-dependencies]
-encoding_rs = "0.8"
 rhythm-core = { path = "../crates/core", features = ["test-support"] }
-rhythm-feed = { path = "../crates/feed", features = ["test-keys"] }
 minisign-verify = "=0.3.0"
 tempfile = "3"
-http = "1"
 tokio = { version = "1", features = ["test-util"] }
