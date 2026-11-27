@@ -4,24 +4,23 @@
 //! tried again on a later pass while its todo is still ahead. A reserved
 //! reminder whose handoff fails is never sent again.
 use super::scheduler::{lock_store, NotificationState};
+use crate::shell::{Event, Shell};
 use crate::{archive::sync::SharedStore, storage::calendar::DueReminder};
 use chrono::NaiveDate;
+use std::sync::Arc;
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter};
 use tokio::sync::watch;
 
 #[cfg(any(windows, test))]
-pub(crate) fn token_prefix() -> &'static str {
-    crate::core::windows_identity::current()
-        .reminder_prefix
-        .as_str()
+pub fn token_prefix() -> &'static str {
+    crate::windows_identity::current().reminder_prefix.as_str()
 }
 #[cfg(any(windows, target_os = "macos"))]
 const UNCERTAIN: &str = "할 일 알림 전달 결과를 확인하지 못했습니다. 자동 재전송하지 않습니다.";
 
 pub(super) async fn deliver(
     store: &SharedStore,
-    app: &AppHandle,
+    shell: &Arc<dyn Shell>,
     notifications: &mut NotificationState,
     stop: &watch::Receiver<bool>,
 ) -> Result<(), String> {
@@ -36,7 +35,7 @@ pub(super) async fn deliver(
     if due.is_empty() {
         return Ok(());
     }
-    let authorization = crate::notification_permission::notification_authorization_status().await;
+    let authorization = crate::notification::permission::notification_authorization_status().await;
     if !super::scheduler::notification_authorization_permits(&authorization, false) {
         return Ok(());
     }
@@ -47,11 +46,11 @@ pub(super) async fn deliver(
         let token = token()?;
         #[cfg(windows)]
         {
-            let _ = app;
+            let _ = shell;
             // Preparing the toast can fail without consuming the latch or a rate slot.
             let (title, body) = text(&reminder, &clock);
             let store = lock_store(store)?;
-            let prepared = super::windows_notification::prepare_reminder(&title, &body, &token)?;
+            let prepared = crate::notification::windows::prepare_reminder(&title, &body, &token)?;
             if store
                 .calendar_reminder_reserve(reminder.todo_id, &token, now)?
                 .is_none()
@@ -59,7 +58,7 @@ pub(super) async fn deliver(
                 continue;
             }
             // The synchronous handoff shares Store with settings and disable.
-            super::windows_notification::show(prepared).map_err(|_| UNCERTAIN.to_string())?;
+            crate::notification::windows::show(prepared).map_err(|_| UNCERTAIN.to_string())?;
         }
         #[cfg(target_os = "macos")]
         {
@@ -77,7 +76,7 @@ pub(super) async fn deliver(
                 .await
                 .map_err(|_| UNCERTAIN.to_string())?;
             let store = store.clone();
-            let app = app.clone();
+            let shell = shell.clone();
             let pending = notifications.pending_reminder.clone();
             let accepting = notifications.accepting_callbacks.clone();
             let callback_gate = notifications.callback_gate.clone();
@@ -107,14 +106,14 @@ pub(super) async fn deliver(
                 if !accepting.load(std::sync::atomic::Ordering::Acquire) {
                     return;
                 }
-                if let Err(error) = activate(&store, &app, &pending, &token) {
+                if let Err(error) = activate(&store, &shell, &pending, &token) {
                     eprintln!("Calendar reminder activation: {error}");
                 }
             });
         }
         #[cfg(not(any(windows, target_os = "macos")))]
         {
-            let _ = (app, &reminder, &clock, token);
+            let _ = (shell, &reminder, &clock, token);
             return Ok(());
         }
     }
@@ -126,7 +125,7 @@ pub(super) async fn deliver(
 /// window that subscribes later.
 pub(super) fn activate(
     store: &SharedStore,
-    app: &AppHandle,
+    shell: &Arc<dyn Shell>,
     pending: &Mutex<Option<String>>,
     token: &str,
 ) -> Result<bool, String> {
@@ -136,14 +135,13 @@ pub(super) fn activate(
     *pending
         .lock()
         .map_err(|_| "할 일 알림 이동 정보를 저장할 수 없습니다.")? = Some(day.clone());
-    let handle = app.clone();
-    app.run_on_main_thread(move || {
-        if let Err(error) = crate::core::lifecycle::show_main_window(&handle) {
+    let handle = shell.clone();
+    shell.run_on_main_thread(Box::new(move || {
+        if let Err(error) = handle.show_main_window() {
             eprintln!("Lifecycle: 알림 창 복원 실패: {error}");
         }
-    })
-    .map_err(|e| e.to_string())?;
-    let _ = app.emit("calendar://reminder-clicked", day);
+    }))?;
+    shell.emit(Event::ReminderClicked(day));
     Ok(true)
 }
 
@@ -154,8 +152,8 @@ fn token() -> Result<String, String> {
 }
 
 #[cfg(any(windows, test))]
-pub(crate) fn token_from_uri(uri: &str) -> Option<&str> {
-    crate::core::windows_identity::current().reminder_token_from_uri(uri)
+pub fn token_from_uri(uri: &str) -> Option<&str> {
+    crate::windows_identity::current().reminder_token_from_uri(uri)
 }
 
 /// Title and body in the user's 12/24-hour format, like the calendar shows them.

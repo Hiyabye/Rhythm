@@ -1,4 +1,5 @@
 use super::notification::{self, DeliveryItem};
+use crate::shell::{Event, Shell};
 use crate::{
     archive::{
         self,
@@ -22,9 +23,11 @@ use std::{
     },
     time::Duration,
 };
-use tauri::async_runtime::JoinHandle;
-use tauri::AppHandle;
-use tokio::sync::{oneshot, watch};
+use tokio::{
+    runtime::Handle,
+    sync::{oneshot, watch},
+    task::JoinHandle,
+};
 
 const WAKE_INTERVAL: Duration = Duration::from_secs(15);
 
@@ -33,7 +36,11 @@ pub struct Scheduler {
     archive: Arc<Controller>,
     feed: Arc<crate::feed::Controller>,
     root: PathBuf,
-    app: AppHandle,
+    shell: Arc<dyn Shell>,
+    /// Where the loop runs; `start` is called from setup, outside any runtime.
+    runtime: Handle,
+    /// The app's `Rhythm/<version>` for the feed and eClass requests.
+    user_agent: &'static str,
     operation_gate: Arc<AdmissionGate>,
     control: Mutex<Control>,
     pending_activation: Arc<Mutex<Option<notification::NotificationActivation>>>,
@@ -90,12 +97,15 @@ pub(super) struct NotificationState {
 }
 
 impl Scheduler {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         store: sync::SharedStore,
         archive: Arc<Controller>,
         feed: Arc<crate::feed::Controller>,
         root: PathBuf,
-        app: AppHandle,
+        shell: Arc<dyn Shell>,
+        runtime: Handle,
+        user_agent: &'static str,
         operation_gate: Arc<AdmissionGate>,
     ) -> Self {
         let (sender, _) = watch::channel(false);
@@ -107,7 +117,9 @@ impl Scheduler {
             archive,
             feed,
             root,
-            app,
+            shell,
+            runtime,
+            user_agent,
             operation_gate,
             control: Mutex::new(Control {
                 sender,
@@ -139,7 +151,8 @@ impl Scheduler {
         let archive = self.archive.clone();
         let feed = self.feed.clone();
         let root = self.root.clone();
-        let app = self.app.clone();
+        let shell = self.shell.clone();
+        let user_agent = self.user_agent;
         let operation_gate = self.operation_gate.clone();
         let mut notification_state = NotificationState {
             #[cfg(target_os = "macos")]
@@ -155,18 +168,19 @@ impl Scheduler {
             operation_gate: operation_gate.clone(),
         };
         let (done_sender, done_receiver) = oneshot::channel();
-        control.task = Some(tauri::async_runtime::spawn(async move {
+        control.task = Some(self.runtime.spawn(async move {
             let mut interval = tokio::time::interval(WAKE_INTERVAL);
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
                         if let Ok(_lease) = operation_gate.shared().await {
-                            run_feed(&store, &feed, &root).await;
+                            run_feed(&store, &feed, &root, user_agent).await;
                             if let Err(error) = cycle(
                                 &store,
                                 &archive,
                                 &root,
-                                &app,
+                                &shell,
+                                user_agent,
                                 &mut notification_state,
                                 &mut stop,
                             ).await {
@@ -262,14 +276,14 @@ impl Scheduler {
         if !self.accepting_callbacks.load(Ordering::Acquire) {
             return Ok(false);
         }
-        super::reminders::activate(&self.store, &self.app, &self.pending_reminder, token)
+        super::reminders::activate(&self.store, &self.shell, &self.pending_reminder, token)
     }
 
     /// Consume a Windows protocol activation after the store is initialized.
     /// Both startup argv and second-instance argv must call this same method.
     #[cfg(windows)]
     pub async fn handle_windows_activation(&self, uri: &str) -> Result<bool, String> {
-        let Some(token) = super::windows_notification::token_from_uri(uri) else {
+        let Some(token) = crate::notification::windows::token_from_uri(uri) else {
             return Ok(false);
         };
         let _lease = self.operation_gate.shared().await?;
@@ -302,15 +316,13 @@ impl Scheduler {
                 .map_err(|_| "알림 이동 정보를 저장할 수 없습니다.")? = Some(activation.clone());
             activation
         };
-        let app = self.app.clone();
-        self.app
-            .run_on_main_thread(move || {
-                if let Err(error) = crate::core::lifecycle::show_main_window(&app) {
-                    eprintln!("Lifecycle: 알림 창 복원 실패: {error}");
-                }
-            })
-            .map_err(|e| e.to_string())?;
-        notification::emit_activation(&self.app, activation);
+        let shell = self.shell.clone();
+        self.shell.run_on_main_thread(Box::new(move || {
+            if let Err(error) = shell.show_main_window() {
+                eprintln!("Lifecycle: 알림 창 복원 실패: {error}");
+            }
+        }))?;
+        self.shell.emit(Event::NoticeClicked(activation));
         Ok(true)
     }
 }
@@ -331,9 +343,7 @@ pub(super) fn resolved_interval(requested: u32, profile: &str) -> u32 {
     }
 }
 
-pub(super) fn lock_store(
-    store: &sync::SharedStore,
-) -> Result<std::sync::MutexGuard<'_, Store>, String> {
+pub fn lock_store(store: &sync::SharedStore) -> Result<std::sync::MutexGuard<'_, Store>, String> {
     store
         .lock()
         .map_err(|_| "로컬 저장소에 접근할 수 없습니다.".to_string())
@@ -535,7 +545,12 @@ pub(super) async fn run_scheduled_task<H: archive::cybercampus::client::Http + '
 /// The feed sync (#177 P2): at launch and then on the feed controller's
 /// schedule while the notices extension is on, whether or not the opt-in
 /// scheduler is. Maintenance and exit cancel it through `quiesce`.
-async fn run_feed(store: &sync::SharedStore, feed: &crate::feed::Controller, root: &Path) {
+async fn run_feed(
+    store: &sync::SharedStore,
+    feed: &crate::feed::Controller,
+    root: &Path,
+    user_agent: &'static str,
+) {
     if !feed.due() || !with_store(store, |s| s.enabled(crate::extensions::NOTICES)).unwrap_or(false)
     {
         return;
@@ -544,7 +559,7 @@ async fn run_feed(store: &sync::SharedStore, feed: &crate::feed::Controller, roo
         .run(
             store,
             root,
-            &crate::feed::transport::HttpsTransport::new(crate::USER_AGENT),
+            &crate::feed::transport::HttpsTransport::new(user_agent),
         )
         .await
     {
@@ -556,7 +571,8 @@ async fn cycle(
     store: &sync::SharedStore,
     archive: &Arc<Controller>,
     root: &Path,
-    app: &AppHandle,
+    shell: &Arc<dyn Shell>,
+    user_agent: &'static str,
     notifications: &mut NotificationState,
     stop: &mut watch::Receiver<bool>,
 ) -> Result<(), String> {
@@ -567,9 +583,7 @@ async fn cycle(
     reconcile_tasks(store, &prefs, &energy)?;
     if prefs.scheduler_enabled && !prefs.scheduler_paused {
         let due = with_store(store, |store| store.proactive_due_tasks())?;
-        let http = Arc::new(archive::cybercampus::client::Reqwest::new(
-            crate::USER_AGENT,
-        ));
+        let http = Arc::new(archive::cybercampus::client::Reqwest::new(user_agent));
         let mut failures = 0;
         let mut successes = 0;
         let mut cancelled = 0;
@@ -588,7 +602,7 @@ async fn cycle(
             let (outcome, discovery_error) = wait_for_scheduled_task_and_notifications(
                 run_scheduled_task(store, archive, root, &http, task, &mut task_stop),
                 store,
-                app,
+                shell,
                 notifications,
                 stop,
             )
@@ -607,7 +621,7 @@ async fn cycle(
             }
             let (updated, extension, subscribed) = task_inputs(store, &source_id)?;
             if can_admit_task(stop, &updated, extension, subscribed) {
-                discover_and_deliver(store, &updated, app, notifications, stop).await?;
+                discover_and_deliver(store, &updated, shell, notifications, stop).await?;
             }
         }
         if !due.is_empty() {
@@ -640,8 +654,8 @@ async fn cycle(
     if !stop_requested(stop) {
         let (current, _) = settings(store)?;
         if should_discover_notifications(&current) {
-            discover_and_deliver(store, &current, app, notifications, stop).await?;
-            super::reminders::deliver(store, app, notifications, stop).await?;
+            discover_and_deliver(store, &current, shell, notifications, stop).await?;
+            super::reminders::deliver(store, shell, notifications, stop).await?;
         }
     }
     Ok(())
@@ -650,7 +664,7 @@ async fn cycle(
 async fn wait_for_scheduled_task_and_notifications<F>(
     task: F,
     store: &sync::SharedStore,
-    app: &AppHandle,
+    shell: &Arc<dyn Shell>,
     notifications: &mut NotificationState,
     stop: &mut watch::Receiver<bool>,
 ) -> Result<(ProactiveOutcome, Option<String>), String>
@@ -670,13 +684,13 @@ where
                 match settings(store) {
                     Ok((prefs, _)) if should_discover_notifications(&prefs) => {
                         if let Err(error) =
-                            discover_and_deliver(store, &prefs, app, notifications, stop).await
+                            discover_and_deliver(store, &prefs, shell, notifications, stop).await
                         {
                             notification_error.get_or_insert(error);
                         }
                         // A long sync must not hold a reminder past its moment.
                         if let Err(error) =
-                            super::reminders::deliver(store, app, notifications, stop).await
+                            super::reminders::deliver(store, shell, notifications, stop).await
                         {
                             notification_error.get_or_insert(error);
                         }
@@ -872,7 +886,7 @@ pub(super) fn handoff_validated<P>(
 async fn discover_and_deliver(
     store: &sync::SharedStore,
     prefs: &ProactiveSettings,
-    app: &AppHandle,
+    shell: &Arc<dyn Shell>,
     notifications: &mut NotificationState,
     stop: &mut watch::Receiver<bool>,
 ) -> Result<(), String> {
@@ -890,12 +904,12 @@ async fn discover_and_deliver(
     } else {
         None
     };
-    let authorization = crate::notification_permission::notification_authorization_status().await;
+    let authorization = crate::notification::permission::notification_authorization_status().await;
     if !notification_authorization_permits(&authorization, quiet) {
         return Ok(());
     }
     #[cfg(windows)]
-    let windows_token = super::windows_notification::new_token()?;
+    let windows_token = crate::notification::windows::new_token()?;
     let recent = with_store(store, |store| {
         store.proactive_recent_delivery_attempts(notification::RATE_WINDOW_SECS)
     })?;
@@ -1001,7 +1015,7 @@ async fn discover_and_deliver(
     // one lock immediately before handing the digest to the operating system.
     #[cfg(windows)]
     {
-        let _ = (app, stop);
+        let _ = (shell, stop);
         handoff_validated(
             store,
             deliver,
@@ -1009,9 +1023,9 @@ async fn discover_and_deliver(
             |_, deliver| {
                 let (title, body) =
                     notification::digest_text(deliver).ok_or("알림 내용을 만들지 못했습니다.")?;
-                super::windows_notification::prepare(&title, &body, &windows_token)
+                crate::notification::windows::prepare(&title, &body, &windows_token)
             },
-            super::windows_notification::show,
+            crate::notification::windows::show,
         )?;
     }
     #[cfg(not(windows))]
@@ -1021,7 +1035,7 @@ async fn discover_and_deliver(
         return Ok(());
     }
     #[cfg(target_os = "macos")]
-    match notification::show_digest(app, &deliver).await {
+    match notification::show_digest(&deliver).await {
         Ok(Some(handle)) => {
             let attempts = deliver
                 .iter()
@@ -1031,7 +1045,7 @@ async fn discover_and_deliver(
                 store.proactive_mark_attempted_batch(&attempts).map(|_| ())
             })?;
             let store = store.clone();
-            let app = app.clone();
+            let shell = shell.clone();
             let pending_activation = notifications.pending_activation.clone();
             let accepting_callbacks = notifications.accepting_callbacks.clone();
             let callback_gate = notifications.callback_gate.clone();
@@ -1076,26 +1090,24 @@ async fn discover_and_deliver(
                                     *pending = Some(activation.clone());
                                 }
                                 drop(_lease);
-                                let handle = app.clone();
+                                let handle = shell.clone();
                                 let main_thread_gate = callback_gate.clone();
                                 let main_thread_accepting = accepting_callbacks.clone();
-                                if let Err(error) = app.run_on_main_thread(move || {
+                                if let Err(error) = shell.run_on_main_thread(Box::new(move || {
                                     let Ok(_main_thread_guard) = main_thread_gate.lock() else {
                                         return;
                                     };
                                     if !main_thread_accepting.load(Ordering::Acquire) {
                                         return;
                                     }
-                                    if let Err(error) =
-                                        crate::core::lifecycle::show_main_window(&handle)
-                                    {
+                                    if let Err(error) = handle.show_main_window() {
                                         eprintln!("Lifecycle: 알림 창 복원 실패: {error}");
                                     }
-                                }) {
+                                })) {
                                     eprintln!("Lifecycle: 알림 창 복원 예약 실패: {error}");
                                     return;
                                 }
-                                notification::emit_activation(&app, activation);
+                                shell.emit(Event::NoticeClicked(activation));
                             }
                         }
                     }

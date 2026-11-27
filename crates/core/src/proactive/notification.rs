@@ -3,7 +3,6 @@ use crate::storage::{
     Store,
 };
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
 
 pub(super) const CANDIDATE_LIMIT: usize = 100;
 
@@ -177,14 +176,12 @@ pub(super) fn activation_for_items(items: &[DeliveryItem]) -> Option<Notificatio
 
 #[cfg(target_os = "macos")]
 pub(super) async fn show_digest(
-    app: &AppHandle,
     items: &[DeliveryItem],
 ) -> Result<Option<mac_usernotifications::NotificationHandle>, String> {
     use std::time::Duration;
     let Some((title, body)) = digest_text(items) else {
         return Ok(None);
     };
-    let _ = app;
     // The crate closes the delivered alert when this elapses and resolves the
     // response as `Expired`. Thirty minutes keeps the notice visible while the
     // user is away without leaving a response task pending indefinitely.
@@ -196,7 +193,4 @@ pub(super) async fn show_digest(
         .await
         .map(Some)
         .map_err(|error| error.to_string())
-}
-pub(super) fn emit_activation(app: &AppHandle, activation: NotificationActivation) {
-    let _ = app.emit("proactive://notification-clicked", activation);
 }

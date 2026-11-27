@@ -1,8 +1,8 @@
 # Lifecycle, scheduler and notifications
 
-Area instructions for `src-tauri/src/proactive/`, `src-tauri/src/core/lifecycle.rs` and `storage/proactive.rs`. The root `AGENTS.md` (project-wide rules) applies too.
+Area instructions for `crates/core/src/proactive/` (in `rhythm-core`), the app's `src-tauri/src/proactive/` (commands and the Windows validation helper), `src-tauri/src/core/lifecycle.rs` and `storage/proactive.rs`. The root `AGENTS.md` (project-wide rules) applies too.
 
-- `src-tauri/src/proactive/`: `scheduler.rs` runs persisted source tasks while the app is open; `notification.rs` discovers, filters, batches and routes notification actions; `reminders.rs` sends due todo reminders from the scheduler loop. `core/lifecycle.rs` owns tray/window/login behavior; settings and durable event/task state live in `storage/proactive.rs` (with `storage/proactive/{model,tasks}.rs`) and schema migrations 005–007.
+- `crates/core/src/proactive/`: `scheduler.rs` runs persisted source tasks while the app is open (it takes the app's `Shell`, runtime handle and User-Agent at construction); `notification.rs` discovers, filters, batches and routes notification actions; `reminders.rs` sends due todo reminders from the scheduler loop. The app keeps the commands (`src-tauri/src/proactive/mod.rs`), and its `src-tauri/src/core/lifecycle.rs` owns tray/window/login behavior; settings and durable event/task state live in `storage/proactive.rs` (with `storage/proactive/{model,tasks}.rs`) and schema migrations 005–007.
 
 ## Invariants
 
@@ -19,7 +19,7 @@ Focused lifecycle/proactive checks:
 ```sh
 cargo test --locked -p rhythm core::lifecycle
 cargo test --locked -p rhythm-core storage::proactive_tests
-cargo test --locked -p rhythm proactive::tests
+cargo test --locked -p rhythm-core proactive::tests
 ```
 
 - Native notification, scheduler and login evidence is recorded once in `docs/ROADMAP.md#verification-status` (macOS) and `docs/WINDOWS_VALIDATION.md`. Do not generalize beyond those records.

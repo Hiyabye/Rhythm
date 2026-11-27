@@ -1,49 +1,14 @@
-mod notification;
-mod reminders;
-pub mod scheduler;
+//! The proactive commands; the scheduler, notification pipeline and todo
+//! reminders are `rhythm_core::proactive`.
 #[cfg(windows)]
 pub(crate) use rhythm_core::notification::windows as windows_notification;
+pub use rhythm_core::proactive::*;
 
 use crate::{
-    storage::{
-        proactive::{ProactiveHistoryItem, ProactiveSchedulerStatus, ProactiveSettings},
-        Store,
-    },
+    storage::proactive::{ProactiveHistoryItem, ProactiveSettings},
     AppState,
 };
-use serde::Serialize;
 use tauri::State;
-
-pub use notification::NotificationActivation;
-#[cfg(windows)]
-pub(crate) use reminders::{
-    token_from_uri as reminder_token_from_uri, token_prefix as reminder_prefix,
-};
-pub use scheduler::Scheduler;
-
-#[derive(Clone, Debug, Serialize)]
-pub struct ProactiveSnapshot {
-    pub settings: ProactiveSettings,
-    pub scheduler: ProactiveSchedulerStatus,
-    pub history: Vec<ProactiveHistoryItem>,
-    /// One-shot fallback for a notification click received before the UI subscribed.
-    pub pending_activation: Option<NotificationActivation>,
-    /// Tauri's desktop permission API reports a default rather than authorization.
-    pub notification_permission: &'static str,
-}
-
-fn snapshot(
-    store: &Store,
-    pending_activation: Option<NotificationActivation>,
-) -> Result<ProactiveSnapshot, String> {
-    Ok(ProactiveSnapshot {
-        settings: store.proactive_settings()?,
-        scheduler: store.proactive_scheduler_status()?,
-        history: store.proactive_history(50)?,
-        pending_activation,
-        notification_permission: "unknown",
-    })
-}
 
 #[tauri::command]
 pub async fn proactive_snapshot(state: State<'_, AppState>) -> Result<ProactiveSnapshot, String> {
@@ -63,16 +28,6 @@ pub async fn proactive_save(
     let settings = preserve_lifecycle_settings(settings, &persisted_settings);
     store.proactive_save_settings(&settings)?;
     snapshot(&store, state.proactive.take_activation()?)
-}
-
-fn preserve_lifecycle_settings(
-    mut settings: ProactiveSettings,
-    persisted: &ProactiveSettings,
-) -> ProactiveSettings {
-    settings.close_to_background = persisted.close_to_background;
-    settings.launch_at_login = persisted.launch_at_login;
-    settings.start_hidden = persisted.start_hidden;
-    settings
 }
 
 #[tauri::command]
@@ -109,5 +64,3 @@ pub async fn calendar_reminder_activation(
 
 #[cfg(all(test, windows))]
 mod native_validation;
-#[cfg(test)]
-mod tests;
