@@ -50,6 +50,26 @@ impl Connector {
             vault: Vault::memory(),
         }
     }
+    /// The user's explicit save: logs in first (this attempt ignores the
+    /// account-lock guard; success clears it) and stores the login only when
+    /// eClass accepts it.
+    pub async fn save_login<H: Http>(
+        &self,
+        http: &H,
+        store: &SharedStore,
+        credentials: &credentials::Credentials,
+        cancel: &AtomicBool,
+    ) -> Result<(), String> {
+        self.session.login(http, store, credentials, cancel).await?;
+        self.vault.save(credentials)
+    }
+    /// Deletes the stored login, the in-memory session and the account-lock
+    /// guard.
+    pub async fn forget_login(&self, store: &SharedStore) -> Result<(), String> {
+        self.vault.clear()?;
+        self.session.reset().await;
+        with_store(store, |s| s.cybercampus_login_clear())
+    }
 }
 
 /// True for resources this connector downloads with the session.
@@ -93,7 +113,7 @@ pub async fn sync<H: Http>(
     let vault = &connector.vault;
     let request = |path: &'static str, form: Option<Vec<(&'static str, String)>>| async move {
         session
-            .request(http, vault, path, form, PAGE_LIMIT, cancel)
+            .request(http, vault, store, path, form, PAGE_LIMIT, cancel)
             .await
     };
     (progress.report)("사이버캠퍼스에 로그인하고 있습니다.");
@@ -268,9 +288,15 @@ async fn notices<H: Http>(
     resource_bytes: &AtomicU64,
 ) -> Result<(), String> {
     let request = |path: &'static str, form: Vec<(&'static str, String)>| {
-        connector
-            .session
-            .request(http, &connector.vault, path, Some(form), PAGE_LIMIT, cancel)
+        connector.session.request(
+            http,
+            &connector.vault,
+            store,
+            path,
+            Some(form),
+            PAGE_LIMIT,
+            cancel,
+        )
     };
     let mut rows = Vec::new();
     for page in 0..NOTICE_PAGES {
@@ -315,6 +341,7 @@ async fn notices<H: Http>(
         match notice(
             connector,
             http,
+            store,
             cancel,
             course,
             &row,
@@ -369,6 +396,7 @@ async fn notices<H: Http>(
 async fn notice<H: Http>(
     connector: &Connector,
     http: &H,
+    store: &SharedStore,
     cancel: &AtomicBool,
     course: &parser::Course,
     row: &parser::NoticeRow,
@@ -381,6 +409,7 @@ async fn notice<H: Http>(
         .request(
             http,
             &connector.vault,
+            store,
             "/ilos/cls/st/notice/notice_view_pop.acl",
             Some(vec![("ARTL_NUM", row.seq.clone())]),
             PAGE_LIMIT,
@@ -398,6 +427,7 @@ async fn notice<H: Http>(
                 .request(
                     http,
                     &connector.vault,
+                    store,
                     if files.path == "/ilos/co/efile_list.acl" {
                         "/ilos/co/efile_list.acl"
                     } else {
@@ -470,6 +500,7 @@ async fn assignments<H: Http>(
         .request(
             http,
             &connector.vault,
+            store,
             "/ilos/cls/st/activity/activity_list.acl",
             Some(vec![
                 ("type", "report".into()),
@@ -500,6 +531,7 @@ async fn assignments<H: Http>(
             .request(
                 http,
                 &connector.vault,
+                store,
                 &format!(
                     "/ilos/cls/st/report/report_view_form.acl?RT_SEQ={}",
                     row.seq
@@ -569,7 +601,7 @@ pub async fn download<H: Http>(
         };
         let response = connector
             .session
-            .request(http, &connector.vault, &path, None, limit, cancel)
+            .request(http, &connector.vault, store, &path, None, limit, cancel)
             .await?;
         sync::install_resource(
             store,
@@ -621,7 +653,7 @@ impl Status {
     pub fn read(connector: &Connector, store: &SharedStore) -> Result<Self, String> {
         Ok(Self {
             id: connector.vault.load()?.map(|credentials| credentials.id),
-            rejected: connector.session.rejected(),
+            rejected: with_store(store, |s| s.cybercampus_login_stopped())?,
             courses: with_store(store, |s| s.cybercampus_courses())?,
         })
     }

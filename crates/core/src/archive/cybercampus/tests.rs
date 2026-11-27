@@ -257,22 +257,156 @@ fn expiry_needs_a_redirect_an_empty_page_or_the_login_form() {
     ));
 }
 
+fn stopped(setup: &Setup) -> bool {
+    Status::read(&setup.connector, &setup.store)
+        .unwrap()
+        .rejected
+}
+fn credentials(password: &str) -> Credentials {
+    Credentials::new("20990001", password).unwrap()
+}
+/// A new connector (a relaunch) on the same store, with the login saved.
+fn relaunch(setup: &mut Setup, password: &str) {
+    setup.connector = Connector::memory();
+    setup.connector.vault.save(&credentials(password)).unwrap();
+}
+const MAINTENANCE: &str = "<p>잠시 점검 중입니다.</p>";
+
 #[tokio::test]
 async fn a_rejected_login_is_not_retried_automatically() {
-    let setup = setup(Some("wrong"));
+    let mut setup = setup(Some("wrong"));
     assert_eq!(run(&setup).await.unwrap_err(), client::REJECTED);
-    assert!(setup.connector.session.rejected());
+    assert!(stopped(&setup));
     setup.fake.clear();
     assert_eq!(run(&setup).await.unwrap_err(), client::REJECTED);
     assert!(setup.fake.requests().is_empty());
     assert_eq!(setup.fake.logins.load(Ordering::SeqCst), 1);
-    // Saving the login again (the settings command resets the session) retries.
-    setup.connector.session.reset().await;
+    // The rejection survives a relaunch: no password is sent again.
+    relaunch(&mut setup, "wrong");
+    assert!(stopped(&setup));
+    assert_eq!(run(&setup).await.unwrap_err(), client::REJECTED);
+    assert!(setup.fake.requests().is_empty());
+    // Saving the login again retries and clears the guard.
+    let cancel = AtomicBool::new(false);
     setup
         .connector
-        .vault
-        .save(&Credentials::new("20990001", "right").unwrap())
+        .save_login(&setup.fake, &setup.store, &credentials("right"), &cancel)
+        .await
         .unwrap();
+    assert!(!stopped(&setup));
+    run(&setup).await.unwrap();
+}
+
+#[tokio::test]
+async fn forgetting_the_login_clears_the_guard() {
+    let setup = setup(Some("wrong"));
+    run(&setup).await.unwrap_err();
+    assert!(stopped(&setup));
+    setup.connector.forget_login(&setup.store).await.unwrap();
+    assert!(!stopped(&setup));
+    assert_eq!(
+        Status::read(&setup.connector, &setup.store).unwrap().id,
+        None
+    );
+}
+
+#[tokio::test]
+async fn three_unrecognised_login_answers_in_a_row_stop_automatic_logins() {
+    let mut setup = setup(Some("right"));
+    setup.fake.login_pages.lock().unwrap().extend([
+        MAINTENANCE.to_string(),
+        MAINTENANCE.into(),
+        MAINTENANCE.into(),
+    ]);
+    // Each answer comes after a relaunch: the count is persisted.
+    assert!(run(&setup)
+        .await
+        .unwrap_err()
+        .contains("확인하지 못했습니다"));
+    relaunch(&mut setup, "right");
+    assert!(run(&setup)
+        .await
+        .unwrap_err()
+        .contains("확인하지 못했습니다"));
+    assert!(!stopped(&setup));
+    relaunch(&mut setup, "right");
+    assert_eq!(run(&setup).await.unwrap_err(), client::REJECTED);
+    assert!(stopped(&setup));
+    assert_eq!(setup.fake.logins.load(Ordering::SeqCst), 3);
+    // No further login POST, also after another relaunch, until the user saves.
+    setup.fake.clear();
+    relaunch(&mut setup, "right");
+    assert_eq!(run(&setup).await.unwrap_err(), client::REJECTED);
+    assert_eq!(setup.fake.count("/ilos/lo/login.acl"), 0);
+    let cancel = AtomicBool::new(false);
+    setup
+        .connector
+        .save_login(&setup.fake, &setup.store, &credentials("right"), &cancel)
+        .await
+        .unwrap();
+    assert!(!stopped(&setup));
+    run(&setup).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_successful_login_resets_the_unrecognised_count() {
+    let setup = setup(Some("right"));
+    let cancel = AtomicBool::new(false);
+    let right = credentials("right");
+    let login = || {
+        setup
+            .connector
+            .session
+            .login(&setup.fake, &setup.store, &right, &cancel)
+    };
+    setup
+        .fake
+        .login_pages
+        .lock()
+        .unwrap()
+        .extend([MAINTENANCE.to_string(), MAINTENANCE.into()]);
+    login().await.unwrap_err();
+    login().await.unwrap_err();
+    login().await.unwrap();
+    // Two more do not stop: the count started over.
+    setup
+        .fake
+        .login_pages
+        .lock()
+        .unwrap()
+        .extend([MAINTENANCE.to_string(), MAINTENANCE.into()]);
+    login().await.unwrap_err();
+    login().await.unwrap_err();
+    assert!(!stopped(&setup));
+}
+
+/// An eClass that never answers: only transport errors.
+struct Offline;
+impl client::Http for Offline {
+    async fn send(
+        &self,
+        _url: &Url,
+        _method: &Method,
+        _cookie: Option<String>,
+        _limit: usize,
+        _cancel: &AtomicBool,
+    ) -> Result<Response, String> {
+        Err("사이버캠퍼스에 안전하게 연결하지 못했습니다.".into())
+    }
+}
+#[tokio::test]
+async fn transport_failures_do_not_count_as_unrecognised_answers() {
+    let setup = setup(Some("right"));
+    let cancel = AtomicBool::new(false);
+    for _ in 0..5 {
+        setup
+            .connector
+            .session
+            .login(&Offline, &setup.store, &credentials("right"), &cancel)
+            .await
+            .unwrap_err();
+    }
+    assert!(!stopped(&setup));
     run(&setup).await.unwrap();
 }
 
