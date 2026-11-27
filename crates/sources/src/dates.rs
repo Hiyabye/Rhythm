@@ -29,8 +29,9 @@ pub struct Found {
 
 /// A date labelled with one of these is page metadata.
 const HEADER: [&str; 3] = ["작성일", "게시일", "수정일"];
-/// Page metadata only as the whole label: `신입생 등록일` is an event.
-const HEADER_ALONE: &str = "등록일";
+/// Page metadata as the whole label or on the publication day; otherwise an
+/// event (`신입생 등록일`).
+const REGISTERED: &str = "등록일";
 /// A clause with one of these reports a replaced or cancelled date.
 const SUPERSEDED: [&str; 6] = [
     "취소합니다",
@@ -76,7 +77,7 @@ const WEEKDAYS: [char; 7] = ['일', '월', '화', '수', '목', '금', '토'];
 
 /// Bump when the extraction rules change: the app and the collector store it
 /// with their dates and re-extract notices extracted by another version.
-pub const EXTRACTOR_VERSION: i64 = 4;
+pub const EXTRACTOR_VERSION: i64 = 5;
 
 /// The dates of one notice: its title and body as one text, since titles often
 /// carry the deadline (`채용 (~9/29(화)까지)`). The app and the collector both
@@ -106,7 +107,8 @@ pub fn extract(text: &str, published: &str) -> Vec<Found> {
             let before = &clause[segment_start..index];
             segment_start = expression.end;
             index = expression.end;
-            if header(before) {
+            let metadata = header(before);
+            if metadata == Metadata::Always {
                 continue;
             }
             // Keywords count only between the previous date and a short window
@@ -150,6 +152,9 @@ pub fn extract(text: &str, published: &str) -> Vec<Found> {
             let Some(start) = resolve(&expression.start, None, published) else {
                 continue;
             };
+            if metadata == Metadata::OnPublication && published == Some(start) {
+                continue;
+            }
             first_at.get_or_insert(at);
             last_at = at;
             // Nothing published after a date can still be due on it.
@@ -236,20 +241,39 @@ pub fn extract(text: &str, published: &str) -> Vec<Found> {
     deduplicate(found)
 }
 
+#[derive(PartialEq)]
+enum Metadata {
+    No,
+    Always,
+    /// Only a date on the publication day: `관리자 등록일 2026.09.01` is the
+    /// page's own date, `신입생 등록일: 2. 20.` an event.
+    OnPublication,
+}
+
 /// Whether the text before a date labels it as page metadata (`작성일 :`,
-/// `조회 12 | 수정일자`). The label is the last field before the date, so a
-/// header word earlier in the sentence does not hide a real date.
-fn header(before: &str) -> bool {
+/// `조회 12 | 수정일자`, `등록일시`). The label is the last word of the last
+/// field before the date, so a header word earlier in the sentence does not
+/// hide a real date.
+fn header(before: &str) -> Metadata {
     let field = before.rsplit(['|', '·']).next().unwrap_or(before);
     let field = field
         .trim()
         .trim_end_matches([':', '：'])
         .trim_matches(|c: char| c.is_whitespace() || matches!(c, '[' | ']' | '(' | ')'));
-    let Some(last) = field.split_whitespace().next_back() else {
-        return false;
+    let mut words = field.split_whitespace();
+    let Some(last) = words.next_back() else {
+        return Metadata::No;
     };
-    let last = last.strip_suffix('자').unwrap_or(last);
-    HEADER.iter().any(|word| last.ends_with(word)) || field == HEADER_ALONE
+    let last = last.strip_suffix(['자', '시']).unwrap_or(last);
+    if HEADER.iter().any(|word| last.ends_with(word)) {
+        Metadata::Always
+    } else if last != REGISTERED {
+        Metadata::No
+    } else if words.next().is_none() {
+        Metadata::Always
+    } else {
+        Metadata::OnPublication
+    }
 }
 
 fn iso(date: (u32, u32, u32)) -> String {
@@ -646,15 +670,9 @@ fn short_date(
     }
     if range_end {
         // `~ 7일` or `~ 19(금)`; date_at reads the weekday itself. `부터 3일간`,
-        // `3일 이내` and `3일 동안` are durations.
+        // `3일 이내`, `3일 동안` and `3일 안에` are durations.
         let end = expect(text, after_first, "일")
-            .filter(|&end| {
-                let rest = &text[end..];
-                !rest.starts_with('간')
-                    && !["이내", "동안"]
-                        .iter()
-                        .any(|word| rest.trim_start().starts_with(word))
-            })
+            .filter(|&end| !duration_follows(&text[end..]))
             .or_else(|| weekday_at(text, after_first).map(|_| after_first))?;
         return Some((
             Written {
@@ -667,6 +685,21 @@ fn short_date(
         ));
     }
     None
+}
+
+/// Whether the text after `N일` makes it a length of days: `간` attached, or
+/// one of the words below (the short ones only as a whole word, so `7일 내용`
+/// stays a date).
+fn duration_follows(rest: &str) -> bool {
+    if rest.starts_with('간') {
+        return true;
+    }
+    let rest = rest.trim_start();
+    let word: String = rest.chars().take_while(|c| c.is_alphabetic()).collect();
+    ["이내", "동안", "안에", "내에"]
+        .iter()
+        .any(|long| rest.starts_with(long))
+        || ["내", "안", "후", "뒤"].contains(&word.as_str())
 }
 
 /// `(목)`, `(목요일)`, `(목)요일` or `목요일`, optionally after one space;
@@ -722,6 +755,10 @@ fn time_at(text: &str, index: usize) -> Option<(String, usize)> {
             expect(text, after_hour, "시").filter(|&end| !text[end..].starts_with('간'))?;
         let minutes = number_at(text, skip_space(text, after_hour))
             .and_then(|(minute, after)| expect(text, after, "분").map(|end| (minute, end)));
+        // `10시 30분간` is a length of time too.
+        if minutes.is_some_and(|(_, end)| text[end..].starts_with('간')) {
+            return None;
+        }
         match minutes {
             Some((minute, end)) => (hour, minute, end),
             None => (hour, 0, after_hour),
