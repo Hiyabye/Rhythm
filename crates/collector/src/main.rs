@@ -52,7 +52,7 @@ use std::{
     path::{Path, PathBuf},
     process::ExitCode,
     sync::atomic::AtomicBool,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, SystemTime},
 };
 
 const USAGE: &str = "usage: rhythm-collector <state.sqlite3> [--r2 <prefix> [--init] \
