@@ -554,19 +554,37 @@ fn windows_restore_with_missing_prepared_database_is_refused_without_changing_li
 
 #[cfg(windows)]
 #[test]
-fn windows_unjournaled_restore_artifacts_are_preserved() {
+fn windows_unjournaled_staging_is_removed_unless_an_earlier_restore_is_unfinished() {
     let root = tempfile::tempdir().unwrap();
+    let stage = root.path().join(STAGING);
+    let temporary_journal = root.path().join(".rhythm-restore-journal.tmp");
+    let interrupted = || {
+        fs::create_dir(&stage).unwrap();
+        fs::write(stage.join("unverified"), b"staged").unwrap();
+        fs::write(&temporary_journal, b"partial").unwrap();
+    };
     fs::write(root.path().join("rhythm.sqlite3"), b"original").unwrap();
-    fs::create_dir(root.path().join(STAGING)).unwrap();
-    fs::write(root.path().join(STAGING).join("unverified"), b"keep").unwrap();
-    assert!(recover_pending_restore(root.path()).is_err());
+
+    // A restore stopped before its journal installed nothing: the next
+    // launch clears it and opens the profile as it was.
+    interrupted();
+    assert_eq!(recover_pending_restore(root.path()).unwrap(), None);
+    assert!(!stage.exists() && !temporary_journal.exists());
     assert_eq!(
         fs::read(root.path().join("rhythm.sqlite3")).unwrap(),
         b"original"
     );
+
+    // A previous-data folder without its completion marker means an earlier
+    // restore may be half applied: nothing is removed.
+    interrupted();
+    fs::create_dir(root.path().join(format!("{PREVIOUS_PREFIX}unfinished"))).unwrap();
+    assert!(recover_pending_restore(root.path()).is_err());
+    assert_eq!(fs::read(stage.join("unverified")).unwrap(), b"staged");
+    assert!(temporary_journal.exists());
     assert_eq!(
-        fs::read(root.path().join(STAGING).join("unverified")).unwrap(),
-        b"keep"
+        fs::read(root.path().join("rhythm.sqlite3")).unwrap(),
+        b"original"
     );
 }
 
