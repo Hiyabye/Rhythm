@@ -3,9 +3,9 @@
 //! each listed file in its own store transaction. Runs at launch and every 30
 //! minutes from the scheduler loop while `sogang_notices` is on, and on demand
 //! (user decision P2).
-use crate::{
-    archive::sync::{with_store, SharedStore},
-    storage::feed::{FeedResult, FeedStatus, Unmirrored},
+use crate::storage::{
+    feed::{FeedResult, FeedStatus, Unmirrored},
+    with_store, SharedStore,
 };
 use rhythm_feed::{record, FileRef, Manifest};
 use std::{
@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) mod transport;
+pub mod transport;
 use transport::{Base, FetchError, Transport};
 
 /// The feed signing key (#166 D10), `key_id` `7fdf378f071d58dc`. Rotating it
@@ -337,7 +337,7 @@ pub(crate) async fn sync(
 
 /// Runs one sync at a time and remembers when the next is due.
 #[derive(Default)]
-pub(crate) struct Controller {
+pub struct Controller {
     active: Mutex<Option<Arc<AtomicBool>>>,
     /// When the scheduler may start the next sync; `None` at launch.
     next: Mutex<Option<Instant>>,
@@ -353,11 +353,11 @@ impl Drop for Active<'_> {
 }
 
 impl Controller {
-    pub(crate) fn running(&self) -> bool {
+    pub fn running(&self) -> bool {
         self.active.lock().map(|a| a.is_some()).unwrap_or(true)
     }
 
-    pub(crate) fn cancel(&self) {
+    pub fn cancel(&self) {
         if let Ok(active) = self.active.lock() {
             if let Some(cancel) = active.as_ref() {
                 cancel.store(true, Ordering::Release);
@@ -365,20 +365,20 @@ impl Controller {
         }
     }
 
-    pub(crate) async fn wait(&self) {
+    pub async fn wait(&self) {
         while self.running() {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
 
-    pub(crate) fn due(&self) -> bool {
+    pub fn due(&self) -> bool {
         self.next
             .lock()
             .map(|next| next.is_none_or(|next| Instant::now() >= next))
             .unwrap_or(false)
     }
 
-    pub(crate) fn status(&self, store: &SharedStore) -> Result<FeedStatus, String> {
+    pub fn status(&self, store: &SharedStore) -> Result<FeedStatus, String> {
         let mut status = with_store(store, |s| s.feed_status(chrono::Utc::now()))?;
         status.running = self.running();
         Ok(status)
@@ -386,7 +386,7 @@ impl Controller {
 
     /// Runs a sync unless one is already running (`Ok(false)`), records how
     /// it ended and schedules the next.
-    pub(crate) async fn run(
+    pub async fn run(
         &self,
         store: &SharedStore,
         data_root: &Path,
@@ -434,28 +434,6 @@ impl Controller {
         }
         Ok(true)
     }
-}
-
-#[tauri::command]
-pub async fn feed_status(state: tauri::State<'_, crate::AppState>) -> Result<FeedStatus, String> {
-    state.feed.status(&state.store)
-}
-
-/// 지금 받기: syncs now, or waits for the sync already running.
-#[tauri::command]
-pub async fn feed_sync(state: tauri::State<'_, crate::AppState>) -> Result<FeedStatus, String> {
-    let _lease = state.operation_gate.shared().await?;
-    if !with_store(&state.store, |s| s.enabled(crate::extensions::NOTICES))? {
-        return Err("서강대학교 공지 기능이 꺼져 있습니다.".into());
-    }
-    if !state
-        .feed
-        .run(&state.store, &state.data_root, &transport::HttpsTransport)
-        .await?
-    {
-        state.feed.wait().await;
-    }
-    state.feed.status(&state.store)
 }
 
 #[cfg(test)]

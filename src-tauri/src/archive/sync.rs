@@ -13,20 +13,11 @@ use std::{
 use tokio::sync::Notify;
 use url::Url;
 
-pub type SharedStore = Arc<Mutex<Store>>;
 const FILE_LIMIT: usize = 20 * 1024 * 1024;
 const IMPORT_RESOURCES: u64 = 256 * 1024 * 1024;
 
+pub use crate::storage::{with_store, SharedStore};
 pub use network::Transport;
-pub fn with_store<T>(
-    store: &SharedStore,
-    operation: impl FnOnce(&Store) -> Result<T, String>,
-) -> Result<T, String> {
-    let guard = store
-        .lock()
-        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
-    operation(&guard)
-}
 // Disabling a source extension sets the cancel flag under the store lock that
 // job admission also takes, and admission resets it only for sources whose
 // extension is on, so the flag alone stops a disabled extension's work.

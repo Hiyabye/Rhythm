@@ -541,7 +541,11 @@ async fn run_feed(store: &sync::SharedStore, feed: &crate::feed::Controller, roo
         return;
     }
     if let Err(error) = feed
-        .run(store, root, &crate::feed::transport::HttpsTransport)
+        .run(
+            store,
+            root,
+            &crate::feed::transport::HttpsTransport::new(crate::USER_AGENT),
+        )
         .await
     {
         eprintln!("Feed: {error}");
