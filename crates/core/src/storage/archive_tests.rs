@@ -2368,6 +2368,39 @@ fn purging_all_of_a_huge_trash_stays_below_the_variable_limit() {
     assert!(store.notice_deleted("two", "f33000").unwrap());
 }
 #[test]
+fn a_committed_purge_still_returns_its_files_when_the_recompute_fails() {
+    let (_directory, store) = database();
+    let (id, _) = store
+        .upsert_article("one", &article("1", "공지", "본문", "2026-11-01"), false)
+        .unwrap();
+    let revision = store.document(id, None).unwrap().revision_id;
+    let resource = store
+        .add_resource_for_test(id, revision, "https://www.sogang.ac.kr/a.png", "x.png", "image")
+        .unwrap();
+    store
+        .resource_result(
+            resource,
+            "downloaded",
+            Some("image/png"),
+            Some(1),
+            Some("resources/only.png"),
+            Some(&"a".repeat(64)),
+            None,
+        )
+        .unwrap();
+    store.trash_documents(&[id]).unwrap();
+    // Make the recompute fail after the purge's own transaction.
+    store
+        .connection
+        .execute_batch(
+            "ALTER TABLE personalization_activity RENAME TO personalization_activity_gone;",
+        )
+        .unwrap();
+    assert!(store.recompute_learned().is_err());
+    assert_eq!(store.purge_trashed(None).unwrap(), ["resources/only.png"]);
+    assert!(store.document(id, None).is_err());
+}
+#[test]
 fn trashed_notices_leave_automatic_classification() {
     let (_directory, store) = database();
     let (kept, _) = store

@@ -179,7 +179,11 @@ impl Store {
             }
         }
         tx.commit().map_err(|e| e.to_string())?;
-        self.recompute_learned()?;
+        // The deletion is committed: a failed recompute must not turn it into
+        // an error that drops the orphan list. The next recompute catches up.
+        if let Err(error) = self.recompute_learned() {
+            eprintln!("Archive: 개인화 학습 결과를 다시 계산하지 못했습니다: {error}");
+        }
         Ok(orphaned)
     }
     /// Moves notices published more than the chosen number of months ago to
