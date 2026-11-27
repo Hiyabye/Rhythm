@@ -204,6 +204,42 @@ class JobTests(unittest.TestCase):
             self.assertEqual(result, {"version": meal_ocr.VERSION, "image_sha256": sha,
                                       "status": "rejected", "reason": "unsupported_image_format"})
 
+    def test_one_unusable_job_or_image_does_not_stop_the_others(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            bad = self.write(folder, b"bad job", version="meal-ocr-0")
+            good = self.write(folder, b"good job")
+
+            def broken():
+                raise RuntimeError("engine down")
+
+            # Both are reported; neither raises out of the step.
+            self.assertEqual(meal_ocr.run(folder, broken), 2)
+            if Image is None:
+                return
+            # An image whose header parses but whose pixel data is corrupt or
+            # cut short is rejected, and the job after it still gets a result.
+            import io
+            buffer = io.BytesIO()
+            Image.new("RGB", (64, 64), "white").save(buffer, "PNG")
+            png = buffer.getvalue()
+            at = png.index(b"IDAT") + 8
+            corrupt = png[:at] + bytes(byte ^ 0xFF for byte in png[at:at + 8]) + png[at + 8:]
+            cut = png[:at + 4]
+            for data in (corrupt, cut):
+                sha = hashlib.sha256(data).hexdigest()
+                (folder / f"{sha}.png").write_bytes(data)
+                body = {"version": meal_ocr.VERSION, "image": f"{sha}.png", "image_sha256": sha, **job()}
+                (folder / f"{sha}.json").write_text(json.dumps(body))
+            self.assertEqual(meal_ocr.run(folder, lambda: (lambda path: [])), 1)
+            self.assertFalse((folder / f"{bad}.result.json").exists())
+            for data in (corrupt, cut, b"good job"):
+                sha = hashlib.sha256(data).hexdigest()
+                result = json.loads((folder / f"{sha}.result.json").read_text())
+                self.assertEqual((result["status"], result["reason"]),
+                                 ("rejected", "unsupported_image_format"), sha)
+            self.assertEqual(hashlib.sha256(b"good job").hexdigest(), good)
+
     def test_missing_or_changed_weights_abort_the_step(self):
         with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as home:
             folder = Path(directory)

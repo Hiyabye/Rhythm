@@ -1652,6 +1652,21 @@ async fn a_k2web_list_title_cut_short_matches_the_archived_title() {
     run(&state, &fake, INNOV, Budget::default()).await.unwrap();
     assert_eq!(requests(&fake, INNOV_DETAIL), 1);
 
+    // A row without a title is not a match for every archived title.
+    let (source, external): (String, String) = state
+        .with(|c| {
+            c.query_row("SELECT source_id,external_id FROM notices", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+        })
+        .unwrap();
+    assert!(state
+        .listed_title_unchanged(&source, &external, "서강의")
+        .unwrap());
+    assert!(!state
+        .listed_title_unchanged(&source, &external, "")
+        .unwrap());
+
     // Any other listed title is a change.
     list("서강의 혁신을 기록하다 Vol.6");
     run(&state, &fake, INNOV, Budget::default()).await.unwrap();

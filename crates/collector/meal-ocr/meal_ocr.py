@@ -333,14 +333,21 @@ def extract_week(image_path, job, infer):
         opened = Image.open(image_path)
     except UnidentifiedImageError:
         raise Rejected("unsupported_image_format") from None
+    except Image.DecompressionBombError:
+        raise Rejected("unsupported_image_dimensions") from None
     with opened as image:
         if image.format not in ("PNG", "JPEG") or getattr(image, "n_frames", 1) != 1:
             raise Rejected("unsupported_image_format")
         if image.width * image.height > MAX_PIXELS:
             raise Rejected("unsupported_image_dimensions")
         width, height = image.size
+        try:
+            image.load()
+        except (OSError, SyntaxError, ValueError):
+            # The header parsed but the pixel data is cut short or corrupt
+            # (Pillow reports a broken PNG chunk as SyntaxError).
+            raise Rejected("unsupported_image_format") from None
         geometry = detect_geometry(image)
-        image.load()
         image = image.convert("RGB")
         with tempfile.TemporaryDirectory() as directory:
             def read(crop):
@@ -418,7 +425,13 @@ def run(folder, engine_factory=load_engine, weights_home=None):
     checked = False
     failed = 0
     for path in jobs:
-        job, image = read_job(folder, path)
+        try:
+            job, image = read_job(folder, path)
+        except (ValueError, OSError) as error:
+            # One unusable job must not cost the other weeks their results.
+            print(f"{path.stem}: job not read ({type(error).__name__})", file=sys.stderr)
+            failed += 1
+            continue
         result = {"version": VERSION, "image_sha256": job["image_sha256"]}
         try:
             if infer is None:
@@ -434,10 +447,12 @@ def run(folder, engine_factory=load_engine, weights_home=None):
             result.update(status="ok", reason=None, **extract_week(image, job, infer))
         except Rejected as error:
             result.update(status="rejected", reason=str(error))
-        except (ValueError, KeyError, OSError, RuntimeError) as error:
+        except Exception as error:
             # An engine or system failure says nothing about the image: no
-            # result, so the collector offers it again. Never print the error
-            # body, which may quote third-party output.
+            # result, so the collector offers it again. Third-party code
+            # raises its own types (`cv2.error`), and none of them may stop
+            # the remaining jobs. Never print the error body, which may quote
+            # third-party output.
             print(f"{path.stem}: OCR failed ({type(error).__name__})", file=sys.stderr)
             failed += 1
             continue

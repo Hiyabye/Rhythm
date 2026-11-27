@@ -34,7 +34,8 @@ impl State {
                    (SELECT json_group_array(json_extract(value,'$.url')) FROM json_each(resources)
                     WHERE json_extract(value,'$.kind')='image')
                  FROM notices WHERE source_id=?1 AND removed_at IS NULL
-                 ORDER BY published_at DESC,first_seen_at DESC,external_id DESC",
+                 ORDER BY published_at DESC,first_seen_at DESC,
+                   CAST(external_id AS INTEGER) DESC,external_id DESC",
             )?
             .query_map([source_id], |row| {
                 let images: String = row.get(4)?;
@@ -145,14 +146,17 @@ impl State {
             )?;
             // A later post replaces the week, whatever its result (#318: never
             // show a menu the dormitory replaced); an older one never does.
+            // Post ids are numbers: as text, 999 would be later than 1000.
             let changed = transaction.execute(
                 "INSERT INTO meal_weeks(week,source_id,external_id,published_at,record,updated_at)
                  VALUES(?1,?2,?3,?4,?5,?6)
                  ON CONFLICT(week) DO UPDATE SET source_id=excluded.source_id,
                    external_id=excluded.external_id,published_at=excluded.published_at,
                    record=excluded.record,updated_at=excluded.updated_at
-                 WHERE (excluded.published_at,excluded.external_id)
-                       >=(meal_weeks.published_at,meal_weeks.external_id)
+                 WHERE (excluded.published_at,CAST(excluded.external_id AS INTEGER),
+                        excluded.external_id)
+                       >=(meal_weeks.published_at,CAST(meal_weeks.external_id AS INTEGER),
+                          meal_weeks.external_id)
                    AND excluded.record!=meal_weeks.record",
                 params![
                     week.week,
