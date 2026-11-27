@@ -170,6 +170,41 @@ async fn maintenance_pauses_the_views_and_its_guard_restarts_them() {
 }
 
 #[tokio::test]
+async fn a_maintenance_call_dropped_while_the_classifier_quiesces_resumes_the_work() {
+    let directory = tempfile::tempdir().unwrap();
+    let app = Arc::new(open(directory.path()).unwrap());
+    let views = Arc::new(Views::default());
+    let _ = app.views.set(views.clone());
+
+    // A batch in flight keeps the classifier's quiesce waiting.
+    let in_flight = app.classifier.quiesce().await;
+    let task = tokio::spawn({
+        let app = app.clone();
+        async move { app.exclusive_maintenance().await.map(|_| ()) }
+    });
+    let waited = tokio::time::timeout(Duration::from_secs(5), async {
+        while app.settings().snapshot().await.is_ok() || count(&views.quiesces) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(waited.is_ok(), "maintenance never closed the gate");
+    // Past the exclusive acquisition, now waiting on the classifier.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!task.is_finished());
+    assert_eq!(count(&views.starts), 0);
+
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert_eq!(count(&views.starts), 1);
+    assert!(app.settings().snapshot().await.is_ok());
+    drop(in_flight);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(count(&views.starts), 1, "resumed exactly once");
+    app.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_source_subscribes_only_while_its_extension_is_on() {
     use crate::{archive::catalog::CYBERCAMPUS_SOURCE_ID, extensions::CYBERCAMPUS};
     let directory = tempfile::tempdir().unwrap();

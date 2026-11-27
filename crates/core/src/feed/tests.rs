@@ -444,6 +444,46 @@ async fn a_file_that_does_not_match_its_manifest_stops_before_it() {
     assert_eq!(status(&store).result.as_deref(), Some("failed"));
 }
 
+/// Sets the sync's cancel flag while the last download is in flight, as a
+/// disable or maintenance can after the last check and before the apply.
+struct CancelDuringDownload<'a> {
+    fake: &'a Fake,
+    cancel: &'a AtomicBool,
+}
+impl Transport for CancelDuringDownload<'_> {
+    async fn get(&self, url: &Url, limit: u64, cancel: &AtomicBool) -> Result<Vec<u8>, FetchError> {
+        let bytes = self.fake.get(url, limit, cancel).await;
+        if url.as_str().ends_with(SNAPSHOT) {
+            self.cancel.store(true, Ordering::Release);
+        }
+        bytes
+    }
+}
+
+#[tokio::test]
+async fn a_sync_cancelled_during_the_last_download_applies_nothing() {
+    let (directory, store) = store();
+    let fake = Fake::default();
+    first_feed(&fake);
+    let cancel = AtomicBool::new(false);
+    let transport = CancelDuringDownload {
+        fake: &fake,
+        cancel: &cancel,
+    };
+    let failure = sync(
+        &store,
+        directory.path(),
+        &transport,
+        &[signer().public_key()],
+        &cancel,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(failure, Failure::from(FetchError::Cancelled));
+    assert_eq!(store.lock().unwrap().feed_cursor().unwrap(), None);
+    assert!(titles(&store).is_empty());
+}
+
 #[tokio::test]
 async fn an_offline_feed_is_recorded_quietly_and_retried_soon() {
     let (directory, store) = store();

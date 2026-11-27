@@ -259,6 +259,41 @@ pub(in crate::archive) async fn install_resource(
             None,
         )
     })?;
+    // Another notice's permanent deletion may have judged this shared file
+    // unused before the reference above was committed, and removes its files
+    // after releasing the store lock. Put the verified bytes back if so.
+    restore_if_missing(root, &relative, &bytes, hash.as_str()).await?;
+    Ok(())
+}
+/// Writes `bytes` to `relative` when the file is gone, through its own partial
+/// file like the install, so a file that appeared meanwhile is left alone.
+async fn restore_if_missing(
+    root: &Path,
+    relative: &str,
+    bytes: &[u8],
+    hash: &str,
+) -> Result<(), String> {
+    static PARTS: AtomicU64 = AtomicU64::new(0);
+    let destination = root.join(relative);
+    if tokio::fs::try_exists(&destination).await.unwrap_or(true) {
+        return Ok(());
+    }
+    let temporary = root.join(format!(
+        "resources/{hash}.{}.part",
+        PARTS.fetch_add(1, Ordering::Relaxed)
+    ));
+    let restored = async {
+        tokio::fs::write(&temporary, bytes).await?;
+        tokio::fs::rename(&temporary, &destination).await
+    }
+    .await;
+    if restored.is_err() {
+        let _ = tokio::fs::remove_file(&temporary).await;
+        // A concurrent install may have won the rename; only a missing file is an error.
+        if !tokio::fs::try_exists(&destination).await.unwrap_or(false) {
+            return Err("첨부 파일 저장을 완료하지 못했습니다.".into());
+        }
+    }
     Ok(())
 }
 /// Records a failed download without discarding a verified earlier copy.
@@ -333,4 +368,41 @@ pub async fn local_resource(
 }
 pub fn image_mime(bytes: &[u8]) -> Option<&'static str> {
     raster(bytes)
+}
+
+#[cfg(test)]
+mod restore_tests {
+    use super::restore_if_missing;
+
+    #[tokio::test]
+    async fn a_file_removed_after_the_commit_is_put_back_and_a_present_one_is_kept() {
+        let root = tempfile::tempdir().unwrap();
+        tokio::fs::create_dir_all(root.path().join("resources"))
+            .await
+            .unwrap();
+        let relative = "resources/abc.png";
+        let destination = root.path().join(relative);
+
+        restore_if_missing(root.path(), relative, b"verified", "abc")
+            .await
+            .unwrap();
+        assert_eq!(tokio::fs::read(&destination).await.unwrap(), b"verified");
+
+        // A file already there is not rewritten.
+        tokio::fs::write(&destination, b"existing").await.unwrap();
+        restore_if_missing(root.path(), relative, b"verified", "abc")
+            .await
+            .unwrap();
+        assert_eq!(tokio::fs::read(&destination).await.unwrap(), b"existing");
+
+        // No partial file is left behind.
+        let mut entries = tokio::fs::read_dir(root.path().join("resources"))
+            .await
+            .unwrap();
+        let mut names = Vec::new();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            names.push(entry.file_name());
+        }
+        assert_eq!(names, ["abc.png"]);
+    }
 }

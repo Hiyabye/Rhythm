@@ -12,6 +12,7 @@ pub const NOT_TRASHED: &str =
 pub const AUTO_TRASH_MONTHS: [u32; 6] = [0, 1, 3, 6, 12, 24];
 /// One list selection; a page holds at most 100 notices.
 const MAX_SELECTION: usize = 200;
+const PURGE_CHUNK: usize = 500;
 
 fn placeholders(count: usize) -> String {
     vec!["?"; count].join(",")
@@ -119,42 +120,50 @@ impl Store {
         if targets.is_empty() {
             return Ok(Vec::new());
         }
-        let list = placeholders(targets.len());
-        let paths: Vec<String> = {
+        // Chunked so emptying a large 휴지통 stays below SQLite's limit on
+        // bound variables; everything stays in this one transaction.
+        let mut paths: Vec<String> = Vec::new();
+        for chunk in targets.chunks(PURGE_CHUNK) {
+            let list = placeholders(chunk.len());
             let mut statement = tx
                 .prepare(&format!(
                     "SELECT DISTINCT local_path FROM resources WHERE document_id IN ({list}) AND local_path IS NOT NULL"
                 ))
                 .map_err(|e| e.to_string())?;
             let rows = statement
-                .query_map(params_from_iter(&targets), |row| row.get(0))
+                .query_map(params_from_iter(chunk), |row| row.get::<_, String>(0))
                 .map_err(|e| e.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?;
-            rows
-        };
-        tx.execute(
-            &format!(
-                "INSERT OR IGNORE INTO deleted_notices(source_id,external_id)
-                 SELECT source_id,external_id FROM documents WHERE id IN ({list})"
-            ),
-            params_from_iter(&targets),
-        )
-        .map_err(|e| e.to_string())?;
-        tx.execute(
-            &format!(
-                "DELETE FROM skipped_articles WHERE EXISTS(
-                   SELECT 1 FROM documents d WHERE d.id IN ({list})
-                     AND d.source_id=skipped_articles.source_id AND d.external_id=skipped_articles.external_id)"
-            ),
-            params_from_iter(&targets),
-        )
-        .map_err(|e| e.to_string())?;
-        tx.execute(
-            &format!("DELETE FROM documents WHERE id IN ({list})"),
-            params_from_iter(&targets),
-        )
-        .map_err(|e| e.to_string())?;
+            paths.extend(rows);
+        }
+        paths.sort_unstable();
+        paths.dedup();
+        for chunk in targets.chunks(PURGE_CHUNK) {
+            let list = placeholders(chunk.len());
+            tx.execute(
+                &format!(
+                    "INSERT OR IGNORE INTO deleted_notices(source_id,external_id)
+                     SELECT source_id,external_id FROM documents WHERE id IN ({list})"
+                ),
+                params_from_iter(chunk),
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute(
+                &format!(
+                    "DELETE FROM skipped_articles WHERE EXISTS(
+                       SELECT 1 FROM documents d WHERE d.id IN ({list})
+                         AND d.source_id=skipped_articles.source_id AND d.external_id=skipped_articles.external_id)"
+                ),
+                params_from_iter(chunk),
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute(
+                &format!("DELETE FROM documents WHERE id IN ({list})"),
+                params_from_iter(chunk),
+            )
+            .map_err(|e| e.to_string())?;
+        }
         // Files are content-addressed, so another notice may share one.
         let mut orphaned = Vec::new();
         for path in paths {
@@ -170,7 +179,11 @@ impl Store {
             }
         }
         tx.commit().map_err(|e| e.to_string())?;
-        self.recompute_learned()?;
+        // The deletion is committed: a failed recompute must not turn it into
+        // an error that drops the orphan list. The next recompute catches up.
+        if let Err(error) = self.recompute_learned() {
+            eprintln!("Archive: 개인화 학습 결과를 다시 계산하지 못했습니다: {error}");
+        }
         Ok(orphaned)
     }
     /// Moves notices published more than the chosen number of months ago to

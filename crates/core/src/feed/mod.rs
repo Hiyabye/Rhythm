@@ -5,7 +5,7 @@
 //! (user decision P2).
 use crate::storage::{
     feed::{FeedResult, FeedStatus, Unmirrored},
-    with_store, SharedStore,
+    with_store, SharedStore, Store,
 };
 use rhythm_feed::{record, FileRef, Manifest};
 use std::{
@@ -188,6 +188,23 @@ async fn manifest(
     ))
 }
 
+/// Runs one apply under the store lock unless the sync was cancelled since its
+/// download: the commit boundary checks `cancel`, so a disable, maintenance or
+/// exit that stopped the sync never sees a late write or a moved cursor.
+fn apply<T>(
+    store: &SharedStore,
+    cancel: &AtomicBool,
+    operation: impl FnOnce(&Store) -> Result<T, String>,
+) -> Result<T, Failure> {
+    with_store(store, |s| {
+        if cancel.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        operation(s).map(Some)
+    })?
+    .ok_or_else(|| FetchError::Cancelled.into())
+}
+
 /// Downloads one step's records and, if listed, vectors.
 async fn fetch(
     transport: &impl Transport,
@@ -237,7 +254,7 @@ async fn backfill(
             ),
         };
         let entries = entries.map_err(feed_error)?;
-        let applied = with_store(store, |s| {
+        let applied = apply(store, cancel, |s| {
             s.feed_backfill(boards, kinds, after, &entries, &vectors)
         })?;
         for path in &applied.orphaned {
@@ -302,14 +319,14 @@ pub(crate) async fn sync(
             Step::Snapshot(snapshot) => {
                 let entries =
                     record::decode_snapshot(&records, snapshot.through_seq).map_err(feed_error)?;
-                with_store(store, |s| {
+                apply(store, cancel, |s| {
                     s.feed_apply_snapshot(snapshot.through_seq, &entries, &vectors)
                 })?
             }
             Step::Segment(segment) => {
                 let entries = record::decode_segment(&records, segment.from_seq, segment.to_seq)
                     .map_err(feed_error)?;
-                with_store(store, |s| {
+                apply(store, cancel, |s| {
                     s.feed_apply_segment(
                         segment.from_seq,
                         segment.to_seq,
