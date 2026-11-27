@@ -10,7 +10,7 @@ publish = false
 [features]
 # Test helpers (temporary stores, migration rollback fragments, the scripted
 # eClass) for the app crate's tests. Enable only as a dev-dependency.
-test-support = ["dep:tempfile", "dep:base64"]
+test-support = ["dep:tempfile"]
 
 [dependencies]
 rusqlite = { version = "0.38", default-features = false, features = ["bundled", "backup"] }
@@ -23,7 +23,7 @@ getrandom = "0.3"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 url = "2"
 tempfile = { version = "3", optional = true }
-base64 = { version = "0.22", optional = true }
+base64 = "0.22"
 rhythm-embed = { path = "../embed" }
 rhythm-feed = { path = "../feed" }
 rhythm-sources = { path = "../sources", features = ["studium"] }
@@ -52,6 +52,5 @@ keyring = { version = "4.2", default-features = false, features = ["v1", "window
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
-base64 = "0.22"
 rhythm-feed = { path = "../feed", features = ["test-keys"] }
 tempfile = "3"

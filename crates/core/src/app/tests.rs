@@ -168,3 +168,37 @@ async fn maintenance_pauses_the_views_and_its_guard_restarts_them() {
     app.shutdown().await;
     assert_eq!(count(&views.shutdowns), 1);
 }
+
+#[tokio::test]
+async fn a_source_subscribes_only_while_its_extension_is_on() {
+    use crate::{archive::catalog::CYBERCAMPUS_SOURCE_ID, extensions::CYBERCAMPUS};
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+    let subscribed = |sources: &[crate::archive::model::SourceInfo]| {
+        sources
+            .iter()
+            .find(|source| source.definition.id == CYBERCAMPUS_SOURCE_ID)
+            .unwrap()
+            .subscribed
+    };
+    let before = subscribed(&app.archive().sources().await.unwrap());
+
+    let refused = app
+        .archive()
+        .subscribe(CYBERCAMPUS_SOURCE_ID, !before)
+        .await;
+    assert!(refused.unwrap_err().contains("확장 기능"));
+    assert_eq!(subscribed(&app.archive().sources().await.unwrap()), before);
+
+    app.settings()
+        .set_extension(CYBERCAMPUS, true)
+        .await
+        .unwrap();
+    let changed = app
+        .archive()
+        .subscribe(CYBERCAMPUS_SOURCE_ID, !before)
+        .await
+        .unwrap();
+    assert_eq!(subscribed(&changed.sources), !before);
+    app.shutdown().await;
+}

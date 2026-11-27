@@ -3926,7 +3926,6 @@ dependencies = [
 name = "rhythm"
 version = "2.4.0"
 dependencies = [
- "base64 0.22.1",
  "chrono",
  "minisign-verify",
  "rhythm-core",

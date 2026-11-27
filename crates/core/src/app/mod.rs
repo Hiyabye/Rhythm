@@ -7,14 +7,16 @@
 //! The fields are public while the command areas move here one by one; once
 //! every area has its handle they become private.
 
+mod archive;
 mod settings;
 #[cfg(test)]
 mod tests;
 
+pub use archive::{original_link, Archive};
 pub use settings::{storage_error, Settings, Snapshot};
 
 use crate::{
-    archive::{self, sync},
+    archive::sync,
     data_lock::{lock_data_dir, DataDirLock},
     extensions::Registry,
     feed, intelligence,
@@ -105,7 +107,7 @@ pub struct App {
     pub feed: Arc<feed::Controller>,
     pub studium: Arc<studium::controller::Controller>,
     pub studium_notifications: Arc<studium::notification::Notifications>,
-    pub network: archive::Client,
+    pub network: crate::archive::Client,
     pub registry: Registry,
     pub classifier: Arc<intelligence::classification::Controller>,
     pub models: intelligence::models::Controller,
@@ -117,6 +119,7 @@ pub struct App {
     pub operation_gate: Arc<AdmissionGate>,
     /// What the restore finished at this launch reported, for the UI.
     pub restore_outcome: Option<crate::backup::RestoreOutcome>,
+    user_agent: &'static str,
     ui: Ui,
     runtime: Handle,
     views: OnceLock<Arc<dyn StudiumViews>>,
@@ -144,7 +147,9 @@ impl App {
             crate::backup::recover_pending_restore(&data_root).map_err(OpenError::Restore)?;
         crate::backup::remove_stale_backup_snapshots(&data_root);
         let store = Store::open(&paths::database(&data_root)).map_err(failed)?;
-        store.catalog(&archive::definitions()).map_err(failed)?;
+        store
+            .catalog(&crate::archive::definitions())
+            .map_err(failed)?;
         let store = Arc::new(Mutex::new(store));
         let ui = Ui::new(config.shell);
         let operation_gate = Arc::new(AdmissionGate::default());
@@ -162,7 +167,7 @@ impl App {
         let archive_agent: &'static str = Box::leak(
             format!("{} (local university notice archive)", config.user_agent).into_boxed_str(),
         );
-        let network = archive::network::Client::new(archive_agent).map_err(failed)?;
+        let network = crate::archive::network::Client::new(archive_agent).map_err(failed)?;
         let feed = Arc::new(feed::Controller::default());
         let proactive = proactive::Scheduler::new(
             store.clone(),
@@ -204,6 +209,7 @@ impl App {
             maintenance_shutdown: Arc::new(AtomicBool::new(false)),
             operation_gate,
             restore_outcome,
+            user_agent: config.user_agent,
             ui,
             runtime: config.runtime,
             views: OnceLock::new(),
@@ -243,12 +249,12 @@ impl App {
             self.data_root.clone(),
             shutdown.clone(),
         ));
-        self.runtime.spawn(archive::run_auto_trash(
+        self.runtime.spawn(crate::archive::run_auto_trash(
             self.store.clone(),
             self.operation_gate.clone(),
             shutdown.clone(),
         ));
-        self.runtime.spawn(archive::run_notice_dates(
+        self.runtime.spawn(crate::archive::run_notice_dates(
             self.store.clone(),
             self.operation_gate.clone(),
             shutdown.clone(),
@@ -262,6 +268,10 @@ impl App {
 
     pub fn settings(&self) -> Settings<'_> {
         Settings(self)
+    }
+
+    pub fn archive(&self) -> Archive<'_> {
+        Archive(self)
     }
 
     fn views(&self) -> Option<&Arc<dyn StudiumViews>> {
