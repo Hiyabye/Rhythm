@@ -9,6 +9,7 @@ pub mod data_lock;
 pub mod extensions;
 pub mod feed;
 pub mod intelligence;
+pub mod job;
 pub mod notification;
 pub mod operation_gate;
 pub mod paths;

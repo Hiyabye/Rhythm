@@ -205,7 +205,7 @@ async fn existing_file_in_chosen_folder_is_never_adopted_for_deletion() {
         root.path(),
         &entry,
         &mut model,
-        &Arc::new(AtomicBool::new(false)),
+        &CancelToken::new(),
         &Fake::new(bytes.clone()),
     )
     .await
@@ -221,7 +221,7 @@ async fn existing_file_in_chosen_folder_is_never_adopted_for_deletion() {
         root.path(),
         &entry,
         &mut model,
-        &Arc::new(AtomicBool::new(false)),
+        &CancelToken::new(),
         &Fake::new(bytes.clone()),
     )
     .await
@@ -303,7 +303,7 @@ async fn removing_custom_model_preserves_unrelated_files_and_default_model() {
     let selected = choose_directory(&store, destination.path());
     let mut custom = inventory(&entry);
     custom.storage_directory = Some(selected);
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = CancelToken::new();
     install(
         &store,
         root.path(),
@@ -369,7 +369,7 @@ async fn missing_custom_directory_never_redirects_install_or_remove_to_default()
     std::fs::create_dir(&original).unwrap();
     let mut model = inventory(&entry);
     model.storage_directory = Some(choose_directory(&store, &original));
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = CancelToken::new();
     install(
         &store,
         root.path(),
@@ -532,7 +532,7 @@ fn resume_headers_and_disk_limits_fail_closed() {
 #[tokio::test]
 async fn interrupted_download_resumes_then_reopen_and_no_duplicate_network() {
     let (dir, store, e, bytes) = fixture();
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = CancelToken::new();
     let mut m = inventory(&e);
     with_store(&store, |s| s.ai_upsert_model(&m)).unwrap();
     let mut fake = Fake::new(bytes);
@@ -585,7 +585,7 @@ async fn completed_partial_recovers_without_network() {
         dir.path(),
         &entry,
         &mut model,
-        &Arc::new(AtomicBool::new(false)),
+        &CancelToken::new(),
         &fake,
     )
     .await
@@ -597,7 +597,7 @@ async fn completed_partial_recovers_without_network() {
 #[tokio::test]
 async fn range_ignored_restarts_and_corrupt_hash_never_installs() {
     let (dir, store, e, bytes) = fixture();
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = CancelToken::new();
     let mut m = inventory(&e);
     let full = managed_path(dir.path(), &m.path).unwrap();
     std::fs::write(full.with_extension("part"), &bytes[..16]).unwrap();
@@ -624,7 +624,8 @@ async fn range_ignored_restarts_and_corrupt_hash_never_installs() {
 #[tokio::test]
 async fn cancellation_unsupported_and_duplicate_admission() {
     let (dir, store, e, bytes) = fixture();
-    let cancel = Arc::new(AtomicBool::new(true));
+    let cancel = CancelToken::new();
+    cancel.cancel();
     let mut m = inventory(&e);
     assert!(
         install(&store, dir.path(), &e, &mut m, &cancel, &Fake::new(bytes))
@@ -638,25 +639,19 @@ async fn cancellation_unsupported_and_duplicate_admission() {
     assert!(c
         .start(store.clone(), dir.path().into(), "qwen35-0-8b".into())
         .is_err());
-    *c.active.lock().unwrap() = Some(Arc::new(AtomicBool::new(false)));
+    let running = c.active.begin().unwrap();
     assert!(c
         .start_entry(store, dir.path().into(), catalog().remove(0))
         .unwrap_err()
         .contains("이미"));
     c.cancel();
-    assert!(c
-        .active
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .load(Ordering::Acquire));
+    assert!(running.token().is_cancelled());
 }
 #[tokio::test]
 async fn managed_delete_clears_files_and_rejects_path_escape() {
     let (dir, store, e, bytes) = fixture();
     let mut m = inventory(&e);
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = CancelToken::new();
     install(&store, dir.path(), &e, &mut m, &cancel, &Fake::new(bytes))
         .await
         .unwrap();
@@ -717,7 +712,7 @@ async fn invalid_partial_path_preserves_installed_weights_and_inventory() {
         dir.path(),
         &entry,
         &mut model,
-        &Arc::new(AtomicBool::new(false)),
+        &CancelToken::new(),
         &Fake::new(bytes.clone()),
     )
     .await
@@ -760,7 +755,7 @@ async fn ancillary_unlink_failure_does_not_delete_installed_weights() {
         dir.path(),
         &entry,
         &mut model,
-        &Arc::new(AtomicBool::new(false)),
+        &CancelToken::new(),
         &Fake::new(bytes.clone()),
     )
     .await
@@ -830,7 +825,7 @@ async fn locked_ancillary_file_does_not_delete_installed_weights() {
         dir.path(),
         &entry,
         &mut model,
-        &Arc::new(AtomicBool::new(false)),
+        &CancelToken::new(),
         &Fake::new(bytes.clone()),
     )
     .await
@@ -879,7 +874,7 @@ async fn locked_installed_file_restores_inventory_and_can_be_removed_after_unloc
         dir.path(),
         &entry,
         &mut model,
-        &Arc::new(AtomicBool::new(false)),
+        &CancelToken::new(),
         &Fake::new(bytes.clone()),
     )
     .await
@@ -914,7 +909,7 @@ async fn unavailable_inventory_cannot_be_saved_before_unlink_preserves_weights()
         dir.path(),
         &entry,
         &mut model,
-        &Arc::new(AtomicBool::new(false)),
+        &CancelToken::new(),
         &Fake::new(bytes.clone()),
     )
     .await
@@ -947,7 +942,7 @@ async fn failed_inventory_delete_records_missing_weights_and_can_be_retried() {
         dir.path(),
         &entry,
         &mut model,
-        &Arc::new(AtomicBool::new(false)),
+        &CancelToken::new(),
         &Fake::new(bytes),
     )
     .await

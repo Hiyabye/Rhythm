@@ -9,7 +9,7 @@ async fn download_part(
     total: u64,
     url: &Url,
     part: &Path,
-    cancel: &Arc<AtomicBool>,
+    cancel: &CancelToken,
     transport: &impl Transport,
 ) -> Result<(), String> {
     let actual = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
@@ -29,7 +29,7 @@ async fn download_part(
     record.downloaded_bytes = offset;
     record.error = None;
     with_store(store, |s| s.ai_upsert_model(record))?;
-    let mut response = tokio::select! {r=transport.response(url,total,offset,record.resume_etag.as_deref(),cancel)=>r?,_=cancelled(cancel)=>return check_cancel(cancel)};
+    let mut response = tokio::select! {r=transport.response(url,total,offset,record.resume_etag.as_deref(),cancel.flag())=>r?,_=cancelled(cancel.flag())=>return check_cancel(cancel.flag())};
     let append = match validate_response(&response, offset, total, record.resume_etag.as_deref()) {
         Ok(append) => append,
         Err(error) => {
@@ -61,10 +61,10 @@ async fn download_part(
     loop {
         let next = tokio::select! {
             r = tokio::time::timeout(Duration::from_secs(45), response.body.chunk()) => r.unwrap_or_else(|_| Err("모델 다운로드 응답 시간이 초과되었습니다.".into())),
-            _ = cancelled(cancel) => Err("모델 설치를 취소했습니다. 다시 선택하면 이어받습니다.".into()),
+            _ = cancelled(cancel.flag()) => Err("모델 설치를 취소했습니다. 다시 선택하면 이어받습니다.".into()),
         };
         let chunk = match next {
-            Ok(chunk) if !cancel.load(Ordering::Acquire) => chunk,
+            Ok(chunk) if !cancel.is_cancelled() => chunk,
             outcome => {
                 // Tokio writes may still be buffered when a network error arrives.
                 file.flush()
@@ -109,10 +109,10 @@ pub(super) async fn install(
     root: &Path,
     entry: &CatalogEntry,
     model: &mut AiModel,
-    cancel: &Arc<AtomicBool>,
+    cancel: &CancelToken,
     transport: &impl Transport,
 ) -> Result<(), String> {
-    check_cancel(cancel)?;
+    check_cancel(cancel.flag())?;
     let full = super::super::model_storage::managed_path(
         root,
         &model.path,
@@ -131,11 +131,15 @@ pub(super) async fn install(
         let expected = entry.clone();
         let cancelled = cancel.clone();
         tokio::task::spawn_blocking(move || {
-            verify_file(&file, Some((&expected.sha256, expected.bytes)), &cancelled)
+            verify_file(
+                &file,
+                Some((&expected.sha256, expected.bytes)),
+                cancelled.flag(),
+            )
         })
         .await
         .map_err(|_| "모델 검증 작업이 중단되었습니다.")??;
-        check_cancel(cancel)?;
+        check_cancel(cancel.flag())?;
         model.status = "installed".into();
         model.sha256 = Some(entry.sha256.clone());
         model.bytes = entry.bytes;
@@ -151,7 +155,7 @@ pub(super) async fn finalize(
     store: &Arc<Mutex<Store>>,
     entry: &CatalogEntry,
     model: &mut AiModel,
-    cancel: &Arc<AtomicBool>,
+    cancel: &CancelToken,
     part: &Path,
     full: &Path,
 ) -> Result<(), String> {
@@ -161,12 +165,16 @@ pub(super) async fn finalize(
     let expected = entry.clone();
     let cancelled = cancel.clone();
     let checked = tokio::task::spawn_blocking(move || {
-        verify_file(&file, Some((&expected.sha256, expected.bytes)), &cancelled)
+        verify_file(
+            &file,
+            Some((&expected.sha256, expected.bytes)),
+            cancelled.flag(),
+        )
     })
     .await
     .map_err(|_| "모델 무결성 검증이 중단되었습니다.")?;
     if let Err(error) = checked {
-        if !cancel.load(Ordering::Acquire) {
+        if !cancel.is_cancelled() {
             // A failed full-file digest must not be reused as a supposedly safe prefix.
             tokio::fs::remove_file(part)
                 .await
@@ -176,7 +184,7 @@ pub(super) async fn finalize(
         }
         return Err(error);
     }
-    check_cancel(cancel)?;
+    check_cancel(cancel.flag())?;
     tokio::fs::rename(part, full)
         .await
         .map_err(|_| "검증한 모델 설치를 마무리하지 못했습니다.")?;

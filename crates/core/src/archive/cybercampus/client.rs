@@ -229,9 +229,7 @@ fn set_cookie(value: &str) -> Option<(String, String)> {
     .then(|| (name.to_owned(), value.trim().to_owned()))
 }
 async fn cancelled(cancel: &AtomicBool) {
-    while !cancel.load(Ordering::Acquire) {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    crate::job::cancelled(cancel, Duration::from_millis(50)).await;
 }
 
 struct State {

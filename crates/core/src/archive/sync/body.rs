@@ -5,6 +5,7 @@
 //! revision in place. Main-board notices whose body is the school's PDF
 //! viewer download that PDF and use its text, as the crawler does.
 use super::*;
+use crate::job::CancelToken;
 use std::time::{Duration, Instant};
 
 /// How long a host's robots.txt is reused between opened notices.
@@ -15,16 +16,16 @@ const ROBOTS_TTL: Duration = Duration::from_secs(60 * 60);
 /// them.
 #[derive(Default)]
 pub struct Bodies {
-    active: Mutex<Vec<Arc<AtomicBool>>>,
+    active: Mutex<Vec<CancelToken>>,
     robots: Mutex<HashMap<String, (Instant, Arc<Robots>)>>,
     downloading: Mutex<HashSet<i64>>,
 }
 
-struct Active<'a>(&'a Bodies, Arc<AtomicBool>);
+struct Active<'a>(&'a Bodies, CancelToken);
 impl Drop for Active<'_> {
     fn drop(&mut self) {
         if let Ok(mut active) = self.0.active.lock() {
-            active.retain(|cancel| !Arc::ptr_eq(cancel, &self.1));
+            active.retain(|cancel| !cancel.same(&self.1));
         }
     }
 }
@@ -52,7 +53,7 @@ impl Bodies {
     pub fn cancel(&self) {
         if let Ok(active) = self.active.lock() {
             for cancel in active.iter() {
-                cancel.store(true, Ordering::Release);
+                cancel.cancel();
             }
         }
     }
@@ -73,7 +74,7 @@ impl Bodies {
         transport: &T,
         id: i64,
     ) -> Result<bool, String> {
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = CancelToken::new();
         self.active
             .lock()
             .map_err(|_| "공지 본문을 가져오지 못했습니다.")?
@@ -90,7 +91,7 @@ impl Bodies {
             return Ok(false);
         };
         let url = parser::detail_url(&definition, &entry)?;
-        let policy = self.robots(transport, &url, &cancel).await?;
+        let policy = self.robots(transport, &url, cancel.flag()).await?;
         let network::Fetch::Body {
             bytes,
             etag,
@@ -101,7 +102,7 @@ impl Bodies {
             &url,
             None,
             parser::article_limit(&definition),
-            &cancel,
+            cancel.flag(),
             &policy,
             network::Access::Source,
         )
@@ -120,12 +121,12 @@ impl Bodies {
             .map(|r| r.url.clone())
             .collect();
         if !viewer.is_empty() {
-            self.viewer_pdfs(store, root, transport, &cancel, id, &article, &viewer)
+            self.viewer_pdfs(store, root, transport, cancel.flag(), id, &article, &viewer)
                 .await?;
             local_pdf_text(store, root, id, &mut article).await?;
         }
         let filled = with_store(store, |s| {
-            ensure_active(&cancel)?;
+            ensure_active(cancel.flag())?;
             enabled(s, &definition.id)?;
             s.fill_feed_body(id, &article, viewer.is_empty())
         })?;
@@ -149,7 +150,7 @@ impl Bodies {
         transport: &T,
         id: i64,
     ) -> Result<(), String> {
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = CancelToken::new();
         self.active
             .lock()
             .map_err(|_| "첨부 자료를 내려받지 못했습니다.")?
@@ -159,7 +160,7 @@ impl Bodies {
             if let Some(guard) = Downloading::claim(self, id)? {
                 break guard;
             }
-            active(&cancel)?;
+            active(cancel.flag())?;
             tokio::time::sleep(Duration::from_millis(25)).await;
         };
         let Some((definition, entry, resources)) =
@@ -176,7 +177,7 @@ impl Bodies {
             return Ok(());
         };
         let url = parser::detail_url(&definition, &entry)?;
-        let policy = self.robots(transport, &url, &cancel).await?;
+        let policy = self.robots(transport, &url, cancel.flag()).await?;
         let image_robots = RobotsCache::default();
         let total = AtomicU64::new(0);
         for resource in resources {
@@ -185,7 +186,7 @@ impl Bodies {
                 store,
                 root,
                 transport,
-                &cancel,
+                cancel.flag(),
                 &policy,
                 &image_robots,
                 &resource,

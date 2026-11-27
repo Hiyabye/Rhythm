@@ -9,7 +9,7 @@ use rhythm_feed::{
     test_keys::{other_signer, signer},
     Signer,
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 use url::Url;
 
 #[derive(Default)]

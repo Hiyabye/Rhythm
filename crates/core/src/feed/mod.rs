@@ -3,6 +3,7 @@
 //! each listed file in its own store transaction. Runs at launch and every 30
 //! minutes from the scheduler loop while `sogang_notices` is on, and on demand
 //! (user decision P2).
+use crate::job::{Busy, Slot};
 use crate::storage::{
     feed::{FeedResult, FeedStatus, Unmirrored},
     with_store, SharedStore, Store,
@@ -13,7 +14,7 @@ use std::{
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Mutex,
     },
     time::{Duration, Instant},
 };
@@ -355,37 +356,22 @@ pub(crate) async fn sync(
 /// Runs one sync at a time and remembers when the next is due.
 #[derive(Default)]
 pub struct Controller {
-    active: Mutex<Option<Arc<AtomicBool>>>,
+    active: Slot,
     /// When the scheduler may start the next sync; `None` at launch.
     next: Mutex<Option<Instant>>,
 }
 
-struct Active<'a>(&'a Controller);
-impl Drop for Active<'_> {
-    fn drop(&mut self) {
-        if let Ok(mut active) = self.0.active.lock() {
-            *active = None;
-        }
-    }
-}
-
 impl Controller {
     pub fn running(&self) -> bool {
-        self.active.lock().map(|a| a.is_some()).unwrap_or(true)
+        self.active.running()
     }
 
     pub fn cancel(&self) {
-        if let Ok(active) = self.active.lock() {
-            if let Some(cancel) = active.as_ref() {
-                cancel.store(true, Ordering::Release);
-            }
-        }
+        self.active.cancel();
     }
 
     pub async fn wait(&self) {
-        while self.running() {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        self.active.wait().await;
     }
 
     pub fn due(&self) -> bool {
@@ -420,19 +406,13 @@ impl Controller {
         transport: &impl Transport,
         trusted: &[[u8; 32]],
     ) -> Result<bool, String> {
-        let cancel = Arc::new(AtomicBool::new(false));
-        {
-            let mut active = self
-                .active
-                .lock()
-                .map_err(|_| "공지 피드 상태를 확인하지 못했습니다.")?;
-            if active.is_some() {
-                return Ok(false);
-            }
-            *active = Some(cancel.clone());
-        }
-        let _active = Active(self);
-        let outcome = sync(store, data_root, transport, trusted, &cancel).await;
+        let running = match self.active.begin() {
+            Ok(running) => running,
+            Err(Busy::Running) => return Ok(false),
+            Err(Busy::Unavailable) => return Err("공지 피드 상태를 확인하지 못했습니다.".into()),
+        };
+        let cancel = running.token();
+        let outcome = sync(store, data_root, transport, trusted, cancel.flag()).await;
         let wait = match &outcome {
             Ok(_) => INTERVAL,
             Err(failure) => failure.wait.unwrap_or_default().max(RETRY),
@@ -444,7 +424,7 @@ impl Controller {
             Ok(_) => with_store(store, |s| s.feed_record(FeedResult::Ok, None))?,
             // A cancelled sync (maintenance, exit, the extension turned off)
             // keeps the last result; the next one picks up where it stopped.
-            Err(failure) if cancel.load(Ordering::Acquire) => drop(failure),
+            Err(failure) if cancel.is_cancelled() => drop(failure),
             Err(failure) => with_store(store, |s| {
                 s.feed_record(failure.result, Some(&failure.message))
             })?,
