@@ -378,6 +378,7 @@ impl Client {
             && url.path() == "/robots.txt"
             && status.is_client_error()
             && validate_url(url).is_err()
+            && third_party_image(url)
         {
             return Ok(Fetch::Body {
                 bytes: Vec::new(),
@@ -650,6 +651,8 @@ mod tests {
             "https://localhost/a.png",
             "https://scc.sogang.ac.kr/dataview/temp/a.jpg",
             "https://sogang.ac.kr/a.png",
+            "https://www.sogang.ac.kr./a.png",
+            "https://sogang.ac.kr./a.png",
             "https://user@cdn.example.com/a.png",
             "https://cdn.example.com/a.png#x",
             "https://cdn.example.com/a%2Fb.png",
