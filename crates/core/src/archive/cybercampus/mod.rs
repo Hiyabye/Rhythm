@@ -31,6 +31,10 @@ pub use rhythm_sources::catalog::{
 /// pages, so this bounds a malformed total, not a real board.
 const NOTICE_PAGES: u32 = 25;
 const NOTICE_DISPLAY: u32 = 20;
+/// Rows asked of the TODO list; the response carries no total, so a page this
+/// full may continue.
+const TODO_DISPLAY: usize = 50;
+
 const LOCKED: &str = "사이버캠퍼스 로그인 정보에 접근하지 못했습니다.";
 
 pub struct Connector {
@@ -115,6 +119,27 @@ fn canonical_url() -> String {
 fn fingerprint(row: &parser::NoticeRow) -> String {
     let digest = Sha256::digest(format!("{}\n{}", row.title, row.preview));
     format!("list:{:x}", digest)[..37].to_owned()
+}
+/// Carries the TODO list's contribution of the last successful sync into a
+/// fresh task list: the `pending` flag of rows both have and the stored rows
+/// (`pending` ones are the TODO-only quizzes and lectures) the fresh list lacks.
+fn keep_todo_rows(stored: &HashMap<(String, String), TaskInput>, tasks: &mut Vec<TaskInput>) {
+    for task in tasks.iter_mut() {
+        let key = (task.category.clone(), task.item_id.clone());
+        task.pending |= stored.get(&key).is_some_and(|known| known.pending);
+    }
+    let mut kept = stored
+        .values()
+        .filter(|known| {
+            known.pending
+                && !tasks
+                    .iter()
+                    .any(|task| task.category == known.category && task.item_id == known.item_id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    kept.sort_by(|a, b| (&a.category, &a.item_id).cmp(&(&b.category, &b.item_id)));
+    tasks.extend(kept);
 }
 fn text(response: &client::Response) -> Result<String, String> {
     String::from_utf8(response.bytes.clone())
@@ -269,8 +294,12 @@ pub async fn sync<H: Http>(
     .await
     .and_then(|page| text(&page))
     .map(|page| parser::todo(&page));
+    // Whether `tasks` holds everything the TODO list would have said: a failed
+    // request says nothing, and a full page may have more rows behind it.
+    let mut todo_complete = false;
     match todo {
         Ok(items) => {
+            todo_complete = items.len() < TODO_DISPLAY;
             for item in items {
                 let Some(course_tasks) = tasks.get_mut(&item.course_key) else {
                     continue;
@@ -296,9 +325,12 @@ pub async fn sync<H: Http>(
         Err(error) if cancel.load(Ordering::Acquire) => return Err(error),
         Err(error) => failures.push(format!("할 일 목록: {error}")),
     }
-    for (course_key, course_tasks) in &tasks {
+    for (course_key, course_tasks) in &mut tasks {
         with_store(store, |s| {
             sync::ensure_active(cancel)?;
+            if !todo_complete {
+                keep_todo_rows(&s.cybercampus_stored_tasks(course_key)?, course_tasks);
+            }
             s.cybercampus_replace_tasks(course_key, course_tasks)
         })?;
     }

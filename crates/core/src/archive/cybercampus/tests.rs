@@ -1027,3 +1027,48 @@ async fn a_transient_notice_failure_still_fails_the_course_and_keeps_the_seed_op
         .seed_complete(SOURCE_ID)
         .unwrap());
 }
+
+#[tokio::test]
+async fn a_failed_todo_request_keeps_the_todo_only_rows_and_flags() {
+    let setup = setup(Some("right"));
+    run(&setup).await.unwrap();
+    let before = task_titles(&setup);
+    assert_eq!(before, ["6000001*", "7000010", "7000020*"]);
+    setup
+        .fake
+        .failing
+        .lock()
+        .unwrap()
+        .push("/ilos/mp/todo_list.acl");
+    let error = run(&setup).await.unwrap_err();
+    assert!(error.contains("할 일 목록"), "{error}");
+    assert_eq!(task_titles(&setup), before);
+}
+
+#[tokio::test]
+async fn a_successful_todo_list_still_replaces_the_rows() {
+    let setup = setup(Some("right"));
+    run(&setup).await.unwrap();
+    // The quiz and the open assignment's flag are gone from the list.
+    *setup.fake.todo.lock().unwrap() = Some("<div></div>".into());
+    run(&setup).await.unwrap();
+    assert_eq!(task_titles(&setup), ["7000010", "7000020"]);
+}
+
+#[tokio::test]
+async fn a_full_todo_page_is_incomplete_and_deletes_nothing() {
+    let setup = setup(Some("right"));
+    run(&setup).await.unwrap();
+    let mut rows = String::new();
+    for index in 0..50 {
+        rows.push_str(&format!(
+            "<a class=\"todo_wrap on\" href=\"javascript:goLecture('{COURSE}','test','5{index:06}')\"><div class=\"todo_title\"><span>[퀴즈]</span> 퀴즈 {index}</div><span class=\"todo_date\">11월 9일 (월) 23:59</span></a>"
+        ));
+    }
+    *setup.fake.todo.lock().unwrap() = Some(rows);
+    run(&setup).await.unwrap();
+    let titles = task_titles(&setup);
+    assert!(titles.contains(&"6000001*".to_owned()), "{titles:?}");
+    assert!(titles.contains(&"7000020*".to_owned()), "{titles:?}");
+    assert!(titles.contains(&"5000049*".to_owned()), "{titles:?}");
+}
