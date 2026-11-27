@@ -63,6 +63,10 @@ pub struct Extension {
     pub settles: &'static [Work],
     /// Cleared in the same transaction that records the disable.
     pub clears: &'static [Tokens],
+    /// Turning this on moves the notification baseline to the newest archived
+    /// revision in the same transaction, so notices that arrived while it was
+    /// off are not announced afterwards.
+    pub announces_from_enable: bool,
 }
 impl Extension {
     const fn new(id: &'static str, display_name: &'static str, description: &'static str) -> Self {
@@ -73,6 +77,7 @@ impl Extension {
             cancels: &[],
             settles: &[],
             clears: &[],
+            announces_from_enable: false,
         }
     }
     const fn cancels(mut self, work: &'static [Work]) -> Self {
@@ -85,6 +90,10 @@ impl Extension {
     }
     const fn clears(mut self, tokens: &'static [Tokens]) -> Self {
         self.clears = tokens;
+        self
+    }
+    const fn announces_from_enable(mut self) -> Self {
+        self.announces_from_enable = true;
         self
     }
     /// Whether the extension feeds the Studium alert pipeline, so that its
@@ -140,7 +149,8 @@ pub const BUILT_IN: &[Extension] = &[
         "알림·백그라운드",
         "앱이 켜져 있는 동안 새 공지를 알립니다. 로그인 시 실행도 정합니다.",
     )
-    .clears(&[Tokens::StudiumAlerts, Tokens::CalendarReminders]),
+    .clears(&[Tokens::StudiumAlerts, Tokens::CalendarReminders])
+    .announces_from_enable(),
     Extension::new(STUDIUM, "열람실", "열람실의 빈 좌석을 확인합니다.")
         .cancels(&[Work::Studium])
         .settles(&[Work::Studium])

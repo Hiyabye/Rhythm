@@ -23,6 +23,27 @@ pub fn definitions() -> Vec<SourceDefinition> {
 pub fn groups() -> Vec<SourceGroup> {
     catalog::groups()
 }
+/// Where a stored resource path points, only when it is a file directly in
+/// `resources/`. Stored paths are generated that way; a database from a
+/// restored backup must not be able to name a file anywhere else.
+fn resource_file(root: &std::path::Path, stored: &str) -> Option<std::path::PathBuf> {
+    let name = stored.strip_prefix("resources/")?;
+    let plain =
+        !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':', '\0']);
+    plain.then(|| root.join("resources").join(name))
+}
+/// Deletes resource files no row references any more. The rows are gone, so
+/// a file left behind is only unused disk space.
+pub async fn remove_orphans<P: AsRef<str>>(
+    root: &std::path::Path,
+    paths: impl IntoIterator<Item = P>,
+) {
+    for path in paths {
+        if let Some(file) = resource_file(root, path.as_ref()) {
+            let _ = tokio::fs::remove_file(file).await;
+        }
+    }
+}
 /// Whether the app collects this source itself: only Cybercampus. Public
 /// boards arrive through the feed (#177, #178).
 pub fn app_collected(id: &str) -> bool {
@@ -85,3 +106,44 @@ pub async fn run_notice_dates(
 const NOTICE_DATES_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
 const NOTICE_DATES_ATTEMPTS: u32 = 3;
 const NOTICE_DATES_BATCH: i64 = 200;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn orphan_cleanup_follows_a_stored_path_only_inside_resources() {
+        let outside = tempfile::tempdir().unwrap();
+        let root = outside.path().join("data");
+        std::fs::create_dir_all(root.join("resources/nested")).unwrap();
+        let kept = [
+            outside.path().join("victim"),
+            root.join("rhythm.sqlite3"),
+            root.join("resources/nested/file.pdf"),
+        ];
+        for path in &kept {
+            std::fs::write(path, b"keep").unwrap();
+        }
+        let orphan = root.join("resources/abc.pdf");
+        std::fs::write(&orphan, b"orphan").unwrap();
+        let absolute = kept[0].to_string_lossy().into_owned();
+        remove_orphans(
+            &root,
+            [
+                "resources/abc.pdf",
+                "resources/../../victim",
+                "../victim",
+                absolute.as_str(),
+                "rhythm.sqlite3",
+                "resources/nested/file.pdf",
+                "resources/..",
+                "resources/",
+            ],
+        )
+        .await;
+        assert!(!orphan.exists());
+        for path in &kept {
+            assert!(path.exists(), "{}", path.display());
+        }
+    }
+}

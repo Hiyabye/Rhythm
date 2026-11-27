@@ -1149,6 +1149,26 @@ async fn a_resource_url_reaches_only_the_route_of_its_kind() {
         setup.fake.requests()
     );
 
+    // A file type that is never stored is refused by its name alone: asking
+    // for it would be an eClass view and use the job's byte budget.
+    let mut script = file.clone();
+    script.filename = "hw1.py".into();
+    script.status = "pending".into();
+    download(
+        &setup.connector,
+        &setup.fake,
+        &setup.store,
+        &setup.root,
+        &cancel,
+        &script,
+        &bytes,
+    )
+    .await
+    .unwrap();
+    assert_eq!(status(script.id), "unsupported");
+    assert!(setup.fake.requests().is_empty());
+    assert_eq!(bytes.load(Ordering::Acquire), 0);
+
     // The normal routes still download.
     for record in [image, file] {
         let record = crate::archive::model::ResourceRecord {
