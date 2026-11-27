@@ -245,20 +245,15 @@ pub async fn set_extension(
     if !enabled && id == extensions::PROACTIVE {
         set_launch_at_login(&app, state.inner(), false)?;
     }
-    let (studium_completion, notification_completion, view_ticket) =
-        change_extension_with_notifications(
-            &state.registry,
-            &state.store,
-            &state.studium,
-            &id,
-            enabled,
-        )?;
+    let changed = state.registry.change(&state.store, &id, enabled, || {
+        state.studium_views.capture_close()
+    })?;
     if !enabled {
-        let view_result = match view_ticket {
+        let view_result = match changed.captured {
             Some(ticket) => state.studium_views.disable(ticket).await,
             None => Ok(()),
         };
-        if let Some(completion) = notification_completion {
+        if let Some(completion) = changed.notifications {
             completion.wait().await;
         }
         match id.as_str() {
@@ -268,7 +263,8 @@ pub async fn set_extension(
             }
             extensions::CYBERCAMPUS => state.archive.wait().await,
             extensions::STUDIUM => {
-                finish_studium_disable(&state.store, &state.studium, studium_completion).await?;
+                crate::studium::jobs::finish_disable(&state.store, &state.studium, changed.studium)
+                    .await?;
             }
             // The classifier sees the extension off on its next pass and
             // stops its process; wake it instead of waiting for the timer.
@@ -287,69 +283,12 @@ pub async fn set_extension(
 pub(crate) fn change_extension(
     registry: &extensions::Registry,
     shared_store: &crate::archive::sync::SharedStore,
-    studium: &crate::studium::controller::Controller,
     id: &str,
     enabled: bool,
 ) -> Result<Option<crate::studium::controller::CompletionHandle>, String> {
-    change_extension_with_notifications(registry, shared_store, studium, id, enabled)
-        .map(|(completion, _, _)| completion)
-}
-
-type ExtensionCompletions = (
-    Option<crate::studium::controller::CompletionHandle>,
-    Option<crate::studium::notification::Completion>,
-    Option<crate::studium::views::CloseTicket>,
-);
-
-fn change_extension_with_notifications(
-    registry: &extensions::Registry,
-    shared_store: &crate::archive::sync::SharedStore,
-    studium: &crate::studium::controller::Controller,
-    id: &str,
-    enabled: bool,
-) -> Result<ExtensionCompletions, String> {
-    let store = shared_store
-        .lock()
-        .map_err(|_| "저장소에 접근할 수 없습니다.")?;
-    registry.set(&store, id, enabled)?;
-    let notifications = if !enabled && matches!(id, extensions::STUDIUM | extensions::PROACTIVE) {
-        studium.cancel_notifications()
-    } else {
-        None
-    };
-    let view_ticket = if !enabled && id == extensions::STUDIUM {
-        studium.capture_views_close()
-    } else {
-        None
-    };
-    Ok((
-        if !enabled && id == extensions::STUDIUM {
-            studium.completion()
-        } else {
-            None
-        },
-        notifications,
-        view_ticket,
-    ))
-}
-
-pub(crate) async fn finish_studium_disable(
-    shared_store: &crate::archive::sync::SharedStore,
-    studium: &crate::studium::controller::Controller,
-    completion: Option<crate::studium::controller::CompletionHandle>,
-) -> Result<(), String> {
-    if let Some(completion) = completion {
-        completion.wait().await;
-    }
-    let store = shared_store
-        .lock()
-        .map_err(|_| "저장소에 접근할 수 없습니다.")?;
-    // A later enable may have won while disable awaited. Never clear a newly
-    // admitted generation's results in that case.
-    if !store.enabled(extensions::STUDIUM)? {
-        studium.clear();
-    }
-    Ok(())
+    registry
+        .change(shared_store, id, enabled, || None::<()>)
+        .map(|changed| changed.studium)
 }
 #[tauri::command]
 pub async fn calendar_todos(

@@ -1,25 +1,11 @@
-use super::{controller::CompletionHandle, model::Snapshot};
-use crate::{
-    archive::sync::{SharedStore, Transport},
-    operation_gate::{AdmissionGate, AdmissionLease, MaintenanceReservation},
-    storage::Store,
-    AppState,
+use super::{
+    jobs::{automatic_start_with_transport, snapshot_with_store, start_with_transport},
+    model::Snapshot,
 };
-use std::sync::{atomic::AtomicBool, Arc};
+use crate::{storage::Store, AppState};
 
 fn snapshot(state: &AppState, store: &Store) -> Result<Snapshot, String> {
     snapshot_with_store(&state.studium, store)
-}
-
-fn snapshot_with_store(
-    controller: &super::controller::Controller,
-    store: &Store,
-) -> Result<Snapshot, String> {
-    let mut value = controller.snapshot(store.studium_preferences()?)?;
-    value.automatic.interval_minutes = store.studium_auto_interval()?;
-    value.favorites = store.studium_favorites()?;
-    value.alert_rules = store.studium_alert_rules()?;
-    Ok(value)
 }
 
 #[tauri::command]
@@ -105,32 +91,6 @@ pub(crate) async fn studium_automatic_start(
     Ok(value)
 }
 
-pub(crate) async fn automatic_start_with_transport<T: Transport + Clone + 'static>(
-    controller: &Arc<super::controller::Controller>,
-    gate: &Arc<AdmissionGate>,
-    shutdown: &Arc<AtomicBool>,
-    shared_store: &SharedStore,
-    transport: T,
-) -> Result<Snapshot, String> {
-    let _lease = gate.shared().await?;
-    let store = shared_store.lock().map_err(|_| "설정 잠금 오류")?;
-    gate.ensure_open()?;
-    if shutdown.load(std::sync::atomic::Ordering::Acquire) {
-        return Err("Rhythm을 종료하고 있습니다.".into());
-    }
-    if !store.enabled(crate::extensions::STUDIUM)? {
-        return Err("Studium 확장 기능이 꺼져 있습니다.".into());
-    }
-    store.studium_auto_interval()?;
-    controller.start_automatic(
-        shared_store.clone(),
-        gate.clone(),
-        shutdown.clone(),
-        transport,
-    )?;
-    snapshot_with_store(controller, &store)
-}
-
 #[tauri::command]
 pub(crate) async fn studium_automatic_pause(
     state: tauri::State<'_, AppState>,
@@ -198,70 +158,6 @@ pub(crate) async fn studium_start(state: tauri::State<'_, AppState>) -> Result<S
         state.network.clone(),
     )
     .await
-}
-
-/// The IPC command and in-process callers use the same admission boundary.
-/// Transport injection lets command tests observe requests without a live server.
-pub(crate) async fn start_with_transport<T: Transport + 'static>(
-    controller: &Arc<super::controller::Controller>,
-    gate: &Arc<AdmissionGate>,
-    shutdown: &AtomicBool,
-    shared_store: &SharedStore,
-    transport: T,
-) -> Result<Snapshot, String> {
-    let lease = gate.shared().await?;
-    register(controller, gate, shutdown, shared_store, transport, lease)
-}
-
-fn register<T: Transport + 'static>(
-    controller: &Arc<super::controller::Controller>,
-    gate: &AdmissionGate,
-    shutdown: &AtomicBool,
-    shared_store: &SharedStore,
-    transport: T,
-    lease: AdmissionLease,
-) -> Result<Snapshot, String> {
-    let store = shared_store.lock().map_err(|_| "설정 잠금 오류")?;
-    // Registration and cancellation share Store's boundary. A lease admitted
-    // just before maintenance/exit must not register after their cancel pass.
-    gate.ensure_open()?;
-    if shutdown.load(std::sync::atomic::Ordering::Acquire) {
-        return Err("Rhythm을 종료하고 있습니다.".into());
-    }
-    if !store.enabled(crate::extensions::STUDIUM)? {
-        return Err("열람실 확장 기능이 꺼져 있습니다.".into());
-    }
-    controller.start(
-        store.studium_preferences()?,
-        transport,
-        shared_store.clone(),
-        lease,
-    )?;
-    snapshot_with_store(controller, &store)
-}
-
-/// Cancellation and admission serialize on Store. The returned handle belongs
-/// to the cancelled generation even if a later enable starts another job.
-pub(crate) fn cancel_at_boundary(
-    store: &SharedStore,
-    controller: &super::controller::Controller,
-) -> Result<Option<CompletionHandle>, String> {
-    let _store = store.lock().map_err(|_| "설정 잠금 오류")?;
-    controller.cancel();
-    Ok(controller.completion())
-}
-
-/// Failure before maintenance preparation returns drops the reservation and
-/// reopens admission; no scheduler or AI work has been stopped at this point.
-pub(crate) fn reserve_maintenance(
-    gate: &Arc<AdmissionGate>,
-    store: &SharedStore,
-    controller: &super::controller::Controller,
-) -> Result<(MaintenanceReservation, Option<CompletionHandle>), String> {
-    let reservation = gate.close()?;
-    let _store = store.lock().map_err(|_| "설정 잠금 오류")?;
-    controller.cancel_for_maintenance();
-    Ok((reservation, controller.completion()))
 }
 
 #[tauri::command]

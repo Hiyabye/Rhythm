@@ -3988,6 +3988,7 @@ dependencies = [
  "encoding_rs",
  "getrandom 0.3.4",
  "keyring",
+ "mac-usernotifications",
  "objc2-user-notifications",
  "reqwest 0.12.28",
  "rhythm-embed",

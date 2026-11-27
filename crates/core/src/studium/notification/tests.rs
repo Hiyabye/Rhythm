@@ -6,7 +6,7 @@ use crate::{
         sync::Transport,
     },
     extensions::{PROACTIVE, STUDIUM},
-    studium::{commands::start_with_transport, model::AlertRuleInput},
+    studium::{jobs::start_with_transport, model::AlertRuleInput},
 };
 use chrono::{Datelike, Timelike};
 use std::sync::atomic::AtomicU32;
@@ -180,7 +180,8 @@ impl Harness {
             store: store.clone(),
             controller: Arc::downgrade(&controller),
             gate: gate.clone(),
-            app: None,
+            shell: None,
+            runtime: Handle::current(),
             control: Mutex::new(None),
             memory: Mutex::new(Memory::default()),
             wake: Notify::new(),
@@ -467,7 +468,7 @@ fn seat_activation_uris_are_a_separate_exact_capability_namespace() {
         assert!(token_from_uri(&invalid).is_none());
     }
     #[cfg(windows)]
-    assert!(crate::proactive::windows_notification::token_from_uri(&uri).is_none());
+    assert!(crate::notification::windows::token_from_uri(&uri).is_none());
 }
 
 #[tokio::test(start_paused = true)]

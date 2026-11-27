@@ -4,7 +4,7 @@ use super::*;
 use crate::studium::model::AutomaticStatus;
 use crate::{archive::sync::SharedStore, operation_gate::AdmissionGate};
 
-pub(crate) const MAINTENANCE_STOPPED: &str =
+pub const MAINTENANCE_STOPPED: &str =
     "백업, 복원 또는 업데이트를 시작해 자동 확인을 멈췄습니다. 끝난 뒤 다시 시작해 주세요.";
 
 pub(super) struct Run {
@@ -44,7 +44,7 @@ pub(super) fn clear(state: &mut State) {
 
 impl Controller {
     /// Caller holds Store. Starting the session never replaces a running job.
-    pub(crate) fn start_automatic<T: Transport + Clone + 'static>(
+    pub fn start_automatic<T: Transport + Clone + 'static>(
         self: &Arc<Self>,
         store: SharedStore,
         gate: Arc<AdmissionGate>,
@@ -105,7 +105,7 @@ impl Controller {
     /// Caller holds Store after closing the gate. A session the user had not
     /// paused and that had not already stopped with an error reports why it
     /// ended; maintenance never resumes it.
-    pub(crate) fn cancel_for_maintenance(&self) {
+    pub fn cancel_for_maintenance(&self) {
         if let Ok(mut state) = self.state.lock() {
             if let Some(run) = state.automatic.as_mut() {
                 if !run.job.cancel.load(Ordering::Acquire) && run.error.is_none() {
@@ -117,7 +117,7 @@ impl Controller {
     }
 
     /// Caller holds Store. A manual check continues when the timer is paused.
-    pub(crate) fn pause_automatic(&self) -> Option<CompletionHandle> {
+    pub fn pause_automatic(&self) -> Option<CompletionHandle> {
         let state = self.state.lock().ok()?;
         let run = state.automatic.as_ref()?;
         run.job.cancel.store(true, Ordering::Release);

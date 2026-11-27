@@ -1,8 +1,8 @@
 # Studium (reading-room seats)
 
-Area instructions for `src-tauri/src/studium/`, `src/lib/StudiumView.svelte`, `src/lib/StudiumMini.svelte`, `src/lib/StudiumSeatMap.svelte` and the `storage/studium*.rs` modules. The root `AGENTS.md` (project-wide rules) applies too.
+Area instructions for `crates/core/src/studium/` (in `rhythm-core`), the app's `src-tauri/src/studium/` (commands, native mini window and tray), `src/lib/StudiumView.svelte`, `src/lib/StudiumMini.svelte`, `src/lib/StudiumSeatMap.svelte` and the `storage/studium*.rs` modules. The root `AGENTS.md` (project-wide rules) applies too.
 
-- `src-tauri/src/studium/`: separate fixed reading-room catalog (`rooms.rs`), pure UTF-8/CP949 seat parsers (`parser.rs`, optional geometry in `parser_layout.rs`) and the `model.rs` types (these three in `crates/core/src/studium/`, re-exported as `crate::studium::{model, parser, rooms}`), bounded seat session over the crate transport (`network.rs`; the route validator is `rhythm_sources::studium`), shared manual/automatic in-memory job controller (`controller.rs`, timer in `controller/automatic.rs`), payloads (`model.rs`), commands (`commands.rs`), seat-alert runtime (`notification.rs`) and native mini/tray owner (`views.rs`). `src/lib/StudiumView.svelte` owns its multi-room selection, automatic controls, favorite/alert editors and seat results. Its collection is separate from archive sources and AI; seat alerts share proactive permission, quiet hours, rate policy and native senders.
+- `crates/core/src/studium/`: separate fixed reading-room catalog (`rooms.rs`), pure UTF-8/CP949 seat parsers (`parser.rs`, optional geometry in `parser_layout.rs`), payloads (`model.rs`), bounded seat session over the crate transport (`network.rs`; the route validator is `rhythm_sources::studium`), shared manual/automatic in-memory job controller (`controller.rs`, timer in `controller/automatic.rs`), the admission helpers at the Store boundary (`jobs.rs`) and the seat-alert runtime (`notification.rs`, clicks through `crate::shell::Shell`). The app re-exports them at `crate::studium::*` and keeps the commands (`src-tauri/src/studium/commands.rs`) and the native mini/tray owner (`views.rs`). `src/lib/StudiumView.svelte` owns its multi-room selection, automatic controls, favorite/alert editors and seat results. Its collection is separate from archive sources and AI; seat alerts share proactive permission, quiet hours, rate policy and native senders.
 - **Contracts live in `docs/ARCHITECTURE.md`:** "Studium seat checks" (preferences, favorites, controller, automatic timer, result states, source-time age policy, disable/maintenance), "Studium seat map", "Studium seat alerts", "Studium mini window and tray", and under "Transport, resources and safe rendering" the `Access::Studium` routes and the seat-origin TLS paragraph. Read the matching section before changing that part, and change the doc with the code.
 
 ## Rules
@@ -15,7 +15,7 @@ Area instructions for `src-tauri/src/studium/`, `src/lib/StudiumView.svelte`, `s
 - **Alerts:** request notification permission only from the existing explicit settings controls; a reserved but uncertain OS handoff is never replayed automatically.
 - **Map:** never execute source HTML/CSS/scripts or add map requests; keep ○/×/★/underline states independent of color; avoid hundreds of focus targets.
 - **Fixtures** must be synthetic; never commit private Studium source or captured school HTML.
-- **Evidence:** fake senders, mocked IPC/clicks and native compilation do not verify native display, click, lifecycle, tray or macOS behavior. Scope native claims to the [recorded validation runs](../../../docs/ROADMAP.md#verification-status); DOM-triggered native IPC does not establish physical input on recreated WebView2 windows, OS tray menus, monitor recovery or installed-app behavior.
+- **Evidence:** fake senders, mocked IPC/clicks and native compilation do not verify native display, click, lifecycle, tray or macOS behavior. Scope native claims to the [recorded validation runs](../../../../docs/ROADMAP.md#verification-status); DOM-triggered native IPC does not establish physical input on recreated WebView2 windows, OS tray menus, monitor recovery or installed-app behavior.
 
 ## Focused checks
 
@@ -25,4 +25,4 @@ cargo test --locked -p rhythm-core studium
 npx playwright test tests/ui/studium.spec.ts tests/ui/studium-mini.spec.ts tests/ui/studium-map.spec.ts
 ```
 
-`studium/live_tests.rs` (ignored) sends real requests to the seat server; run it only with explicit approval and never commit its output.
+`src-tauri/src/studium/live_tests.rs` (ignored) sends real requests to the seat server; run it only with explicit approval and never commit its output.
