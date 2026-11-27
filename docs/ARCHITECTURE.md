@@ -197,7 +197,7 @@ Evidence topics come only from titles and original source categories, at most 32
 
 `Store::personalization_recommendations` is deterministic and never calls the worker or a model; its only AI input is the similarity term below:
 
-- Each matching explicit topic: `12 + 3×priority` (15–27). Learned topic: at most 6. Explicit negative topics subtract their amount.
+- Each matching explicit topic: `12 + 3×priority` (15–27). Learned topic: at most 6. Explicit negative topics subtract their amount. A topic matches on its name or an alias in the title, category, board, author or the whole indexed body; a term of ASCII letters, digits and spaces must stand as a whole word (`AI` does not match `mail`), in the snippet check (`matches_folded`) and in the index probes (`whole_word_sql`) alike.
 - Positive feedback: +24 for 30 days, +12 to day 180, +6 to day 365. Negative feedback caps the item score at −40 to day 180, −20 to day 365 (the item is not hidden).
 - Saved +8; exact university/department/study-level match +4/+8/+2. Subscription is not a term: candidates come only from subscribed sources and notifications only from active ones, so it would add the same points to everything (user decision, 2026-11-24).
 - Freshness: non-historical publication 0–6 over 30 days; recently collected older or undated non-historical +2; meaningful revision of an older item in the last three days +4. Historical backfill gets no freshness.
