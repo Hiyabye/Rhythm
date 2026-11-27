@@ -851,7 +851,9 @@ async fn exhausted_budget_leaves_files_pending_instead_of_too_large() {
     fake.missing_resources.store(false, Ordering::Release);
     let policy = Robots::parse(&Url::parse(PNG_URL).unwrap(), "User-agent: *\nAllow: /\n").unwrap();
     for total in [IMPORT_RESOURCES - 10, IMPORT_RESOURCES] {
-        for resource in with_store(&store, |s| s.pending_resources(id)).unwrap() {
+        let resources = with_store(&store, |s| s.pending_resources(id)).unwrap();
+        assert!(!resources.is_empty());
+        for resource in resources {
             let outcome = download_resource(
                 &store,
                 dir.path(),

@@ -85,9 +85,12 @@ impl Drop for Closing {
     }
 }
 
+/// Fields drop in order: admission reopens before the lock is released, so
+/// work already waiting on the lock is admitted instead of being told that
+/// maintenance is still running.
 pub struct MaintenanceGuard {
-    _guard: OwnedRwLockWriteGuard<()>,
     _closing: Closing,
+    _guard: OwnedRwLockWriteGuard<()>,
 }
 
 #[cfg(test)]

@@ -58,15 +58,21 @@ pub async fn run_auto_trash(
     shutdown: Arc<AtomicBool>,
 ) {
     while !shutdown.load(Ordering::Acquire) {
-        if let Ok(_lease) = gate.shared().await {
-            if let Err(error) = with_store(&store, |s| s.auto_trash_old()) {
-                eprintln!("Archive: 오래된 공지를 휴지통으로 옮기지 못했습니다: {error}");
-            }
+        // A closed gate (a backup or update at launch) only postpones the
+        // pass; it does not cost the hour.
+        let Ok(lease) = gate.shared().await else {
+            tokio::time::sleep(AUTO_TRASH_RETRY).await;
+            continue;
+        };
+        if let Err(error) = with_store(&store, |s| s.auto_trash_old()) {
+            eprintln!("Archive: 오래된 공지를 휴지통으로 옮기지 못했습니다: {error}");
         }
+        drop(lease);
         tokio::time::sleep(AUTO_TRASH_WAKE).await;
     }
 }
 const AUTO_TRASH_WAKE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+const AUTO_TRASH_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Extracts dates for notices archived before the dates table existed or by an
 /// older extractor, once per launch. New and changed notices are extracted when

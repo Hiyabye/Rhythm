@@ -162,15 +162,7 @@ pub async fn ai_remove(
     } else {
         None
     };
-    with_store(&state, |s| {
-        let mut preferences = s.ai_preferences()?;
-        if preferences.embedding_model_id.as_deref() == Some(&id) {
-            preferences.embedding_model_id = None;
-            s.ai_save_preferences(&preferences)?;
-        }
-        Ok(())
-    })?;
-    models::remove_with_policy(
+    models::remove_and_deselect(
         state.store.clone(),
         state.data_root.clone(),
         id,
