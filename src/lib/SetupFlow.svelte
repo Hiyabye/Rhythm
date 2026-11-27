@@ -23,13 +23,13 @@
   // The core steps frame the steps each chosen extension contributes, in this order.
   type StepId = 'start' | 'extensions' | 'boards' | 'cybercampus' | 'interests' | 'ai' | 'background' | 'notifications' | 'done';
   const allSteps: { id: StepId; label: string; title: string; line: string; extension?: string }[] = [
-    { id: 'start', label: '시작', title: 'Rhythm에 오신 것을 환영합니다', line: '계정이나 클라우드 없이 학교 소식과 일정을 이 기기에 모아 봅니다. 여기서 고른 설정은 나중에 설정에서 언제든 바꿀 수 있습니다.' },
-    { id: 'extensions', label: '기능', title: '사용할 기능 고르기', line: '켠 기능만 메뉴와 오늘 화면에 나타납니다. 처음에는 모두 꺼져 있고, 설정 → 확장 기능에서 언제든 바꿀 수 있습니다.' },
-    { id: 'boards', label: '게시판', title: '받아 볼 게시판', line: '학교 게시판 공지는 서버가 모은 공지 피드로 받습니다. 구독한 게시판의 공지를 추천과 알림에 씁니다.', extension: 'sogang_notices' },
+    { id: 'start', label: '시작', title: 'Rhythm에 오신 것을 환영합니다', line: '계정이나 클라우드 없이 학교 소식과 일정을 이 기기에 모읍니다. 여기서 고른 설정은 나중에 설정에서 바꿀 수 있습니다.' },
+    { id: 'extensions', label: '기능', title: '사용할 기능 고르기', line: '켠 기능만 메뉴와 오늘 화면에 나타납니다. 처음에는 모두 꺼져 있으며, 설정 → 확장 기능에서 바꿀 수 있습니다.' },
+    { id: 'boards', label: '게시판', title: '받아 볼 게시판', line: '학교 게시판 공지는 공지 피드로 받습니다. 구독한 게시판의 공지는 추천과 알림에 쓰입니다.', extension: 'sogang_notices' },
     { id: 'cybercampus', label: '사이버캠퍼스', title: '사이버캠퍼스 연결', line: '본인 강좌의 공지와 과제·마감을 가져옵니다. 로그인 정보는 운영체제 보안 저장소에만 저장합니다.', extension: 'cybercampus' },
     { id: 'interests', label: '관심사', title: '관심사', line: '추천 순위에만 쓰이며 이 기기에만 저장됩니다. 비워 두어도 됩니다.', extension: 'recommendations' },
-    { id: 'ai', label: 'AI', title: '공지 분류', line: '학교 공지를 주제별로 나누고 비슷한 공지를 묶습니다. 이 기기에 작은 분류 모델을 설치하면 사이버캠퍼스 공지도 나누고 뜻으로 찾는 검색도 쓸 수 있습니다. 설치하지 않아도 읽기, 검색, 추천을 모두 쓸 수 있습니다.', extension: 'ai' },
-    { id: 'background', label: '백그라운드', title: '백그라운드 실행', line: '처음에는 모두 꺼져 있습니다. 켜더라도 Rhythm이 실행 중이고 기기가 깨어 있을 때만 동작합니다.', extension: 'proactive' },
+    { id: 'ai', label: 'AI', title: '공지 분류', line: '학교 공지를 주제별로 나누고 비슷한 공지를 묶습니다. 작은 분류 모델을 설치하면 사이버캠퍼스 공지도 나누고, 뜻으로 찾는 검색도 쓸 수 있습니다. 설치하지 않아도 읽기, 검색, 추천은 모두 쓸 수 있습니다.', extension: 'ai' },
+    { id: 'background', label: '백그라운드', title: '백그라운드 실행', line: '처음에는 모두 꺼져 있습니다. 켜도 Rhythm이 실행 중이고 기기가 깨어 있을 때만 동작합니다.', extension: 'proactive' },
     { id: 'notifications', label: '알림', title: '알림', line: '새 공지를 운영체제 알림으로 받습니다. 처음에는 꺼져 있습니다.', extension: 'proactive' },
     { id: 'done', label: '완료', title: '준비가 끝났습니다', line: '지금까지 고른 설정입니다. 설정 → 일반에서 초기 설정을 다시 열 수 있습니다.' },
   ];
@@ -64,7 +64,7 @@
   let aiError = $state('');
   let embeddingEntry = $derived(ai?.catalog.find((entry) => entry.kind === 'embedding') ?? null);
   let embeddingModel = $derived(ai?.models.find((model) => model.catalog_id === embeddingEntry?.id) ?? null);
-  const modelState: Record<string, string> = { pending: '내려받는 중', downloading: '내려받는 중', verifying: '확인하는 중', installed: '설치함', failed: '설치 실패', cancelled: '중단됨', missing: '파일 확인 필요' };
+  const modelState: Record<string, string> = { pending: '내려받는 중', downloading: '내려받는 중', verifying: '파일 확인 중', installed: '설치함', failed: '설치 실패', cancelled: '중단됨', missing: '파일 확인 필요' };
 
   let updaterConfigured = $state(false);
   let autoCheck = $state<boolean | null>(null);
@@ -174,8 +174,8 @@
         <div class="settings-group">
           <div class="settings-row"><span class="row-label">화면 테마</span><div class="segmented" role="group" aria-label="화면 테마">{#each themes as option}<button disabled={busy} class:selected={theme === option.id} aria-pressed={theme === option.id} onclick={() => onsave({ theme: option.id })}><Icon name={option.icon} size={15} />{option.label}</button>{/each}</div></div>
           <div class="settings-row"><span class="row-label">시간 표시<span class="row-detail">{snapshot.settings.clock_format === '12h' ? '오후 9:30' : '21:30'}</span></span><div class="segmented" role="group" aria-label="시간 표시">{#each clockFormats as option}<button disabled={busy} class:selected={snapshot.settings.clock_format === option.id} aria-pressed={snapshot.settings.clock_format === option.id} onclick={() => onsave({ clock_format: option.id })}>{option.label}</button>{/each}</div></div>
-          <div class="settings-row"><span class="row-label">전원 모드<Hint label="전원 모드">사이버캠퍼스 자동 동기화 간격에 적용됩니다. 절전은 60분마다, 균형은 30분, 성능은 15분마다 확인합니다. 학교 게시판 공지 피드는 전원 모드와 관계없이 30분마다 받습니다.</Hint></span><div class="segmented" role="group" aria-label="전원 모드">{#each energyProfiles as option}<button disabled={busy} class:selected={snapshot.settings.energy_profile === option.id} aria-pressed={snapshot.settings.energy_profile === option.id} onclick={() => onsave({ energy_profile: option.id })}>{option.label}</button>{/each}</div></div>
-          {#if updaterConfigured}<div class="settings-row"><span class="row-label">자동으로 업데이트 확인<Hint label="자동으로 업데이트 확인">앱이 실행 중일 때 하루에 한 번 GitHub에서 새 버전을 확인해 알려 드립니다. 내려받기와 설치는 직접 고를 때만 진행합니다.</Hint></span><button class="switch" class:on={autoCheck === true} role="switch" aria-label="자동으로 업데이트 확인" aria-checked={autoCheck === true} disabled={autoCheck === null} onclick={toggleAutoCheck}><span></span></button></div>{/if}
+          <div class="settings-row"><span class="row-label">전원 모드<Hint label="전원 모드">사이버캠퍼스 자동 동기화 간격을 정합니다. 절전은 60분, 균형은 30분, 성능은 15분마다 확인합니다. 공지 피드는 전원 모드와 관계없이 30분마다 받습니다.</Hint></span><div class="segmented" role="group" aria-label="전원 모드">{#each energyProfiles as option}<button disabled={busy} class:selected={snapshot.settings.energy_profile === option.id} aria-pressed={snapshot.settings.energy_profile === option.id} onclick={() => onsave({ energy_profile: option.id })}>{option.label}</button>{/each}</div></div>
+          {#if updaterConfigured}<div class="settings-row"><span class="row-label">자동으로 업데이트 확인<Hint label="자동으로 업데이트 확인">앱이 실행 중일 때 하루에 한 번 GitHub에서 새 버전을 확인하고 알립니다. 내려받기와 설치는 직접 선택할 때만 진행합니다.</Hint></span><button class="switch" class:on={autoCheck === true} role="switch" aria-label="자동으로 업데이트 확인" aria-checked={autoCheck === true} disabled={autoCheck === null} onclick={toggleAutoCheck}><span></span></button></div>{/if}
         </div>
       {:else if current === 'extensions'}
         <ExtensionSettings extensions={snapshot.extensions} {busy} ontoggle={ontoggleextension} compact />
@@ -195,13 +195,13 @@
               <p class="model-meta">{embeddingEntry.use_case} · {archiveSize(embeddingEntry.bytes)}</p>
               {#if model && ['downloading', 'pending'].includes(model.status)}
                 <label class="ai-progress"><span class="sr-only">{embeddingEntry.name} 다운로드</span><Progress max={model.expected_bytes || 1} value={model.downloaded_bytes} /><span>{archiveSize(model.downloaded_bytes)} / {archiveSize(model.expected_bytes ?? 0)}</span></label>
-              {:else if model?.status === 'verifying'}<p class="model-note" role="status">무결성 확인 중</p>{/if}
+              {:else if model?.status === 'verifying'}<p class="model-note" role="status">파일 확인 중</p>{/if}
               {#if !model || ['failed', 'cancelled', 'missing'].includes(model.status)}
                 <div class="model-actions"><button class="button small" disabled={aiBusy || ai.busy} aria-label={`${embeddingEntry.name} 다운로드 및 설치`} onclick={() => install(embeddingEntry!)}>{model ? '이어받기' : '설치'}</button></div>
               {/if}
             </li>
           </ul>
-          <p class="footnote setup-note">설치는 누를 때만 시작하며, 앱을 닫아도 다음 실행에서 이어받습니다. 나중에 설정 → AI에서 설치해도 됩니다.</p>
+          <p class="footnote setup-note">설치는 누를 때만 시작합니다. 앱을 닫아도 다음 실행에서 이어받습니다. 나중에 설정 → AI에서 설치해도 됩니다.</p>
         {:else if !aiError}<p class="loading" role="status">모델 정보를 불러오는 중입니다…</p>{/if}
       {:else if current === 'background'}
         <ProactiveSettings desktop part="background" compact onopen={() => {}} {onactivation} />
@@ -210,7 +210,7 @@
       {:else}
         {#if summaryError}<p class="archive-error" role="alert">{summaryError}</p>{/if}
         <div class="settings-group" role="group" aria-label="선택한 설정">
-          <div class="settings-row"><span class="row-label">켠 기능<span class="row-detail">{chosen.length ? chosen.join(', ') : '오늘만 표시합니다. 설정 → 확장 기능에서 언제든 켤 수 있습니다.'}</span></span><span class="value">{chosen.length.toLocaleString('ko-KR')}개</span></div>
+          <div class="settings-row"><span class="row-label">켠 기능<span class="row-detail">{chosen.length ? chosen.join(', ') : '오늘만 표시합니다. 설정 → 확장 기능에서 켤 수 있습니다.'}</span></span><span class="value">{chosen.length.toLocaleString('ko-KR')}개</span></div>
           {#if sourcesOn}<div class="settings-row"><span class="row-label">구독한 게시판</span><span class="value">{subscribed.length.toLocaleString('ko-KR')}개</span></div>{/if}
           {#if enabled.has('ai')}<div class="settings-row"><span class="row-label">공지 분류</span><span class="value">{embeddingModel ? modelState[embeddingModel.status] ?? embeddingModel.status : '나중에 설정'}</span></div>{/if}
           {#if enabled.has('proactive')}

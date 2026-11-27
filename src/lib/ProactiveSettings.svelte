@@ -134,7 +134,7 @@
     notice = '';
     let confirmed: boolean;
     try {
-      confirmed = await confirmAction('표시된 알림 기록을 모두 지울까요? 지운 기록은 되돌릴 수 없습니다.\n\n보관한 공지와 알림 설정은 그대로이며, 같은 공지를 다시 알리지 않도록 하는 중복 방지 정보와 최근 알림 횟수 제한도 유지됩니다.', '기록 비우기');
+      confirmed = await confirmAction('표시된 알림 기록을 모두 지울까요? 지운 기록은 되돌릴 수 없습니다.\n\n보관한 공지와 알림 설정은 그대로 남습니다. 같은 공지를 다시 알리지 않는 정보와 최근 알림 횟수 제한도 유지됩니다.', '기록 비우기');
     } catch (reason) {
       error = `${archiveError(reason)} 확인 창을 열지 못해 기록을 비우지 않았습니다.`;
       return;
@@ -179,7 +179,7 @@
       <div class="settings-row"><span class="row-label">로그인 후 창 숨기기<Hint label="로그인 후 창 숨기기">로그인으로 실행될 때만 적용됩니다. 직접 앱을 열면 창이 보입니다.</Hint></span><button class="switch" class:on={lifecycle.start_hidden} role="switch" aria-label="로그인 후 창 숨기기" aria-checked={lifecycle.start_hidden} disabled={busy || !lifecycle.autostart_enabled} onclick={() => setLifecycle('lifecycle_set_start_hidden', !lifecycle?.start_hidden)}><span></span></button></div>
     </div>
 
-    <div class="settings-group-title"><h3>자동 동기화</h3><Hint label="자동 동기화">앱이 실행 중일 때만 사이버캠퍼스의 새 공지와 과제를 확인합니다. 학교 게시판 공지는 이 설정과 관계없이 공지 피드로 30분마다 받습니다. 앱을 종료하면 멈추고, 잠자기 중에는 확인하지 않습니다. 전원 모드 기본값은 절전 60분, 균형 30분, 성능 15분이며, 간격을 직접 고르면 전원 모드와 관계없이 그 간격을 지킵니다.</Hint></div>
+    <div class="settings-group-title"><h3>자동 동기화</h3><Hint label="자동 동기화">앱이 실행 중일 때만 사이버캠퍼스의 새 공지와 과제를 확인합니다. 앱을 종료하거나 기기가 잠자기 중이면 확인하지 않습니다. 학교 게시판 공지는 이 설정과 관계없이 공지 피드로 30분마다 받습니다. 전원 모드 기본값은 절전 60분, 균형 30분, 성능 15분입니다. 간격을 직접 고르면 전원 모드와 관계없이 그 간격으로 확인합니다.</Hint></div>
     <div class="settings-group">
       <div class="settings-row"><span class="row-label">새 공지 자동 확인</span><button class="switch" class:on={data.settings.scheduler_enabled} role="switch" aria-label="자동 동기화" aria-checked={data.settings.scheduler_enabled} disabled={busy} onclick={() => save({ scheduler_enabled: !data?.settings.scheduler_enabled, scheduler_paused: false })}><span></span></button></div>
       {#if !compact}<div class="settings-row"><span class="row-label">일시 중지</span><button class="switch" class:on={data.settings.scheduler_paused} role="switch" aria-label="자동 동기화 일시 중지" aria-checked={data.settings.scheduler_paused} disabled={busy || !data.settings.scheduler_enabled} onclick={() => save({ scheduler_paused: !data?.settings.scheduler_paused })}><span></span></button></div>{/if}
@@ -188,7 +188,7 @@
     </div>
   {:else if data && part === 'notifications'}
     <div class="settings-group">
-      <div class="settings-row"><span class="row-label">알림<Hint label="알림">공지 동기화와 알림은 별개입니다. 알림은 {isWindows ? 'Windows 설정' : '시스템 권한'}, 집중 모드, 방해 금지 시간의 영향을 받으며, 권한을 허용해도 전달을 보장하지는 않습니다.</Hint>{#if !capabilities?.notifications.available}<span class="row-detail">{capabilities?.notifications.reason ?? '알림 사용 가능 여부를 확인하지 못했습니다.'}</span>{/if}</span><button class="switch" class:on={data.settings.notifications_enabled} role="switch" aria-label="알림 활성화" aria-checked={data.settings.notifications_enabled} disabled={busy || (isWindows && (!capabilities?.notifications.available || notificationAuthorization !== 'granted') && !data.settings.notifications_enabled)} onclick={() => save({ notifications_enabled: !data?.settings.notifications_enabled })}><span></span></button></div>
+      <div class="settings-row"><span class="row-label">알림<Hint label="알림">공지 동기화와 알림은 별개입니다. 알림은 {isWindows ? 'Windows 설정' : '시스템 권한'}, 집중 모드, 방해 금지 시간의 영향을 받습니다. 권한을 허용해도 알림이 반드시 전달되지는 않습니다.</Hint>{#if !capabilities?.notifications.available}<span class="row-detail">{capabilities?.notifications.reason ?? '알림 사용 가능 여부를 확인하지 못했습니다.'}</span>{/if}</span><button class="switch" class:on={data.settings.notifications_enabled} role="switch" aria-label="알림 활성화" aria-checked={data.settings.notifications_enabled} disabled={busy || (isWindows && (!capabilities?.notifications.available || notificationAuthorization !== 'granted') && !data.settings.notifications_enabled)} onclick={() => save({ notifications_enabled: !data?.settings.notifications_enabled })}><span></span></button></div>
       <div class="settings-row" aria-live="polite">
         <span class="row-label">운영체제 알림 권한<span class="row-detail">{authorizationLabel(notificationAuthorization)}</span>
           {#if notificationAuthorization === 'denied'}<span class="row-detail">{isWindows ? 'Windows 설정 → 시스템 → 알림에서 Rhythm을 허용한 뒤 새로고침하세요.' : '시스템 설정의 알림에서 Rhythm을 허용한 뒤 새로고침하세요.'}</span>
@@ -205,7 +205,7 @@
     </div>
 
     {#if !compact}
-    <div class="settings-group-title"><h3 id="notification-history-title" tabindex="-1">알림 기록</h3><Hint label="알림 기록">기록은 이 기기에만 남고 공지 본문은 복사하지 않습니다. 운영체제에 전달을 요청한 것만으로는 표시나 수신이 확인되지 않습니다.</Hint></div>
+    <div class="settings-group-title"><h3 id="notification-history-title" tabindex="-1">알림 기록</h3><Hint label="알림 기록">기록은 이 기기에만 남고 공지 본문은 담지 않습니다. 운영체제에 전달을 요청했다고 해서 알림이 표시됐다는 뜻은 아닙니다.</Hint></div>
     {#if data.history.length}
       <ul class="settings-group" aria-label="알림 기록">{#each showAllHistory ? data.history : data.history.slice(0, historyPreview) as item (item.id)}<li class="settings-row"><span class="row-label history-title">{item.title}<span class="row-detail">{historyLabel(item)} · {localTimestamp(item.created_at)}</span>{#if item.error}<span class="row-detail">{item.error}</span>{/if}{#if item.reason}<span class="row-detail">{item.reason}</span>{/if}</span><button class="text-button" type="button" disabled={historyBusy} aria-label={`${item.title} 공지 열기`} onclick={() => onopen(item.document_id, item.revision_id, item.id, item.attempt_count, [item.id])}>열기</button></li>{/each}</ul>
       <div class="group-footer">
