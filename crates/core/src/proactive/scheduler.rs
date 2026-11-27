@@ -1067,11 +1067,7 @@ async fn discover_and_deliver(
                 }
                 match response {
                     Ok(response) => {
-                        use mac_usernotifications::response::CloseReason;
-                        if response.is_default_action()
-                            && response.close_reason != Some(CloseReason::Dismissed)
-                            && response.close_reason != Some(CloseReason::Expired)
-                        {
+                        if crate::notification::is_activation(&response) {
                             if let Some(activation) = notification::activation_for_items(&deliver) {
                                 if !accepting_callbacks.load(Ordering::Acquire) {
                                     return;
