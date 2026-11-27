@@ -5,9 +5,11 @@
 //! although opening a notice counts as a view on eClass, as in a browser.
 pub mod client;
 pub mod credentials;
+#[cfg(any(test, feature = "test-support"))]
+pub mod fake;
 pub mod parser;
 #[cfg(test)]
-pub(crate) mod tests;
+mod tests;
 
 use super::model::{ArticleInput, ListingEntry, ResourceRecord, SourceInfo};
 use super::sync::{self, with_store, DownloadOutcome, SharedStore};
@@ -41,7 +43,7 @@ impl Connector {
             vault: Vault::native(),
         }
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn memory() -> Self {
         Self {
             session: Session::unpaced(),
@@ -614,69 +616,13 @@ pub struct Status {
     pub rejected: bool,
     pub courses: Vec<crate::storage::cybercampus::CybercampusCourse>,
 }
-fn status(state: &crate::AppState) -> Result<Status, String> {
-    let connector = &state.archive.cybercampus;
-    Ok(Status {
-        id: connector.vault.load()?.map(|credentials| credentials.id),
-        rejected: connector.session.rejected(),
-        courses: with_store(&state.store, |s| s.cybercampus_courses())?,
-    })
-}
-#[tauri::command]
-pub async fn cybercampus_status(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<Status, String> {
-    let _lease = state.operation_gate.shared().await?;
-    status(&state)
-}
-/// Checks the login against eClass and stores it only when the site accepts it.
-#[tauri::command]
-pub async fn cybercampus_save_login(
-    state: tauri::State<'_, crate::AppState>,
-    id: String,
-    password: String,
-) -> Result<Status, String> {
-    let _lease = state.operation_gate.shared().await?;
-    let credentials = credentials::Credentials::new(&id, &password)?;
-    if !sync::with_store(&state.store, |s| s.enabled(crate::extensions::CYBERCAMPUS))? {
-        return Err("사이버캠퍼스 확장 기능을 먼저 켜 주세요.".into());
+impl Status {
+    /// The saved login's ID, the session's rejection flag and the synced courses.
+    pub fn read(connector: &Connector, store: &SharedStore) -> Result<Self, String> {
+        Ok(Self {
+            id: connector.vault.load()?.map(|credentials| credentials.id),
+            rejected: connector.session.rejected(),
+            courses: with_store(store, |s| s.cybercampus_courses())?,
+        })
     }
-    if state.archive.status()?.running {
-        return Err("동기화가 끝난 뒤 다시 시도해 주세요.".into());
-    }
-    let connector = &state.archive.cybercampus;
-    connector
-        .session
-        .login(&client::Reqwest, &credentials, &AtomicBool::new(false))
-        .await?;
-    connector.vault.save(&credentials)?;
-    status(&state)
-}
-/// Deletes the stored login and the in-memory session. Archived notices and
-/// deadlines stay, like any other source's archive.
-#[tauri::command]
-pub async fn cybercampus_forget_login(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<Status, String> {
-    let _lease = state.operation_gate.shared().await?;
-    let connector = &state.archive.cybercampus;
-    connector.vault.clear()?;
-    connector.session.reset().await;
-    status(&state)
-}
-/// The synced term's courses with their unread counts, for the sidebar. Unlike
-/// `cybercampus_status` it does not read the credential store.
-#[tauri::command]
-pub async fn cybercampus_courses(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<Vec<crate::storage::cybercampus::CybercampusCourse>, String> {
-    let _lease = state.operation_gate.shared().await?;
-    with_store(&state.store, |s| s.cybercampus_courses())
-}
-#[tauri::command]
-pub async fn cybercampus_tasks(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<Vec<crate::storage::cybercampus::CybercampusTask>, String> {
-    let _lease = state.operation_gate.shared().await?;
-    with_store(&state.store, |s| s.cybercampus_tasks())
 }

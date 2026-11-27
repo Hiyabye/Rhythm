@@ -567,7 +567,9 @@ async fn cycle(
     reconcile_tasks(store, &prefs, &energy)?;
     if prefs.scheduler_enabled && !prefs.scheduler_paused {
         let due = with_store(store, |store| store.proactive_due_tasks())?;
-        let http = Arc::new(archive::cybercampus::client::Reqwest);
+        let http = Arc::new(archive::cybercampus::client::Reqwest::new(
+            crate::USER_AGENT,
+        ));
         let mut failures = 0;
         let mut successes = 0;
         let mut cancelled = 0;
