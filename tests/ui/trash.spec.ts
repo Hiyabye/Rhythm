@@ -86,3 +86,20 @@ test('the old-notice period is saved with the other settings and survives reopen
   await openSettings(page, '데이터 및 정보');
   await expect(page.getByRole('combobox', { name: '오래된 공지 정리' })).toHaveValue('6');
 });
+
+test('emptying 휴지통 from a filtered list names everything it removes', async ({ page }) => {
+  await mockDesktop(page, { count: 3 });
+  await page.goto('/');
+  await navigate(page, '받은 소식');
+  await page.getByRole('button', { name: '한국어 공지 01 휴지통으로 이동' }).click();
+  await page.getByRole('button', { name: '한국어 공지 02 휴지통으로 이동' }).click();
+  await navigate(page, '휴지통');
+  await expect(list(page).locator('li')).toHaveCount(2);
+  // The list narrows to one notice; emptying still removes both.
+  await page.getByLabel('게시판 분류').selectOption('학사');
+  await expect(list(page).locator('li')).toHaveCount(1);
+  await answerDialogs(page, 'cancel');
+  await page.getByRole('button', { name: '휴지통 비우기' }).click();
+  expect((await dialogMessages(page)).at(-1)).toContain('휴지통의 공지 2개를 영구 삭제할까요?');
+  await expect(list(page).locator('li')).toHaveCount(1);
+});
