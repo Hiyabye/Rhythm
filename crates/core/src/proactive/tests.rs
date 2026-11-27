@@ -888,3 +888,34 @@ fn only_cybercampus_gets_a_scheduled_task() {
     assert_eq!(tasks[0].task_id, "source:cybercampus");
     assert!(tasks[0].enabled);
 }
+
+#[test]
+fn claimed_events_are_released_without_a_spent_attempt_when_a_later_step_fails() {
+    use crate::storage::proactive::{ProactiveClaim, ProactiveEventKey, ProactiveEventState};
+    use std::sync::{Arc, Mutex};
+
+    let (directory, store, settings) = seeded_store(true);
+    let ProactiveClaim::Claimed { event_id, .. } = store
+        .proactive_claim_event(&ProactiveEventKey {
+            document_id: 1,
+            revision_id: 1,
+            event_type: ProactiveEventKind::New,
+        })
+        .unwrap()
+    else {
+        panic!("expected the fresh event to be claimed");
+    };
+    // Fresh-candidate discovery reads `proactive_baseline`; the due-event
+    // claim before it does not, so the failure lands after the first claim.
+    rusqlite::Connection::open(directory.path().join("rhythm.db"))
+        .unwrap()
+        .execute_batch("ALTER TABLE proactive_baseline RENAME TO proactive_baseline_gone")
+        .unwrap();
+    let shared = Arc::new(Mutex::new(store));
+
+    assert!(scheduler::claim_delivery_items(&shared, &settings, 3, None).is_err());
+
+    let event = shared.lock().unwrap().proactive_event(event_id).unwrap();
+    assert_eq!(event.state, ProactiveEventState::Deferred);
+    assert_eq!(event.attempt_count, 0);
+}

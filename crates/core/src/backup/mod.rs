@@ -530,9 +530,15 @@ fn read_manifest<R: Read + io::Seek>(zip: &mut ZipArchive<R>) -> Result<Manifest
     if file.size() > MAX_MANIFEST {
         return Err("백업 정보가 너무 큽니다.".into());
     }
+    // The declared size is attacker-controlled; bound what is actually inflated.
     let mut raw = Vec::with_capacity(file.size() as usize);
-    file.read_to_end(&mut raw)
+    (&mut file)
+        .take(MAX_MANIFEST + 1)
+        .read_to_end(&mut raw)
         .map_err(|_| "백업 정보를 읽지 못했습니다.")?;
+    if raw.len() as u64 > MAX_MANIFEST {
+        return Err("백업 정보가 너무 큽니다.".into());
+    }
     drop(file);
     let manifest: Manifest =
         serde_json::from_slice(&raw).map_err(|_| "백업 정보가 손상되었습니다.")?;

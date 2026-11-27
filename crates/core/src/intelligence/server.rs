@@ -132,7 +132,14 @@ impl Server {
             command.args(["-ngl", "0", "--device", "none"]);
         }
         let observed = Arc::new(Mutex::new(Observed::default()));
-        let (mut child, job) = spawn(command, observed.clone())?;
+        let (mut child, job) = match spawn(command, observed.clone()) {
+            Ok(spawned) => spawned,
+            Err(error) => {
+                // The loopback path wrote its key before spawning.
+                let _ = std::fs::remove_file(&key_file);
+                return Err(error);
+            }
+        };
         #[cfg(unix)]
         if let Some(pid) = child.id() {
             if std::fs::write(runtime.join(PID_FILE), pid.to_string()).is_err() {

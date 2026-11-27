@@ -1042,10 +1042,14 @@ impl Store {
                 },
             )
             .map_err(|e| e.to_string())?
-            .map(|row| {
-                let (mut notice, dim, bytes) = row.map_err(|e| e.to_string())?;
-                notice.vector = decode_vector(dim, &bytes)?;
-                Ok(notice)
+            .filter_map(|row| {
+                let (mut notice, dim, bytes) = match row {
+                    Ok(row) => row,
+                    Err(error) => return Some(Err(error.to_string())),
+                };
+                // One damaged vector must not fail every lookup; skip its row.
+                notice.vector = decode_vector(dim, &bytes).ok()?;
+                Some(Ok(notice))
             })
             .collect::<Result<Vec<_>, String>>()?;
         // Candidate bodies are reduced to their digit runs once, so a cached

@@ -678,3 +678,36 @@ fn windows_restore_recovers_after_process_abort_at_each_transition() {
         assert_eq!(recover_pending_restore(root.path()).unwrap(), None);
     }
 }
+
+#[test]
+fn manifest_that_inflates_past_its_declared_size_is_rejected() {
+    use std::io::{Cursor, Write};
+
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    zip.start_file(MANIFEST, options).unwrap();
+    let chunk = vec![b' '; 1024 * 1024];
+    for _ in 0..(MAX_MANIFEST / chunk.len() as u64 + 2) {
+        zip.write_all(&chunk).unwrap();
+    }
+    zip.start_file("database.sqlite3", options).unwrap();
+    let mut bytes = zip.finish().unwrap().into_inner();
+    // Lie about the uncompressed size in the local and central headers.
+    let patch = |bytes: &mut Vec<u8>, signature: [u8; 4], offset: usize| {
+        let mut found = 0;
+        for at in 0..bytes.len() - 4 {
+            if bytes[at..at + 4] == signature {
+                bytes[at + offset..at + offset + 4].copy_from_slice(&100u32.to_le_bytes());
+                found += 1;
+            }
+        }
+        found
+    };
+    assert!(patch(&mut bytes, [0x50, 0x4b, 0x01, 0x02], 24) >= 1);
+    patch(&mut bytes, [0x50, 0x4b, 0x03, 0x04], 22);
+    let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+    assert_eq!(archive.by_name(MANIFEST).unwrap().size(), 100);
+    // The zip reader itself already stops at the lying declared size, so this
+    // guards the outcome; the explicit `take` is defense in depth.
+    assert!(read_manifest(&mut archive).is_err());
+}

@@ -1557,3 +1557,28 @@ fn removing_one_of_two_inventory_rows_with_one_sha_keeps_the_vectors() {
         .unwrap()
         .is_none());
 }
+
+#[test]
+fn a_corrupt_stored_vector_is_skipped_by_similar_notices() {
+    let (_directory, store) = database();
+    let model = "a".repeat(64);
+    let (target, _) = embedded_notice(&store, "test", "a", "장학", "본문 가", &[1.0, 0.0], &model);
+    let (related, _) =
+        embedded_notice(&store, "test", "b", "장학2", "본문 나", &[1.0, 0.1], &model);
+    let (broken, _) = embedded_notice(&store, "test", "c", "장학3", "본문 다", &[1.0, 0.2], &model);
+    store
+        .connection
+        .execute(
+            "UPDATE notice_embeddings SET vector=x'00' WHERE document_id=?1",
+            [broken],
+        )
+        .unwrap();
+    let similar = &store
+        .ai_similar_notices(&[target], Some(&model), 5)
+        .unwrap()[0]
+        .1;
+    assert_eq!(
+        similar.iter().map(|n| n.document_id).collect::<Vec<_>>(),
+        vec![related]
+    );
+}
