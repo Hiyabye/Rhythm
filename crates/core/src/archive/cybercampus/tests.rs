@@ -275,6 +275,7 @@ const MAINTENANCE: &str = "<p>잠시 점검 중입니다.</p>";
 #[tokio::test]
 async fn a_rejected_login_is_not_retried_automatically() {
     let mut setup = setup(Some("wrong"));
+    with_store(&setup.store, |s| s.set_enabled("cybercampus", true)).unwrap();
     assert_eq!(run(&setup).await.unwrap_err(), client::REJECTED);
     assert!(stopped(&setup));
     setup.fake.clear();
@@ -313,6 +314,7 @@ async fn forgetting_the_login_clears_the_guard() {
 #[tokio::test]
 async fn three_unrecognised_login_answers_in_a_row_stop_automatic_logins() {
     let mut setup = setup(Some("right"));
+    with_store(&setup.store, |s| s.set_enabled("cybercampus", true)).unwrap();
     setup.fake.login_pages.lock().unwrap().extend([
         MAINTENANCE.to_string(),
         MAINTENANCE.into(),
@@ -846,4 +848,75 @@ async fn retrying_a_third_party_image_of_a_notice_stays_with_the_connector() {
     controller.wait().await;
     assert!(http.count("/ilos/co/efile_download.acl") >= 1);
     assert_eq!(status(file), "downloaded");
+}
+
+/// The scripted eClass, calling `hook` when the login POST arrives.
+struct OnLogin<'a> {
+    fake: Fake,
+    hook: Box<dyn Fn() + Send + Sync + 'a>,
+}
+impl client::Http for OnLogin<'_> {
+    async fn send(
+        &self,
+        url: &Url,
+        method: &Method,
+        cookie: Option<String>,
+        limit: usize,
+        cancel: &AtomicBool,
+    ) -> Result<Response, String> {
+        if url.path() == "/ilos/lo/login.acl" {
+            (self.hook)();
+        }
+        self.fake.send(url, method, cookie, limit, cancel).await
+    }
+}
+fn setup_enabled() -> Setup {
+    let setup = setup(None);
+    with_store(&setup.store, |s| s.set_enabled("cybercampus", true)).unwrap();
+    setup
+}
+
+#[tokio::test]
+async fn a_save_does_not_store_the_login_after_a_forget_or_a_disable_meanwhile() {
+    let cancel = AtomicBool::new(false);
+    let right = credentials("right");
+
+    // Nothing intervenes: the login is stored.
+    let setup = setup_enabled();
+    setup
+        .connector
+        .save_login(&setup.fake, &setup.store, &right, &cancel)
+        .await
+        .unwrap();
+    assert!(setup.connector.vault.load().unwrap().is_some());
+
+    // The user forgets the login while the save waits for eClass.
+    let setup = setup_enabled();
+    let http = OnLogin {
+        fake: Fake::default(),
+        hook: Box::new(|| setup.connector.forget_stored().unwrap()),
+    };
+    let error = setup
+        .connector
+        .save_login(&http, &setup.store, &right, &cancel)
+        .await
+        .unwrap_err();
+    assert!(error.contains("삭제"), "{error}");
+    assert!(setup.connector.vault.load().unwrap().is_none());
+
+    // The extension is turned off while the save waits.
+    let setup = setup_enabled();
+    let http = OnLogin {
+        fake: Fake::default(),
+        hook: Box::new(|| {
+            with_store(&setup.store, |s| s.set_enabled("cybercampus", false)).unwrap();
+        }),
+    };
+    let error = setup
+        .connector
+        .save_login(&http, &setup.store, &right, &cancel)
+        .await
+        .unwrap_err();
+    assert!(error.contains("확장 기능"), "{error}");
+    assert!(setup.connector.vault.load().unwrap().is_none());
 }

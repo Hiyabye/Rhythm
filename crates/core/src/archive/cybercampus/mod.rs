@@ -32,15 +32,22 @@ pub use rhythm_sources::catalog::{
 const NOTICE_PAGES: u32 = 25;
 const NOTICE_DISPLAY: u32 = 20;
 
+const LOCKED: &str = "사이버캠퍼스 로그인 정보에 접근하지 못했습니다.";
+
 pub struct Connector {
     pub session: Session,
     pub vault: Vault,
+    /// How many times the login was forgotten. A save compares it before
+    /// storing, so a forget that happened during its network check wins; the
+    /// lock also keeps a forget from slipping between that check and the store.
+    forgotten: std::sync::Mutex<u64>,
 }
 impl Connector {
     pub fn native() -> Self {
         Self {
             session: Session::default(),
             vault: Vault::native(),
+            forgotten: Default::default(),
         }
     }
     #[cfg(any(test, feature = "test-support"))]
@@ -48,11 +55,13 @@ impl Connector {
         Self {
             session: Session::unpaced(),
             vault: Vault::memory(),
+            forgotten: Default::default(),
         }
     }
     /// The user's explicit save: logs in first (this attempt ignores the
     /// account-lock guard; success clears it) and stores the login only when
-    /// eClass accepts it.
+    /// eClass accepts it, the extension is still on and the login was not
+    /// forgotten meanwhile.
     pub async fn save_login<H: Http>(
         &self,
         http: &H,
@@ -60,15 +69,36 @@ impl Connector {
         credentials: &credentials::Credentials,
         cancel: &AtomicBool,
     ) -> Result<(), String> {
+        let seen = *self.forgotten.lock().map_err(|_| LOCKED)?;
         self.session.login(http, store, credentials, cancel).await?;
-        self.vault.save(credentials)
+        let outcome = {
+            let forgotten = self.forgotten.lock().map_err(|_| LOCKED)?;
+            if !with_store(store, |s| s.enabled(crate::extensions::CYBERCAMPUS))? {
+                Err("사이버캠퍼스 확장 기능을 먼저 켜 주세요.".to_string())
+            } else if *forgotten != seen {
+                Err("저장하는 동안 로그인 정보를 삭제해서 저장하지 않았습니다.".to_string())
+            } else {
+                self.vault.save(credentials)
+            }
+        };
+        if outcome.is_err() {
+            // The login that just succeeded must not leave a session behind.
+            self.session.reset().await;
+        }
+        outcome
     }
     /// Deletes the stored login, the in-memory session and the account-lock
     /// guard.
     pub async fn forget_login(&self, store: &SharedStore) -> Result<(), String> {
-        self.vault.clear()?;
+        self.forget_stored()?;
         self.session.reset().await;
         with_store(store, |s| s.cybercampus_login_clear())
+    }
+    /// Deletes the stored login and makes a pending save give up.
+    fn forget_stored(&self) -> Result<(), String> {
+        let mut forgotten = self.forgotten.lock().map_err(|_| LOCKED)?;
+        *forgotten += 1;
+        self.vault.clear()
     }
 }
 
