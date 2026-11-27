@@ -110,6 +110,10 @@ fn listing_reads_the_envelope_and_each_post_change_time() {
     let grown = LAST.replace("\"X-WP-Total\":279", "\"X-WP-Total\":280");
     assert_ne!(grown, LAST);
     assert!(listing(&source, 6, &grown).is_err());
+    // A total too small for the declared pages is an error, not an underflow.
+    let shrunk = LAST.replace("\"X-WP-Total\":279", "\"X-WP-Total\":10");
+    assert_ne!(shrunk, LAST);
+    assert!(listing(&source, 6, &shrunk).is_err());
 }
 
 #[test]

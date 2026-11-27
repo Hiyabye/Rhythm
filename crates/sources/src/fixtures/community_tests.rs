@@ -19,6 +19,14 @@ fn clean(parsed: &ArticleInput) {
     assert!(!parsed.unsupported_body);
 }
 
+/// The entry as an older run stored it: its link carries the listing page.
+fn requested_on(entry: &ListingEntry, page: u32) -> ListingEntry {
+    ListingEntry {
+        url: entry.url.replacen("pNo=1", &format!("pNo={page}"), 1),
+        ..entry.clone()
+    }
+}
+
 #[test]
 fn nine_boards_parse_official_list_and_detail_pages() {
     let cases: [(&str, &str, u32, &str, &str, &str); 9] = [
@@ -98,8 +106,13 @@ fn nine_boards_parse_official_list_and_detail_pages() {
     for (id, list, page, detail, external, published) in cases {
         let source = source(id);
         let page_data = listing(&source, page, list).unwrap();
-        let entry = entry_of(&page_data, external);
+        let listed = entry_of(&page_data, external);
+        // The detail fixtures were captured by requesting the old link, which
+        // carried its listing page.
+        let entry = requested_on(&listed, page);
         let parsed = article(&source, &entry, detail).unwrap();
+        assert_eq!(parsed.canonical_url, listed.url, "{id}");
+        assert!(parsed.canonical_url.contains("&pNo=1"), "{id}");
         clean(&parsed);
         assert_eq!(parsed.external_id, external, "{id}");
         assert_eq!(parsed.published_at, published, "{id}");
@@ -118,7 +131,7 @@ fn resources_keep_attachments_and_policy_blocked_images() {
     let page_data = listing(&general, 2, include_str!("community-ee-general-page2.html")).unwrap();
     let parsed = article(
         &general,
-        &entry_of(&page_data, "2867"),
+        &requested_on(&entry_of(&page_data, "2867"), 2),
         include_str!("community-ee-general-detail-2867.html"),
     )
     .unwrap();
@@ -327,7 +340,7 @@ fn wrong_page_wrong_board_and_tampered_rows_are_rejected() {
 fn article_rejects_a_different_board_and_a_foreign_attachment_identity() {
     let general = source("ee-general");
     let page = listing(&general, 2, include_str!("community-ee-general-page2.html")).unwrap();
-    let entry = entry_of(&page, "2867");
+    let entry = requested_on(&entry_of(&page, "2867"), 2);
     assert!(article(
         &general,
         &entry,
@@ -383,6 +396,41 @@ fn unescaped_bracket_title_is_kept_literally() {
     let parsed = article(&employment, &entry_of(&page, "2872"), &detail).unwrap();
     assert_eq!(parsed.title, raw);
     assert_eq!(parsed.original, detail);
+}
+#[test]
+fn a_notice_keeps_its_link_on_whatever_page_it_is_listed() {
+    for (id, code) in [("ee-news", "&code=news"), ("sse-notices", "")] {
+        let board = board(&source(id)).unwrap();
+        let path = board.path;
+        let link = |page: u32| {
+            let href = format!("{path}?m=v&idx=2865&pNo={page}{code}");
+            listing_entry(&board, page, &href, false, &mut HashSet::new()).unwrap()
+        };
+        let (first, second) = (link(1), link(2));
+        assert_eq!(first.url, second.url, "{id}");
+        assert_eq!(
+            first.url,
+            format!("https://{}{path}?m=v&idx=2865&pNo=1{code}", board.host),
+            "{id}"
+        );
+    }
+    // The row's own page is still checked against the page being listed.
+    let board = board(&source("ee-news")).unwrap();
+    let href = format!("{}?m=v&idx=2865&pNo=2&code=news", board.path);
+    assert!(listing_entry(&board, 1, &href, false, &mut HashSet::new()).is_err());
+}
+#[test]
+fn links_stored_with_a_listing_page_still_give_a_detail_url() {
+    let news = source("ee-news");
+    let page = listing(&news, 1, include_str!("community-ee-news-list.html")).unwrap();
+    let listed = entry_of(&page, "2865");
+    for number in [1, 2, 17] {
+        let old = requested_on(&listed, number);
+        let url = detail_url(&news, &old).unwrap();
+        assert_eq!(url.as_str(), old.url);
+    }
+    // Page zero is no page.
+    assert!(detail_url(&news, &requested_on(&listed, 0)).is_err());
 }
 #[test]
 fn only_tags_with_non_ascii_names_are_escaped() {

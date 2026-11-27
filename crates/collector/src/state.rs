@@ -938,7 +938,7 @@ fn https_url(value: &str) -> bool {
 }
 /// The same bounds the app applies before archiving; a parser regression must
 /// fail here instead of publishing a malformed notice.
-fn validate(source_id: &str, article: &ArticleInput) -> Result<(), String> {
+pub fn validate(source_id: &str, article: &ArticleInput) -> Result<(), String> {
     let empty_body = article.body_text.trim().is_empty() && article.body_html.trim().is_empty();
     // The approved metadata-only exceptions: main-site iframe bodies and k2web
     // poster bodies.
@@ -1192,5 +1192,59 @@ mod tests {
             .unwrap();
         assert_eq!(state.refresh_dates().unwrap(), 1);
         assert_eq!(dates(&state, id).0, Some(EXTRACTOR_VERSION));
+    }
+
+    #[test]
+    fn a_community_notice_moving_to_another_page_is_not_a_revision() {
+        use rhythm_sources::{catalog, parser};
+        let source = catalog::definitions()
+            .into_iter()
+            .find(|source| source.id == "ee-general")
+            .unwrap();
+        let list = include_str!("../../sources/src/fixtures/community-ee-general-page2.html");
+        let detail =
+            include_str!("../../sources/src/fixtures/community-ee-general-detail-2867.html");
+        let listed = parser::listing(&source, 2, list)
+            .unwrap()
+            .entries
+            .into_iter()
+            .find(|entry| entry.external_id == "2867")
+            .unwrap();
+        // How an earlier run stored it: the link carried the page it was listed
+        // on (the detail page echoes the requested page).
+        let stored = rhythm_sources::model::ListingEntry {
+            url: listed.url.replacen("pNo=1", "pNo=2", 1),
+            ..listed.clone()
+        };
+        let before = parser::article(&source, &stored, detail).unwrap();
+        // Listed on page 1 later: the same notice, requested with `pNo=1`.
+        let after = parser::article(&source, &listed, &detail.replace("pNo=2", "pNo=1")).unwrap();
+        assert_eq!(before.canonical_url, after.canonical_url);
+        assert_eq!(
+            revision_hash(&before).unwrap(),
+            revision_hash(&after).unwrap()
+        );
+
+        let state = State::open_in_memory().unwrap();
+        state.board("ee-general").unwrap();
+        state.upsert("ee-general", &before, false).unwrap();
+        let revised = |state: &State| -> String {
+            state
+                .with(|c| {
+                    c.execute(
+                        "UPDATE notices SET revised_at='2000-01-01T00:00:00.000Z'",
+                        [],
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+            "2000-01-01T00:00:00.000Z".into()
+        };
+        let backdated = revised(&state);
+        state.upsert("ee-general", &after, false).unwrap();
+        let now: String = state
+            .with(|c| c.query_row("SELECT revised_at FROM notices", [], |row| row.get(0)))
+            .unwrap();
+        assert_eq!(now, backdated);
     }
 }

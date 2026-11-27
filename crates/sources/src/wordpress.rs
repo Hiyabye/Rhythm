@@ -112,6 +112,10 @@ pub(super) fn listing(
         .filter(|pages| *pages <= u64::from(u32::MAX))
         .ok_or(PARSER_ERROR)? as u32;
     let rows = value["body"].as_array().ok_or(PARSER_ERROR)?;
+    // The envelope must agree with itself before any arithmetic on it.
+    if u64::from(pages) != total.div_ceil(u64::from(PER_PAGE)) || (page > pages && page != 1) {
+        return invalid();
+    }
     let expected = if page < pages {
         u64::from(PER_PAGE)
     } else if page == pages {
@@ -120,10 +124,7 @@ pub(super) fn listing(
         // Only an empty first page lies beyond the page count (no posts yet).
         0
     };
-    if u64::from(pages) != total.div_ceil(u64::from(PER_PAGE))
-        || (page > pages && page != 1)
-        || rows.len() as u64 != expected
-    {
+    if rows.len() as u64 != expected {
         return invalid();
     }
     let mut seen = HashSet::new();
