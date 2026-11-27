@@ -122,10 +122,10 @@
       catalog = next.sources;
       groupList = next.groups;
       const running = Boolean(status?.running);
-      feedback = source.family !== 'cybercampus' ? (subscribed ? `${source.name} 구독을 시작했습니다. 이 게시판 공지를 추천과 알림에 포함합니다.` : `${source.name} 구독을 해제했습니다. 받은 공지는 목록에 남고 추천과 알림에서만 빠집니다.`)
-        : !subscribed ? `${source.name} 구독을 해제했습니다.${running ? ' 이 게시판의 가져오기만 멈춥니다.' : ''} 보관한 공지는 남습니다.`
-        : running ? `${source.name} 구독을 시작했습니다. 지금 진행 중인 작업이 끝난 뒤 새로고침을 눌러야 가져옵니다.`
-        : `${source.name} 구독을 시작했습니다. 새로고침을 눌러야 가져옵니다.`;
+      feedback = source.family !== 'cybercampus' ? (subscribed ? `${source.name} 구독을 시작했습니다.` : `${source.name} 구독을 해제했습니다. 받은 공지는 남지만 추천과 알림에서 빠집니다.`)
+        : !subscribed ? `${source.name} 구독을 해제했습니다. 보관한 공지는 남습니다.`
+        : running ? `${source.name} 구독을 시작했습니다. 지금 작업이 끝난 뒤 새로고침하면 가져옵니다.`
+        : `${source.name} 구독을 시작했습니다. 새로고침하면 가져옵니다.`;
     } catch (reason) { if (active) error = archiveError(reason); }
     finally { if (active) busy = false; }
   }
@@ -142,7 +142,7 @@
       catalog = next.sources;
       groupList = next.groups;
       // Only public boards have groups.
-      feedback = !on ? `${node.group.name} 그룹을 껐습니다. 아래 게시판 공지는 추천과 알림에서 빠집니다. 고른 게시판과 받은 공지는 그대로 남습니다.`
+      feedback = !on ? `${node.group.name} 그룹을 껐습니다. 받은 공지는 남지만 추천과 알림에서 빠집니다.`
         : `${node.group.name} 그룹을 켰습니다. 전에 고른 게시판을 다시 구독합니다.`;
       return true;
     } catch (reason) { if (active) error = archiveError(reason); return false; }
@@ -170,7 +170,7 @@
   async function cancel() {
     busy = true;
     error = '';
-    try { status = await invoke<SyncStatus>('archive_cancel'); feedback = '중단을 요청했습니다. 이미 저장한 공지는 유지됩니다.'; }
+    try { status = await invoke<SyncStatus>('archive_cancel'); feedback = '중단을 요청했습니다. 저장한 공지는 남습니다.'; }
     catch (reason) { error = archiveError(reason); }
     finally { busy = false; }
   }
@@ -201,7 +201,7 @@
   <div class="collect-bar">
     <button class="button small" disabled={locked || !subscribed.length} onclick={() => start('refresh')}>새로고침</button>
     <button class="button secondary small" disabled={locked || !subscribed.length} onclick={() => start('resources')}>자료 모두 내려받기</button>
-    <Hint label="가져오기">저장한 로그인으로 본인 강좌의 공지와 과제·마감을 가져옵니다. 구독만으로는 아무것도 가져오지 않습니다. 중단해도 저장한 자료는 남고, 다시 누르면 이어서 가져옵니다. 처음 가져오는 기록은 새 소식으로 세지 않습니다. 자료 모두 내려받기는 받지 못한 첨부 파일과 이미지를 한 번에 최대 256 MB까지 받으며, 다시 누르면 이어서 받습니다. 접근 제한은 우회하지 않습니다.</Hint>
+    <Hint label="가져오기">구독한 강좌의 공지와 과제·마감을 가져옵니다. 중단해도 받은 자료는 남고, 다시 누르면 이어서 가져옵니다. 자료 모두 내려받기는 남은 첨부 파일과 이미지를 한 번에 256 MB까지 받습니다.</Hint>
     <span class="collect-status" role="status" aria-live="polite">
       {#if status?.running}<Spinner />{runningLabel(status)}{:else if !loading}구독 {subscribed.length}개{/if}
     </span>
@@ -220,7 +220,7 @@
           {#if source.feed}
             <p>{feedLabel(source.feed)}</p>
             <dl class="popover-facts"><div><dt>서버 마지막 수집</dt><dd>{archiveDate(source.feed.last_success_at, clock.format)}</dd></div></dl>
-          {:else}<p>아직 공지 피드에서 이 게시판 소식을 받지 않았습니다.</p>{/if}
+          {:else}<p>아직 이 게시판 소식을 받지 않았습니다.</p>{/if}
           <code class="popover-code">{source.url}</code>
         </Popover>
       {:else if source.supported}
@@ -233,10 +233,10 @@
           {#if source.last_error}<p class="archive-error">{archiveError(source.last_error)}</p>{/if}
           {#if source.skipped_count}
             <p class="popover-subtitle">가져오지 못한 공지 {source.skipped_count}건</p>
-            <p>원문을 읽지 못해 건너뛰었습니다. 나머지 공지는 계속 가져왔습니다.</p>
+            <p>원문을 읽지 못해 건너뛴 공지입니다.</p>
             <ul class="skipped-list">
               {#each source.skipped as item (item.external_id)}
-                <li><button class="text-button" onclick={() => openOriginal(item.url)}>공지 {item.external_id} 원문 열기</button><span>{item.archived ? '이전에 보관한 내용은 그대로 읽을 수 있습니다.' : archiveError(item.reason)}</span></li>
+                <li><button class="text-button" onclick={() => openOriginal(item.url)}>공지 {item.external_id} 원문 열기</button><span>{item.archived ? '전에 보관한 내용은 읽을 수 있습니다.' : archiveError(item.reason)}</span></li>
               {/each}
             </ul>
             {#if source.skipped_count > source.skipped.length}<p class="footnote">최근 {source.skipped.length}건만 표시합니다.</p>{/if}
@@ -316,7 +316,7 @@
   {#if unsupportedCount}
     <details class="board-unsupported">
       <summary>미지원 게시판 {unsupportedCount}개</summary>
-      <p class="footnote">원문 수집을 확인하지 못한 게시판은 구독할 수 없습니다.</p>
+      <p class="footnote">아직 지원하지 않아 구독할 수 없는 게시판입니다.</p>
       {#each unsupportedGroups as [organization, members] (organization)}
         <h3 class="settings-group-title">{organizationLabel(organization)}</h3>
         <ul class="board-grid" aria-label={organization}>{#each members as source (source.id)}{@render tile(source, organization)}{/each}</ul>

@@ -17,8 +17,8 @@ test('Windows build offers manual installer updates without invoking updater com
   await page.goto('/');
   await openSettings(page, '데이터 및 정보');
   const updater = page.locator('#about');
-  await expect(updater).toContainText('최신 Windows 설치 파일을 내려받습니다.');
-  await expect(updater).toContainText('트레이 메뉴에서 완전히 종료');
+  await expect(updater).toContainText('최신 Windows 설치 파일을 받습니다.');
+  await expect(updater).toContainText('트레이 메뉴에서 Rhythm을 종료');
   await expect(updater).not.toContainText('DMG');
   await expect(updater.getByRole('button', { name: '업데이트 확인', exact: true })).toHaveCount(0);
   expect(await callCount(page, 'updater_check')).toBe(0);
@@ -142,7 +142,7 @@ test('first notification connection requires an explicit test and separate opt-i
   await expect(testButton).toBeVisible();
   expect(await callCount(page, 'notification_request_permission')).toBe(0);
   await testButton.click();
-  await expect(page.getByText('Windows에 시험 알림 표시를 요청했습니다. 실제 화면 표시 여부는 확인하지 못했습니다.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Windows에 시험 알림을 보냈습니다. 화면에 표시됐는지는 알 수 없습니다.', { exact: true })).toBeVisible();
   await expect(toggle).toBeEnabled();
   await expect(toggle).toHaveAttribute('aria-checked', 'false');
   expect(await callCount(page, 'notification_request_permission')).toBe(1);
@@ -203,9 +203,9 @@ test('the notice feed status reads the same under a Windows user agent', async (
   await page.goto('/');
   await openSettings(page, '게시판');
   const feed = page.getByRole('region', { name: '공지 피드', exact: true });
-  await expect(feed).toContainText('연결되면 자동으로 다시 받습니다');
+  await expect(feed).toContainText('연결되면 다시 받습니다');
   await feed.getByRole('button', { name: '지금 받기', exact: true }).click();
-  await expect(feed).not.toContainText('연결되면 자동으로 다시 받습니다');
+  await expect(feed).not.toContainText('연결되면 다시 받습니다');
   expect(await callCount(page, 'feed_sync')).toBe(1);
 });
 

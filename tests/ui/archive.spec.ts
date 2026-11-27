@@ -307,7 +307,7 @@ test('public boards come from the feed: subscriptions only filter, and each boar
   await expect(page.getByRole('dialog', { name: '취업 상태', exact: true })).toContainText('서버가 연속 4회 가져오지 못함 · 공개된 이전 공지 모두 받음');
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: '소프트웨어융합대학 장학 상태', exact: true }).click();
-  await expect(page.getByRole('dialog', { name: '장학 상태', exact: true })).toContainText('아직 공지 피드에서 이 게시판 소식을 받지 않았습니다.');
+  await expect(page.getByRole('dialog', { name: '장학 상태', exact: true })).toContainText('아직 이 게시판 소식을 받지 않았습니다.');
   await page.keyboard.press('Escape');
 
   await page.evaluate(() => { (window as any).__fixture.subscribeError = true; });
@@ -321,10 +321,10 @@ test('public boards come from the feed: subscriptions only filter, and each boar
   await expect(subscribe).toBeDisabled();
   await expect(subscribe).toHaveAttribute('aria-checked', 'true');
   await expect(subscribe).toBeEnabled();
-  await expect(page.locator('.source-manager .archive-feedback')).toContainText('이 게시판 공지를 추천과 알림에 포함합니다');
+  await expect(page.locator('.source-manager .archive-feedback')).toContainText('구독을 시작했습니다.');
   await career.click();
   await expect(career).toHaveAttribute('aria-checked', 'false');
-  await expect(page.locator('.source-manager .archive-feedback')).toContainText('받은 공지는 목록에 남고 추천과 알림에서만 빠집니다');
+  await expect(page.locator('.source-manager .archive-feedback')).toContainText('받은 공지는 남지만 추천과 알림에서 빠집니다');
   expect(await callCount(page, 'archive_start')).toBe(0);
 });
 
@@ -343,7 +343,7 @@ test('skipped notices are listed per board with their originals and an explicit 
   const status = page.getByRole('dialog', { name: '강의 공지 상태', exact: true });
   await expect(status).toContainText('가져오지 못한 공지 21건');
   await expect(status).toContainText('최근 2건만 표시합니다.');
-  await expect(status).toContainText('이전에 보관한 내용은 그대로 읽을 수 있습니다.');
+  await expect(status).toContainText('전에 보관한 내용은 읽을 수 있습니다.');
   await status.getByRole('button', { name: '공지 A1-3110 원문 열기', exact: true }).click();
   const calls = (command: string) => page.evaluate((name) => (window as any).__fixture.calls.filter((call: any) => call.command === name).map((call: any) => call.args), command);
   await expect.poll(() => calls('archive_open_original')).toEqual([{ url: 'https://eclass.sogang.ac.kr/ilos/3110' }]);

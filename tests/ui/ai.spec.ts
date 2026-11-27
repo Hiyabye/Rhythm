@@ -29,7 +29,7 @@ test('installing the classification model shows progress and selects it', async 
   await openSettings(page, 'AI');
   const section = page.getByRole('group', { name: '공지 분류' });
   await expect(section).toContainText('설치하지 않음');
-  await expect(section).toContainText('AI 요약과 원격 AI 연결은 더 이상 제공하지 않습니다.');
+  await expect(section).toContainText('AI 요약과 원격 AI는 더 이상 제공하지 않습니다.');
   await section.getByRole('button', { name: '분류 모델 설치', exact: true }).click();
   await expect(section.getByText('분류 모델 다운로드')).toBeAttached();
   await expect(section.locator('#ai-classification-enabled')).toBeChecked();
@@ -196,7 +196,7 @@ test('managed model removal can keep files after an inaccessible folder error an
   await openSettings(page, 'AI');
   await page.getByRole('button', { name: '모델 삭제', exact: true }).click();
   const confirmation = page.getByRole('group', { name: 'Qwen3.5 4B 삭제 확인', exact: true });
-  await expect(confirmation).toContainText('폴더에 접근할 수 없으면 파일을 남기고 목록에서 제거하세요.');
+  await expect(confirmation).toContainText('폴더에 접근할 수 없으면 파일은 두고 목록에서만 제거하세요.');
   await confirmation.getByRole('button', { name: '취소', exact: true }).click();
   await expect(confirmation).toHaveCount(0);
   expect(await callCount(page, 'ai_remove')).toBe(0);

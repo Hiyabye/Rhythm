@@ -16,7 +16,7 @@ test('sync interval distinguishes the energy-profile default from an explicit on
   const interval = page.getByLabel('확인 간격', { exact: true });
   await expect(interval).toHaveValue('0');
   await page.getByRole('button', { name: '자동 동기화 설명', exact: true }).click();
-  await expect(page.getByText('전원 모드 기본값은 절전 60분, 균형 30분, 성능 15분', { exact: false })).toBeVisible();
+  await expect(page.getByText('기본 간격은 전원 모드를 따릅니다(절전 60분, 균형 30분, 성능 15분)', { exact: false })).toBeVisible();
   await page.keyboard.press('Escape');
 
   await interval.selectOption('60');
@@ -138,7 +138,7 @@ test('unsupported notification permission APIs are reported as unavailable and c
   await openSettings(page, '알림·백그라운드');
 
   await expect(permission(page)).toContainText('이 환경에서 사용할 수 없음');
-  await expect(permission(page)).toContainText('이 환경에서는 권한을 확인하거나 요청할 수 없습니다.');
+  await expect(permission(page)).toContainText('이 환경에서는 권한을 확인할 수 없습니다.');
   expect(await callCount(page, 'notification_authorization')).toBe(1);
   expect(await callCount(page, 'notification_request_permission')).toBe(0);
   await expect(page.getByRole('button', { name: '운영체제 알림 권한 요청', exact: true })).toBeDisabled();
@@ -177,7 +177,7 @@ test('history can be cleared and opens its stable document destination in the ar
 
   await answerDialogs(page, 'ok');
   await page.getByRole('button', { name: '알림 기록 비우기', exact: true }).click();
-  await expect(page.getByText('저장된 알림 기록이 없습니다.', { exact: true })).toBeVisible();
+  await expect(page.getByText('알림 기록이 없습니다.', { exact: true })).toBeVisible();
   expect(await callCount(page, 'proactive_clear_history')).toBe(1);
 });
 

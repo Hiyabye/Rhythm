@@ -13,7 +13,7 @@
   ]);
 </script>
 
-{#if !compact}<p class="footnote">켠 확장 기능만 메뉴, 오늘 화면과 설정에 나타납니다. 꺼도 보관한 공지, 저장한 항목과 설정은 그대로 남고 다시 켜면 이어서 쓸 수 있습니다.</p>{/if}
+{#if !compact}<p class="footnote">켠 기능만 메뉴, 오늘 화면, 설정에 나타납니다. 꺼도 공지와 설정은 지워지지 않습니다.</p>{/if}
 {#each groups as group (group.title)}
   <h3 class="settings-group-title">{group.title}</h3>
   <div class="settings-group">

@@ -36,7 +36,7 @@ test('an offline feed stays quiet in settings and explains itself in the list', 
   await expect(banner).toHaveAttribute('role', 'status');
   await banner.getByRole('button', { name: '상태 보기', exact: true }).click();
   const feed = page.getByRole('region', { name: '공지 피드', exact: true });
-  await expect(feed).toContainText('연결되면 자동으로 다시 받습니다');
+  await expect(feed).toContainText('연결되면 다시 받습니다');
   await expect(feed.getByRole('alert')).toHaveCount(0);
 });
 
