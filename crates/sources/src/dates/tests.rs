@@ -301,3 +301,73 @@ fn archived_dates_evaluation() {
     )
     .unwrap();
 }
+
+fn all_days(text: &str, published: &str) -> Vec<String> {
+    extract(text, published)
+        .into_iter()
+        .map(|found| found.day)
+        .collect()
+}
+
+#[test]
+fn a_length_of_days_is_not_a_range_end() {
+    // `3일 이내` would otherwise be February 3 of the next year, as a deadline.
+    for text in [
+        "합격자는 2월 10일부터 3일 이내 등록금을 납부해야 합니다.",
+        "합격자는 2월 10일부터 3일 동안 등록금을 납부해야 합니다.",
+        "합격자는 2월 10일부터 3일간 등록금을 납부해야 합니다.",
+    ] {
+        assert_eq!(all_days(text, "2026-02-01"), ["2026-02-10"], "{text}");
+    }
+    // A day-only end before the start's day is not in the start's month.
+    assert_eq!(
+        all_days("행사 기간: 9월 28일 ~ 5일", "2026-09-01"),
+        ["2026-09-28"]
+    );
+    // An end written before its start keeps only the start.
+    assert_eq!(
+        all_days("행사 기간: 2026. 9. 5. ~ 2026. 9. 1.", "2026-09-01"),
+        ["2026-09-05"]
+    );
+    // A real day-only end still closes the range.
+    let found = extract("신청: 9월 1일 ~ 7일", "2026-08-20");
+    assert_eq!(days(&found, Kind::Start), ["2026-09-01"]);
+    assert_eq!(days(&found, Kind::Deadline), ["2026-09-07"]);
+}
+
+#[test]
+fn a_metadata_word_hides_a_date_only_as_its_label() {
+    let found = extract("신입생 등록일: 2026. 2. 20.(금) ~ 2. 24.(화)", "2026-02-01");
+    assert_eq!(days(&found, Kind::Start), ["2026-02-20"]);
+    assert_eq!(days(&found, Kind::Deadline), ["2026-02-24"]);
+    // The text after each date keeps the sign-off rule out of these cases.
+    for text in [
+        "작성일 2026-09-01 아래 내용을 확인하시고 기한 안에 처리해 주시기 바랍니다.",
+        "작성자 관리자 | 등록일 2026-09-01 아래 내용을 확인하시고 처리해 주시기 바랍니다.",
+        "등록일 : 2026.09.01 아래 내용을 확인하시고 기한 안에 처리해 주시기 바랍니다.",
+        "조회 12 · 최종수정일자: 2026-09-01 아래 내용을 확인하시고 처리해 주시기 바랍니다.",
+    ] {
+        assert!(extract(text, "2026-09-01").is_empty(), "{text}");
+    }
+}
+
+#[test]
+fn only_a_time_of_day_is_a_time() {
+    let time = |text: &str| {
+        let found = extract(text, "2026-11-01");
+        assert_eq!(found.len(), 1, "{text}");
+        found[0].time.clone()
+    };
+    assert_eq!(time("특강 일시: 11월 12일 3시간 동안 진행"), None);
+    assert_eq!(time("특강 일시: 11월 12일 24:30"), None);
+    assert_eq!(time("특강 일시: 11월 12일 24:00").as_deref(), Some("24:00"));
+    assert_eq!(
+        time("특강 일시: 11월 12일 오전 12시").as_deref(),
+        Some("00:00")
+    );
+    assert_eq!(
+        time("특강 일시: 11월 12일 오후 12시").as_deref(),
+        Some("12:00")
+    );
+    assert_eq!(time("특강 일시: 11월 12일 3시").as_deref(), Some("03:00"));
+}

@@ -27,8 +27,10 @@ pub struct Found {
     pub kind: Kind,
 }
 
-/// A date with nothing before it except one of these is page metadata.
-const HEADER: [&str; 4] = ["작성일", "게시일", "등록일", "수정일"];
+/// A date labelled with one of these is page metadata.
+const HEADER: [&str; 3] = ["작성일", "게시일", "수정일"];
+/// Page metadata only as the whole label: `신입생 등록일` is an event.
+const HEADER_ALONE: &str = "등록일";
 /// A clause with one of these reports a replaced or cancelled date.
 const SUPERSEDED: [&str; 6] = [
     "취소합니다",
@@ -74,7 +76,7 @@ const WEEKDAYS: [char; 7] = ['일', '월', '화', '수', '목', '금', '토'];
 
 /// Bump when the extraction rules change: the app and the collector store it
 /// with their dates and re-extract notices extracted by another version.
-pub const EXTRACTOR_VERSION: i64 = 3;
+pub const EXTRACTOR_VERSION: i64 = 4;
 
 /// The dates of one notice: its title and body as one text, since titles often
 /// carry the deadline (`채용 (~9/29(화)까지)`). The app and the collector both
@@ -104,7 +106,7 @@ pub fn extract(text: &str, published: &str) -> Vec<Found> {
             let before = &clause[segment_start..index];
             segment_start = expression.end;
             index = expression.end;
-            if HEADER.iter().any(|word| before.contains(word)) {
+            if header(before) {
                 continue;
             }
             // Keywords count only between the previous date and a short window
@@ -177,6 +179,11 @@ pub fn extract(text: &str, published: &str) -> Vec<Found> {
                     let deadline = due || action || expression.until && !period;
                     let kind = due_on(end_date, deadline);
                     let span = day_number(end_date) - day_number(start);
+                    // An end written before its start is a typo: keep the start.
+                    if span < 0 {
+                        push(start, &expression.start.time, Kind::Date);
+                        continue;
+                    }
                     if kind == Kind::Date && (1..=MAX_SPAN_DAYS).contains(&span) {
                         push(start, &expression.start.time, Kind::Date);
                         let item = found.last_mut().unwrap();
@@ -193,7 +200,13 @@ pub fn extract(text: &str, published: &str) -> Vec<Found> {
                     let until = expression.until || open_end;
                     let deadline = due || until && (action || !period);
                     let kind = due_on(start, deadline);
-                    let tail = text[offset + expression.end..].trim().chars().count();
+                    // Only whether the rest is short matters, so do not count
+                    // all of it for every date.
+                    let tail = text[offset + expression.end..]
+                        .trim()
+                        .chars()
+                        .take(SIGNATURE_TAIL + 1)
+                        .count();
                     if kind == Kind::Date
                         && expression.start.time.is_none()
                         && published.is_some_and(|p| start <= p)
@@ -221,6 +234,22 @@ pub fn extract(text: &str, published: &str) -> Vec<Found> {
         }
     }
     deduplicate(found)
+}
+
+/// Whether the text before a date labels it as page metadata (`작성일 :`,
+/// `조회 12 | 수정일자`). The label is the last field before the date, so a
+/// header word earlier in the sentence does not hide a real date.
+fn header(before: &str) -> bool {
+    let field = before.rsplit(['|', '·']).next().unwrap_or(before);
+    let field = field
+        .trim()
+        .trim_end_matches([':', '：'])
+        .trim_matches(|c: char| c.is_whitespace() || matches!(c, '[' | ']' | '(' | ')'));
+    let Some(last) = field.split_whitespace().next_back() else {
+        return false;
+    };
+    let last = last.strip_suffix('자').unwrap_or(last);
+    HEADER.iter().any(|word| last.ends_with(word)) || field == HEADER_ALONE
 }
 
 fn iso(date: (u32, u32, u32)) -> String {
@@ -445,7 +474,11 @@ fn expression_at(text: &str, index: usize) -> Option<Expression> {
     // start and the cursor stays at the date.
     if let Some(after_marker) = range_marker(text, cursor) {
         let next = skip_space(text, after_marker);
-        if let Some((mut end, after)) = date_at(text, next, true) {
+        // A day-only end (`~ 7일`) is in the start's month, so it comes after
+        // the start's day; anything else is not this range's end.
+        let end =
+            date_at(text, next, true).filter(|(end, _)| end.month.is_some() || end.day > start.day);
+        if let Some((mut end, after)) = end {
             end.month = end.month.or(start.month);
             end_date = Some(end);
             cursor = after;
@@ -612,10 +645,16 @@ fn short_date(
         return month_day(first, day, after_day);
     }
     if range_end {
-        // `~ 7일` or `~ 19(금)`; date_at reads the weekday itself. `부터 3일간`
-        // is a duration.
+        // `~ 7일` or `~ 19(금)`; date_at reads the weekday itself. `부터 3일간`,
+        // `3일 이내` and `3일 동안` are durations.
         let end = expect(text, after_first, "일")
-            .filter(|&end| !text[end..].starts_with('간'))
+            .filter(|&end| {
+                let rest = &text[end..];
+                !rest.starts_with('간')
+                    && !["이내", "동안"]
+                        .iter()
+                        .any(|word| rest.trim_start().starts_with(word))
+            })
             .or_else(|| weekday_at(text, after_first).map(|_| after_first))?;
         return Some((
             Written {
@@ -664,9 +703,10 @@ fn range_follows(text: &str, end: usize) -> bool {
 /// `17:00`, `18시`, `오후 5시 30분`, `밤 12시`, normalized to 24-hour `HH:MM`.
 fn time_at(text: &str, index: usize) -> Option<(String, usize)> {
     let night = expect(text, index, "밤");
+    let morning = expect(text, index, "오전");
     let (afternoon, cursor) = if let Some(after) = expect(text, index, "오후").or(night) {
         (true, skip_space(text, after))
-    } else if let Some(after) = expect(text, index, "오전") {
+    } else if let Some(after) = morning {
         (false, skip_space(text, after))
     } else {
         (false, index)
@@ -677,7 +717,9 @@ fn time_at(text: &str, index: usize) -> Option<(String, usize)> {
         (after_minute - after_colon == 2).then_some(())?;
         (hour, minute, after_minute)
     } else {
-        let after_hour = expect(text, after_hour, "시")?;
+        // `3시간` is a length of time.
+        let after_hour =
+            expect(text, after_hour, "시").filter(|&end| !text[end..].starts_with('간'))?;
         let minutes = number_at(text, skip_space(text, after_hour))
             .and_then(|(minute, after)| expect(text, after, "분").map(|end| (minute, end)));
         match minutes {
@@ -688,8 +730,12 @@ fn time_at(text: &str, index: usize) -> Option<(String, usize)> {
     // `밤 12시` is midnight at the end of that day, written 24:00.
     if afternoon && hour < 12 || night.is_some() && hour == 12 {
         hour += 12;
+    } else if morning.is_some() && hour == 12 {
+        hour = 0;
     }
-    (hour <= 24 && minute < 60).then(|| (format!("{hour:02}:{minute:02}"), end))
+    // 24:00 is the end of the day; no later time exists.
+    (minute < 60 && (hour < 24 || hour == 24 && minute == 0))
+        .then(|| (format!("{hour:02}:{minute:02}"), end))
 }
 
 /// The written date as a calendar day. A missing year is the one that puts the
