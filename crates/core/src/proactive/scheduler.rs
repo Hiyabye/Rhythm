@@ -800,6 +800,16 @@ pub(super) fn revalidate_delivery_batch(
     Ok(eligible)
 }
 
+/// Hands claimed events back after an error, without a spent attempt when
+/// nothing was reserved. Events already deferred, suppressed or reserved by the
+/// failed step no longer match the claim and are skipped; cleanup errors are
+/// ignored because the lease would release them anyway.
+fn release_claims(store: &Store, attempts: &[(i64, u32)]) {
+    for (id, attempt) in attempts {
+        let _ = store.proactive_defer_event(*id, *attempt, 1, None);
+    }
+}
+
 /// macOS hands off asynchronously, so revalidation and attempt reservation
 /// share one lock and the send happens after it is released.
 #[cfg(any(not(windows), test))]
@@ -808,7 +818,20 @@ pub(super) fn reserve_delivery_batch(
     items: Vec<DeliveryItem>,
 ) -> Result<Vec<DeliveryItem>, String> {
     let store = lock_store(shared)?;
-    let eligible = revalidate_delivery_batch(&store, items)?;
+    let claimed = items
+        .iter()
+        .map(|item| (item.event_id, item.attempt_count))
+        .collect::<Vec<_>>();
+    let reserved = reserve_locked(&store, items);
+    if reserved.is_err() {
+        release_claims(&store, &claimed);
+    }
+    reserved
+}
+
+#[cfg(any(not(windows), test))]
+fn reserve_locked(store: &Store, items: Vec<DeliveryItem>) -> Result<Vec<DeliveryItem>, String> {
+    let eligible = revalidate_delivery_batch(store, items)?;
     if eligible.is_empty() {
         return Ok(eligible);
     }
@@ -830,6 +853,19 @@ pub(super) fn reserve_delivery_batch(
     Ok(eligible)
 }
 
+/// Records that the OS accepted the notification. A failure here would let the
+/// lease expire and send it again, so the write is retried once and logged.
+#[cfg(any(windows, target_os = "macos", test))]
+fn mark_attempted(store: &Store, attempts: &[(i64, u32)]) -> Result<(), String> {
+    retry_once(|| store.proactive_mark_attempted_batch(attempts).map(|_| ()))
+        .inspect_err(|error| eprintln!("Proactive notification attempt record: {error}"))
+}
+
+#[cfg(any(windows, target_os = "macos", test))]
+pub(super) fn retry_once(mut operation: impl FnMut() -> Result<(), String>) -> Result<(), String> {
+    operation().or_else(|_| operation())
+}
+
 /// Windows: the final policy check, token creation, durable reservation and
 /// synchronous WinRT handoff share one store lock, so settings or
 /// subscriptions cannot change between them.
@@ -842,7 +878,17 @@ pub(super) fn handoff_validated<P>(
     send: impl FnOnce(P) -> Result<(), String>,
 ) -> Result<(), String> {
     let store = lock_store(shared)?;
-    let items = revalidate_delivery_batch(&store, items)?;
+    let claimed = items
+        .iter()
+        .map(|item| (item.event_id, item.attempt_count))
+        .collect::<Vec<_>>();
+    let items = match revalidate_delivery_batch(&store, items) {
+        Ok(items) => items,
+        Err(error) => {
+            release_claims(&store, &claimed);
+            return Err(error);
+        }
+    };
     if items.is_empty() {
         return Ok(());
     }
@@ -882,7 +928,7 @@ pub(super) fn handoff_validated<P>(
     }
     match send(prepared) {
         Ok(()) => {
-            store.proactive_mark_attempted_batch(&attempts)?;
+            mark_attempted(&store, &attempts)?;
             Ok(())
         }
         Err(error) => {
@@ -1081,9 +1127,7 @@ async fn discover_and_deliver(
                 .iter()
                 .map(|item| (item.event_id, item.attempt_count))
                 .collect::<Vec<_>>();
-            with_store(store, |store| {
-                store.proactive_mark_attempted_batch(&attempts).map(|_| ())
-            })?;
+            with_store(store, |store| mark_attempted(store, &attempts))?;
             let store = store.clone();
             let shell = shell.clone();
             let pending_activation = notifications.pending_activation.clone();

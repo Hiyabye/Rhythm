@@ -919,3 +919,58 @@ fn claimed_events_are_released_without_a_spent_attempt_when_a_later_step_fails()
     assert_eq!(event.state, ProactiveEventState::Deferred);
     assert_eq!(event.attempt_count, 0);
 }
+
+#[test]
+fn an_error_after_the_claim_hands_the_event_back_without_a_spent_attempt() {
+    use crate::storage::proactive::ProactiveEventState;
+    for windows_path in [false, true] {
+        let (directory, shared, item) = claimed_delivery_fixture();
+        let event_id = item.event_id;
+        assert_eq!(item.attempt_count, 1);
+        // The final policy read fails after the claim spent an attempt.
+        rusqlite::Connection::open(directory.path().join("rhythm.db"))
+            .unwrap()
+            .execute_batch("ALTER TABLE documents RENAME TO documents_gone")
+            .unwrap();
+        let failed = if windows_path {
+            scheduler::handoff_validated(
+                &shared,
+                vec![item],
+                &"ee".repeat(32),
+                |_, _| -> Result<(), String> {
+                    panic!("no preparation after a failed revalidation")
+                },
+                |_| panic!("no handoff after a failed revalidation"),
+            )
+            .is_err()
+        } else {
+            scheduler::reserve_delivery_batch(&shared, vec![item]).is_err()
+        };
+        assert!(failed, "windows path: {windows_path}");
+        let event = shared.lock().unwrap().proactive_event(event_id).unwrap();
+        assert_eq!(event.state, ProactiveEventState::Deferred);
+        assert_eq!(event.attempt_count, 0, "windows path: {windows_path}");
+    }
+}
+
+#[test]
+fn recording_a_sent_notification_is_retried_once() {
+    let mut calls = 0;
+    assert!(scheduler::retry_once(|| {
+        calls += 1;
+        if calls == 1 {
+            Err("database is busy".into())
+        } else {
+            Ok(())
+        }
+    })
+    .is_ok());
+    assert_eq!(calls, 2);
+    let mut calls = 0;
+    assert!(scheduler::retry_once(|| {
+        calls += 1;
+        Err("still failing".into())
+    })
+    .is_err());
+    assert_eq!(calls, 2);
+}

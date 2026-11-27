@@ -1072,3 +1072,104 @@ async fn a_full_todo_page_is_incomplete_and_deletes_nothing() {
     assert!(titles.contains(&"7000020*".to_owned()), "{titles:?}");
     assert!(titles.contains(&"5000049*".to_owned()), "{titles:?}");
 }
+
+#[tokio::test]
+async fn a_resource_url_reaches_only_the_route_of_its_kind() {
+    let setup = setup(Some("right"));
+    run(&setup).await.unwrap();
+    let records = with_store(&setup.store, |s| {
+        let id = s
+            .archive_query(&ArchiveQuery {
+                source_id: Some(SOURCE_ID.into()),
+                ..ArchiveQuery::default()
+            })?
+            .items
+            .iter()
+            .find(|i| i.title == "[중요] 중간고사 범위 안내")
+            .unwrap()
+            .id;
+        Ok(s.document(id, None)?.resources)
+    })
+    .unwrap();
+    let base = |url: &str| {
+        records
+            .iter()
+            .find(|r| r.url.contains(url))
+            .unwrap()
+            .clone()
+    };
+    let image = base("editor-file/0000/2026/SYNIMG01.png");
+    let file = base("efile_download.acl?FILE_SEQ=SYNFILE01");
+    let bytes = AtomicU64::new(0);
+    let cancel = AtomicBool::new(false);
+    let attempt = |mut record: crate::archive::model::ResourceRecord, url: &str| {
+        record.url = format!("{}{url}", parser::ORIGIN);
+        record.status = "pending".into();
+        record
+    };
+    let status = |id: i64| with_store(&setup.store, |s| s.resource(id)).unwrap().status;
+
+    // An image or attachment aimed at another read-only route: no request.
+    setup.fake.clear();
+    for record in [
+        attempt(
+            image.clone(),
+            "/ilos/cls/st/report/report_view_form.acl?RT_SEQ=1",
+        ),
+        attempt(
+            image.clone(),
+            "/ilos/co/efile_download.acl?FILE_SEQ=SYNFILE01",
+        ),
+        attempt(
+            file.clone(),
+            "/ilos/cls/st/notice/notice_view_pop.acl?ARTL_NUM=1",
+        ),
+        attempt(
+            file.clone(),
+            "/ilosfiles/editor-file/0000/2026/SYNIMG01.png",
+        ),
+        attempt(file.clone(), "/ilos/co/efile_download.acl"),
+    ] {
+        download(
+            &setup.connector,
+            &setup.fake,
+            &setup.store,
+            &setup.root,
+            &cancel,
+            &record,
+            &bytes,
+        )
+        .await
+        .unwrap();
+        assert_eq!(status(record.id), "unsupported", "{}", record.url);
+    }
+    assert!(
+        setup.fake.requests().is_empty(),
+        "{:?}",
+        setup.fake.requests()
+    );
+
+    // The normal routes still download.
+    for record in [image, file] {
+        let record = crate::archive::model::ResourceRecord {
+            status: "pending".into(),
+            ..record
+        };
+        let outcome = download(
+            &setup.connector,
+            &setup.fake,
+            &setup.store,
+            &setup.root,
+            &cancel,
+            &record,
+            &bytes,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(outcome, DownloadOutcome::Downloaded),
+            "{outcome:?}"
+        );
+        assert_eq!(status(record.id), "downloaded");
+    }
+}

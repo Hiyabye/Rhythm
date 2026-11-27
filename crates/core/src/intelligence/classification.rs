@@ -226,22 +226,8 @@ impl Controller {
     }
 
     async fn unload_if_idle(&self, force: bool) {
-        let idle = self
-            .last_work
-            .lock()
-            .map(|last| last.is_none_or(|last| last.elapsed() >= IDLE_UNLOAD))
-            .unwrap_or(true);
-        if !force && !idle {
+        if !self.release_worker(force).await {
             return;
-        }
-        let Ok(mut worker) = self.worker.try_lock() else {
-            return;
-        };
-        if worker.status().model.is_some() {
-            worker.shutdown().await;
-            if let Ok(mut verified) = self.verified.lock() {
-                *verified = None;
-            }
         }
         if let Ok(mut state) = self.state.lock() {
             *state = if force { "disabled" } else { "idle" };
@@ -249,6 +235,29 @@ impl Controller {
         if let Ok(mut detail) = self.detail.lock() {
             *detail = None;
         }
+    }
+
+    /// Shuts the engine down once idle (or at once when `force`) without
+    /// touching the reported state. False when it stayed up.
+    async fn release_worker(&self, force: bool) -> bool {
+        let idle = self
+            .last_work
+            .lock()
+            .map(|last| last.is_none_or(|last| last.elapsed() >= IDLE_UNLOAD))
+            .unwrap_or(true);
+        if !force && !idle {
+            return false;
+        }
+        let Ok(mut worker) = self.worker.try_lock() else {
+            return false;
+        };
+        if worker.status().model.is_some() {
+            worker.shutdown().await;
+            if let Ok(mut verified) = self.verified.lock() {
+                *verified = None;
+            }
+        }
+        true
     }
 
     fn set_failure(&self, identity: &str, detail: &str) {
@@ -351,7 +360,8 @@ impl Controller {
             return;
         };
         if self.stopped(&identity) {
-            self.unload_if_idle(false).await;
+            // A failed or paused model keeps its "failed" state and detail.
+            self.release_worker(false).await;
             return;
         }
         if models.busy() || self.paused.load(Ordering::Acquire) {
@@ -634,6 +644,8 @@ impl Controller {
             Ok(_) => return None,
             Err(error) => {
                 eprintln!("Search embedding: {error}");
+                drop(worker);
+                self.embed_failed(identity, &error, Instant::now());
                 return None;
             }
         };
@@ -1029,6 +1041,61 @@ mod tests {
         assert!(controller.backoff.lock().unwrap().is_none());
         controller.invalidate();
         assert!(!controller.is_failed(&identity));
+        controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_stopped_model_keeps_its_failed_state_and_detail_when_the_worker_is_released() {
+        for crash in [true, false] {
+            let (directory, controller, model) = fake_controller();
+            let identity = model.sha256.clone().unwrap();
+            let (_data, store) = store_with_notice(&model);
+            let models = models::Controller::new("Rhythm/test");
+            let shutdown = AtomicBool::new(false);
+            if crash {
+                // A failed embedding request: paused, not latched.
+                *controller.verified.lock().unwrap() = Some(identity.clone());
+                seed_prototypes(&controller, &identity).await;
+                set_mode(directory.path(), "crash-on-embed");
+            }
+            // Otherwise the fake GGUF fails integrity: stopped until invalidated.
+            controller
+                .advance(&store, &models, directory.path(), &shutdown)
+                .await;
+            let failed = controller.status();
+            assert_eq!(failed.state, "failed");
+            assert!(failed.detail.is_some());
+            // The idle condition is met; the next pass must not wipe the failure.
+            *controller.last_work.lock().unwrap() = None;
+            controller
+                .advance(&store, &models, directory.path(), &shutdown)
+                .await;
+            let after = controller.status();
+            assert_eq!(after.state, "failed", "crash: {crash}");
+            assert_eq!(after.detail, failed.detail, "crash: {crash}");
+            assert!(controller.worker.lock().await.status().model.is_none());
+            controller.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_search_embedding_starts_the_pause_so_the_next_search_skips_the_engine() {
+        let (directory, controller, model) = fake_controller();
+        let identity = model.sha256.clone().unwrap();
+        *controller.verified.lock().unwrap() = Some(identity.clone());
+        set_mode(directory.path(), "crash-on-embed");
+        assert!(controller
+            .embed_query(directory.path(), &model, &identity, "장학")
+            .await
+            .is_none());
+        let requests = embedding_requests(directory.path());
+        assert!(requests > 0);
+        assert!(controller.backing_off(&identity, Instant::now()));
+        assert!(controller
+            .embed_query(directory.path(), &model, &identity, "생활")
+            .await
+            .is_none());
+        assert_eq!(embedding_requests(directory.path()), requests);
         controller.shutdown().await;
     }
 }

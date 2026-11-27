@@ -46,10 +46,10 @@ pub struct Connector {
     forgotten: std::sync::Mutex<u64>,
 }
 impl Connector {
-    pub fn native() -> Self {
+    pub fn native(identifier: &str) -> Self {
         Self {
             session: Session::default(),
-            vault: Vault::native(),
+            vault: Vault::native(identifier),
             forgotten: Default::default(),
         }
     }
@@ -682,6 +682,18 @@ async fn pending<H: Http>(
     }
     Ok(())
 }
+/// Images come from the editor-file route, attachments from the file-download
+/// route with a `FILE_SEQ`; the URL already passed `client::validate`.
+fn fetchable(kind: &str, url: &Url) -> bool {
+    match kind {
+        "image" => url.path().starts_with("/ilosfiles/editor-file/"),
+        "attachment" => {
+            url.path() == "/ilos/co/efile_download.acl"
+                && url.query_pairs().any(|(name, _)| name == "FILE_SEQ")
+        }
+        _ => false,
+    }
+}
 /// Downloads one resource. A file failure is recorded on the resource and is
 /// not a sync failure; cancellation and storage errors still propagate.
 pub async fn download<H: Http>(
@@ -701,6 +713,14 @@ pub async fn download<H: Http>(
         client::validate(&url).map_err(|_| {
             "사이버캠퍼스 밖의 자료는 자동으로 내려받지 않아 지원하지 않습니다.".to_string()
         })?;
+        // A notice body chooses its image and link URLs; each kind may reach
+        // only the route the parser itself produces for it, never another
+        // read-only route (which would also count as an eClass view).
+        if !fetchable(&resource.kind, &url) {
+            return Err(
+                "사이버캠퍼스 밖의 자료는 자동으로 내려받지 않아 지원하지 않습니다.".into(),
+            );
+        }
         let limit =
             sync::resource_limit(resource, total.load(Ordering::Acquire), &mut budget_bound)?;
         let path = match url.query() {

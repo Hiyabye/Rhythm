@@ -153,7 +153,7 @@ impl App {
         let store = Arc::new(Mutex::new(store));
         let ui = Ui::new(config.shell);
         let operation_gate = Arc::new(AdmissionGate::default());
-        let archive = sync::Controller::new();
+        let archive = sync::Controller::for_identifier(&config.identifier);
         let studium = studium::controller::Controller::new();
         let studium_notifications = studium::notification::Notifications::new(
             store.clone(),
