@@ -173,7 +173,16 @@ impl Scheduler {
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
+                        // `select!` may pick a ready tick over the stop signal;
+                        // quiesce only cancels a sync that is already running,
+                        // so a late tick must not start a new one.
+                        if stop_requested(&stop) {
+                            break;
+                        }
                         if let Ok(_lease) = operation_gate.shared().await {
+                            if stop_requested(&stop) {
+                                break;
+                            }
                             run_feed(&store, &feed, &root, user_agent).await;
                             if let Err(error) = cycle(
                                 &store,
