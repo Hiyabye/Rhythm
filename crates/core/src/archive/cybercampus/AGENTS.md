@@ -9,7 +9,7 @@ Area instructions for `crates/core/src/archive/cybercampus/` (in `rhythm-core`),
 
 - Requests go only to the fixed read-only routes in `client.rs::ROUTES`; never add a submit, post, delete or confirm route.
 - The login (학번 + SAINT password) lives only in the OS credential store and is sent only to `/ilos/lo/login.acl`; never put it in SQLite, backups, logs or diagnostics. Cookies stay in memory.
-- A rejected login must stop every automatic retry until the user saves the login again (account-lock protection).
+- A rejected login must stop every automatic retry until the user saves the login again (account-lock protection) or forgets it. The stop is persisted (`cybercampus_login_guard`, migration 045: a rejection, or three unrecognised login answers in a row), so a relaunch keeps it; it holds no login data. The text of a full notice page never decides session expiry (`client::expired`: the login form, a script, or a page of a few words).
 - Fetching a notice counts as an eClass view: never refetch unchanged list rows (fingerprint in `documents.modified_at`). The first sync is historical and announces nothing.
 - Its documents are personal data: AI work on them stays local.
 - Ordinary tests use the scripted fake in `cybercampus/fake.rs`. A live check needs the user's account and explicit approval, runs only against a temporary profile, and must not commit captured pages or credentials. Fixtures are synthetic (`cybercampus/fixtures/README.md`).

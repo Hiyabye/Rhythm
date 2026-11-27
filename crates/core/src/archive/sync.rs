@@ -196,6 +196,11 @@ impl Controller {
     fn reserve(&self) -> Result<(), String> {
         self.reserve_task(0, crate::extensions::CYBERCAMPUS)
     }
+    /// The extension that owns the current or last job.
+    #[cfg(test)]
+    pub(crate) fn owner(&self) -> &'static str {
+        self.owner.lock().map(|owner| *owner).unwrap_or("")
+    }
     fn reserve_task(&self, task_id: u64, owner: &'static str) -> Result<(), String> {
         let _admission = self
             .admission
@@ -395,25 +400,30 @@ impl Controller {
         id: i64,
         lease: crate::operation_gate::AdmissionLease,
     ) -> Result<SyncStatus, String> {
-        let resource = with_store(&store, |s| {
-            if !s.source_extension_enabled(&s.resource_source(id)?)? {
+        // The document's source decides, not the URL: an image of an eClass
+        // notice hosted elsewhere still belongs to the connector (which records
+        // it as unsupported without a request), never to the public downloader.
+        let (resource, from_cybercampus) = with_store(&store, |s| {
+            let source = s.resource_source(id)?;
+            if !s.source_extension_enabled(&source)? {
                 return Err("이 자료의 확장 기능을 먼저 켜 주세요.".into());
             }
             let resource = s.resource(id)?;
-            let owner = if cybercampus::owns(&resource.url) {
+            let from_cybercampus = source == cybercampus::SOURCE_ID;
+            let owner = if from_cybercampus {
                 crate::extensions::CYBERCAMPUS
             } else {
                 crate::extensions::NOTICES
             };
             self.reserve_task(0, owner)?;
-            Ok(resource)
+            Ok((resource, from_cybercampus))
         })?;
         self.update(None, "resource", 0, "첨부 자료를 다시 내려받고 있습니다.");
         let controller = self.clone();
         tokio::spawn(async move {
             let _lease = lease;
             let result = async {
-                if cybercampus::owns(&resource.url) {
+                if from_cybercampus {
                     let bytes = AtomicU64::new(0);
                     return cybercampus::download(
                         &controller.cybercampus,

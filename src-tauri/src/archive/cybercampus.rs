@@ -34,14 +34,13 @@ pub async fn cybercampus_save_login(
     }
     let connector = &state.archive.cybercampus;
     connector
-        .session
-        .login(
+        .save_login(
             &client::Reqwest::new(crate::USER_AGENT),
+            &state.store,
             &credentials,
             &AtomicBool::new(false),
         )
         .await?;
-    connector.vault.save(&credentials)?;
     status(&state)
 }
 /// Deletes the stored login and the in-memory session. Archived notices and
@@ -52,8 +51,7 @@ pub async fn cybercampus_forget_login(
 ) -> Result<Status, String> {
     let _lease = state.operation_gate.shared().await?;
     let connector = &state.archive.cybercampus;
-    connector.vault.clear()?;
-    connector.session.reset().await;
+    connector.forget_login(&state.store).await?;
     status(&state)
 }
 /// The synced term's courses with their unread counts, for the sidebar. Unlike

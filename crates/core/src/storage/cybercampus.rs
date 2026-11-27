@@ -7,6 +7,9 @@ use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Unrecognised login answers in a row that stop automatic logins.
+pub const LOGIN_UNRECOGNISED_LIMIT: i64 = 3;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CourseInput {
     pub key: String,
@@ -274,6 +277,52 @@ impl Store {
             )
             .map_err(|e| e.to_string())
     }
+    /// Whether automatic eClass logins are stopped: the login was rejected or
+    /// `LOGIN_UNRECOGNISED_LIMIT` unrecognised answers came in a row (045).
+    pub fn cybercampus_login_stopped(&self) -> Result<bool, String> {
+        let state: Option<(bool, i64)> = self
+            .connection
+            .query_row(
+                "SELECT rejected,unrecognised FROM cybercampus_login_guard WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        Ok(state.is_some_and(|(rejected, unrecognised)| {
+            rejected || unrecognised >= LOGIN_UNRECOGNISED_LIMIT
+        }))
+    }
+    /// eClass rejected the login: stop automatic logins until it is saved again.
+    pub fn cybercampus_login_rejected(&self) -> Result<(), String> {
+        self.connection
+            .execute(
+                "INSERT INTO cybercampus_login_guard(id,rejected,unrecognised) VALUES(1,1,0)
+                 ON CONFLICT(id) DO UPDATE SET rejected=1",
+                [],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    /// One more login answer in a row that was neither success nor a known
+    /// rejection; returns whether automatic logins are now stopped.
+    pub fn cybercampus_login_unrecognised(&self) -> Result<bool, String> {
+        self.connection
+            .execute(
+                "INSERT INTO cybercampus_login_guard(id,rejected,unrecognised) VALUES(1,0,1)
+                 ON CONFLICT(id) DO UPDATE SET unrecognised=unrecognised+1",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        self.cybercampus_login_stopped()
+    }
+    /// A successful login, a saved login or a forgotten one: allow logins again.
+    pub fn cybercampus_login_clear(&self) -> Result<(), String> {
+        self.connection
+            .execute("DELETE FROM cybercampus_login_guard", [])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
     /// Unfinished items with a deadline first (soonest first), then the rest.
     pub fn cybercampus_tasks(&self) -> Result<Vec<CybercampusTask>, String> {
         let mut statement = self
@@ -317,9 +366,9 @@ mod tests {
     use super::*;
     use crate::storage::{
         UNDO_ALERTS, UNDO_AUTO_TRASH, UNDO_BODY_HASH, UNDO_CALENDAR_EVENTS, UNDO_CLOCK, UNDO_DATES,
-        UNDO_FAVORITES, UNDO_FEED, UNDO_FEED_SYNC, UNDO_GROUPS, UNDO_KNOWN_BOARDS, UNDO_MEALS,
-        UNDO_MINI_GEOMETRY, UNDO_PREVIOUS_MANIFEST, UNDO_REMINDERS, UNDO_STUDIUM, UNDO_TODOS,
-        UNDO_TRASH,
+        UNDO_FAVORITES, UNDO_FEED, UNDO_FEED_SYNC, UNDO_GROUPS, UNDO_KNOWN_BOARDS,
+        UNDO_LOGIN_GUARD, UNDO_MEALS, UNDO_MINI_GEOMETRY, UNDO_PREVIOUS_MANIFEST, UNDO_REMINDERS,
+        UNDO_STUDIUM, UNDO_TODOS, UNDO_TRASH,
     };
     use rusqlite::Connection;
 
@@ -351,7 +400,7 @@ mod tests {
                 .execute_batch(
                     &format!("DROP TABLE cybercampus_tasks; DROP TABLE cybercampus_courses;
                      ALTER TABLE settings DROP COLUMN onboarding_completed;
-                     {UNDO_GROUPS}{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
+                     {UNDO_GROUPS}{UNDO_LOGIN_GUARD}{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}{UNDO_REMINDERS}{UNDO_DATES}{UNDO_TODOS}{UNDO_MINI_GEOMETRY}{UNDO_ALERTS}{UNDO_FAVORITES}{UNDO_STUDIUM}{UNDO_CLOCK}{UNDO_TRASH}{UNDO_AUTO_TRASH}
                      PRAGMA user_version=17;"),
                 )
                 .unwrap();
@@ -402,6 +451,63 @@ mod tests {
         let reopened = Store::open(&path).unwrap();
         assert_eq!(ids(&reopened), ["2"]);
         assert_eq!(reopened.cybercampus_stored_tasks("K1").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_schema_44_profile_gains_an_empty_login_guard_and_a_failed_upgrade_changes_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("db");
+        {
+            let store = Store::open(&path).unwrap();
+            store
+                .cybercampus_set_courses(2026, "3", &[course("K1", "운영체제")])
+                .unwrap();
+            store
+                .connection
+                .execute_batch(&format!("{UNDO_LOGIN_GUARD}PRAGMA user_version=44;"))
+                .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.info().unwrap().schema_version,
+            super::super::SCHEMA_VERSION
+        );
+        assert_eq!(store.cybercampus_courses().unwrap().len(), 1);
+        assert!(!store.cybercampus_login_stopped().unwrap(), "starts clear");
+        // A rejection stays; unrecognised answers stop at the third in a row.
+        store.cybercampus_login_rejected().unwrap();
+        assert!(store.cybercampus_login_stopped().unwrap());
+        store.cybercampus_login_clear().unwrap();
+        assert!(!store.cybercampus_login_unrecognised().unwrap());
+        assert!(!store.cybercampus_login_unrecognised().unwrap());
+        assert!(store.cybercampus_login_unrecognised().unwrap());
+        drop(store);
+        assert!(Store::open(&path)
+            .unwrap()
+            .cybercampus_login_stopped()
+            .unwrap());
+
+        // A table left behind makes 045 fail; the open changes nothing.
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(&format!(
+                "{UNDO_LOGIN_GUARD}PRAGMA user_version=44; CREATE TABLE cybercampus_login_guard(sentinel TEXT);"
+            ))
+            .unwrap();
+        drop(connection);
+        assert!(Store::open(&path).is_err());
+        let connection = Connection::open(&path).unwrap();
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 44);
+        assert!(connection
+            .query_row(
+                "SELECT COUNT(sentinel) FROM cybercampus_login_guard",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .is_ok());
     }
 
     #[test]

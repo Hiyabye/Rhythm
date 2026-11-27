@@ -3,6 +3,7 @@
 //! route. Cookies are kept in memory for the process and never persisted.
 use super::credentials::{Credentials, Vault};
 use super::parser::ORIGIN;
+use crate::storage::{with_store, SharedStore};
 use std::{
     collections::BTreeMap,
     future::Future,
@@ -242,10 +243,6 @@ struct State {
 /// that another task waits on for long.
 pub struct Session {
     state: Mutex<State>,
-    /// Set when the server rejected the stored login. Automatic syncs stop
-    /// retrying it (repeated failures can lock a school account) until the
-    /// user saves the login again.
-    rejected: AtomicBool,
     gap: Duration,
 }
 impl Default for Session {
@@ -257,16 +254,16 @@ impl Default for Session {
                 logged_in: false,
                 last_request: None,
             }),
-            rejected: AtomicBool::new(false),
         }
     }
 }
 impl Session {
+    /// Drops the in-memory session. The persisted login guard is the store's
+    /// (`cybercampus_login_*`): a saved or forgotten login clears it.
     pub async fn reset(&self) {
         let mut state = self.state.lock().await;
         state.cookies.clear();
         state.logged_in = false;
-        self.rejected.store(false, Ordering::Release);
     }
     #[cfg(any(test, feature = "test-support"))]
     pub fn unpaced() -> Self {
@@ -274,9 +271,6 @@ impl Session {
             gap: Duration::ZERO,
             ..Self::default()
         }
-    }
-    pub fn rejected(&self) -> bool {
-        self.rejected.load(Ordering::Acquire)
     }
     /// One request including same-origin redirects. Cookies set on any hop are
     /// kept; the final URL tells whether the server sent us to its login page.
@@ -357,9 +351,16 @@ impl Session {
     }
     /// Logs in with the given login. The response page reports success with a
     /// script redirect and failure with a message.
+    ///
+    /// The outcome feeds the persisted account-lock guard (migration 045):
+    /// success clears it, a known rejection or the third unrecognised answer
+    /// in a row stops automatic logins (`request` checks it). Only an HTTP
+    /// answer to the login POST counts; a transport failure, timeout or
+    /// cancellation before an answer changes nothing.
     pub async fn login<H: Http>(
         &self,
         http: &H,
+        store: &SharedStore,
         credentials: &Credentials,
         cancel: &AtomicBool,
     ) -> Result<(), String> {
@@ -390,13 +391,15 @@ impl Session {
         let body = String::from_utf8_lossy(&response.bytes);
         if body.contains("top.location.href") {
             self.state.lock().await.logged_in = true;
-            self.rejected.store(false, Ordering::Release);
+            with_store(store, |s| s.cybercampus_login_clear())?;
             Ok(())
         } else if body.contains("SAINT 인증에 실패")
             || body.contains("로긴에러")
             || body.contains("err_message")
         {
-            self.rejected.store(true, Ordering::Release);
+            with_store(store, |s| s.cybercampus_login_rejected())?;
+            Err(REJECTED.into())
+        } else if with_store(store, |s| s.cybercampus_login_unrecognised())? {
             Err(REJECTED.into())
         } else {
             Err(
@@ -407,10 +410,12 @@ impl Session {
     }
     /// A logged-in request. An expired session is renewed once with the stored
     /// login and the request repeated.
+    #[allow(clippy::too_many_arguments)]
     pub async fn request<H: Http>(
         &self,
         http: &H,
         vault: &Vault,
+        store: &SharedStore,
         path: &str,
         form: Option<Vec<(&str, String)>>,
         limit: usize,
@@ -433,11 +438,11 @@ impl Session {
         };
         for attempt in 0..2 {
             if attempt == 1 || !self.state.lock().await.logged_in {
-                if self.rejected() {
+                if with_store(store, |s| s.cybercampus_login_stopped())? {
                     return Err(REJECTED.into());
                 }
                 let credentials = vault.load()?.ok_or(NO_LOGIN)?;
-                self.login(http, &credentials, cancel).await?;
+                self.login(http, store, &credentials, cancel).await?;
             }
             let (final_url, response) = self.exchange(http, &url, &method, limit, cancel).await?;
             if !expired(&final_url, &response) {
@@ -449,8 +454,9 @@ impl Session {
     }
 }
 /// eClass signals an expired session by sending the browser to its login page
-/// or by answering a page request with an empty body or a login form.
-fn expired(url: &Url, response: &Response) -> bool {
+/// or by answering a page request with an empty body, the login form, or a
+/// short script page that sends the browser there.
+pub(super) fn expired(url: &Url, response: &Response) -> bool {
     if [LOGIN, INDEX, LOGIN_FORM, "/"].contains(&url.path()) {
         return true;
     }
@@ -459,8 +465,31 @@ fn expired(url: &Url, response: &Response) -> bool {
     }
     let body = String::from_utf8_lossy(&response.bytes);
     let body = body.trim();
-    body.is_empty()
-        || body.contains("login_form")
-        || body.contains("member/login")
-        || body.contains("로그인이 필요")
+    body.is_empty() || login_page(body)
+}
+/// A page this short cannot be a notice with its frame, so the login wording
+/// decides alone.
+const SHORT_PAGE: usize = 256;
+/// True for the login form (its password input `usr_pwd`, the field the login
+/// POST sends) and for a page that only tells the browser to log in: the
+/// wording inside a script, or a page of at most `SHORT_PAGE` bytes. The same
+/// wording as text of a full page is a course notice that mentions logging in
+/// and must not look like an expired session: it would log in again on every
+/// sync and keep the course from ever completing.
+fn login_page(body: &str) -> bool {
+    let wording = |text: &str| {
+        ["login_form", "member/login", "로그인이 필요"]
+            .iter()
+            .any(|marker| text.contains(marker))
+    };
+    if body.len() <= SHORT_PAGE && wording(body) {
+        return true;
+    }
+    let password = scraper::Selector::parse(r#"input[name="usr_pwd"]"#).expect("static selector");
+    let script = scraper::Selector::parse("script").expect("static selector");
+    let page = scraper::Html::parse_document(body);
+    page.select(&password).next().is_some()
+        || page
+            .select(&script)
+            .any(|script| wording(&script.text().collect::<String>()))
 }

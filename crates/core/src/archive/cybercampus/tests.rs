@@ -215,21 +215,216 @@ async fn an_expired_session_logs_in_again_once() {
 }
 
 #[tokio::test]
+async fn a_notice_that_mentions_logging_in_is_not_an_expired_session() {
+    let setup = setup(Some("right"));
+    *setup.fake.first_view.lock().unwrap() = Some(
+        r#"<div class="view_title"><span class="font_headline2">접속 안내</span></div>
+<table><tr><th scope="row">작성자</th><td>김교수</td></tr><tr><th scope="row">게시일</th><td>9월 1일 (화) 09:00</td></tr>
+<tr><td colspan="2"><div class="editor_content"><p>로그인이 필요합니다. login_form 과 member/login 주소를 확인하세요.</p></div></td></tr></table>"#
+            .into(),
+    );
+    run(&setup).await.unwrap();
+    assert_eq!(setup.fake.logins.load(Ordering::SeqCst), 1);
+    let store = setup.store.lock().unwrap();
+    let page = store
+        .archive_query(&ArchiveQuery {
+            source_id: Some(SOURCE_ID.into()),
+            ..ArchiveQuery::default()
+        })
+        .unwrap();
+    assert_eq!(page.total, 2);
+}
+
+#[test]
+fn expiry_needs_a_redirect_an_empty_page_or_the_login_form() {
+    let html = |body: &str| Response {
+        status: 200,
+        mime: Some("text/html".into()),
+        bytes: body.as_bytes().to_vec(),
+        ..Response::default()
+    };
+    let url = |path: &str| Url::parse(&format!("{}{path}", parser::ORIGIN)).unwrap();
+    let notice = url("/ilos/cls/st/notice/notice_view_pop.acl");
+    assert!(client::expired(&url("/ilos/index.acl"), &html("<p>x</p>")));
+    assert!(client::expired(&notice, &html("  ")));
+    assert!(client::expired(
+        &notice,
+        &html(r#"<form action="/ilos/lo/login.acl"><input type="password" name="usr_pwd"></form>"#)
+    ));
+    // A page that only sends the browser to the login form: a script, or a
+    // few words.
+    let filler = "가".repeat(1024);
+    assert!(client::expired(
+        &notice,
+        &html(&format!(
+            "<p>{filler}</p><script>alert('로그인이 필요합니다.'); location.href='/ilos/main/member/login_form.acl';</script>"
+        ))
+    ));
+    assert!(client::expired(
+        &notice,
+        &html("<p>로그인이 필요합니다.</p>")
+    ));
+    // The same wording as the text of a full notice page is not an expiry.
+    assert!(!client::expired(
+        &notice,
+        &html(&format!(
+            "<p>{filler}</p><p>로그인이 필요합니다 login_form member/login usr_pwd</p>"
+        ))
+    ));
+}
+
+fn stopped(setup: &Setup) -> bool {
+    Status::read(&setup.connector, &setup.store)
+        .unwrap()
+        .rejected
+}
+fn credentials(password: &str) -> Credentials {
+    Credentials::new("20990001", password).unwrap()
+}
+/// A new connector (a relaunch) on the same store, with the login saved.
+fn relaunch(setup: &mut Setup, password: &str) {
+    setup.connector = Connector::memory();
+    setup.connector.vault.save(&credentials(password)).unwrap();
+}
+const MAINTENANCE: &str = "<p>잠시 점검 중입니다.</p>";
+
+#[tokio::test]
 async fn a_rejected_login_is_not_retried_automatically() {
-    let setup = setup(Some("wrong"));
+    let mut setup = setup(Some("wrong"));
+    with_store(&setup.store, |s| s.set_enabled("cybercampus", true)).unwrap();
     assert_eq!(run(&setup).await.unwrap_err(), client::REJECTED);
-    assert!(setup.connector.session.rejected());
+    assert!(stopped(&setup));
     setup.fake.clear();
     assert_eq!(run(&setup).await.unwrap_err(), client::REJECTED);
     assert!(setup.fake.requests().is_empty());
     assert_eq!(setup.fake.logins.load(Ordering::SeqCst), 1);
-    // Saving the login again (the settings command resets the session) retries.
-    setup.connector.session.reset().await;
+    // The rejection survives a relaunch: no password is sent again.
+    relaunch(&mut setup, "wrong");
+    assert!(stopped(&setup));
+    assert_eq!(run(&setup).await.unwrap_err(), client::REJECTED);
+    assert!(setup.fake.requests().is_empty());
+    // Saving the login again retries and clears the guard.
+    let cancel = AtomicBool::new(false);
     setup
         .connector
-        .vault
-        .save(&Credentials::new("20990001", "right").unwrap())
+        .save_login(&setup.fake, &setup.store, &credentials("right"), &cancel)
+        .await
         .unwrap();
+    assert!(!stopped(&setup));
+    run(&setup).await.unwrap();
+}
+
+#[tokio::test]
+async fn forgetting_the_login_clears_the_guard() {
+    let setup = setup(Some("wrong"));
+    run(&setup).await.unwrap_err();
+    assert!(stopped(&setup));
+    setup.connector.forget_login(&setup.store).await.unwrap();
+    assert!(!stopped(&setup));
+    assert_eq!(
+        Status::read(&setup.connector, &setup.store).unwrap().id,
+        None
+    );
+}
+
+#[tokio::test]
+async fn three_unrecognised_login_answers_in_a_row_stop_automatic_logins() {
+    let mut setup = setup(Some("right"));
+    with_store(&setup.store, |s| s.set_enabled("cybercampus", true)).unwrap();
+    setup.fake.login_pages.lock().unwrap().extend([
+        MAINTENANCE.to_string(),
+        MAINTENANCE.into(),
+        MAINTENANCE.into(),
+    ]);
+    // Each answer comes after a relaunch: the count is persisted.
+    assert!(run(&setup)
+        .await
+        .unwrap_err()
+        .contains("확인하지 못했습니다"));
+    relaunch(&mut setup, "right");
+    assert!(run(&setup)
+        .await
+        .unwrap_err()
+        .contains("확인하지 못했습니다"));
+    assert!(!stopped(&setup));
+    relaunch(&mut setup, "right");
+    assert_eq!(run(&setup).await.unwrap_err(), client::REJECTED);
+    assert!(stopped(&setup));
+    assert_eq!(setup.fake.logins.load(Ordering::SeqCst), 3);
+    // No further login POST, also after another relaunch, until the user saves.
+    setup.fake.clear();
+    relaunch(&mut setup, "right");
+    assert_eq!(run(&setup).await.unwrap_err(), client::REJECTED);
+    assert_eq!(setup.fake.count("/ilos/lo/login.acl"), 0);
+    let cancel = AtomicBool::new(false);
+    setup
+        .connector
+        .save_login(&setup.fake, &setup.store, &credentials("right"), &cancel)
+        .await
+        .unwrap();
+    assert!(!stopped(&setup));
+    run(&setup).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_successful_login_resets_the_unrecognised_count() {
+    let setup = setup(Some("right"));
+    let cancel = AtomicBool::new(false);
+    let right = credentials("right");
+    let login = || {
+        setup
+            .connector
+            .session
+            .login(&setup.fake, &setup.store, &right, &cancel)
+    };
+    setup
+        .fake
+        .login_pages
+        .lock()
+        .unwrap()
+        .extend([MAINTENANCE.to_string(), MAINTENANCE.into()]);
+    login().await.unwrap_err();
+    login().await.unwrap_err();
+    login().await.unwrap();
+    // Two more do not stop: the count started over.
+    setup
+        .fake
+        .login_pages
+        .lock()
+        .unwrap()
+        .extend([MAINTENANCE.to_string(), MAINTENANCE.into()]);
+    login().await.unwrap_err();
+    login().await.unwrap_err();
+    assert!(!stopped(&setup));
+}
+
+/// An eClass that never answers: only transport errors.
+struct Offline;
+impl client::Http for Offline {
+    async fn send(
+        &self,
+        _url: &Url,
+        _method: &Method,
+        _cookie: Option<String>,
+        _limit: usize,
+        _cancel: &AtomicBool,
+    ) -> Result<Response, String> {
+        Err("사이버캠퍼스에 안전하게 연결하지 못했습니다.".into())
+    }
+}
+#[tokio::test]
+async fn transport_failures_do_not_count_as_unrecognised_answers() {
+    let setup = setup(Some("right"));
+    let cancel = AtomicBool::new(false);
+    for _ in 0..5 {
+        setup
+            .connector
+            .session
+            .login(&Offline, &setup.store, &credentials("right"), &cancel)
+            .await
+            .unwrap_err();
+    }
+    assert!(!stopped(&setup));
     run(&setup).await.unwrap();
 }
 
@@ -606,4 +801,138 @@ async fn unsubscribing_stops_the_sync_and_cancelling_cancels_the_job() {
         assert_eq!(source_status(&setup), "cancelled");
         assert_eq!(http.fake.count("/ilos/cls/st/notice/notice_list.acl"), 1);
     }
+}
+
+#[tokio::test]
+async fn retrying_a_third_party_image_of_a_notice_stays_with_the_connector() {
+    let setup = setup(Some("right"));
+    run(&setup).await.unwrap();
+    // Only the Cybercampus extension is on, as when the notices switch is off.
+    with_store(&setup.store, |s| s.set_enabled("sogang_notices", false)).unwrap();
+    let controller = controller(&setup);
+    let (image, file) = with_store(&setup.store, |s| {
+        let id = s
+            .archive_query(&ArchiveQuery {
+                source_id: Some(SOURCE_ID.into()),
+                ..ArchiveQuery::default()
+            })?
+            .items
+            .iter()
+            .find(|i| i.title == "[중요] 중간고사 범위 안내")
+            .unwrap()
+            .id;
+        let resources = s.document(id, None)?.resources;
+        let find = |url: &str| resources.iter().find(|r| r.url.contains(url)).unwrap().id;
+        Ok((
+            find("https://example.org/remote.png"),
+            find("efile_download.acl?FILE_SEQ=SYNFILE01"),
+        ))
+    })
+    .unwrap();
+    let gate = Arc::new(crate::operation_gate::AdmissionGate::default());
+    let status = |id: i64| with_store(&setup.store, |s| s.resource(id)).unwrap().status;
+
+    // The image on another host: owned by the connector, no request at all.
+    let http = Arc::new(Fake::default());
+    controller
+        .retry_admitted(
+            setup.store.clone(),
+            setup.root.clone(),
+            crate::archive::network::Client::new("Rhythm/test").unwrap(),
+            http.clone(),
+            image,
+            gate.shared().await.unwrap(),
+        )
+        .unwrap();
+    assert_eq!(controller.owner(), "cybercampus");
+    controller.wait().await;
+    assert!(http.requests().is_empty(), "{:?}", http.requests());
+    assert_eq!(status(image), "unsupported");
+
+    // An eClass file still downloads again through the session.
+    let http = Arc::new(Fake::default());
+    controller
+        .retry_admitted(
+            setup.store.clone(),
+            setup.root.clone(),
+            crate::archive::network::Client::new("Rhythm/test").unwrap(),
+            http.clone(),
+            file,
+            gate.shared().await.unwrap(),
+        )
+        .unwrap();
+    controller.wait().await;
+    assert!(http.count("/ilos/co/efile_download.acl") >= 1);
+    assert_eq!(status(file), "downloaded");
+}
+
+/// The scripted eClass, calling `hook` when the login POST arrives.
+struct OnLogin<'a> {
+    fake: Fake,
+    hook: Box<dyn Fn() + Send + Sync + 'a>,
+}
+impl client::Http for OnLogin<'_> {
+    async fn send(
+        &self,
+        url: &Url,
+        method: &Method,
+        cookie: Option<String>,
+        limit: usize,
+        cancel: &AtomicBool,
+    ) -> Result<Response, String> {
+        if url.path() == "/ilos/lo/login.acl" {
+            (self.hook)();
+        }
+        self.fake.send(url, method, cookie, limit, cancel).await
+    }
+}
+fn setup_enabled() -> Setup {
+    let setup = setup(None);
+    with_store(&setup.store, |s| s.set_enabled("cybercampus", true)).unwrap();
+    setup
+}
+
+#[tokio::test]
+async fn a_save_does_not_store_the_login_after_a_forget_or_a_disable_meanwhile() {
+    let cancel = AtomicBool::new(false);
+    let right = credentials("right");
+
+    // Nothing intervenes: the login is stored.
+    let setup = setup_enabled();
+    setup
+        .connector
+        .save_login(&setup.fake, &setup.store, &right, &cancel)
+        .await
+        .unwrap();
+    assert!(setup.connector.vault.load().unwrap().is_some());
+
+    // The user forgets the login while the save waits for eClass.
+    let setup = setup_enabled();
+    let http = OnLogin {
+        fake: Fake::default(),
+        hook: Box::new(|| setup.connector.forget_stored().unwrap()),
+    };
+    let error = setup
+        .connector
+        .save_login(&http, &setup.store, &right, &cancel)
+        .await
+        .unwrap_err();
+    assert!(error.contains("삭제"), "{error}");
+    assert!(setup.connector.vault.load().unwrap().is_none());
+
+    // The extension is turned off while the save waits.
+    let setup = setup_enabled();
+    let http = OnLogin {
+        fake: Fake::default(),
+        hook: Box::new(|| {
+            with_store(&setup.store, |s| s.set_enabled("cybercampus", false)).unwrap();
+        }),
+    };
+    let error = setup
+        .connector
+        .save_login(&http, &setup.store, &right, &cancel)
+        .await
+        .unwrap_err();
+    assert!(error.contains("확장 기능"), "{error}");
+    assert!(setup.connector.vault.load().unwrap().is_none());
 }

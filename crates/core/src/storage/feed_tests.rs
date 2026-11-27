@@ -629,7 +629,9 @@ fn a_schema_43_profile_gains_meals_off_and_backfills_them_once() {
         store.set_enabled("calendar", true).unwrap();
         store
             .connection
-            .execute_batch(&format!("{UNDO_MEALS}PRAGMA user_version=43;"))
+            .execute_batch(&format!(
+                "{UNDO_LOGIN_GUARD}{UNDO_MEALS}PRAGMA user_version=43;"
+            ))
             .unwrap();
     }
     let store = Store::open(&path).unwrap();
@@ -653,7 +655,7 @@ fn a_schema_43_profile_gains_meals_off_and_backfills_them_once() {
     let connection = rusqlite::Connection::open(&path).unwrap();
     connection
         .execute_batch(&format!(
-            "{UNDO_MEALS}PRAGMA user_version=43; CREATE TABLE meal_weeks(sentinel TEXT);"
+            "{UNDO_LOGIN_GUARD}{UNDO_MEALS}PRAGMA user_version=43; CREATE TABLE meal_weeks(sentinel TEXT);"
         ))
         .unwrap();
     drop(connection);
@@ -713,7 +715,7 @@ fn a_populated_profile_upgrades_and_a_failed_upgrade_rolls_back() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}PRAGMA user_version=36;"
+                "{UNDO_LOGIN_GUARD}{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}PRAGMA user_version=36;"
             ))
             .unwrap();
     }
@@ -733,7 +735,7 @@ fn a_populated_profile_upgrades_and_a_failed_upgrade_rolls_back() {
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}CREATE TABLE feed_state(id INTEGER); PRAGMA user_version=36;"
+            "{UNDO_LOGIN_GUARD}{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}{UNDO_FEED}CREATE TABLE feed_state(id INTEGER); PRAGMA user_version=36;"
         ))
         .unwrap();
     assert!(Store::open(&path).is_err());
@@ -896,7 +898,7 @@ fn a_schema_37_profile_upgrades_and_a_failed_upgrade_rolls_back() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}PRAGMA user_version=37;"
+                "{UNDO_LOGIN_GUARD}{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}PRAGMA user_version=37;"
             ))
             .unwrap();
     }
@@ -911,7 +913,7 @@ fn a_schema_37_profile_upgrades_and_a_failed_upgrade_rolls_back() {
     rusqlite::Connection::open(&path)
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}CREATE TABLE feed_boards(id INTEGER); PRAGMA user_version=37;"
+            "{UNDO_LOGIN_GUARD}{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}{UNDO_BODY_HASH}{UNDO_FEED_SYNC}CREATE TABLE feed_boards(id INTEGER); PRAGMA user_version=37;"
         ))
         .unwrap();
     assert!(Store::open(&path).is_err());
@@ -1470,7 +1472,7 @@ fn a_schema_40_profile_starts_counting_at_the_next_manifest() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}PRAGMA user_version=40;"
+                "{UNDO_LOGIN_GUARD}{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}{UNDO_PREVIOUS_MANIFEST}PRAGMA user_version=40;"
             ))
             .unwrap();
     }
@@ -1799,7 +1801,7 @@ fn a_schema_41_profile_knows_the_boards_of_its_old_catalog() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}PRAGMA user_version=41;"
+                "{UNDO_LOGIN_GUARD}{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}{UNDO_KNOWN_BOARDS}PRAGMA user_version=41;"
             ))
             .unwrap();
     }
@@ -1951,7 +1953,7 @@ fn a_schema_42_profile_shows_the_layer_and_backfills_events_once() {
         store
             .connection
             .execute_batch(&format!(
-                "{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}PRAGMA user_version=42;"
+                "{UNDO_LOGIN_GUARD}{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}PRAGMA user_version=42;"
             ))
             .unwrap();
     }
@@ -1971,7 +1973,7 @@ fn a_schema_42_profile_shows_the_layer_and_backfills_events_once() {
     let connection = rusqlite::Connection::open(&path).unwrap();
     connection
         .execute_batch(&format!(
-            "{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}PRAGMA user_version=42; CREATE TABLE calendar_events(sentinel TEXT);"
+            "{UNDO_LOGIN_GUARD}{UNDO_MEALS}{UNDO_CALENDAR_EVENTS}PRAGMA user_version=42; CREATE TABLE calendar_events(sentinel TEXT);"
         ))
         .unwrap();
     drop(connection);
