@@ -5,7 +5,10 @@ pub mod archive;
 pub mod extensions;
 pub mod feed;
 pub mod intelligence;
+pub mod notification;
 pub mod operation_gate;
 pub mod paths;
 pub mod storage;
 pub mod studium;
+#[cfg(any(windows, test, feature = "test-support"))]
+pub mod windows_identity;

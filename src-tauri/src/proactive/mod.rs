@@ -2,7 +2,7 @@ mod notification;
 mod reminders;
 pub mod scheduler;
 #[cfg(windows)]
-pub(crate) mod windows_notification;
+pub(crate) use rhythm_core::notification::windows as windows_notification;
 
 use crate::{
     storage::{
