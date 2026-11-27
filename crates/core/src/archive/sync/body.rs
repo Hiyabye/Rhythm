@@ -132,10 +132,7 @@ impl Bodies {
             enabled(s, &definition.id)?;
             s.fill_feed_body(id, &article, viewer.is_empty())
         })?;
-        // The rows are gone, so a file left behind is only unused disk space.
-        for path in filled.orphaned {
-            let _ = tokio::fs::remove_file(root.join(path)).await;
-        }
+        crate::archive::remove_orphans(root, filled.orphaned).await;
         Ok(filled.revised)
     }
 

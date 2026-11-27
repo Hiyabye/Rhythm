@@ -163,10 +163,7 @@ impl Archive<'_> {
         let app = self.0;
         let _lease = app.operation_gate.shared().await?;
         let orphaned = with_store(&app.store, |s| s.purge_trashed(ids))?;
-        // The rows are gone, so a file left behind is only unused disk space.
-        for path in orphaned {
-            let _ = tokio::fs::remove_file(app.data_root.join(path)).await;
-        }
+        crate::archive::remove_orphans(&app.data_root, orphaned).await;
         Ok(())
     }
 
