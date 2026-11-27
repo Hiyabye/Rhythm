@@ -552,6 +552,26 @@ fn windows_restore_with_missing_prepared_database_is_refused_without_changing_li
     assert!(root.path().join(STAGING).is_dir());
 }
 
+/// On Windows the unjournaled-staging cleanup must not run for a restore that
+/// has its journal: the next launch needs that staging.
+#[test]
+fn a_second_restore_leaves_the_staging_of_a_journaled_one() {
+    let root = tempfile::tempdir().unwrap();
+    let stage = root.path().join(STAGING);
+    fs::create_dir(&stage).unwrap();
+    fs::write(stage.join("prepared"), b"staged").unwrap();
+    fs::write(root.path().join(JOURNAL), b"{}").unwrap();
+    let cancellation = BackupCancellation(AtomicU8::new(CANCELLABLE));
+    assert!(stage_restore(
+        root.path(),
+        &root.path().join("absent.rhythm-backup"),
+        &cancellation
+    )
+    .is_err());
+    assert_eq!(fs::read(stage.join("prepared")).unwrap(), b"staged");
+    assert!(root.path().join(JOURNAL).exists());
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_unjournaled_staging_is_removed_unless_an_earlier_restore_is_unfinished() {

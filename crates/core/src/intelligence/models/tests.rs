@@ -934,6 +934,50 @@ async fn unavailable_inventory_cannot_be_saved_before_unlink_preserves_weights()
     );
 }
 #[tokio::test]
+async fn a_failed_removal_keeps_the_installed_model_selected() {
+    let (dir, store, entry, bytes) = fixture();
+    let mut model = inventory(&entry);
+    install(
+        &store,
+        dir.path(),
+        &entry,
+        &mut model,
+        &CancelToken::new(),
+        &Fake::new(bytes),
+    )
+    .await
+    .unwrap();
+    let selected = || {
+        store
+            .lock()
+            .unwrap()
+            .ai_preferences()
+            .unwrap()
+            .embedding_model_id
+    };
+    assert_eq!(selected(), Some(model.id.clone()));
+    let connection = rusqlite::Connection::open(dir.path().join("rhythm.sqlite3")).unwrap();
+    connection.execute_batch("CREATE TRIGGER refuse_model_update BEFORE UPDATE ON ai_models BEGIN SELECT RAISE(ABORT, 'simulated inventory write failure'); END;").unwrap();
+    let remove = || {
+        remove_and_deselect(
+            store.clone(),
+            dir.path().into(),
+            model.id.clone(),
+            true,
+            false,
+        )
+    };
+    assert!(remove().await.is_err());
+    assert_eq!(selected(), Some(model.id.clone()));
+
+    connection
+        .execute_batch("DROP TRIGGER refuse_model_update")
+        .unwrap();
+    remove().await.unwrap();
+    assert_eq!(selected(), None);
+    assert!(store.lock().unwrap().ai_model(&model.id).unwrap().is_none());
+}
+#[tokio::test]
 async fn failed_inventory_delete_records_missing_weights_and_can_be_retried() {
     let (dir, store, entry, bytes) = fixture();
     let mut model = inventory(&entry);

@@ -239,6 +239,39 @@ pub async fn remove(
     remove_with_policy(store, root, id, confirmed, false).await
 }
 
+/// Removes a model and, when it is the selected embedding model, its
+/// selection. A removal that fails with the model still installed keeps it
+/// selected: an installed model nothing selects stops classification and
+/// cannot be installed again.
+pub async fn remove_and_deselect(
+    store: Arc<Mutex<Store>>,
+    root: PathBuf,
+    id: String,
+    confirmed: bool,
+    keep_files: bool,
+) -> Result<(), String> {
+    let selected = with_store(&store, |s| {
+        let mut preferences = s.ai_preferences()?;
+        if preferences.embedding_model_id.as_deref() != Some(&id) {
+            return Ok(false);
+        }
+        preferences.embedding_model_id = None;
+        s.ai_save_preferences(&preferences)?;
+        Ok(true)
+    })?;
+    let result = remove_with_policy(store.clone(), root, id.clone(), confirmed, keep_files).await;
+    if result.is_err() && selected {
+        // Saving refuses any model that is not installed, so this cannot
+        // select one whose weights are gone.
+        let _ = with_store(&store, |s| {
+            let mut preferences = s.ai_preferences()?;
+            preferences.embedding_model_id = Some(id);
+            s.ai_save_preferences(&preferences)
+        });
+    }
+    result
+}
+
 pub async fn remove_with_policy(
     store: Arc<Mutex<Store>>,
     root: PathBuf,

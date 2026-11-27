@@ -1002,12 +1002,18 @@ pub(super) fn stage_restore(
     cancellation: &BackupCancellation,
 ) -> Result<(), String> {
     restore_support(root)?;
+    let leftover = || {
+        Err("이전 복원 작업의 복구 파일이 남아 있습니다. 앱을 다시 시작한 뒤 확인해 주세요.".into())
+    };
+    // A journal means a staged restore waits for the next launch. Refuse
+    // before the cleanup below, which would delete the staging it needs.
+    if root.join(JOURNAL).exists() {
+        return leftover();
+    }
     #[cfg(windows)]
     check_unjournaled_restore(root)?;
-    if root.join(STAGING).exists() || root.join(JOURNAL).exists() {
-        return Err(
-            "이전 복원 작업의 복구 파일이 남아 있습니다. 앱을 다시 시작한 뒤 확인해 주세요.".into(),
-        );
+    if root.join(STAGING).exists() {
+        return leftover();
     }
     let previous_name = format!("{PREVIOUS_PREFIX}{}-{}", timestamp(), std::process::id());
     if root.join(&previous_name).exists() {
