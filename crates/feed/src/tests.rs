@@ -530,6 +530,15 @@ fn manifests_with_unsafe_files_or_gaps_are_rejected() {
 }
 
 #[test]
+fn seqs_at_the_u64_limit_are_rejected_without_overflow() {
+    let max = u64::MAX;
+    let to_seq = edited(|m| m["segments"][0]["to_seq"] = max.into());
+    assert!(matches!(to_seq, Err(Error::Invalid(_))));
+    let through = edited(|m| m["snapshot"]["through_seq"] = max.into());
+    assert!(matches!(through, Err(Error::Invalid(_))));
+}
+
+#[test]
 fn downloaded_files_must_match_their_reference() {
     let bytes = b"segment bytes";
     let file = FileRef::new("segments/1-2.jsonl.zst".into(), bytes);

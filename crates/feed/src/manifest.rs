@@ -150,7 +150,7 @@ impl Manifest {
             || self
                 .segments
                 .windows(2)
-                .any(|pair| pair[1].from_seq != pair[0].to_seq + 1)
+                .any(|pair| pair[0].to_seq.checked_add(1) != Some(pair[1].from_seq))
         {
             return invalid("segments are not contiguous");
         }
@@ -158,7 +158,11 @@ impl Manifest {
         // after its seq, so the snapshot must fall inside the listed range.
         if let (Some(first), Some(last)) = (self.segments.first(), self.segments.last()) {
             let through = self.snapshot.through_seq;
-            if through + 1 < first.from_seq || through > last.to_seq {
+            if through
+                .checked_add(1)
+                .is_none_or(|next| next < first.from_seq)
+                || through > last.to_seq
+            {
                 return invalid("the snapshot is outside the listed segments");
             }
         }
