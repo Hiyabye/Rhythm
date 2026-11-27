@@ -76,7 +76,7 @@ const WEEKDAYS: [char; 7] = ['일', '월', '화', '수', '목', '금', '토'];
 
 /// Bump when the extraction rules change: the app and the collector store it
 /// with their dates and re-extract notices extracted by another version.
-pub const EXTRACTOR_VERSION: i64 = 3;
+pub const EXTRACTOR_VERSION: i64 = 4;
 
 /// The dates of one notice: its title and body as one text, since titles often
 /// carry the deadline (`채용 (~9/29(화)까지)`). The app and the collector both
