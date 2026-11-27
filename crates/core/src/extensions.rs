@@ -229,7 +229,7 @@ impl Registry {
         if !enabled {
             for work in extension.cancels {
                 match work {
-                    Work::Archive => self.jobs.cancel(),
+                    Work::Archive => self.jobs.cancel_owned_by(id),
                     Work::Feed => self.feed.cancel(),
                     Work::Bodies => self.jobs.bodies.cancel(),
                     Work::Studium => {

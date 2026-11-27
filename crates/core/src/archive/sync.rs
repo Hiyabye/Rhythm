@@ -48,6 +48,8 @@ pub struct Controller {
     /// The collecting source and its own cancel flag, so unsubscribing it
     /// stops it without counting as a cancelled job. `cancel` sets it too.
     board: Mutex<Option<(String, Arc<AtomicBool>)>>,
+    /// The extension that owns the running job, set at admission.
+    owner: Mutex<&'static str>,
     /// The eClass session and stored login of the `cybercampus` source.
     pub cybercampus: cybercampus::Connector,
     /// Bodies of opened feed notices, fetched outside sync jobs.
@@ -79,6 +81,7 @@ impl Controller {
             active_task_id: AtomicU64::new(0),
             task_notifications: Mutex::new(HashMap::new()),
             board: Mutex::default(),
+            owner: Mutex::new(""),
             cybercampus,
             bodies: body::Bodies::default(),
         })
@@ -134,6 +137,16 @@ impl Controller {
             }
         }
     }
+    /// Cancels the running job only when `extension` owns it, so turning off
+    /// one extension never stops another's job. Called under the Store lock,
+    /// which job admission also takes, so the owner cannot change meanwhile.
+    pub fn cancel_owned_by(&self, extension: &str) {
+        let owned = self.busy.load(Ordering::Acquire)
+            && self.owner.lock().is_ok_and(|owner| *owner == extension);
+        if owned {
+            self.cancel();
+        }
+    }
     /// Stops source `id` if it is collecting, as unsubscribing it does.
     pub fn cancel_source(&self, id: &str) {
         if let Ok(board) = self.board.lock() {
@@ -170,10 +183,11 @@ impl Controller {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
     }
+    #[cfg(test)]
     fn reserve(&self) -> Result<(), String> {
-        self.reserve_task(0)
+        self.reserve_task(0, crate::extensions::CYBERCAMPUS)
     }
-    fn reserve_task(&self, task_id: u64) -> Result<(), String> {
+    fn reserve_task(&self, task_id: u64, owner: &'static str) -> Result<(), String> {
         let _admission = self
             .admission
             .lock()
@@ -182,6 +196,9 @@ impl Controller {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| "다른 동기화가 진행 중입니다. 완료하거나 중단한 뒤 시도해 주세요.")?;
         self.cancel.store(false, Ordering::Release);
+        if let Ok(mut current) = self.owner.lock() {
+            *current = owner;
+        }
         self.active_task_id.store(task_id, Ordering::Release);
         if let Ok(mut status) = self.status.lock() {
             status.active.clear();
@@ -305,7 +322,7 @@ impl Controller {
             {
                 return Err("지원되는 구독 정보원을 선택해 주세요.".into());
             }
-            self.reserve_task(task_id)?;
+            self.reserve_task(task_id, crate::extensions::CYBERCAMPUS)?;
             Ok(source)
         })?;
         // The command path (holding a lease) reports through status polling and
@@ -374,7 +391,12 @@ impl Controller {
                 return Err("이 자료의 확장 기능을 먼저 켜 주세요.".into());
             }
             let resource = s.resource(id)?;
-            self.reserve()?;
+            let owner = if cybercampus::owns(&resource.url) {
+                crate::extensions::CYBERCAMPUS
+            } else {
+                crate::extensions::NOTICES
+            };
+            self.reserve_task(0, owner)?;
             Ok(resource)
         })?;
         self.update(None, "resource", 0, "첨부 자료를 다시 내려받고 있습니다.");

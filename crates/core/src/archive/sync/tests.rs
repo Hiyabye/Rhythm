@@ -1443,3 +1443,41 @@ async fn a_failed_file_waits_for_an_explicit_retry() {
         .unwrap();
     assert_eq!(resource_requests(&fake), 2);
 }
+
+/// One controller runs one job at a time, so turning off an extension must
+/// cancel only a job that extension owns.
+#[test]
+fn disabling_an_extension_cancels_only_the_job_it_owns() {
+    use crate::extensions::{Registry, CYBERCAMPUS, NOTICES};
+    let (_directory, store) = crate::storage::temp_store();
+    let controller = Controller::new();
+    let registry = Registry::new(
+        controller.clone(),
+        crate::studium::controller::Controller::new(),
+        Default::default(),
+    );
+    registry.set(&store, NOTICES, true).unwrap();
+    registry.set(&store, CYBERCAMPUS, true).unwrap();
+
+    controller.reserve_task(1, CYBERCAMPUS).unwrap();
+    registry.set(&store, NOTICES, false).unwrap();
+    assert!(!controller.cancel.load(Ordering::Acquire));
+    registry.set(&store, CYBERCAMPUS, false).unwrap();
+    assert!(controller.cancel.load(Ordering::Acquire));
+    controller.finish("완료".into());
+
+    // A retried notice file belongs to the notices extension.
+    registry.set(&store, CYBERCAMPUS, true).unwrap();
+    controller.reserve_task(0, NOTICES).unwrap();
+    registry.set(&store, CYBERCAMPUS, false).unwrap();
+    assert!(!controller.cancel.load(Ordering::Acquire));
+    registry.set(&store, NOTICES, false).unwrap();
+    assert!(controller.cancel.load(Ordering::Acquire));
+    controller.finish("완료".into());
+
+    // Nothing running: nothing to cancel.
+    controller.reserve_task(0, NOTICES).unwrap();
+    controller.finish("완료".into());
+    registry.set(&store, NOTICES, false).unwrap();
+    assert!(!controller.cancel.load(Ordering::Acquire));
+}
