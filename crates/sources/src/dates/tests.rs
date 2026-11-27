@@ -319,6 +319,23 @@ fn a_length_of_days_is_not_a_range_end() {
     ] {
         assert_eq!(all_days(text, "2026-02-01"), ["2026-02-10"], "{text}");
     }
+    // The start is the 1st, so only the word after `3일` says it is a length.
+    for after in [
+        "3일간",
+        "3일 이내",
+        "3일이내",
+        "3일 동안",
+        "3일 안에",
+        "3일 내에",
+        "3일 내",
+        "3일 후",
+    ] {
+        let text = format!("합격자는 2월 1일부터 {after} 등록금을 납부해야 합니다.");
+        assert_eq!(all_days(&text, "2026-01-20"), ["2026-02-01"], "{text}");
+    }
+    // A word that only begins like one of them does not make a length.
+    let found = extract("신청: 2월 1일부터 3일 내용 확인 후 접수", "2026-01-20");
+    assert_eq!(days(&found, Kind::Deadline), ["2026-02-03"]);
     // A day-only end before the start's day is not in the start's month.
     assert_eq!(
         all_days("행사 기간: 9월 28일 ~ 5일", "2026-09-01"),
@@ -346,6 +363,11 @@ fn a_metadata_word_hides_a_date_only_as_its_label() {
         "작성자 관리자 | 등록일 2026-09-01 아래 내용을 확인하시고 처리해 주시기 바랍니다.",
         "등록일 : 2026.09.01 아래 내용을 확인하시고 기한 안에 처리해 주시기 바랍니다.",
         "조회 12 · 최종수정일자: 2026-09-01 아래 내용을 확인하시고 처리해 주시기 바랍니다.",
+        "등록일자: 2026.09.01 아래 내용을 확인하시고 기한 안에 처리해 주시기 바랍니다.",
+        "작성일시: 2026.09.01 아래 내용을 확인하시고 기한 안에 처리해 주시기 바랍니다.",
+        "수정일시 2026.09.01 아래 내용을 확인하시고 기한 안에 처리해 주시기 바랍니다.",
+        // With other words in its field, 등록일 is metadata on the publication day.
+        "관리자 등록일 2026.09.01 조회 15 아래 내용을 확인하시고 처리해 주시기 바랍니다.",
     ] {
         assert!(extract(text, "2026-09-01").is_empty(), "{text}");
     }
@@ -370,4 +392,9 @@ fn only_a_time_of_day_is_a_time() {
         Some("12:00")
     );
     assert_eq!(time("특강 일시: 11월 12일 3시").as_deref(), Some("03:00"));
+    assert_eq!(time("특강 일시: 11월 12일 10시 30분간 진행"), None);
+    assert_eq!(
+        time("특강 일시: 11월 12일 10시 30분").as_deref(),
+        Some("10:30")
+    );
 }
