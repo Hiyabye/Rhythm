@@ -441,4 +441,8 @@ fn only_tags_with_non_ascii_names_are_escaped() {
         escape_text_tags("<strong><HD현대삼호 온라인 채용설명회></strong></HD현대>"),
         "<strong>&lt;HD현대삼호 온라인 채용설명회></strong>&lt;/HD현대>"
     );
+    // Each `<` looks only a little way ahead: without that, this body is
+    // scanned to its end 300,000 times.
+    let brackets = "<".repeat(300_000);
+    assert_eq!(escape_text_tags(&brackets), brackets);
 }

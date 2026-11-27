@@ -64,7 +64,8 @@ impl Robots {
         let mut rules = Vec::new();
         let mut delay = Some(0.0);
         let mut directives = false;
-        for line in body.lines() {
+        // A lone CR ends a line too, which `lines()` does not split on.
+        for line in body.split(['\n', '\r']) {
             let line = line.split('#').next().unwrap_or("").trim();
             let Some((name, value)) = line.split_once(':') else {
                 continue;
@@ -135,7 +136,10 @@ impl Robots {
             let rule = normalize_escapes(rule);
             let pattern = rule.strip_suffix('$').unwrap_or(&rule);
             let matched = wildcard_prefix(pattern.as_bytes(), path.as_bytes(), rule.ends_with('$'));
-            let weight = pattern.bytes().filter(|byte| *byte != b'*').count();
+            // The most specific rule is the longest one as written, `*` and
+            // `$` included (RFC 9309): `Disallow: /*` outweighs `Allow: /`,
+            // and `Disallow: *` alone still blocks.
+            let weight = rule.len();
             if matched && (weight > decision.0 || (weight == decision.0 && *allow)) {
                 decision = (weight, *allow);
             }
@@ -286,6 +290,37 @@ mod tests {
             Robots::parse(&url, SCC_ROBOTS).is_err(),
             "other hosts stay strict"
         );
+    }
+
+    #[test]
+    fn wildcards_and_the_end_anchor_count_toward_a_rules_length() {
+        let url = |path: &str| Url::parse(&format!("https://www.sogang.ac.kr{path}")).unwrap();
+        let permits =
+            |body: &str, path: &str| Robots::parse(&url("/"), body).unwrap().permits(&url(path));
+        // A rule of only `*` still blocks.
+        assert!(!permits("User-agent: *\nDisallow: *", "/board"));
+        // The longer rule wins, whichever comes first.
+        for body in [
+            "User-agent: *\nAllow: /\nDisallow: /*",
+            "User-agent: *\nDisallow: /*\nAllow: /",
+        ] {
+            assert!(!permits(body, "/board"), "{body}");
+        }
+        assert!(!permits("User-agent: *\nAllow: /a\nDisallow: /a$", "/a"));
+        assert!(permits("User-agent: *\nAllow: /a\nDisallow: /a$", "/ab"));
+        // Equal lengths still favor Allow, and a longer Allow still wins.
+        assert!(permits("User-agent: *\nDisallow: /a\nAllow: /a", "/a"));
+        assert!(permits(
+            "User-agent: *\nDisallow: /*\nAllow: /board",
+            "/board/1"
+        ));
+    }
+
+    #[test]
+    fn a_lone_carriage_return_ends_a_line() {
+        let url = Url::parse("https://www.sogang.ac.kr/private/x").unwrap();
+        let policy = Robots::parse(&url, "User-agent: *\rDisallow: /private/\r").unwrap();
+        assert!(!policy.permits(&url));
     }
 
     #[test]
