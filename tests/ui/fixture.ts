@@ -139,7 +139,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       id: index + 1, source_id: 'computing-updates', source_name: '소프트웨어융합대학 소식',
       title: `한국어 공지 ${String(index + 1).padStart(2, '0')}`, author: '교학팀', category: index % 2 ? '학사' : '장학',
       published_at: '2026-10-24', collected_at: '2026-10-24 12:00:00', is_read: false,
-      saved: options.saved ?? false, historical: true, snippet: '컴퓨터 Computer 장학금 경제 공지 본문', content_status: 'complete',
+      saved: options.saved ?? false, historical: true, snippet: '컴퓨터 Computer 장학금 경제 공지 본문', content_status: 'archived',
       trashed: false,
     }));
     let sources = [{ id: 'computing-updates', name: '소식', organization: '소프트웨어융합대학',
@@ -230,7 +230,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     const modelNames: Record<string, string> = { 'qwen35-4b': 'Qwen3.5 4B', 'qwen35-9b': 'Qwen3.5 9B', 'qwen3-embedding-0-6b': 'Qwen3-Embedding 0.6B' };
     const model = (id = 'qwen35-4b', kind: 'generation' | 'embedding' = 'generation') => ({ id, catalog_id: id, name: modelNames[id] ?? id, ownership: 'managed', kind, path: `models/${id}.gguf`, storage_directory: null as string | null, sha256: 'a'.repeat(64), expected_sha256: 'a'.repeat(64), expected_bytes: kind === 'embedding' ? 639150592 : 2740937888, bytes: kind === 'embedding' ? 639150592 : 2740937888, source_revision: 'pinned-revision', source_filename: `${id}.gguf`, status: 'installed', downloaded_bytes: kind === 'embedding' ? 639150592 : 2740937888, resume_etag: null, error: null as string | null, created_at: '2026-10-24 12:00:00', updated_at: '2026-10-24 12:00:00' });
     const embeddingCatalog = { id: 'qwen3-embedding-0-6b', kind: 'embedding', name: 'Qwen3-Embedding 0.6B', parameters: '0.6B', quantization: 'Q8_0', bytes: 639150592, memory_bytes: 2147483648, description: '공지 분류용 임베딩 모델', use_case: '공지 주제 분류', repository: 'Qwen/Qwen3-Embedding-0.6B-GGUF', revision: 'pinned-revision', filename: 'Qwen3-Embedding-0.6B-Q8_0.gguf', sha256: 'd'.repeat(64), license: 'Apache-2.0', compatibility: 'verified', reason: null, pooling: 'last', embedding_dim: 1024 };
-    const ai = { model_storage: modelStorage, catalog: [embeddingCatalog], models: [...(options.aiInstalled ? [model()] : []), ...(options.aiRetiredModel ? [model('qwen35-9b')] : []), ...(options.aiEmbeddingInstalled ? [model('qwen3-embedding-0-6b', 'embedding')] : [])], preferences: { model_directory: options.aiModelDirectory ?? null as string | null, embedding_model_id: options.aiEmbeddingInstalled ? 'qwen3-embedding-0-6b' : null as string | null, classification_enabled: true }, hardware: { os: 'macOS', arch: 'arm64', ram_bytes: 17179869184, disk_available_bytes: 27000000000, backend: 'cpu' }, busy: false, classification: { state: options.aiEmbeddingInstalled ? 'idle' : 'disabled', processed: 0 } };
+    const ai = { model_storage: modelStorage, catalog: [embeddingCatalog], models: [...(options.aiInstalled ? [model()] : []), ...(options.aiRetiredModel ? [model('qwen35-9b')] : []), ...(options.aiEmbeddingInstalled ? [model('qwen3-embedding-0-6b', 'embedding')] : [])], preferences: { model_directory: options.aiModelDirectory ?? null as string | null, embedding_model_id: options.aiEmbeddingInstalled ? 'qwen3-embedding-0-6b' : null as string | null, classification_enabled: true }, hardware: { os: 'macos', arch: 'arm64', ram_bytes: 17179869184, disk_available_bytes: 27000000000, backend: 'cpu' }, busy: false, classification: { state: options.aiEmbeddingInstalled ? 'idle' : 'disabled', processed: 0 } };
     const classifications = entries.filter((item) => options.aiCategoryOf?.[item.id] !== null).map((item) => ({
       document_id: item.id, revision_id: 1, category: options.aiCategoryOf?.[item.id] ?? '장학',
       low_confidence: Boolean(options.aiClassificationLow),
@@ -326,7 +326,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     let calendarAcademic = options.calendarAcademic ?? true;
     const noticeDate = ({ saved: _, ...date }: NonNullable<FixtureOptions['noticeDates']>[number]): NoticeDate => ({ end_day: null, end_time: null, ...date });
     let calendarId = Math.max(0, ...calendarTodos.map((todo) => todo.id));
-    const cybercampus = { id: options.cybercampusId ?? null, rejected: false, courses: options.cybercampusId ? [{ course_key: 'A1', name: '자료구조실습', year: 2026, term: '3' }] : [] };
+    const cybercampus = { id: options.cybercampusId ?? null, rejected: false, courses: options.cybercampusId ? [{ course_key: 'A1', name: '자료구조실습', year: 2026, term: '3', unread: 0 }] : [] };
     Object.assign(window, { isTauri: true, __fixture: fixture, __TAURI_EVENT_PLUGIN_INTERNALS__: {
       unregisterListener: (event: string, id: number) => {
         if (event === 'updater://progress') updaterHandler = null;
@@ -390,6 +390,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
               updater: { available: Boolean(options.updaterConfigured), reason: options.updaterConfigured ? null : '새 버전을 내려받아 직접 설치합니다.' },
             };
           }
+          case 'backup_create':
+            return { format_version: 1, created_at: '1793404800', database_schema: 6, documents: 12, resources: 3,
+              resource_bytes: 1536, includes_model_weights: false };
           case 'backup_inspect':
             if (options.backupInspectError) throw '백업 파일의 형식이 올바르지 않습니다.';
             return { format_version: 1, created_at: '1793404800', database_schema: 6, documents: 12, resources: 3,
@@ -854,9 +857,10 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'cybercampus_status': return copy(cybercampus);
           case 'cybercampus_save_login':
             if (args.password !== 'right') { cybercampus.rejected = true; throw '사이버캠퍼스 로그인에 실패했습니다. 아이디와 비밀번호를 확인해 다시 저장해 주세요.'; }
-            Object.assign(cybercampus, { id: args.id, rejected: false, courses: [{ course_key: 'A1', name: '자료구조실습', year: 2026, term: '3' }] });
+            Object.assign(cybercampus, { id: args.id, rejected: false, courses: [{ course_key: 'A1', name: '자료구조실습', year: 2026, term: '3', unread: 0 }] });
             return copy(cybercampus);
-          case 'cybercampus_forget_login': cybercampus.id = null; return copy(cybercampus);
+          // As the connector: forgetting the login also clears the rejected-login guard.
+          case 'cybercampus_forget_login': cybercampus.id = null; cybercampus.rejected = false; return copy(cybercampus);
           case 'cybercampus_tasks': return copy(options.cybercampusTasks ?? []);
           case 'meal_weeks':
             if (!snapshot.extensions.some((extension) => extension.id === 'meals' && extension.enabled)) throw '식단 확장 기능이 꺼져 있습니다.';
