@@ -339,6 +339,15 @@ fn an_on_time_reminder_fires_once_in_a_short_window() {
 }
 
 #[test]
+fn an_on_time_reminder_keeps_its_window_across_midnight() {
+    let (_directory, store) = fixture();
+    todo(&store, "자정 전", "2026-11-10", Some("23:58"), Some(0));
+    assert_eq!(due(&store, "2026-11-10 23:59"), ["자정 전"]);
+    assert_eq!(due(&store, "2026-11-11 00:02"), ["자정 전"]);
+    assert!(due(&store, "2026-11-11 00:03").is_empty());
+}
+
+#[test]
 fn the_cap_applies_after_the_window_filter() {
     let (_directory, store) = fixture();
     for index in 0..(MAX_DUE_REMINDERS + 5) {

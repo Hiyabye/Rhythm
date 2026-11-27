@@ -411,6 +411,12 @@ impl Controller {
             Err(Busy::Running) => return Ok(false),
             Err(Busy::Unavailable) => return Err("공지 피드 상태를 확인하지 못했습니다.".into()),
         };
+        // Turning the extension off cancels under the Store lock, and only a
+        // sync that has already begun: a check made before `begin` could let
+        // one start after the switch.
+        if !with_store(store, |s| s.enabled(crate::extensions::NOTICES))? {
+            return Err("서강대학교 공지 기능이 꺼져 있습니다.".into());
+        }
         let cancel = running.token();
         let outcome = sync(store, data_root, transport, trusted, cancel.flag()).await;
         let wait = match &outcome {

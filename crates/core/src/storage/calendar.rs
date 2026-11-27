@@ -352,7 +352,8 @@ impl Store {
         if !self.reminders_allowed()? {
             return Ok(Vec::new());
         }
-        // The earliest reminder is a day ahead, so only today and tomorrow can be due.
+        // The earliest reminder is a day ahead, and an on-time one stays due for
+        // a few minutes after its moment, which can fall just before midnight.
         let today = now.date();
         let mut statement = self
             .connection
@@ -363,7 +364,10 @@ impl Store {
             .map_err(|e| e.to_string())?;
         let rows = statement
             .query_map(
-                [today.to_string(), (today + Duration::days(1)).to_string()],
+                [
+                    (today - Duration::days(1)).to_string(),
+                    (today + Duration::days(1)).to_string(),
+                ],
                 |row| due_reminder(row, now),
             )
             .map_err(|e| e.to_string())?

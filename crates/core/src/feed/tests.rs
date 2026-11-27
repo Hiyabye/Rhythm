@@ -156,6 +156,7 @@ fn store() -> (tempfile::TempDir, SharedStore) {
     store
         .catalog(&[definition("one"), definition("two")])
         .unwrap();
+    store.set_enabled(crate::extensions::NOTICES, true).unwrap();
     (directory, Arc::new(Mutex::new(store)))
 }
 fn titles(store: &SharedStore) -> Vec<String> {
@@ -485,6 +486,27 @@ async fn a_sync_cancelled_during_the_last_download_applies_nothing() {
 }
 
 #[tokio::test]
+async fn a_sync_does_not_start_while_the_extension_is_off() {
+    let (directory, store) = store();
+    store
+        .lock()
+        .unwrap()
+        .set_enabled(crate::extensions::NOTICES, false)
+        .unwrap();
+    let fake = Fake::default();
+    first_feed(&fake);
+    let controller = Controller::default();
+    assert!(controller
+        .run_with(&store, directory.path(), &fake, &[signer().public_key()])
+        .await
+        .is_err());
+    assert!(fake.take_requests().is_empty());
+    assert!(!controller.running());
+    assert!(titles(&store).is_empty());
+    assert_eq!(status(&store).result, None);
+}
+
+#[tokio::test]
 async fn an_offline_feed_is_recorded_quietly_and_retried_soon() {
     let (directory, store) = store();
     let fake = Fake::default();
@@ -539,6 +561,7 @@ fn unread_titles(store: &SharedStore) -> Vec<String> {
 async fn a_board_the_catalog_gains_is_backfilled_from_the_snapshot_path() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(&directory.path().join("rhythm.sqlite3")).unwrap();
+    store.set_enabled(crate::extensions::NOTICES, true).unwrap();
     store.catalog(&[definition("one")]).unwrap();
     let store: SharedStore = Arc::new(Mutex::new(store));
     let fake = Fake::default();
@@ -659,6 +682,7 @@ async fn a_board_the_catalog_gains_is_backfilled_from_the_snapshot_path() {
 async fn a_backfill_that_stops_early_runs_again() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(&directory.path().join("rhythm.sqlite3")).unwrap();
+    store.set_enabled(crate::extensions::NOTICES, true).unwrap();
     store.catalog(&[definition("one")]).unwrap();
     let store: SharedStore = Arc::new(Mutex::new(store));
     let fake = Fake::default();
@@ -718,6 +742,7 @@ fn academic_titles(store: &SharedStore) -> Vec<String> {
 async fn events_an_older_version_skipped_are_backfilled_once() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(&directory.path().join("rhythm.sqlite3")).unwrap();
+    store.set_enabled(crate::extensions::NOTICES, true).unwrap();
     store.catalog(&[definition("one")]).unwrap();
     let store: SharedStore = Arc::new(Mutex::new(store));
     let fake = Fake::default();
@@ -832,6 +857,7 @@ fn menu_posts(store: &SharedStore) -> Vec<String> {
 async fn menu_weeks_an_older_version_skipped_are_backfilled_once() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(&directory.path().join("rhythm.sqlite3")).unwrap();
+    store.set_enabled(crate::extensions::NOTICES, true).unwrap();
     store.catalog(&[definition("one")]).unwrap();
     let store: SharedStore = Arc::new(Mutex::new(store));
     let fake = Fake::default();
