@@ -189,7 +189,7 @@
     try {
       const result = await invoke<CalendarExport>('calendar_export', { destination });
       const parts = [result.todos && `할 일 ${result.todos}개`, result.deadlines && `마감 ${result.deadlines}개`].filter(Boolean);
-      feedback = `${parts.join('와 ')}를 내보냈습니다. 내보낸 파일은 Rhythm이 관리하지 않으니, 바뀐 일정은 다시 내보내 주세요.`;
+      feedback = `${parts.join('와 ')}를 내보냈습니다. 내보낸 파일은 Rhythm이 관리하지 않습니다. 일정이 바뀌면 다시 내보내 주세요.`;
     } catch (reason) {
       error = archiveError(reason);
     } finally {
@@ -335,7 +335,7 @@
         {#each reminders as [minutes, text]}<option value={minutes}>{text}</option>{/each}
       </select></label>
     </div>
-    {#if draft.reminder_minutes !== null}<p class="footnote todo-reminder-note">Rhythm이 열려 있고 알림·백그라운드에서 알림을 켠 동안 보냅니다. 앱이 꺼져 있던 사이의 알림은 할 일 시간이 지나기 전이면 다음 실행 때 보냅니다.</p>{/if}
+    {#if draft.reminder_minutes !== null}<p class="footnote todo-reminder-note">알림·백그라운드에서 알림을 켜 두고 Rhythm이 열려 있는 동안 보냅니다. 앱이 꺼져 있던 사이의 알림은 할 일 시간 전이면 다음 실행 때 보냅니다.</p>{/if}
     <label class="todo-field"><span class="field-label">메모 (선택)</span><textarea bind:value={draft.memo} maxlength="2000" rows="2"></textarea></label>
     <div class="todo-actions">
       <button type="button" class="button secondary small" onclick={cancel}>취소</button>

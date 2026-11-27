@@ -91,7 +91,7 @@
   {#if error}<p class="archive-error" role="alert">{error}</p>{/if}
   {#if loading}<p class="loading" role="status">과제와 마감을 불러오는 중입니다…</p>
   {:else if !tasks.length}
-    <div class="empty-state"><span class="empty-icon"><Icon name="check" size={30} /></span><h2>가져온 과제가 없습니다</h2><p>{desktop ? '설정의 게시판에서 사이버캠퍼스 로그인 정보를 저장하고 강의 공지를 구독한 뒤 새로고침하면 이번 학기 과제와 마감을 가져옵니다.' : '데스크톱 앱에서 사이버캠퍼스 과제를 가져올 수 있습니다.'}</p>{#if desktop}<button class="button secondary" onclick={onsettings}>게시판 설정하기 <Icon name="arrow" size={16} /></button>{/if}</div>
+    <div class="empty-state"><span class="empty-icon"><Icon name="check" size={30} /></span><h2>가져온 과제가 없습니다</h2><p>{desktop ? '설정의 게시판에서 사이버캠퍼스 로그인 정보를 저장하고 강의 공지를 구독하세요. 새로고침하면 이번 학기 과제와 마감을 가져옵니다.' : '데스크톱 앱에서 사이버캠퍼스 과제를 가져올 수 있습니다.'}</p>{#if desktop}<button class="button secondary" onclick={onsettings}>게시판 설정하기 <Icon name="arrow" size={16} /></button>{/if}</div>
   {:else}
     <h2 class="settings-group-title">해야 할 일 {upcoming.length}개</h2>
     {#if upcoming.length}<ul class="notice-list" aria-label="해야 할 일">{#each upcoming as task (`${task.course_key}-${task.category}-${task.item_id}`)}{@render row(task, true)}{/each}</ul>

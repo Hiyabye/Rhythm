@@ -3,10 +3,10 @@ import type { CalendarEvent, ClockFormat, CybercampusTask, ItemDeadline, NoticeD
 export function archiveError(reason: unknown): string {
   if (typeof reason !== 'string') return '작업을 완료하지 못했습니다. 다시 시도해 주세요.';
   if (/database or disk is full|no space left on device/i.test(reason)) {
-    return '저장 공간이 부족해 작업을 완료하지 못했습니다. 공간을 확보한 뒤 다시 시도해 주세요.';
+    return '저장 공간이 부족합니다. 공간을 확보한 뒤 다시 시도해 주세요.';
   }
   if (/readonly database|read-only file system|permission denied/i.test(reason)) {
-    return '저장 위치에 쓸 수 없습니다. 폴더 권한을 확인한 뒤 다시 시도해 주세요.';
+    return '저장 위치에 파일을 쓸 수 없습니다. 폴더 권한을 확인한 뒤 다시 시도해 주세요.';
   }
   if (/database is (?:locked|busy)/i.test(reason)) {
     return '저장소가 다른 작업을 처리하고 있습니다. 잠시 후 다시 시도해 주세요.';
@@ -113,7 +113,7 @@ export function calendarEventMeta(event: CalendarEvent): string {
 export function calendarEventTodo(event: CalendarEvent): TodoPrefill {
   return {
     todo: { title: todoTitle(event.title), day: event.start_day, time: null, memo: '', document_id: null },
-    caution: '학교 학사 일정을 옮겨 적은 할 일입니다. 일정이 바뀌어도 이 할 일은 그대로이니 캘린더에서 확인하세요.',
+    caution: '학사 일정을 옮겨 만든 할 일입니다. 학사 일정이 바뀌어도 이 할 일은 바뀌지 않으니 캘린더에서 확인하세요.',
   };
 }
 
@@ -131,7 +131,7 @@ export function noticeDateTodo(date: NoticeDate): TodoPrefill {
 export function taskTodo(task: CybercampusTask & { due_at: string }): TodoPrefill {
   return {
     todo: { title: todoTitle(task.title), day: task.due_at.slice(0, 10), time: task.due_at.length > 10 ? task.due_at.slice(11, 16) : null, memo: task.course_name, document_id: null },
-    caution: '사이버캠퍼스 마감을 옮겨 적은 할 일입니다. 마감이 바뀌어도 이 할 일은 그대로이니 과제·마감에서 확인하세요.',
+    caution: '사이버캠퍼스 마감을 옮겨 만든 할 일입니다. 마감이 바뀌어도 이 할 일은 바뀌지 않으니 과제·마감에서 확인하세요.',
   };
 }
 
@@ -151,7 +151,7 @@ export function localDayKey(date: Date): string {
 }
 
 export function archiveSize(bytes: number | null): string {
-  if (bytes === null) return '크기 미상';
+  if (bytes === null) return '크기 알 수 없음';
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;

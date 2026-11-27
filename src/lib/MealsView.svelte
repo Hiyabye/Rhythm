@@ -91,7 +91,7 @@
 {/snippet}
 
 <div class="meals" aria-busy={loading} in:fade>
-  {#if !notices}<p class="meals-note" role="note">식단은 서강대학교 공지와 함께 받아 옵니다. 서강대학교 공지가 꺼져 있는 동안에는 새 메뉴표를 받지 않습니다. <button class="text-button" onclick={onsettings}>확장 기능 설정</button></p>{/if}
+  {#if !notices}<p class="meals-note" role="note">식단은 서강대학교 공지와 함께 받아 옵니다. 서강대학교 공지를 끄면 새 메뉴표를 받지 않습니다. <button class="text-button" onclick={onsettings}>확장 기능 설정</button></p>{/if}
   {#if error}<p class="archive-error" role="alert">{error}</p>{/if}
   {#if loading}<p class="loading" role="status">식단을 불러오는 중입니다…</p>
   {:else if !desktop}
