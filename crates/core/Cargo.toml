@@ -32,6 +32,11 @@ encoding_rs = "0.8"
 sha2 = "0.10"
 zip = { version = "9.2.2", default-features = false, features = ["deflate"] }
 
+# Backups and resource and model files are hashed here; sha2 0.10 otherwise
+# uses its software compressor on ARM. Retain full-file verification; enable
+# the reviewed accelerator only on the tested Apple target.
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+sha2 = { version = "0.10", features = ["asm"] }
 # The retired remote AI key is deleted from the OS credential store on upgrade.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"

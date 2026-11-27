@@ -29,10 +29,6 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 rhythm-core = { path = "../crates/core" }
 
-# sha2 0.10 otherwise uses its software compressor on ARM. Retain full-file
-# verification; enable the reviewed accelerator only on the tested Apple target.
-[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-sha2 = { version = "0.10", features = ["asm"] }
 # Windows registers login startup in the per-user Run key instead.
 [target.'cfg(not(windows))'.dependencies]
 tauri-plugin-autostart = "2.7"
