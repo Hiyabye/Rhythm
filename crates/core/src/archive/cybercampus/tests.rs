@@ -784,3 +784,66 @@ async fn unsubscribing_stops_the_sync_and_cancelling_cancels_the_job() {
         assert_eq!(http.fake.count("/ilos/cls/st/notice/notice_list.acl"), 1);
     }
 }
+
+#[tokio::test]
+async fn retrying_a_third_party_image_of_a_notice_stays_with_the_connector() {
+    let setup = setup(Some("right"));
+    run(&setup).await.unwrap();
+    // Only the Cybercampus extension is on, as when the notices switch is off.
+    with_store(&setup.store, |s| s.set_enabled("sogang_notices", false)).unwrap();
+    let controller = controller(&setup);
+    let (image, file) = with_store(&setup.store, |s| {
+        let id = s
+            .archive_query(&ArchiveQuery {
+                source_id: Some(SOURCE_ID.into()),
+                ..ArchiveQuery::default()
+            })?
+            .items
+            .iter()
+            .find(|i| i.title == "[중요] 중간고사 범위 안내")
+            .unwrap()
+            .id;
+        let resources = s.document(id, None)?.resources;
+        let find = |url: &str| resources.iter().find(|r| r.url.contains(url)).unwrap().id;
+        Ok((
+            find("https://example.org/remote.png"),
+            find("efile_download.acl?FILE_SEQ=SYNFILE01"),
+        ))
+    })
+    .unwrap();
+    let gate = Arc::new(crate::operation_gate::AdmissionGate::default());
+    let status = |id: i64| with_store(&setup.store, |s| s.resource(id)).unwrap().status;
+
+    // The image on another host: owned by the connector, no request at all.
+    let http = Arc::new(Fake::default());
+    controller
+        .retry_admitted(
+            setup.store.clone(),
+            setup.root.clone(),
+            crate::archive::network::Client::new("Rhythm/test").unwrap(),
+            http.clone(),
+            image,
+            gate.shared().await.unwrap(),
+        )
+        .unwrap();
+    assert_eq!(controller.owner(), "cybercampus");
+    controller.wait().await;
+    assert!(http.requests().is_empty(), "{:?}", http.requests());
+    assert_eq!(status(image), "unsupported");
+
+    // An eClass file still downloads again through the session.
+    let http = Arc::new(Fake::default());
+    controller
+        .retry_admitted(
+            setup.store.clone(),
+            setup.root.clone(),
+            crate::archive::network::Client::new("Rhythm/test").unwrap(),
+            http.clone(),
+            file,
+            gate.shared().await.unwrap(),
+        )
+        .unwrap();
+    controller.wait().await;
+    assert!(http.count("/ilos/co/efile_download.acl") >= 1);
+    assert_eq!(status(file), "downloaded");
+}
