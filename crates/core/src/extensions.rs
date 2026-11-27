@@ -22,57 +22,140 @@ pub struct ExtensionInfo {
     pub enabled: bool,
 }
 
+/// Work an extension owns and that its disable stops or settles.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Work {
+    /// The archive job controller. A disable cancels only a job the extension
+    /// owns: `Controller::cancel_owned_by`.
+    Archive,
+    /// The feed sync.
+    Feed,
+    /// Bodies of opened feed notices.
+    Bodies,
+    /// The Studium generation. Its disable also needs the view close ticket
+    /// and `studium::jobs::finish_disable`, which `App::set_extension` runs.
+    Studium,
+    /// The classifier loop, which stops its own process once it sees the
+    /// extension off; a disable only wakes it (never cancelled or awaited).
+    Classifier,
+}
+
+/// Activation tokens a disable clears: one-use records that would otherwise
+/// let a stale notification act after the extension was turned off.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Tokens {
+    StudiumAlerts,
+    CalendarReminders,
+}
+
+/// The one static declaration of an extension. Extension-specific lifecycle
+/// is data here; `Registry`, `App::set_extension` and `Store::set_enabled`
+/// read it and name no extension (`docs/ARCHITECTURE.md` "Core and extensions").
+pub struct Extension {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub description: &'static str,
+    /// Signalled by `Registry::set` under the Store lock when this turns off,
+    /// in order.
+    pub cancels: &'static [Work],
+    /// What `App::set_extension` awaits (or, for the classifier, wakes) after
+    /// that lock is released, in order.
+    pub settles: &'static [Work],
+    /// Cleared in the same transaction that records the disable.
+    pub clears: &'static [Tokens],
+}
+impl Extension {
+    const fn new(id: &'static str, display_name: &'static str, description: &'static str) -> Self {
+        Self {
+            id,
+            display_name,
+            description,
+            cancels: &[],
+            settles: &[],
+            clears: &[],
+        }
+    }
+    const fn cancels(mut self, work: &'static [Work]) -> Self {
+        self.cancels = work;
+        self
+    }
+    const fn settles(mut self, work: &'static [Work]) -> Self {
+        self.settles = work;
+        self
+    }
+    const fn clears(mut self, tokens: &'static [Tokens]) -> Self {
+        self.clears = tokens;
+        self
+    }
+    /// Whether the extension feeds the Studium alert pipeline, so that its
+    /// disable cancels pending alert handoffs and its enable resumes them.
+    pub fn feeds_studium_alerts(&self) -> bool {
+        self.clears.contains(&Tokens::StudiumAlerts)
+    }
+}
+
 /// Every feature beyond the core shell is a built-in extension, listed in the
 /// order the UI shows them. Nothing is loaded from outside the app.
-pub const BUILT_IN: [(&str, &str, &str); 11] = [
-    (
+pub const BUILT_IN: &[Extension] = &[
+    Extension::new(
         NOTICES,
         "서강대학교 공지",
         "학교 게시판 공지를 받아 이 기기에 보관합니다.",
-    ),
-    (
+    )
+    .cancels(&[Work::Archive, Work::Feed, Work::Bodies])
+    .settles(&[Work::Archive, Work::Bodies]),
+    Extension::new(
         CYBERCAMPUS,
         "사이버캠퍼스",
         "eClass에서 수강 과목의 공지와 과제·마감을 가져옵니다.",
-    ),
-    (SEARCH, "검색", "보관한 공지를 검색합니다."),
-    (SAVED, "보관함", "저장한 공지를 모아 봅니다."),
-    (
+    )
+    .cancels(&[Work::Archive])
+    .settles(&[Work::Archive]),
+    Extension::new(SEARCH, "검색", "보관한 공지를 검색합니다."),
+    Extension::new(SAVED, "보관함", "저장한 공지를 모아 봅니다."),
+    Extension::new(
         RECOMMENDATIONS,
         "나를 위한 소식",
         "관심사에 맞는 공지를 골라 줍니다.",
     ),
-    (
+    Extension::new(
         WEEK,
         "앞으로 7일",
         "다가오는 일주일의 공지와 마감을 보여 줍니다.",
     ),
-    (
+    Extension::new(
         CALENDAR,
         "캘린더",
         "마감, 공지 속 날짜, 할 일을 달력으로 보여 줍니다.",
-    ),
-    (
+    )
+    .clears(&[Tokens::CalendarReminders]),
+    Extension::new(
         AI,
         "AI 분류",
         "이 기기에서 공지를 주제별로 나눕니다. 비슷한 공지, 뜻으로 찾는 검색, 기회 화면도 함께 켜집니다.",
-    ),
-    (
+    )
+    .settles(&[Work::Classifier]),
+    Extension::new(
         PROACTIVE,
         "알림·백그라운드",
-        "앱이 켜져 있는 동안 새 공지를 알립니다. 로그인 시 실행과 트레이도 정합니다.",
-    ),
-    (
-        STUDIUM,
-        "열람실",
-        "열람실의 빈 좌석을 확인합니다.",
-    ),
-    (
+        "앱이 켜져 있는 동안 새 공지를 알립니다. 로그인 시 실행도 정합니다.",
+    )
+    .clears(&[Tokens::StudiumAlerts, Tokens::CalendarReminders]),
+    Extension::new(STUDIUM, "열람실", "열람실의 빈 좌석을 확인합니다.")
+        .cancels(&[Work::Studium])
+        .settles(&[Work::Studium])
+        .clears(&[Tokens::StudiumAlerts]),
+    Extension::new(
         MEALS,
         "식단",
         "벨라르미노 학사 식당의 주간 메뉴를 보여 줍니다.",
     ),
 ];
+
+/// The declaration of built-in extension `id`.
+pub fn declaration(id: &str) -> Option<&'static Extension> {
+    BUILT_IN.iter().find(|extension| extension.id == id)
+}
 
 /// The extension that owns a catalog source family.
 pub fn owner(family: &str) -> &'static str {
@@ -87,20 +170,20 @@ pub fn owner(family: &str) -> &'static str {
 pub fn list(store: &Store) -> Result<Vec<ExtensionInfo>, String> {
     BUILT_IN
         .iter()
-        .map(|&(id, display_name, description)| {
+        .map(|extension| {
             Ok(ExtensionInfo {
-                id,
-                display_name,
-                description,
+                id: extension.id,
+                display_name: extension.display_name,
+                description: extension.description,
                 available: true,
-                enabled: store.enabled(id)?,
+                enabled: store.enabled(extension.id)?,
             })
         })
         .collect()
 }
 
 pub fn is_built_in(id: &str) -> bool {
-    BUILT_IN.iter().any(|&(known, ..)| known == id)
+    declaration(id).is_some()
 }
 
 /// What [`Registry::change`] leaves to await outside the Store lock.
@@ -136,23 +219,26 @@ impl Registry {
     /// takes, so no job of its sources can start or continue afterwards. Work
     /// that needs to await (AI, lifecycle) is stopped by the calling command.
     pub fn set(&self, store: &Store, id: &str, enabled: bool) -> Result<(), String> {
-        if !is_built_in(id) {
+        let Some(extension) = declaration(id) else {
             return Err("등록되지 않은 확장 기능입니다.".into());
-        }
+        };
         // The caller holds Store's lock, which also protects admission. Commit
         // the preference before irreversible cancellation/clearing so a failed
         // write leaves the currently enabled extension and its work intact.
         store.set_enabled(id, enabled)?;
-        if !enabled && matches!(id, NOTICES | CYBERCAMPUS) {
-            self.jobs.cancel();
-        }
-        if !enabled && id == NOTICES {
-            self.feed.cancel();
-            self.jobs.bodies.cancel();
-        }
-        if !enabled && id == STUDIUM {
-            self.studium.cancel();
-            self.studium.clear();
+        if !enabled {
+            for work in extension.cancels {
+                match work {
+                    Work::Archive => self.jobs.cancel(),
+                    Work::Feed => self.feed.cancel(),
+                    Work::Bodies => self.jobs.bodies.cancel(),
+                    Work::Studium => {
+                        self.studium.cancel();
+                        self.studium.clear();
+                    }
+                    Work::Classifier => {}
+                }
+            }
         }
         Ok(())
     }
@@ -172,12 +258,14 @@ impl Registry {
             .lock()
             .map_err(|_| "저장소에 접근할 수 없습니다.")?;
         self.set(&store, id, enabled)?;
-        let notifications = if !enabled && matches!(id, STUDIUM | PROACTIVE) {
+        // `set` accepted `id`, so it has a declaration.
+        let extension = declaration(id).ok_or("등록되지 않은 확장 기능입니다.")?;
+        let notifications = if !enabled && extension.feeds_studium_alerts() {
             self.studium.cancel_notifications()
         } else {
             None
         };
-        let studium_off = !enabled && id == STUDIUM;
+        let studium_off = !enabled && extension.cancels.contains(&Work::Studium);
         let captured = if studium_off { capture() } else { None };
         Ok(Changed {
             studium: if studium_off {

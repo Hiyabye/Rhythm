@@ -2,7 +2,7 @@
 
 use super::App;
 use crate::{
-    extensions::{self, ExtensionInfo},
+    extensions::{self, ExtensionInfo, Work},
     shell::Event,
     storage::{self, proactive::ProactiveSettings, StorageInfo},
 };
@@ -108,23 +108,29 @@ impl Settings<'_> {
             if let Some(completion) = changed.notifications {
                 completion.wait().await;
             }
-            match id {
-                extensions::NOTICES => {
-                    app.archive.wait().await;
-                    app.archive.bodies.wait().await;
-                }
-                extensions::CYBERCAMPUS => app.archive.wait().await,
-                extensions::STUDIUM => {
-                    crate::studium::jobs::finish_disable(&app.store, &app.studium, changed.studium)
+            let extension = extensions::declaration(id).ok_or("등록되지 않은 확장 기능입니다.")?;
+            let mut studium = changed.studium;
+            for work in extension.settles {
+                match work {
+                    Work::Archive => app.archive.wait().await,
+                    Work::Bodies => app.archive.bodies.wait().await,
+                    Work::Studium => {
+                        crate::studium::jobs::finish_disable(
+                            &app.store,
+                            &app.studium,
+                            studium.take(),
+                        )
                         .await?;
+                    }
+                    // The classifier sees the extension off on its next pass
+                    // and stops its process; wake it instead of waiting for
+                    // the timer.
+                    Work::Classifier => app.classifier.wake(),
+                    Work::Feed => {}
                 }
-                // The classifier sees the extension off on its next pass and
-                // stops its process; wake it instead of waiting for the timer.
-                extensions::AI => app.classifier.wake(),
-                _ => {}
             }
             view_result?;
-        } else if matches!(id, extensions::STUDIUM | extensions::PROACTIVE) {
+        } else if extensions::declaration(id).is_some_and(|e| e.feeds_studium_alerts()) {
             app.studium_notifications.resume_after_quiesce().await;
         }
         app.refresh_views();
