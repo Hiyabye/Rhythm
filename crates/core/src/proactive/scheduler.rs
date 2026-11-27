@@ -170,6 +170,7 @@ impl Scheduler {
         let (done_sender, done_receiver) = oneshot::channel();
         control.task = Some(self.runtime.spawn(async move {
             let mut interval = tokio::time::interval(WAKE_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
@@ -481,6 +482,7 @@ async fn wait_scheduled_job(
     stop: &mut watch::Receiver<bool>,
 ) -> Result<Option<sync::TaskOutcome>, String> {
     let mut recheck = tokio::time::interval(Duration::from_secs(1));
+    recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         if let Some(outcome) = archive.take_task_outcome(task_id)? {
             return Ok(Some(outcome));
@@ -684,6 +686,7 @@ where
     let mut notification_error = None;
     let mut notification_tick =
         tokio::time::interval_at(tokio::time::Instant::now() + WAKE_INTERVAL, WAKE_INTERVAL);
+    notification_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             result = &mut task => {
