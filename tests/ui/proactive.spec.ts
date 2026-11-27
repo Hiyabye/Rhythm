@@ -86,7 +86,7 @@ test('proactive settings save OS lifecycle, sync cadence, notifications and quie
   await expect(quietEnd.getByRole('button', { name: '오전' })).toHaveAttribute('aria-pressed', 'true');
   await quietEnd.getByRole('combobox', { name: '분' }).selectOption('30');
   await page.getByRole('button', { name: '알림 설명', exact: true }).click();
-  await expect(page.getByText('권한을 허용해도 전달을 보장하지는 않습니다', { exact: false })).toBeVisible();
+  await expect(page.getByText('권한을 허용해도 알림이 반드시 전달되지는 않습니다', { exact: false })).toBeVisible();
   await expect.poll(() => page.evaluate(() => {
     const calls = (window as any).__fixture.calls.filter((call: any) => call.command === 'proactive_save');
     return calls[calls.length - 1]?.args.settings.quiet_hours;
@@ -171,7 +171,7 @@ test('history can be cleared and opens its stable document destination in the ar
   await expect.poll(() => dialogMessages(page).then((messages) => messages.length)).toBe(1);
   const [confirmation] = await dialogMessages(page);
   expect(confirmation).toContain('되돌릴 수 없습니다');
-  expect(confirmation).toContain('중복 방지 정보');
+  expect(confirmation).toContain('같은 공지를 다시 알리지 않는 정보');
   await expect(history(page)).toContainText('한국어 공지 01');
   expect(await callCount(page, 'proactive_clear_history')).toBe(0);
 
@@ -197,7 +197,7 @@ test('notification activation opens a document by stable identity and missing de
 
 test('browser preview explains that proactive settings and OS delivery are unavailable', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByText('브라우저에서는 화면만 둘러볼 수 있습니다.', { exact: false })).toBeVisible();
+  await expect(page.getByText('브라우저에서는 화면만 볼 수 있습니다.', { exact: false })).toBeVisible();
   // Without the desktop backend no extension is on, so only the core panes appear.
   await openSettings(page, '확장 기능');
   await expect(page.getByText('데스크톱 앱에서 확장 기능을 켤 수 있습니다.', { exact: true })).toBeVisible();

@@ -196,7 +196,7 @@
         if (state.status === 'fulfilled') unlistenState = state.value;
         if (colors.status === 'fulfilled') unlistenTheme = colors.value;
         if (format.status === 'fulfilled') unlistenClock = format.value;
-        if (state.status === 'rejected' || colors.status === 'rejected' || format.status === 'rejected') eventError = '다른 창의 상태 변경을 구독하지 못했습니다. 다시 열어 주세요.';
+        if (state.status === 'rejected' || colors.status === 'rejected' || format.status === 'rejected') eventError = '다른 창의 상태 변경을 받지 못했습니다. 다시 열어 주세요.';
         void refresh(true);
       });
     } else loading = false;
@@ -250,7 +250,7 @@
       <div class="lookup-actions"><button class="button primary" bind:this={startButton} disabled={busy || snapshot.running} onclick={() => runAction('studium_start')}>지금 확인</button>{#if snapshot.running}<button class="button secondary" bind:this={cancelButton} disabled={busy || snapshot.job_id === null} onclick={() => runAction('studium_cancel', { jobId: snapshot!.job_id })}>확인 취소</button>{/if}</div>
       <p class="automatic" role="status">{snapshot.automatic.active ? snapshot.running ? '자동 확인 켜짐 · 현재 확인 중' : snapshot.automatic.next_check_at ? `다음 자동 확인: ${clock(snapshot.automatic.next_check_at)}` : '자동 확인 켜짐 · 대기 중' : '자동 확인 꺼짐'}</p>
       {#if snapshot.automatic.error}<p class="detail-error">{snapshot.automatic.error}</p>{/if}
-      <p class="mini-hint">창 열기·표시 변경만으로 새로 조회하지 않습니다. 자동 확인 설정은 기본 창에서 바꿀 수 있습니다.</p>
+      <p class="mini-hint">창을 열거나 표시를 바꿔도 새로 조회하지 않습니다. 자동 확인 설정은 기본 창에서 바꿀 수 있습니다.</p>
     {/if}
   {/if}
 </main>

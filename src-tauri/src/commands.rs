@@ -193,10 +193,9 @@ fn set_launch_at_login(
     state: &AppState,
     enabled: bool,
 ) -> Result<(), String> {
-    let _guard = state
-        .launch_at_login
-        .lock()
-        .map_err(|_| "자동 실행 설정 잠금을 획득하지 못했습니다.".to_string())?;
+    let _guard = state.launch_at_login.lock().map_err(|_| {
+        "자동 실행 설정을 바꾸지 못했습니다. 잠시 후 다시 시도해 주세요.".to_string()
+    })?;
     let previous = core::lifecycle::autostart_status(app)?;
     let changed = previous.enabled != enabled;
     #[cfg(windows)]

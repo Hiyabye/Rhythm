@@ -632,7 +632,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
               if (feedback === 'interested') reasons.push('관심 표시한 공지');
               if (feedback === 'not_interested') reasons.push('관심 없음 표시한 공지');
               if (item.saved) reasons.push('저장한 공지');
-              if (hasPreferences && !reasons.length) reasons.push('관심사 일치 신호가 없어 게시일 기준으로 보조 정렬');
+              if (hasPreferences && !reasons.length) reasons.push('관심사와 맞는 내용이 없어 게시일 순으로 정렬');
               return { item: copy(item), reasons, feedback };
             });
             return { items, has_preferences: hasPreferences };

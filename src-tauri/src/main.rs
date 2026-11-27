@@ -325,7 +325,7 @@ mod notification_launch_queue_tests {
 
 /// Appended to a failed restore recovery error in its dialog.
 const RESTORE_FAILED_NOTE: &str =
-    "\n\n기존 파일은 보존했습니다. 오류 원인을 확인한 뒤 다시 실행해 주세요.";
+    "\n\n기존 파일은 그대로 두었습니다. 원인을 확인한 뒤 다시 실행해 주세요.";
 
 /// Routes SIGTERM, SIGINT and SIGHUP (`kill`, Ctrl-C, logout) through the
 /// normal exit, so `RunEvent::Exit` stops jobs and reaps the embedding server

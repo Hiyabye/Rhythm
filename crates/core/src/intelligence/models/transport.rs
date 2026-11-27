@@ -199,7 +199,7 @@ pub(super) fn validate_response(
     match response.status {
         200 => {
             if response.length.is_some_and(|n| n != total) {
-                return Err("모델 다운로드 크기가 고정 목록과 다릅니다.".into());
+                return Err("모델 파일 크기가 목록과 다릅니다.".into());
             }
             Ok(false)
         }
@@ -210,10 +210,7 @@ pub(super) fn validate_response(
                 || expected_etag.is_none()
                 || response.etag.as_deref() != expected_etag
             {
-                return Err(
-                    "이어받기 응답의 범위나 파일 검증 값이 달라졌습니다. 다시 설치해 주세요."
-                        .into(),
-                );
+                return Err("이어받기 응답이 이전과 맞지 않습니다. 다시 설치해 주세요.".into());
             }
             Ok(true)
         }

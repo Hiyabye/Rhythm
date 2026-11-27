@@ -72,9 +72,7 @@ pub(super) fn check_path(path: &Path) -> Result<(), String> {
     for ancestor in path.ancestors() {
         match fs::symlink_metadata(ancestor) {
             Ok(metadata) if is_link(&metadata) => {
-                return Err(
-                    "복원 경로에 링크 또는 리파스 지점이 있어 안전하게 사용할 수 없습니다.".into(),
-                )
+                return Err("복원 경로에 링크가 있어 사용할 수 없습니다.".into())
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

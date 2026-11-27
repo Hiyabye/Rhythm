@@ -663,9 +663,7 @@ async fn rate_limit_fails_pending_rooms_and_stops_without_retrying() {
         .all(|room| room.status == "failed"
             && room.result.is_none()
             && room.error.as_deref()
-                == Some(
-                    "학교 서버가 요청을 제한했습니다. 잠시 기다린 후 지금 확인을 다시 눌러 주세요."
-                )));
+                == Some("학교 서버가 요청을 제한했습니다. 잠시 후 지금 확인을 다시 눌러 주세요.")));
     assert_eq!(
         fake.requests(),
         ["/robots.txt", COMMON, "/SEAT/roomview5.asp?room_no=5"]

@@ -416,7 +416,7 @@
     const count = ids?.length ?? result.total;
     let confirmed = false;
     try {
-      confirmed = await confirmAction(`${ids === null ? '휴지통의 공지' : '선택한 공지'} ${count}개를 영구 삭제할까요? 본문, 첨부 자료, AI 결과가 이 기기에서 지워지고, 학교 사이트에 남아 있어도 다시 가져오지 않습니다.`, '영구 삭제');
+      confirmed = await confirmAction(`${ids === null ? '휴지통의 공지' : '선택한 공지'} ${count}개를 영구 삭제할까요? 본문, 첨부 자료, AI 결과가 이 기기에서 지워집니다. 학교 사이트에 남아 있어도 다시 가져오지 않습니다.`, '영구 삭제');
     } catch (reason) { if (active) error = archiveError(reason); return; }
     if (!confirmed || !active) return;
     trashBusy = true;
@@ -567,11 +567,11 @@
           {#if desktop && summary?.documents === 0}
             <section class="first-run" aria-labelledby="first-run-heading">
               <h2 id="first-run-heading">Rhythm 시작하기</h2>
-              <p>Rhythm은 공지를 이 기기에 보관해 인터넷 없이도 읽고 검색할 수 있게 합니다. 계정이나 클라우드 없이 모든 자료와 설정은 이 기기에만 저장됩니다.</p>
+              <p>Rhythm은 공지를 이 기기에 보관하므로 인터넷 없이도 읽고 검색할 수 있습니다. 계정과 클라우드 없이 자료와 설정을 모두 이 기기에만 저장합니다.</p>
               <ol>
                 <li>설정 → 확장 기능에서 서강대학교 공지나 사이버캠퍼스를 켭니다.</li>
-                <li>서강대학교 공지를 켜면 서버가 모은 공지 피드를 Rhythm을 연 동안 30분마다 받습니다. 사이버캠퍼스는 게시판 설정에서 새로고침을 누르거나 자동 동기화를 켠 경우에만 가져옵니다.</li>
-                <li>AI 분류, 알림·백그라운드 같은 기능도 확장 기능에서 필요할 때 켭니다. 켜더라도 Rhythm이 실행 중이고 기기가 깨어 있을 때만 동작합니다.</li>
+                <li>서강대학교 공지를 켜면 Rhythm이 열려 있는 동안 30분마다 서버의 공지 피드를 받습니다. 사이버캠퍼스는 게시판 설정에서 새로고침을 누르거나 자동 동기화를 켰을 때만 가져옵니다.</li>
+                <li>AI 분류, 알림·백그라운드 같은 기능도 확장 기능에서 켤 수 있습니다. 켜도 Rhythm이 실행 중이고 기기가 절전 상태가 아닐 때만 동작합니다.</li>
               </ol>
               <p>데이터 저장 위치는 설정 → 데이터 및 정보에서 확인할 수 있습니다.</p>
               <button class="button" onclick={() => onsetup()}>초기 설정 열기</button>
@@ -662,7 +662,7 @@
               </li>
             {/each}
           </ol>
-          {#if weekTruncated}<p class="pane-footnote">오늘 공지가 많아 최근 {pageSize}건 중에서만 표시합니다. 전체 목록은 받은 소식에서 볼 수 있습니다.</p>{/if}
+          {#if weekTruncated}<p class="pane-footnote">오늘 공지가 많아 최근 {pageSize}건만 표시합니다. 전체는 받은 소식에서 볼 수 있습니다.</p>{/if}
           {#if laterDates.length}
             <h3 class="later-heading">이후 공지 날짜</h3>
             <ul class="day-events">
@@ -718,8 +718,8 @@
     {/if}
     <div class="collection-heading archive-list-heading"><h2 bind:this={listHeading} tabindex="-1">{page === 'trash' ? '휴지통' : page === 'bookmark' ? '저장한 공지' : page === 'opportunities' ? '기회 공지' : query ? '검색 결과' : '보관된 공지'} <span class="muted">{result.total.toLocaleString('ko-KR')}</span></h2><div class="heading-actions">{#if result.items.length}<button class="text-button" aria-pressed={selecting} disabled={!desktop} onclick={() => selecting ? stopSelecting() : selecting = true}>{selecting ? '선택 끝내기' : '선택'}</button>{/if}{#if page === 'trash' && result.total}<button class="text-button danger" disabled={!desktop || trashBusy} onclick={() => void deletePermanently(null)}>휴지통 비우기</button>{/if}<button class="text-button" disabled={!desktop || loading} onclick={() => { revision++; void refreshContext(); }}>목록 새로고침</button></div></div>
     {#if aiCounts && aiCategory && aiCounts.unclassified}<p class="footnote">아직 분류되지 않은 공지 {aiCounts.unclassified.toLocaleString('ko-KR')}건은 이 목록에 없습니다.</p>{/if}
-    {#if page === 'opportunities'}<p class="footnote">AI 분류가 공모전·대회, 인턴·채용, 교육·프로그램, 행사·활동으로 나눈 공지를 마감이 가까운 순서로 보여 줍니다. 마감을 찾지 못한 공지는 그 뒤에 최신순으로 놓입니다. 마감은 본문에서 찾은 날짜라 틀릴 수 있으니 원문에서 확인하세요.</p>{/if}
-    {#if page === 'trash'}<p class="footnote">휴지통의 공지는 직접 비우기 전까지 이 기기에 보관되며 목록, 검색, 추천과 알림에는 나타나지 않습니다. 영구 삭제한 공지는 학교 사이트에 남아 있어도 다시 가져오지 않습니다.</p>{/if}
+    {#if page === 'opportunities'}<p class="footnote">AI가 공모전·대회, 인턴·채용, 교육·프로그램, 행사·활동으로 분류한 공지를 마감이 가까운 순서로 보여 줍니다. 마감을 찾지 못한 공지는 그 뒤에 최신순으로 표시합니다. 마감은 본문에서 찾은 날짜라 틀릴 수 있으니 원문에서 확인하세요.</p>{/if}
+    {#if page === 'trash'}<p class="footnote">휴지통의 공지는 직접 비우기 전까지 이 기기에 보관됩니다. 목록, 검색, 추천, 알림에는 나타나지 않습니다. 영구 삭제한 공지는 학교 사이트에 남아 있어도 다시 가져오지 않습니다.</p>{/if}
     {#if selecting && result.items.length}
       <div class="bulk-bar" role="group" aria-label="선택한 공지 작업">
         <label class="archive-checkbox"><input type="checkbox" checked={allChosen} indeterminate={chosen.size > 0 && !allChosen} onchange={chooseAll} /> 이 페이지 전체 선택</label>
@@ -763,7 +763,7 @@
       </ul>
       <nav class="archive-pagination" aria-label="공지 목록 페이지"><button class="button secondary small" disabled={offset === 0 || loading} onclick={() => paginate(-1)}>이전</button><span aria-live="polite">{offset + 1}–{Math.min(offset + pageSize, result.total)} / {result.total}</span><button class="button secondary small" disabled={offset + pageSize >= result.total || loading} onclick={() => paginate(1)}>다음</button></nav>
     {:else if !loading && !error}
-      <div class="empty-state archive-empty"><span class="empty-icon"><Icon name={page === 'trash' ? 'trash' : page === 'bookmark' ? 'bookmark' : page === 'search' ? 'search' : page === 'opportunities' ? 'opportunities' : 'inbox'} size={30} /></span><h2>{query || source || category || (ai && aiCategory) || unread ? '조건에 맞는 공지가 없습니다' : page === 'trash' ? '휴지통이 비어 있습니다' : page === 'bookmark' ? '아직 저장한 공지가 없습니다' : page === 'opportunities' ? includeClosed ? '기회로 분류된 공지가 없습니다' : '마감이 남은 기회가 없습니다' : '아직 보관된 공지가 없습니다'}</h2><p>{query || source || category || (ai && aiCategory) || unread ? '검색어 또는 필터를 바꿔 보세요. 이미 보관한 내용만 검색하며 인터넷 연결은 필요하지 않습니다.' : page === 'trash' ? '공지 옆의 휴지통 버튼이나 선택 기능으로 필요 없는 공지를 옮기면 여기에 모입니다. 비우기 전까지 언제든 복원할 수 있습니다.' : page === 'bookmark' ? '공지 옆의 저장 버튼으로 중요한 정보를 모아 보세요. 확장 기능을 꺼도 보관함은 유지됩니다.' : page === 'opportunities' ? '공모전·대회, 인턴·채용, 교육·프로그램, 행사·활동으로 분류된 공지가 여기에 모입니다. 마감이 지난 공지는 위에서 마감 지난 공지도 보기를 켜면 볼 수 있습니다.' : '설정에서 정보원을 구독하고 공개된 공지를 가져오세요. 한 번 보관한 본문은 오프라인에서도 읽을 수 있습니다.'}</p>{#if page !== 'bookmark' && page !== 'trash' && !query}<button class="button secondary" onclick={() => onsettings()}>정보원 설정하기 <Icon name="arrow" size={16} /></button>{/if}</div>
+      <div class="empty-state archive-empty"><span class="empty-icon"><Icon name={page === 'trash' ? 'trash' : page === 'bookmark' ? 'bookmark' : page === 'search' ? 'search' : page === 'opportunities' ? 'opportunities' : 'inbox'} size={30} /></span><h2>{query || source || category || (ai && aiCategory) || unread ? '조건에 맞는 공지가 없습니다' : page === 'trash' ? '휴지통이 비어 있습니다' : page === 'bookmark' ? '아직 저장한 공지가 없습니다' : page === 'opportunities' ? includeClosed ? '기회로 분류된 공지가 없습니다' : '마감이 남은 기회가 없습니다' : '아직 보관된 공지가 없습니다'}</h2><p>{query || source || category || (ai && aiCategory) || unread ? '검색어나 필터를 바꿔 보세요. 보관한 공지만 검색하므로 인터넷 연결은 필요하지 않습니다.' : page === 'trash' ? '필요 없는 공지를 휴지통으로 옮기면 여기에 모입니다. 비우기 전까지 언제든 복원할 수 있습니다.' : page === 'bookmark' ? '공지 옆의 저장 버튼으로 중요한 공지를 모아 보세요. 확장 기능을 꺼도 보관함은 그대로 남습니다.' : page === 'opportunities' ? '공모전·대회, 인턴·채용, 교육·프로그램, 행사·활동으로 분류된 공지가 여기에 모입니다. 마감이 지난 공지는 마감 지난 공지도 보기를 켜면 볼 수 있습니다.' : '설정에서 정보원을 구독하고 공개된 공지를 가져오세요. 보관한 본문은 오프라인에서도 읽을 수 있습니다.'}</p>{#if page !== 'bookmark' && page !== 'trash' && !query}<button class="button secondary" onclick={() => onsettings()}>정보원 설정하기 <Icon name="arrow" size={16} /></button>{/if}</div>
     {/if}
     {/if}
   </section>

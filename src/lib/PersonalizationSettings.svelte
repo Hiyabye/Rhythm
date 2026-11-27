@@ -104,7 +104,7 @@
     let confirmed: boolean;
     try {
       confirmed = await confirmAction(interest.origin === 'learned'
-        ? `학습된 관심사 '${interest.name}'을(를) 삭제할까요?\n\n지금까지의 저장·관심 표시 기록만으로는 다시 만들어지지 않습니다. 보관한 공지와 피드백은 그대로 유지됩니다.`
+        ? `학습된 관심사 '${interest.name}'을(를) 삭제할까요?\n\n지금까지의 저장·관심 표시 기록만으로는 다시 만들어지지 않습니다. 보관한 공지와 피드백은 그대로 남습니다.`
         : `관심사 '${interest.name}'을(를) 삭제할까요? 추천에서 이 관심사를 더 이상 반영하지 않습니다. 보관한 공지는 그대로 유지됩니다.`, '삭제');
     } catch (reason) {
       error = `${archiveError(reason)} 확인 창을 열지 못해 삭제하지 않았습니다.`;
@@ -212,7 +212,7 @@
       </div>
     </div>
 
-    <div class="settings-group-title"><h3>관심 분야</h3><Hint label="관심 분야">추천 순위에만 쓰이며 이 기기에만 저장됩니다. 주제를 눌러 별칭과 우선순위를 바꿀 수 있습니다. 학습된 관심사는 저장하거나 관심 표시한 서로 다른 공지가 쌓이면 생기고, 근거는 180일 뒤 만료됩니다. 삭제한 관심사는 과거 행동만으로 다시 생기지 않습니다.</Hint></div>
+    <div class="settings-group-title"><h3>관심 분야</h3><Hint label="관심 분야">추천 순위에만 쓰이며 이 기기에만 저장됩니다. 주제를 눌러 별칭과 우선순위를 바꿀 수 있습니다. 학습된 관심사는 저장하거나 관심 표시한 공지가 여러 개 쌓이면 생기고, 근거는 180일 뒤 사라집니다. 삭제한 관심사는 과거 행동만으로는 다시 생기지 않습니다.</Hint></div>
     <div class="settings-group">
       <div class="settings-row chip-row">
         <span class="row-label">추천 주제</span>

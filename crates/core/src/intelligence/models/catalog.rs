@@ -70,7 +70,7 @@ pub(super) fn check_installable(entry: &CatalogEntry) -> Result<(), String> {
     if matches!(entry.compatibility.as_str(), "verified" | "available") {
         Ok(())
     } else {
-        Err("이 모델은 실제 추론 검증 전이므로 원클릭 설치를 제공하지 않습니다.".into())
+        Err("이 모델은 아직 실제 동작을 확인하지 못해 바로 설치할 수 없습니다.".into())
     }
 }
 pub(super) fn validate_manifest(e: &CatalogEntry) -> Result<(), String> {
@@ -93,7 +93,7 @@ pub(super) fn validate_manifest(e: &CatalogEntry) -> Result<(), String> {
         || e.filename.contains(['/', '\\', '\0'])
         || !e.id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
     {
-        return Err("모델 배포 목록의 고정 식별자나 검증 정보가 올바르지 않습니다.".into());
+        return Err("모델 목록의 식별자나 검증 정보가 올바르지 않습니다.".into());
     }
     Ok(())
 }

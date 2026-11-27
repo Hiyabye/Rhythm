@@ -107,7 +107,10 @@ impl Notifications {
         if self.shutdown.load(Ordering::Acquire) {
             return Ok(());
         }
-        let mut control = self.control.lock().map_err(|_| "좌석 알림 잠금 오류")?;
+        let mut control = self
+            .control
+            .lock()
+            .map_err(|_| "좌석 알림 상태에 접근하지 못했습니다.")?;
         if let Some(run) = control
             .as_ref()
             .filter(|run| !run.finished.load(Ordering::Acquire))
@@ -186,14 +189,20 @@ impl Notifications {
         // Store is always acquired before runtime memory, as in publication
         // and OS activation. A click can precede the frontend subscription by
         // enough time for the room, settings or worker generation to change.
-        let store = self.store.lock().map_err(|_| "좌석 알림 설정 잠금 오류")?;
+        let store = self
+            .store
+            .lock()
+            .map_err(|_| "좌석 알림 설정에 접근하지 못했습니다.")?;
         self.gate.ensure_open()?;
         let current = self
             .control
             .lock()
-            .map_err(|_| "좌석 알림 잠금 오류")?
+            .map_err(|_| "좌석 알림 상태에 접근하지 못했습니다.")?
             .clone();
-        let mut memory = self.memory.lock().map_err(|_| "좌석 알림 이동 잠금 오류")?;
+        let mut memory = self
+            .memory
+            .lock()
+            .map_err(|_| "좌석 알림 정보에 접근하지 못했습니다.")?;
         let Some(activation) = memory.activation.take() else {
             return Ok(None);
         };
@@ -332,7 +341,10 @@ impl Notifications {
         let token = token()?;
         #[cfg(test)]
         if let Some(wire) = &self.wire {
-            let store = self.store.lock().map_err(|_| "좌석 알림 설정 잠금 오류")?;
+            let store = self
+                .store
+                .lock()
+                .map_err(|_| "좌석 알림 설정에 접근하지 못했습니다.")?;
             if !self.current(run, &candidate)?
                 || !store.studium_alert_reserve(&candidate, &token)?
             {
@@ -343,7 +355,10 @@ impl Notifications {
         #[cfg(windows)]
         {
             let _ = responses;
-            let store = self.store.lock().map_err(|_| "좌석 알림 설정 잠금 오류")?;
+            let store = self
+                .store
+                .lock()
+                .map_err(|_| "좌석 알림 설정에 접근하지 못했습니다.")?;
             if !self.current(run, &candidate)? {
                 return Ok(());
             }
@@ -376,7 +391,10 @@ impl Notifications {
                     .send(),
             );
             let first = {
-                let store = self.store.lock().map_err(|_| "좌석 알림 설정 잠금 오류")?;
+                let store = self
+                    .store
+                    .lock()
+                    .map_err(|_| "좌석 알림 설정에 접근하지 못했습니다.")?;
                 if !self.current(run, &candidate)?
                     || !store.studium_alert_reserve(&candidate, &token)?
                 {
@@ -456,7 +474,7 @@ impl Notifications {
         let run = self
             .control
             .lock()
-            .map_err(|_| "좌석 알림 잠금 오류")?
+            .map_err(|_| "좌석 알림 상태에 접근하지 못했습니다.")?
             .clone();
         let Some(run) = run else {
             return Ok(false);
@@ -469,12 +487,15 @@ impl Notifications {
         let _callback = self
             .callback_gate
             .lock()
-            .map_err(|_| "좌석 알림 이동 잠금 오류")?;
+            .map_err(|_| "좌석 알림 정보에 접근하지 못했습니다.")?;
         if self.cancelled(run) {
             return Ok(false);
         }
         let room = {
-            let store = self.store.lock().map_err(|_| "좌석 알림 설정 잠금 오류")?;
+            let store = self
+                .store
+                .lock()
+                .map_err(|_| "좌석 알림 설정에 접근하지 못했습니다.")?;
             self.gate.ensure_open()?;
             if self.cancelled(run) {
                 return Ok(false);
@@ -493,7 +514,7 @@ impl Notifications {
         }
         self.memory
             .lock()
-            .map_err(|_| "좌석 알림 이동 잠금 오류")?
+            .map_err(|_| "좌석 알림 정보에 접근하지 못했습니다.")?
             .activation = Some(PendingActivation {
             room_id: room.clone(),
             run: Arc::downgrade(run),

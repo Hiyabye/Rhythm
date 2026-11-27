@@ -29,13 +29,13 @@ pub fn verify_file(
         }
         bytes += n as u64;
         if bytes > size {
-            return Err("검증 중 모델 파일이 변경되었습니다.".into());
+            return Err("확인하는 동안 모델 파일이 바뀌었습니다.".into());
         }
         hash.update(&buffer[..n]);
     }
     let hash = format!("{:x}", hash.finalize());
     if bytes != size || expected.is_some_and(|(h, _)| h != hash) {
-        return Err("모델 SHA-256 무결성 검증에 실패했습니다. 다시 설치해 주세요.".into());
+        return Err("모델 파일의 SHA-256이 맞지 않습니다. 다시 설치해 주세요.".into());
     }
     Ok((hash, size))
 }

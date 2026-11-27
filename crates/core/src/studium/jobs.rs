@@ -28,7 +28,9 @@ pub async fn automatic_start_with_transport<T: Transport + Clone + 'static>(
     transport: T,
 ) -> Result<Snapshot, String> {
     let _lease = gate.shared().await?;
-    let store = shared_store.lock().map_err(|_| "설정 잠금 오류")?;
+    let store = shared_store
+        .lock()
+        .map_err(|_| "설정에 접근하지 못했습니다.")?;
     gate.ensure_open()?;
     if shutdown.load(std::sync::atomic::Ordering::Acquire) {
         return Err("Rhythm을 종료하고 있습니다.".into());
@@ -68,7 +70,9 @@ pub fn register<T: Transport + 'static>(
     transport: T,
     lease: AdmissionLease,
 ) -> Result<Snapshot, String> {
-    let store = shared_store.lock().map_err(|_| "설정 잠금 오류")?;
+    let store = shared_store
+        .lock()
+        .map_err(|_| "설정에 접근하지 못했습니다.")?;
     // Registration and cancellation share Store's boundary. A lease admitted
     // just before maintenance/exit must not register after their cancel pass.
     gate.ensure_open()?;
@@ -93,7 +97,7 @@ pub fn cancel_at_boundary(
     store: &SharedStore,
     controller: &Controller,
 ) -> Result<Option<CompletionHandle>, String> {
-    let _store = store.lock().map_err(|_| "설정 잠금 오류")?;
+    let _store = store.lock().map_err(|_| "설정에 접근하지 못했습니다.")?;
     controller.cancel();
     Ok(controller.completion())
 }
@@ -106,7 +110,7 @@ pub fn reserve_maintenance(
     controller: &Controller,
 ) -> Result<(MaintenanceReservation, Option<CompletionHandle>), String> {
     let reservation = gate.close()?;
-    let _store = store.lock().map_err(|_| "설정 잠금 오류")?;
+    let _store = store.lock().map_err(|_| "설정에 접근하지 못했습니다.")?;
     controller.cancel_for_maintenance();
     Ok((reservation, controller.completion()))
 }

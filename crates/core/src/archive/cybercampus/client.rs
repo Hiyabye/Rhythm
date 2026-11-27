@@ -60,7 +60,7 @@ pub fn validate(url: &Url) -> Result<(), String> {
     {
         Ok(())
     } else {
-        Err("사이버캠퍼스의 허용된 주소가 아니어서 요청하지 않았습니다.".into())
+        Err("허용되지 않은 주소여서 사이버캠퍼스에 요청하지 않았습니다.".into())
     }
 }
 

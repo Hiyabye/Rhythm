@@ -66,7 +66,10 @@ impl WindowState {
         if self.closing {
             return Err("미니 창을 닫고 있습니다. 잠시 후 다시 열어 주세요.".into());
         }
-        self.generation = self.generation.checked_add(1).ok_or("미니 창 번호 오류")?;
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .ok_or("미니 창을 열 수 없습니다.")?;
         if !self.open {
             self.on_top = false;
         }
@@ -167,13 +170,16 @@ impl Views {
         self.windows
             .lock()
             .map(|state| state.status())
-            .map_err(|_| "미니 창 상태 잠금 오류".into())
+            .map_err(|_| "미니 창 상태에 접근하지 못했습니다.".into())
     }
     pub(crate) fn start(self: &Arc<Self>) -> Result<(), String> {
         if self.shutdown.load(Ordering::Acquire) {
             return Ok(());
         }
-        let mut worker = self.worker.lock().map_err(|_| "열람실 표시 잠금 오류")?;
+        let mut worker = self
+            .worker
+            .lock()
+            .map_err(|_| "열람실 표시 상태에 접근하지 못했습니다.")?;
         if worker
             .as_ref()
             .is_some_and(|worker| !worker.finished.load(Ordering::Acquire))
@@ -280,7 +286,10 @@ impl Views {
             // preference edit may have happened while this action was queued.
             // Native application shares Store with admission/publication, so
             // an older generation never overwrites a newer controller state.
-            let store = owner.store.lock().map_err(|_| "설정 잠금 오류")?;
+            let store = owner
+                .store
+                .lock()
+                .map_err(|_| "설정에 접근하지 못했습니다.")?;
             owner.gate.ensure_open()?;
             let snapshot = if store.enabled(crate::extensions::STUDIUM)? {
                 owner
@@ -303,7 +312,10 @@ impl Views {
                 .unwrap_or_default();
             let tooltip = tray_tooltip(&rows);
             let applied = (rows, tooltip);
-            let mut tray = owner.tray.lock().map_err(|_| "트레이 상태 잠금 오류")?;
+            let mut tray = owner
+                .tray
+                .lock()
+                .map_err(|_| "트레이 상태에 접근하지 못했습니다.")?;
             let updated = if tray.as_ref() == Some(&applied) {
                 Ok(())
             } else {
@@ -326,7 +338,10 @@ impl Views {
         if self.shutdown.load(Ordering::Acquire) {
             return Err("Rhythm을 종료하고 있습니다.".into());
         }
-        let store = self.store.lock().map_err(|_| "설정 잠금 오류")?;
+        let store = self
+            .store
+            .lock()
+            .map_err(|_| "설정에 접근하지 못했습니다.")?;
         if !store.enabled(crate::extensions::STUDIUM)? {
             return Err("Studium 확장 기능이 꺼져 있습니다.".into());
         }
@@ -337,7 +352,10 @@ impl Views {
         let _lease = self.gate.shared().await?;
         self.enabled()?;
         let closing = {
-            let state = self.windows.lock().map_err(|_| "미니 창 상태 잠금 오류")?;
+            let state = self
+                .windows
+                .lock()
+                .map_err(|_| "미니 창 상태에 접근하지 못했습니다.")?;
             state.session.as_ref().filter(|_| state.closing).cloned()
         };
         if let Some(closing) = closing {
@@ -346,14 +364,17 @@ impl Views {
                 .map_err(|_| "미니 창을 닫고 있습니다. 잠시 후 다시 열어 주세요.")?;
         }
         let generation = {
-            let store = self.store.lock().map_err(|_| "설정 잠금 오류")?;
+            let store = self
+                .store
+                .lock()
+                .map_err(|_| "설정에 접근하지 못했습니다.")?;
             self.gate.ensure_open()?;
             if !store.enabled(crate::extensions::STUDIUM)? {
                 return Err("Studium 확장 기능이 꺼져 있습니다.".into());
             }
             self.windows
                 .lock()
-                .map_err(|_| "미니 창 상태 잠금 오류")?
+                .map_err(|_| "미니 창 상태에 접근하지 못했습니다.")?
                 .reserve_open()?
         };
         let result = self.on_main(move |owner| owner.open_now(generation)).await;
@@ -369,25 +390,37 @@ impl Views {
 
     fn open_now(self: &Arc<Self>, generation: u64) -> Result<MiniStatus, String> {
         let geometry = {
-            let store = self.store.lock().map_err(|_| "설정 잠금 오류")?;
+            let store = self
+                .store
+                .lock()
+                .map_err(|_| "설정에 접근하지 못했습니다.")?;
             self.gate.ensure_open()?;
             if !store.enabled(crate::extensions::STUDIUM)? {
                 return Err("Studium 확장 기능이 꺼져 있습니다.".into());
             }
-            let state = self.windows.lock().map_err(|_| "미니 창 상태 잠금 오류")?;
+            let state = self
+                .windows
+                .lock()
+                .map_err(|_| "미니 창 상태에 접근하지 못했습니다.")?;
             if state.generation != generation || !state.open {
                 return Err("이전 미니 창 요청을 무시했습니다.".into());
             }
             store.studium_mini_geometry()?
         };
         if let Some(window) = self.app.get_webview_window(MINI_WINDOW) {
-            let store = self.store.lock().map_err(|_| "설정 잠금 오류")?;
+            let store = self
+                .store
+                .lock()
+                .map_err(|_| "설정에 접근하지 못했습니다.")?;
             self.gate.ensure_open()?;
             if !store.enabled(crate::extensions::STUDIUM)? {
                 return Err("Studium 확장 기능이 꺼져 있습니다.".into());
             }
             {
-                let state = self.windows.lock().map_err(|_| "미니 창 상태 잠금 오류")?;
+                let state = self
+                    .windows
+                    .lock()
+                    .map_err(|_| "미니 창 상태에 접근하지 못했습니다.")?;
                 if !state.matches(CloseTicket(generation)) {
                     return Err("이전 미니 창 요청을 무시했습니다.".into());
                 }
@@ -451,20 +484,26 @@ impl Views {
             finished: AtomicBool::new(false),
             done: Notify::new(),
         });
-        let store = self.store.lock().map_err(|_| "설정 잠금 오류")?;
+        let store = self
+            .store
+            .lock()
+            .map_err(|_| "설정에 접근하지 못했습니다.")?;
         if self.gate.ensure_open().is_err()
             || !store.enabled(crate::extensions::STUDIUM)?
             || !self
                 .windows
                 .lock()
-                .map_err(|_| "미니 창 상태 잠금 오류")?
+                .map_err(|_| "미니 창 상태에 접근하지 못했습니다.")?
                 .matches(CloseTicket(generation))
         {
             let _ = window.destroy();
             return Err("미니 창 요청이 취소되었습니다.".into());
         }
         {
-            let mut state = self.windows.lock().map_err(|_| "미니 창 상태 잠금 오류")?;
+            let mut state = self
+                .windows
+                .lock()
+                .map_err(|_| "미니 창 상태에 접근하지 못했습니다.")?;
             state.session = Some(session.clone());
             state.closing = false;
             state.on_top = false;
@@ -566,7 +605,10 @@ impl Views {
 
     fn close_now(&self, ticket: CloseTicket) -> Result<Option<Arc<WindowSession>>, String> {
         {
-            let state = self.windows.lock().map_err(|_| "미니 창 상태 잠금 오류")?;
+            let state = self
+                .windows
+                .lock()
+                .map_err(|_| "미니 창 상태에 접근하지 못했습니다.")?;
             if !state.matches(ticket) {
                 return Ok(None);
             }
@@ -577,7 +619,10 @@ impl Views {
         self.save_geometry(ticket);
         let window = self.app.get_webview_window(MINI_WINDOW);
         let session = {
-            let mut state = self.windows.lock().map_err(|_| "미니 창 상태 잠금 오류")?;
+            let mut state = self
+                .windows
+                .lock()
+                .map_err(|_| "미니 창 상태에 접근하지 못했습니다.")?;
             if !state.matches(ticket) {
                 return Ok(None);
             }
@@ -613,7 +658,10 @@ impl Views {
         let _lease = self.gate.shared().await?;
         self.enabled()?;
         self.on_main(move |owner| {
-            let store = owner.store.lock().map_err(|_| "설정 잠금 오류")?;
+            let store = owner
+                .store
+                .lock()
+                .map_err(|_| "설정에 접근하지 못했습니다.")?;
             owner.gate.ensure_open()?;
             if !store.enabled(crate::extensions::STUDIUM)? {
                 return Err("Studium 확장 기능이 꺼져 있습니다.".into());
@@ -621,7 +669,7 @@ impl Views {
             if !owner
                 .windows
                 .lock()
-                .map_err(|_| "미니 창 상태 잠금 오류")?
+                .map_err(|_| "미니 창 상태에 접근하지 못했습니다.")?
                 .open
             {
                 return Err("미니 창이 열려 있지 않습니다.".into());
@@ -633,7 +681,10 @@ impl Views {
             window
                 .set_always_on_top(enabled)
                 .map_err(|_| "항상 위 표시를 바꾸지 못했습니다.")?;
-            let mut state = owner.windows.lock().map_err(|_| "미니 창 상태 잠금 오류")?;
+            let mut state = owner
+                .windows
+                .lock()
+                .map_err(|_| "미니 창 상태에 접근하지 못했습니다.")?;
             if !state.open {
                 return Err("미니 창이 열려 있지 않습니다.".into());
             }

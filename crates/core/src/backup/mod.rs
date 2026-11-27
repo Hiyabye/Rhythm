@@ -330,7 +330,7 @@ fn referenced_resources(
         // Rows are ordered by path, so repeated references are adjacent.
         if let Some(previous) = files.last().filter(|item| item.name == name) {
             if previous.bytes != expected_bytes as u64 || previous.sha256 != expected_hash {
-                return Err("같은 첨부 경로를 가리키는 데이터베이스 정보가 서로 다릅니다.".into());
+                return Err("같은 첨부 경로에 대한 데이터베이스 정보가 서로 다릅니다.".into());
             }
             continue;
         }
@@ -372,7 +372,7 @@ fn validate_snapshot_summary(
         .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
         .map_err(|_| "백업 공지 수를 확인하지 못했습니다.")?;
     if schema != expected_schema || documents < 0 || documents as u64 != expected_documents {
-        return Err("데이터베이스 스냅샷의 요약 정보가 일치하지 않습니다.".into());
+        return Err("데이터베이스 요약 정보가 맞지 않습니다.".into());
     }
     Ok(())
 }
@@ -680,7 +680,9 @@ fn require_restore_space(available: u64, expanded: u64) -> Result<(), String> {
         .checked_add(1024 * 1024 * 1024)
         .ok_or("복원에 필요한 저장 공간을 확인하지 못했습니다.")?;
     if available < required {
-        return Err("복원에 필요한 저장 공간이 부족합니다. 백업 크기 외에 1 GiB 이상의 여유 공간을 확보해 주세요.".into());
+        return Err(
+            "복원할 공간이 부족합니다. 백업 크기에 1 GiB를 더한 여유 공간이 필요합니다.".into(),
+        );
     }
     Ok(())
 }
