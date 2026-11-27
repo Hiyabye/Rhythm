@@ -27,7 +27,7 @@ test('backup restore inspects selected file before confirmation and only invokes
   await expect(backup.getByRole('heading', { name: '복원할 백업 확인', exact: true })).toBeVisible();
   await expect(backup).toContainText('공지 12건 · 첨부 자료 3개');
   await expect(backup).toContainText('형식 v1 · 스키마 6');
-  await expect(backup).toContainText('모델 가중치는 포함되지 않습니다.');
+  await expect(backup).toContainText('모델 파일은 포함되지 않습니다.');
   await expect(backup).toContainText('자동으로 다시 열리지 않습니다. 직접 다시 열면 복원이 마무리됩니다.');
   expect(await callCount(page, 'backup_inspect')).toBe(1);
 
@@ -102,7 +102,7 @@ test('unconfigured updater shows manual update guidance instead of a failing che
   await expect(updater).toContainText('github.com/Hiyabye/Rhythm');
   await expect(updater).toContainText('Apple 공증을 받지 않았습니다');
   await expect(updater).not.toContainText('공증된');
-  await expect(updater).toContainText('공지, 설정, AI 모델은 앱과 별도로 저장되어 앱을 바꿔도 지워지지 않습니다.');
+  await expect(updater).toContainText('공지, 설정, AI 모델은 앱과 별도로 저장되므로 앱을 바꿔도 지워지지 않습니다.');
   await expect(updater.getByRole('button', { name: '업데이트 확인', exact: true })).toHaveCount(0);
   await expect(updater.getByRole('alert')).toHaveCount(0);
   await expect(updater).toContainText('2.4.0');
@@ -281,7 +281,7 @@ test('automatic update checks are on by default and can be turned off', async ({
   const updater = await openUpdater(page);
   const toggle = updater.getByRole('switch', { name: '자동으로 업데이트 확인', exact: true });
   await expect(toggle).toHaveAttribute('aria-checked', 'true');
-  await expect(updater).toContainText('내려받기와 설치는 직접 고를 때만 진행합니다');
+  await expect(updater).toContainText('내려받기와 설치는 직접 선택할 때만 진행합니다');
 
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-checked', 'false');

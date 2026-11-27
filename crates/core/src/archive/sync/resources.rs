@@ -327,7 +327,7 @@ pub async fn local_resource(
         .await
         .map_err(|_| "로컬 첨부 파일을 읽지 못했습니다.")?;
     if Some(format!("{:x}", Sha256::digest(&bytes))) != resource.sha256 {
-        return Err("저장된 첨부 파일이 손상되었습니다. 다시 내려받아 주세요.".into());
+        return Err("저장된 자료가 손상되었습니다. 다시 내려받아 주세요.".into());
     }
     Ok((resource, bytes))
 }

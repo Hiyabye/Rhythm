@@ -121,7 +121,7 @@ test('automatic start immediately checks once, keeps waiting status on reopen, a
   await nav(page).getByRole('button', { name: '열람실', exact: true }).click();
   await expect(automatic.getByRole('status')).toContainText('다음 자동 확인:');
   await page.getByRole('button', { name: '지금 확인', exact: true }).click();
-  await expect(automatic.getByRole('status')).toContainText('진행 중인 확인을 마친 뒤 5분 후');
+  await expect(automatic.getByRole('status')).toContainText('진행 중인 확인이 끝나면 5분 뒤에');
   await automatic.getByRole('button', { name: '자동 확인 일시정지', exact: true }).click();
   await expect(automatic.getByRole('button', { name: '자동 확인 시작', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '지금 확인', exact: true })).toBeDisabled();
@@ -194,7 +194,7 @@ test('favorite numbers validate, save independently and exact search keeps the t
   const save = page.getByRole('button', { name: '선호 좌석 저장', exact: true });
   await expect(page.locator('.preferred')).toContainText('84');
   await input.fill('1, 1');
-  await expect(page.getByText('같은 좌석 번호를 중복해서 입력할 수 없습니다.')).toBeVisible();
+  await expect(page.getByText('같은 좌석 번호는 한 번만 입력해 주세요.')).toBeVisible();
   await expect(save).toBeDisabled();
   await input.fill('103');
   await expect(input).toHaveAttribute('aria-invalid', 'true');
@@ -299,7 +299,7 @@ test('favorite availability and search distinguish unverified counts, failure, u
   const search = page.getByRole('searchbox', { name: '빈 좌석 번호 검색', exact: true });
   await search.fill('84');
   await expect(page.locator('.favorite-availability')).toHaveText('번호를 확인하지 못해 선호 좌석의 빈자리 여부를 알 수 없습니다.');
-  await expect(page.getByText('좌석 번호를 검증하지 못해 검색할 수 없습니다.')).toBeVisible();
+  await expect(page.getByText('좌석 번호를 확인하지 못해 검색할 수 없습니다.')).toBeVisible();
   await expect(page.locator('.seat-count')).toContainText('3석');
   await expect(page.locator('.search-count')).toHaveCount(0);
   for (const id of ['6', '11']) {
@@ -445,7 +445,7 @@ test('preferred-seat alerts require saved favorites and remain separate for each
   const save = alert.getByRole('button', { name: '알림 조건 저장', exact: true });
   await kind.selectOption('preferred');
   await toggle.check();
-  await expect(alert.getByText('선호 좌석 알림을 켜려면 이 방의 선호 번호를 먼저 저장해 주세요.')).toBeVisible();
+  await expect(alert.getByText('선호 좌석 알림을 켜려면 이 열람실의 선호 번호를 먼저 저장해 주세요.')).toBeVisible();
   await expect(save).toBeDisabled();
   await page.getByRole('textbox', { name: '선호 좌석 번호', exact: true }).fill('84');
   await expect(save).toBeDisabled();

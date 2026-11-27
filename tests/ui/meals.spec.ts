@@ -90,7 +90,7 @@ test('an unreadable or missing week shows no other week, and a note when 공지 
   await expect(page.getByRole('heading', { name: '이번 주 식단이 아직 없습니다' })).toBeVisible();
   await expect(page.getByRole('heading', { name: '11/30 – 12/6' })).toBeVisible();
   const note = page.getByRole('note');
-  await expect(note).toContainText('서강대학교 공지가 꺼져 있는 동안에는 새 메뉴표를 받지 않습니다.');
+  await expect(note).toContainText('서강대학교 공지를 끄면 새 메뉴표를 받지 않습니다.');
   await note.getByRole('button', { name: '확장 기능 설정' }).click();
   await expect(page.getByRole('heading', { name: '설정', level: 1 })).toBeVisible();
 });

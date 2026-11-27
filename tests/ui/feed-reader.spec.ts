@@ -42,7 +42,7 @@ test('a revised school text is labeled', async ({ page }) => {
   await page.goto('/');
   await page.locator('#notice-1').click();
   await expect(page.locator('.reader-body')).toContainText('보관된 한국어 본문입니다.');
-  await expect(page.getByRole('note').filter({ hasText: '원문이 수정됨' })).toContainText('학교 사이트의 현재 본문');
+  await expect(page.getByRole('note').filter({ hasText: '원문이 수정됨' })).toContainText('현재 본문을 보관했습니다');
 });
 
 test('a notice deleted at the school shows what was kept without fetching', async ({ page }) => {

@@ -171,7 +171,7 @@ test('a todo reminder offers choices that fit its time and is saved with it', as
   await panel.getByRole('combobox', { name: '시' }).selectOption('9');
   await expect(reminder.getByRole('option')).toHaveText(['알림 없음', '제시간', '10분 전', '30분 전', '1시간 전', '하루 전']);
   await reminder.selectOption('10분 전');
-  await expect(panel.getByText('Rhythm이 열려 있고 알림·백그라운드에서 알림을 켠 동안 보냅니다.', { exact: false })).toBeVisible();
+  await expect(panel.getByText('알림·백그라운드에서 알림을 켜 두고 Rhythm이 열려 있는 동안 보냅니다.', { exact: false })).toBeVisible();
   // Clearing the time drops a choice an untimed todo cannot have.
   await panel.getByRole('combobox', { name: '시' }).selectOption('');
   await expect(reminder).toHaveValue(await reminder.locator('option', { hasText: '알림 없음' }).getAttribute('value') ?? '');
@@ -206,7 +206,7 @@ test('export saves todos and open deadlines to a chosen .ics file', async ({ pag
   await openCalendar(page);
   await page.getByRole('button', { name: '내보내기' }).click();
   const panel = page.getByRole('region', { name: /10월 24일 토요일/ });
-  await expect(panel.getByRole('status')).toHaveText('할 일 1개와 마감 1개를 내보냈습니다. 내보낸 파일은 Rhythm이 관리하지 않으니, 바뀐 일정은 다시 내보내 주세요.');
+  await expect(panel.getByRole('status')).toHaveText('할 일 1개와 마감 1개를 내보냈습니다. 내보낸 파일은 Rhythm이 관리하지 않습니다. 일정이 바뀌면 다시 내보내 주세요.');
   const calls = await page.evaluate(() => (window as any).__fixture.calls
     .filter((call: any) => call.command === 'plugin:dialog|save' || call.command === 'calendar_export').map((call: any) => call.args));
   expect(calls[0].options).toMatchObject({ defaultPath: 'Rhythm-calendar.ics', filters: [{ name: 'iCalendar', extensions: ['ics'] }] });
@@ -333,7 +333,7 @@ test('an open eClass deadline is copied into a todo with its due time and course
   await expect(panel.getByRole('combobox', { name: '시' })).toHaveValue('11');
   await expect(panel.getByRole('combobox', { name: '분' })).toHaveValue('59');
   await expect(panel.getByRole('button', { name: '오후', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(panel.getByRole('note')).toContainText('마감이 바뀌어도 이 할 일은 그대로');
+  await expect(panel.getByRole('note')).toContainText('마감이 바뀌어도 이 할 일은 바뀌지 않으니');
   await panel.getByRole('button', { name: '추가', exact: true }).click();
   await expect(panel.getByRole('list')).toContainText('오후 11:59 실습 과제 2');
   // eClass deadlines are replaced on every sync, so the todo keeps no link.
@@ -420,7 +420,7 @@ test('a school event becomes a todo after the user checks the prefilled form', a
   await openCalendar(page);
   await page.locator('[data-day="2026-10-28"]').click();
   await page.getByRole('button', { name: '중간시험 할 일로 추가' }).click();
-  await expect(page.getByRole('note')).toContainText('학교 학사 일정을 옮겨 적은 할 일입니다.');
+  await expect(page.getByRole('note')).toContainText('학사 일정을 옮겨 만든 할 일입니다.');
   await expect(page.getByRole('textbox', { name: '제목' })).toHaveValue('중간시험');
   await page.getByRole('button', { name: '추가', exact: true }).click();
   await expect(page.locator('.calendar-feedback')).toHaveText('할 일을 추가했습니다.');

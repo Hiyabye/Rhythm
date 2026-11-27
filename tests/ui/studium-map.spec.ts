@@ -46,7 +46,7 @@ test('map opens locally with complete numbered symbols, padding and the same sou
   await expect(map(page).locator('[data-seat-number="2"] .marker')).toHaveText('×');
   await expect(map(page).locator('.map-summary')).toHaveText('로욜라 인벤툼 II · 전체 102석 · 빈 좌석 2석 · 사용 중 100석');
   await expect(map(page).locator('time')).toHaveAttribute('datetime', ready.result!.source_time);
-  await expect(map(page)).toContainText('실제 좌석의 크기·형태나 벽·문을 나타내지 않습니다.');
+  await expect(map(page)).toContainText('실제 좌석 크기나 모양, 벽, 문은 나타내지 않습니다.');
   await expect(map(page).locator('svg')).toHaveAttribute('aria-hidden', 'true');
   await expect(map(page).locator('[tabindex="0"]')).toHaveCount(1);
   await page.evaluate(() => document.fonts.ready);
@@ -206,7 +206,7 @@ test('missing layout and count-only results never invent a map or occupied seats
   await expect(map(page).getByRole('status')).toHaveText('이 조회에는 좌석 위치 정보가 없습니다. 번호 목록을 이용해 주세요.');
   await expect(page.locator('.seat-numbers')).toContainText('1, 84번');
   await page.getByRole('combobox', { name: '표시할 열람실', exact: true }).selectOption('6');
-  await expect(map(page).getByRole('status')).toHaveText('좌석 번호와 위치를 확인하지 못했습니다. 확인된 빈 좌석 수를 이용해 주세요.');
+  await expect(map(page).getByRole('status')).toHaveText('좌석 번호와 위치를 확인하지 못했습니다. 빈 좌석 수만 참고해 주세요.');
   await expect(page.locator('.seat-count')).toContainText('3석');
   await expect(map(page).locator('svg')).toHaveCount(0);
   expect(await callCount(page, 'studium_start')).toBe(0);
