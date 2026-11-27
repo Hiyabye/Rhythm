@@ -287,3 +287,18 @@ fn keys_and_account_ids_are_checked_before_any_request() {
     .is_err());
     assert_eq!(format!("{:?}", credentials()), "Credentials { .. }");
 }
+
+#[tokio::test]
+async fn error_text_does_not_name_the_account_host() {
+    // https_only refuses this before any connection, with the URL in the error.
+    let error = reqwest::Client::builder()
+        .https_only(true)
+        .build()
+        .unwrap()
+        .get("http://0123456789abcdef0123456789abcdef.r2.invalid/rhythm-feed/key")
+        .send()
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("0123456789abcdef"));
+    assert!(!no_url(error).contains("0123456789abcdef"));
+}
