@@ -644,6 +644,8 @@ impl Controller {
             Ok(_) => return None,
             Err(error) => {
                 eprintln!("Search embedding: {error}");
+                drop(worker);
+                self.embed_failed(identity, &error, Instant::now());
                 return None;
             }
         };
@@ -1074,5 +1076,26 @@ mod tests {
             assert!(controller.worker.lock().await.status().model.is_none());
             controller.shutdown().await;
         }
+    }
+
+    #[tokio::test]
+    async fn a_failed_search_embedding_starts_the_pause_so_the_next_search_skips_the_engine() {
+        let (directory, controller, model) = fake_controller();
+        let identity = model.sha256.clone().unwrap();
+        *controller.verified.lock().unwrap() = Some(identity.clone());
+        set_mode(directory.path(), "crash-on-embed");
+        assert!(controller
+            .embed_query(directory.path(), &model, &identity, "장학")
+            .await
+            .is_none());
+        let requests = embedding_requests(directory.path());
+        assert!(requests > 0);
+        assert!(controller.backing_off(&identity, Instant::now()));
+        assert!(controller
+            .embed_query(directory.path(), &model, &identity, "생활")
+            .await
+            .is_none());
+        assert_eq!(embedding_requests(directory.path()), requests);
+        controller.shutdown().await;
     }
 }
