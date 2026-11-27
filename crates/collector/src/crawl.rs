@@ -405,7 +405,7 @@ async fn run_incremental<T: Transport>(
     // The mechanical sitemap lists every current notice, so the audit there is
     // the set difference; other boards audit their recent notices.
     if let Ok(listed) = outcome.as_mut() {
-        if definition.family != "mechanical" {
+        if !parser::sitemap_listing(definition) {
             *listed = None;
         }
     }
@@ -549,7 +549,7 @@ impl<T: Transport> Crawl<'_, T> {
         let mut seen = HashSet::new();
         let mut page_hashes = HashSet::new();
         // A sitemap listing skips unchanged entries by their own change time.
-        let windowed = !historical && !seed && definition.family != "mechanical";
+        let windowed = !historical && !seed && !parser::sitemap_listing(definition);
         let mut regular_rows = 0;
         let mut page = first_page;
         let mut processed = 0;
@@ -582,7 +582,7 @@ impl<T: Transport> Crawl<'_, T> {
             .await?;
             let listing = match response {
                 Fetch::Body { bytes, mime, .. } => {
-                    check_document_mime(definition, mime.as_deref(), true)?;
+                    parser::check_document_mime(definition, mime.as_deref(), true)?;
                     parser::listing(
                         definition,
                         page,
@@ -923,7 +923,7 @@ impl<T: Transport> Crawl<'_, T> {
             } => {
                 // A different content type is more likely a block or error page than
                 // the notice itself, so it stays a transient failure.
-                check_document_mime(definition, mime.as_deref(), false)?;
+                parser::check_document_mime(definition, mime.as_deref(), false)?;
                 let permanent = |reason: &str| ArticleError::Permanent {
                     reason: reason.into(),
                     response_sha256: crate::sha256_hex(&bytes),
@@ -1010,28 +1010,6 @@ fn active(cancel: &AtomicBool) -> Result<(), String> {
 fn ensure_active(cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::Acquire) {
         return Err("동기화를 중단했습니다.".into());
-    }
-    Ok(())
-}
-fn check_document_mime(
-    source: &SourceDefinition,
-    mime: Option<&str>,
-    listing: bool,
-) -> Result<(), String> {
-    // The mechanical sitemap is XML; article pages must still be HTML so a wrong
-    // content type stays a transient block-page reading.
-    let expected = if rhythm_sources::parser::json_documents(source) {
-        mime == Some("application/json")
-    } else if source.family == "mechanical" && listing {
-        matches!(
-            mime,
-            Some("text/html" | "application/xhtml+xml" | "application/xml" | "text/xml")
-        )
-    } else {
-        matches!(mime, Some("text/html" | "application/xhtml+xml"))
-    };
-    if !expected {
-        return Err("학교 서버가 예상한 공지 형식 대신 다른 자료를 반환했습니다.".into());
     }
     Ok(())
 }

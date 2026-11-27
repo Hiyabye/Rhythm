@@ -19,6 +19,8 @@ pub fn third_party_image(url: &Url) -> bool {
         && url.password().is_none()
         && url.fragment().is_none()
         && host.contains('.')
+        // A trailing dot names the same host; the suffix checks below would miss it.
+        && !host.ends_with('.')
         && host != "sogang.ac.kr"
         && !host.ends_with(".sogang.ac.kr")
         && !path.contains(['\\', '\0'])

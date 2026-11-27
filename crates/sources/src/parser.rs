@@ -1,4 +1,6 @@
-use super::model::{ArticleInput, ListingEntry, ListingPage, ResourceInput, SourceDefinition};
+use super::model::{
+    ArticleInput, Family, ListingEntry, ListingPage, ResourceInput, SourceDefinition,
+};
 use scraper::{ElementRef, Html};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -210,10 +212,23 @@ pub fn metadata_only_allowed(source_id: &str) -> bool {
             .iter()
             .any(|board| board.source_id == source_id)
 }
-/// Whether a board's listings and notices are JSON documents (the main
-/// site's BbsData API and the WordPress REST API) rather than HTML pages.
-pub fn json_documents(source: &SourceDefinition) -> bool {
-    main_board(&source.id).is_some() || source.family == "wordpress"
+/// Whether the board's listing is a sitemap of every current notice
+/// (`Family::sitemap_listing`); false for an unknown family.
+pub fn sitemap_listing(source: &SourceDefinition) -> bool {
+    source.family().is_ok_and(Family::sitemap_listing)
+}
+/// The one content-type rule for fetched listings (`listing`) and notices,
+/// shared by the app and the collector.
+pub fn check_document_mime(
+    source: &SourceDefinition,
+    mime: Option<&str>,
+    listing: bool,
+) -> Result<(), String> {
+    if source.family()?.accepts_mime(mime, listing) {
+        Ok(())
+    } else {
+        Err("학교 서버가 예상한 공지 형식 대신 다른 자료를 반환했습니다.".into())
+    }
 }
 pub fn main_board(source_id: &str) -> Option<&'static MainBoard> {
     MAIN_BOARDS
@@ -243,74 +258,78 @@ pub fn list_url(source: &SourceDefinition, page: u32) -> Result<Url, String> {
     if page == 0 || !source.supported {
         return invalid();
     }
-    match source.family.as_str() {
-        "community" => return community::list_url(source, page),
-        "engineering" => return engineering::list_url(source, page),
-        "k2web" => return k2web::list_url(k2web::board(source)?, page),
-        "mechanical" => return mechanical::list_url(source, page),
-        "semiconductor" => return semiconductor::list_url(source, page),
-        "wordpress" => return wordpress::list_url(source, page),
-        "vendor" => return vendor::list_url(vendor::board(source)?, page),
-        "admission" => return admission::list_url(page),
-        _ => {}
-    }
-    if let Some(board) = main_board(&source.id) {
-        let mut url =
-            Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData/boardList").unwrap();
-        url.query_pairs_mut().extend_pairs([
-            ("pageNum", page.to_string().as_str()),
-            ("pageSize", "50"),
-            ("bbsConfigFk", board.config.to_string().as_str()),
-            ("category", ""),
-            ("introPkId", ""),
-            ("title", ""),
-            ("content", ""),
-            ("username", ""),
-        ]);
-        Ok(url)
-    } else {
-        let board = board(source)?;
-        let mut url = Url::parse(&format!(
-            "https://computing.sogang.ac.kr/ko/community/{board}/list"
-        ))
-        .unwrap();
-        url.query_pairs_mut().append_pair("num", &page.to_string());
-        Ok(url)
+    match source.family()? {
+        Family::Community => community::list_url(source, page),
+        Family::Engineering => engineering::list_url(source, page),
+        Family::K2web => k2web::list_url(k2web::board(source)?, page),
+        Family::Mechanical => mechanical::list_url(source, page),
+        Family::Semiconductor => semiconductor::list_url(source, page),
+        Family::Wordpress => wordpress::list_url(source, page),
+        Family::Vendor => vendor::list_url(vendor::board(source)?, page),
+        Family::Admission => admission::list_url(page),
+        Family::Main => {
+            let board = main_board(&source.id).ok_or(PARSER_ERROR)?;
+            let mut url =
+                Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData/boardList").unwrap();
+            url.query_pairs_mut().extend_pairs([
+                ("pageNum", page.to_string().as_str()),
+                ("pageSize", "50"),
+                ("bbsConfigFk", board.config.to_string().as_str()),
+                ("category", ""),
+                ("introPkId", ""),
+                ("title", ""),
+                ("content", ""),
+                ("username", ""),
+            ]);
+            Ok(url)
+        }
+        Family::Computing => {
+            let board = board(source)?;
+            let mut url = Url::parse(&format!(
+                "https://computing.sogang.ac.kr/ko/community/{board}/list"
+            ))
+            .unwrap();
+            url.query_pairs_mut().append_pair("num", &page.to_string());
+            Ok(url)
+        }
+        Family::Cybercampus => invalid(),
     }
 }
 pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url, String> {
     if !source.supported || !positive(&entry.external_id) {
         return invalid();
     }
-    match source.family.as_str() {
-        "community" => return community::detail_url(source, entry),
-        "engineering" => return engineering::detail_url(source, entry),
-        "k2web" => return k2web::detail_url(k2web::board(source)?, entry),
-        "mechanical" => return mechanical::detail_url(source, entry),
-        "semiconductor" => return semiconductor::detail_url(source, entry),
-        "wordpress" => return wordpress::detail_url(source, entry),
-        "vendor" => return vendor::detail_url(vendor::board(source)?, entry),
-        "admission" => return admission::detail_url(entry),
-        _ => {}
-    }
-    if let Some(board) = main_board(&source.id) {
-        let mut url = Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData").unwrap();
-        url.query_pairs_mut()
-            .append_pair("pkId", &entry.external_id);
-        if entry.url != main_canonical(board, &entry.external_id).as_str() {
-            return invalid();
+    match source.family()? {
+        Family::Community => community::detail_url(source, entry),
+        Family::Engineering => engineering::detail_url(source, entry),
+        Family::K2web => k2web::detail_url(k2web::board(source)?, entry),
+        Family::Mechanical => mechanical::detail_url(source, entry),
+        Family::Semiconductor => semiconductor::detail_url(source, entry),
+        Family::Wordpress => wordpress::detail_url(source, entry),
+        Family::Vendor => vendor::detail_url(vendor::board(source)?, entry),
+        Family::Admission => admission::detail_url(entry),
+        Family::Main => {
+            let board = main_board(&source.id).ok_or(PARSER_ERROR)?;
+            let mut url = Url::parse("https://www.sogang.ac.kr/api/api/v1/mainKo/BbsData").unwrap();
+            url.query_pairs_mut()
+                .append_pair("pkId", &entry.external_id);
+            if entry.url != main_canonical(board, &entry.external_id).as_str() {
+                return invalid();
+            }
+            Ok(url)
         }
-        Ok(url)
-    } else {
-        let expected = format!(
-            "https://computing.sogang.ac.kr/ko/community/{}/detail/{}",
-            board(source)?,
-            entry.external_id
-        );
-        if entry.url != expected {
-            return invalid();
+        Family::Computing => {
+            let expected = format!(
+                "https://computing.sogang.ac.kr/ko/community/{}/detail/{}",
+                board(source)?,
+                entry.external_id
+            );
+            if entry.url != expected {
+                return invalid();
+            }
+            Url::parse(&expected).map_err(|_| PARSER_ERROR.into())
         }
-        Url::parse(&expected).map_err(|_| PARSER_ERROR.into())
+        Family::Cybercampus => invalid(),
     }
 }
 /// Whether a detail response says the notice no longer exists, for the
@@ -322,41 +341,47 @@ pub fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url
 /// answers one with its members-only page.
 /// `body` is the response text for a 200 answer and empty otherwise.
 pub fn missing(source: &SourceDefinition, status: u16, body: &str) -> bool {
-    match source.family.as_str() {
-        "main" | "engineering" | "mechanical" | "wordpress" => matches!(status, 404 | 410),
-        "k2web" => status == 200 && k2web::missing(body),
-        "vendor" => {
+    let Ok(family) = source.family() else {
+        return false;
+    };
+    match family {
+        Family::Main | Family::Engineering | Family::Mechanical | Family::Wordpress => {
+            matches!(status, 404 | 410)
+        }
+        Family::K2web => status == 200 && k2web::missing(body),
+        Family::Vendor => {
             status == 200 && vendor::board(source).is_ok_and(|board| vendor::missing(board, body))
         }
-        "admission" => status == 200 && admission::missing(body),
+        Family::Admission => status == 200 && admission::missing(body),
         // The phrase also sits in the site's script bundle on every page, so
         // only the rendered empty-detail block counts.
-        "computing" => {
+        Family::Computing => {
             status == 200
                 && Html::parse_document(body)
                     .select(selector("section.board-content .board-detail-empty p"))
                     .any(|p| text(p) == "등록된 게시물이 없습니다.")
         }
-        _ => false,
+        // Community and semiconductor boards answer a missing notice with
+        // nothing specific to it (see above).
+        Family::Community | Family::Semiconductor | Family::Cybercampus => false,
     }
 }
 pub fn listing(source: &SourceDefinition, page: u32, body: &str) -> Result<ListingPage, String> {
     if body.len() > 4 * 1024 * 1024 || page == 0 || !source.supported {
         return invalid();
     }
-    match source.family.as_str() {
-        "community" => community::listing(source, page, body),
-        "engineering" => engineering::listing(source, page, body),
-        "k2web" => k2web::listing(k2web::board(source)?, page, body),
-        "mechanical" => mechanical::listing(source, page, body),
-        "semiconductor" => semiconductor::listing(source, page, body),
-        "wordpress" => wordpress::listing(source, page, body),
-        "vendor" => vendor::listing(vendor::board(source)?, page, body),
-        "admission" => admission::listing(page, body),
-        _ => match main_board(&source.id) {
-            Some(board) => main_listing(board, page, body),
-            None => computing_listing(source, page, body),
-        },
+    match source.family()? {
+        Family::Community => community::listing(source, page, body),
+        Family::Engineering => engineering::listing(source, page, body),
+        Family::K2web => k2web::listing(k2web::board(source)?, page, body),
+        Family::Mechanical => mechanical::listing(source, page, body),
+        Family::Semiconductor => semiconductor::listing(source, page, body),
+        Family::Wordpress => wordpress::listing(source, page, body),
+        Family::Vendor => vendor::listing(vendor::board(source)?, page, body),
+        Family::Admission => admission::listing(page, body),
+        Family::Main => main_listing(main_board(&source.id).ok_or(PARSER_ERROR)?, page, body),
+        Family::Computing => computing_listing(source, page, body),
+        Family::Cybercampus => invalid(),
     }
 }
 fn main_listing(board: &MainBoard, page: u32, body: &str) -> Result<ListingPage, String> {
@@ -566,7 +591,7 @@ fn computing_listing(
 /// (dropped by the sanitizer) that exceed 4 MiB (user decisions, #80; a live
 /// run found five such k2web notices).
 pub fn article_limit(source: &SourceDefinition) -> usize {
-    if main_board(&source.id).is_some() || source.family == "k2web" {
+    if matches!(source.family(), Ok(Family::Main | Family::K2web)) {
         16 * 1024 * 1024
     } else {
         4 * 1024 * 1024
@@ -581,19 +606,22 @@ pub fn article(
     if body.len() > article_limit(source) {
         return invalid();
     }
-    match source.family.as_str() {
-        "community" => return community::article(source, entry, body),
-        "engineering" => return engineering::article(source, entry, body),
-        "k2web" => return k2web::article(k2web::board(source)?, entry, body),
-        "mechanical" => return mechanical::article(source, entry, body),
-        "semiconductor" => return semiconductor::article(source, entry, body),
-        "wordpress" => return wordpress::article(source, entry, body),
-        "vendor" => return vendor::article(vendor::board(source)?, entry, body),
-        "admission" => return admission::article(entry, body),
-        _ => {}
+    let family = source.family()?;
+    match family {
+        Family::Community => return community::article(source, entry, body),
+        Family::Engineering => return engineering::article(source, entry, body),
+        Family::K2web => return k2web::article(k2web::board(source)?, entry, body),
+        Family::Mechanical => return mechanical::article(source, entry, body),
+        Family::Semiconductor => return semiconductor::article(source, entry, body),
+        Family::Wordpress => return wordpress::article(source, entry, body),
+        Family::Vendor => return vendor::article(vendor::board(source)?, entry, body),
+        Family::Admission => return admission::article(entry, body),
+        Family::Main | Family::Computing => {}
+        Family::Cybercampus => return invalid(),
     }
     let (title, author, category, published_at, modified_at, content, mut resources) =
-        if let Some(board) = main_board(&source.id) {
+        if family == Family::Main {
+            let board = main_board(&source.id).ok_or(PARSER_ERROR)?;
             let value: Value = serde_json::from_str(body).map_err(|_| PARSER_ERROR)?;
             let data = &value["data"];
             // The public API returns secret="Y" even for publicly linked 551637.
@@ -694,7 +722,7 @@ pub fn article(
         };
     let (mut body_html, mut body_text, inline) = sanitize(&content, &entry.url)?;
     merge_inline_resources(&mut resources, inline);
-    let unsupported_iframe_body = main_board(&source.id).is_some()
+    let unsupported_iframe_body = family == Family::Main
         && body_text.is_empty()
         && !resources.iter().any(|r| r.kind == "image")
         && iframe_only(&content);

@@ -126,10 +126,11 @@ impl Robots {
         if url.origin().ascii_serialization() != self.origin {
             return false;
         }
-        let path = &url[url::Position::BeforePath..url::Position::AfterQuery];
+        let path = normalize_escapes(&url[url::Position::BeforePath..url::Position::AfterQuery]);
         let mut decision = (0, true);
         for (rule, allow) in &self.rules {
-            let pattern = rule.strip_suffix('$').unwrap_or(rule);
+            let rule = normalize_escapes(rule);
+            let pattern = rule.strip_suffix('$').unwrap_or(&rule);
             let matched = wildcard_prefix(pattern.as_bytes(), path.as_bytes(), rule.ends_with('$'));
             let weight = pattern.bytes().filter(|byte| *byte != b'*').count();
             if matched && (weight > decision.0 || (weight == decision.0 && *allow)) {
@@ -138,6 +139,34 @@ impl Robots {
         }
         decision.1
     }
+}
+/// Brings a rule and a URL path to one spelling: non-ASCII bytes are
+/// percent-encoded (the `url` crate already does this to paths) and the hex
+/// digits of every escape are upper case, so `/한글`, `/%ED%95%9C%EA%B8%80` and
+/// `/%ed%95%9c%ea%b8%80` compare equal. `*` and `$` are left alone.
+fn normalize_escapes(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if byte == b'%'
+            && bytes.get(i + 1).is_some_and(u8::is_ascii_hexdigit)
+            && bytes.get(i + 2).is_some_and(u8::is_ascii_hexdigit)
+        {
+            out.push('%');
+            out.push(bytes[i + 1].to_ascii_uppercase() as char);
+            out.push(bytes[i + 2].to_ascii_uppercase() as char);
+            i += 3;
+        } else if byte.is_ascii() {
+            out.push(byte as char);
+            i += 1;
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+            i += 1;
+        }
+    }
+    out
 }
 /// Removes the `<% … %>` code blocks of an unrendered ASP robots.txt. That host
 /// chooses between per-host rule branches in code, so dropping the code keeps
@@ -254,5 +283,20 @@ mod tests {
             Robots::parse(&url, SCC_ROBOTS).is_err(),
             "other hosts stay strict"
         );
+    }
+
+    #[test]
+    fn rules_match_percent_encoded_paths_whatever_their_spelling() {
+        let url = Url::parse("https://www.sogang.ac.kr/x").unwrap();
+        let blocked = Url::parse("https://www.sogang.ac.kr/한글/x").unwrap();
+        for rule in ["/한글", "/%ED%95%9C%EA%B8%80", "/%ed%95%9c%ea%b8%80"] {
+            let policy =
+                Robots::parse(&url, &format!("User-agent: *\nDisallow: {rule}\n")).unwrap();
+            assert!(!policy.permits(&blocked), "{rule}");
+            assert!(policy.permits(&url), "{rule}");
+        }
+        let policy = Robots::parse(&url, "User-agent: *\nDisallow: /한*/x$\n").unwrap();
+        assert!(!policy.permits(&blocked));
+        assert!(policy.permits(&Url::parse("https://www.sogang.ac.kr/한글/xy").unwrap()));
     }
 }

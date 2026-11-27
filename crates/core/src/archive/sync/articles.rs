@@ -23,22 +23,6 @@ pub(super) fn persist(
         )
     })
 }
-pub(super) fn check_document_mime(
-    source: &SourceDefinition,
-    mime: Option<&str>,
-) -> Result<(), String> {
-    // A different content type is more likely a block or error page than the
-    // notice itself.
-    let expected = if crate::archive::parser::json_documents(source) {
-        mime == Some("application/json")
-    } else {
-        matches!(mime, Some("text/html" | "application/xhtml+xml"))
-    };
-    if !expected {
-        return Err("학교 서버가 예상한 공지 형식 대신 다른 자료를 반환했습니다.".into());
-    }
-    Ok(())
-}
 pub(super) async fn fetch<T: Transport>(
     transport: &T,
     url: &Url,

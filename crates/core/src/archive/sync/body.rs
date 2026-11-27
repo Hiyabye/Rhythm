@@ -6,6 +6,7 @@
 //! viewer download that PDF and use its text, as the crawler does.
 use super::*;
 use crate::job::CancelToken;
+use rhythm_sources::model::Family;
 use std::time::{Duration, Instant};
 
 /// How long a host's robots.txt is reused between opened notices.
@@ -110,7 +111,8 @@ impl Bodies {
         else {
             return Err("학교 서버가 공지 본문을 보내지 않았습니다.".into());
         };
-        check_document_mime(&definition, mime.as_deref())?;
+        // A body fetch is always a notice page, never a listing.
+        parser::check_document_mime(&definition, mime.as_deref(), false)?;
         let text = std::str::from_utf8(&bytes)
             .map_err(|_| "공지 본문 문자 인코딩을 지원하지 않습니다.")?;
         let mut article = parser::article(&definition, &entry, text)?;
@@ -163,16 +165,15 @@ impl Bodies {
             active(cancel.flag())?;
             tokio::time::sleep(Duration::from_millis(25)).await;
         };
-        let Some((definition, entry, resources)) =
-            with_store(store, |s| {
-                let Some((source, entry, resources)) = s.pending_downloads(id)? else {
-                    return Ok(None);
-                };
-                enabled(s, &source)?;
-                let definition = s.source(&source)?.definition;
-                Ok((definition.family != cybercampus::FAMILY)
-                    .then_some((definition, entry, resources)))
-            })?
+        let Some((definition, entry, resources)) = with_store(store, |s| {
+            let Some((source, entry, resources)) = s.pending_downloads(id)? else {
+                return Ok(None);
+            };
+            enabled(s, &source)?;
+            let definition = s.source(&source)?.definition;
+            let board = !matches!(definition.family(), Ok(Family::Cybercampus));
+            Ok(board.then_some((definition, entry, resources)))
+        })?
         else {
             return Ok(());
         };
