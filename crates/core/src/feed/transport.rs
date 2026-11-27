@@ -221,9 +221,7 @@ fn retry_after(value: Option<&header::HeaderValue>) -> Duration {
 }
 
 pub(crate) async fn cancelled(cancel: &AtomicBool) {
-    while !cancel.load(Ordering::Acquire) {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    crate::job::cancelled(cancel, Duration::from_millis(50)).await;
 }
 
 #[cfg(test)]

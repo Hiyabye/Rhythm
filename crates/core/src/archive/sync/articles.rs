@@ -59,7 +59,5 @@ pub(super) async fn fetch<T: Transport>(
     unreachable!()
 }
 pub(super) async fn wait_cancel(cancel: &AtomicBool) {
-    while !cancel.load(Ordering::Acquire) {
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
+    crate::job::cancelled(cancel, std::time::Duration::from_millis(25)).await;
 }

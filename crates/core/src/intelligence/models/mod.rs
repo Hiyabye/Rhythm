@@ -1,4 +1,5 @@
 //! Curated weight installation. This transport is deliberately independent of notice collection.
+use crate::job::{Busy, CancelToken, Slot};
 use crate::storage::{intelligence::AiModel, Store};
 use reqwest::header;
 use serde::{Deserialize, Serialize};
@@ -48,13 +49,11 @@ fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
     }
 }
 async fn cancelled(cancel: &AtomicBool) {
-    while !cancel.load(Ordering::Acquire) {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    crate::job::cancelled(cancel, Duration::from_millis(50)).await;
 }
 #[derive(Clone)]
 pub struct Controller {
-    active: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    active: Slot,
     /// Sent with model downloads, e.g. `Rhythm/2.4.0`; the app names its version.
     user_agent: &'static str,
 }
@@ -72,19 +71,13 @@ impl Controller {
         }
     }
     pub fn busy(&self) -> bool {
-        self.active.lock().map(|s| s.is_some()).unwrap_or(true)
+        self.active.running()
     }
     pub fn cancel(&self) {
-        if let Ok(state) = self.active.lock() {
-            if let Some(cancel) = state.as_ref() {
-                cancel.store(true, Ordering::Release);
-            }
-        }
+        self.active.cancel();
     }
     pub async fn wait(&self) {
-        while self.busy() {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        self.active.wait().await;
     }
     #[cfg(test)]
     pub fn start(
@@ -140,13 +133,11 @@ impl Controller {
         lease: Option<crate::operation_gate::AdmissionLease>,
         transport: T,
     ) -> Result<(), String> {
-        let mut active = self
-            .active
-            .lock()
-            .map_err(|_| "모델 설치 상태에 접근하지 못했습니다.")?;
-        if active.is_some() {
-            return Err("이미 모델을 설치하고 있습니다.".into());
-        }
+        let running = match self.active.begin() {
+            Ok(running) => running,
+            Err(Busy::Running) => return Err("이미 모델을 설치하고 있습니다.".into()),
+            Err(Busy::Unavailable) => return Err("모델 설치 상태에 접근하지 못했습니다.".into()),
+        };
         validate_manifest(&entry)?;
         let old = with_store(&store, |s| s.ai_model(&entry.id))?;
         let mut model = inventory(&entry);
@@ -172,14 +163,13 @@ impl Controller {
             }
         }
         with_store(&store, |s| s.ai_upsert_model(&model))?;
-        let cancel = Arc::new(AtomicBool::new(false));
-        *active = Some(cancel.clone());
-        let this = self.clone();
+        let cancel = running.token().clone();
         tokio::spawn(async move {
             let _lease = lease;
+            let _running = running;
             let outcome = install(&store, &root, &entry, &mut model, &cancel, &transport).await;
             if let Err(error) = outcome {
-                model.status = if cancel.load(Ordering::Acquire) {
+                model.status = if cancel.is_cancelled() {
                     "cancelled"
                 } else {
                     "failed"
@@ -189,9 +179,6 @@ impl Controller {
                 if let Err(error) = with_store(&store, |s| s.ai_upsert_model(&model)) {
                     eprintln!("AI model status: {error}");
                 }
-            }
-            if let Ok(mut active) = this.active.lock() {
-                *active = None;
             }
         });
         Ok(())
