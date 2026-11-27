@@ -28,6 +28,9 @@ struct Fake {
     bad: Mutex<HashSet<u64>>,
     failed: Mutex<HashSet<u64>>,
     rate_limited: Mutex<HashSet<u64>>,
+    /// Serve a page past the last one like the school: a valid envelope with
+    /// no rows (which the parser rejects) instead of a transport error.
+    past_end: AtomicBool,
     conditional: AtomicBool,
     views: AtomicU64,
     robots: Mutex<String>,
@@ -47,6 +50,7 @@ impl Fake {
             bad: Mutex::default(),
             failed: Mutex::default(),
             rate_limited: Mutex::default(),
+            past_end: AtomicBool::new(false),
             conditional: AtomicBool::new(false),
             views: AtomicU64::new(1),
             robots: Mutex::new("User-agent: *\nAllow: /\n".into()),
@@ -88,7 +92,13 @@ impl Fake {
     fn list(&self, page: usize, config: u64) -> Result<String, FetchError> {
         let offset = if config == 1 { GENERAL_IDS } else { 0 };
         let pages = self.pages.lock().unwrap();
-        let ids = pages.get(page - 1).ok_or("없는 목록 페이지")?;
+        let past_end = self.past_end.load(Ordering::Acquire) && page > pages.len();
+        let no_rows = Vec::new();
+        let ids = if past_end {
+            &no_rows
+        } else {
+            pages.get(page - 1).ok_or("없는 목록 페이지")?
+        };
         let mut value: Value = serde_json::from_str(include_str!(
             "../../../sources/src/fixtures/main-list-exact.json"
         ))
@@ -550,6 +560,68 @@ async fn wordpress_posts_are_archived_from_json_and_skipped_while_unchanged() {
     assert!(state
         .listing_unchanged("creative-news", "47154", "2026-11-21T01:00:00Z")
         .unwrap());
+}
+
+/// A board that shrank below its saved history cursor.
+fn shrunk_board() -> (State, Fake) {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![
+        (1..=50).collect(),
+        (51..=100).collect(),
+        (101..=110).collect(),
+    ]);
+    fake.past_end.store(true, Ordering::Release);
+    let mut board = state.board(MAIN).unwrap();
+    board.next_page = 5;
+    state.progress(&board, "running", None, false).unwrap();
+    (state, fake)
+}
+
+#[tokio::test]
+async fn a_history_cursor_past_a_shrunk_board_resumes_at_its_last_page() {
+    let (state, fake) = shrunk_board();
+    historical(&state, &fake, Budget::default()).await;
+    let board = state.board(MAIN).unwrap();
+    assert!(board.history_complete);
+    assert_eq!((board.status.as_str(), board.next_page), ("completed", 4));
+    assert_eq!(notices(&state).len(), 10, "the last page was read");
+    assert!(notices(&state).iter().all(|n| n.historical));
+}
+
+#[tokio::test]
+async fn a_failed_page_one_probe_leaves_the_cursor_and_the_failure() {
+    let (state, fake) = shrunk_board();
+    // A block page instead of the first listing proves nothing about the end.
+    let first = parser::list_url(&definition(MAIN), 1).unwrap().to_string();
+    fake.extra.lock().unwrap().insert(
+        first,
+        ("<html>blocked</html>".into(), "application/json".into()),
+    );
+    let result = run(&state, &fake, MAIN, Budget::default()).await;
+    assert!(result.is_err());
+    let board = state.board(MAIN).unwrap();
+    assert!(!board.history_complete);
+    assert_eq!((board.status.as_str(), board.next_page), ("failed", 5));
+    assert!(notices(&state).is_empty());
+}
+
+#[tokio::test]
+async fn a_rejected_cursor_below_the_declared_pages_is_not_past_the_end() {
+    let (state, fake) = shrunk_board();
+    // Page 3 of 3 is rejected although the cursor is not past the end.
+    let mut board = state.board(MAIN).unwrap();
+    board.next_page = 3;
+    state.progress(&board, "running", None, false).unwrap();
+    let third = parser::list_url(&definition(MAIN), 3).unwrap().to_string();
+    fake.extra.lock().unwrap().insert(
+        third,
+        ("<html>blocked</html>".into(), "application/json".into()),
+    );
+    historical(&state, &fake, Budget::default()).await;
+    let board = state.board(MAIN).unwrap();
+    assert!(!board.history_complete);
+    assert_eq!(board.next_page, 3);
+    assert!(notices(&state).is_empty());
 }
 
 #[tokio::test]

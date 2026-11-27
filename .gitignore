@@ -35,3 +35,6 @@ Thumbs.db
 
 # Impeccable review screenshots (regenerated per design review)
 /.impeccable/review/
+
+# Python bytecode (collector meal-ocr tests)
+__pycache__/

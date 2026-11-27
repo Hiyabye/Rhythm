@@ -374,14 +374,20 @@ def load_engine():
 
 
 def check_weights(home):
-    """Refuses weights other than the reviewed ones (PaddleX downloads them at
-    the engine's first use, so this runs before any image is read)."""
+    """Aborts the step (`SystemExit`) unless every reviewed weight file exists
+    and matches its digest. PaddleX downloads the weights while the engine is
+    constructed, so the paths exist only after that: the check runs right after
+    construction and before any image is decoded or inferred. A missing or
+    different file is fatal, never a per-image failure."""
     for model, files in MODELS.items():
         for name, expected in files.items():
             digest = hashlib.sha256()
-            with (home / "official_models" / model / name).open("rb") as handle:
-                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                    digest.update(chunk)
+            try:
+                with (home / "official_models" / model / name).open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+            except OSError:
+                raise SystemExit(f"{model}/{name} is missing or unreadable") from None
             if digest.hexdigest() != expected:
                 raise SystemExit(f"{model}/{name} is not the reviewed model file")
 
@@ -409,6 +415,7 @@ def run(folder, engine_factory=load_engine, weights_home=None):
     if len(jobs) > MAX_JOBS:
         raise SystemExit(f"more than {MAX_JOBS} jobs")
     infer = None
+    checked = False
     failed = 0
     for path in jobs:
         job, image = read_job(folder, path)
@@ -416,8 +423,14 @@ def run(folder, engine_factory=load_engine, weights_home=None):
         try:
             if infer is None:
                 infer = engine_factory()
-                if weights_home is not None:
-                    check_weights(weights_home)
+        except (ValueError, KeyError, OSError, RuntimeError) as error:
+            print(f"{path.stem}: OCR failed ({type(error).__name__})", file=sys.stderr)
+            failed += 1
+            continue
+        if weights_home is not None and not checked:
+            check_weights(weights_home)
+            checked = True
+        try:
             result.update(status="ok", reason=None, **extract_week(image, job, infer))
         except Rejected as error:
             result.update(status="rejected", reason=str(error))
