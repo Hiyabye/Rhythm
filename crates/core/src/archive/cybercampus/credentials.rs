@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
-const SERVICE: &str = "io.github.hiyabye.rhythm.cybercampus";
+/// The production bundle identifier; its service name is the one every saved
+/// login already uses.
+pub const PRODUCTION_IDENTIFIER: &str = "io.github.hiyabye.rhythm";
 const ACCOUNT: &str = "eclass";
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -40,8 +42,14 @@ impl Credentials {
     }
 }
 
+/// The credential-store service of one bundle identifier. A validation build
+/// has its own identifier and so its own entry, never the production login.
+pub fn service_name(identifier: &str) -> String {
+    format!("{identifier}.cybercampus")
+}
+
 enum Backend {
-    Native,
+    Native(String),
     #[cfg(any(test, feature = "test-support"))]
     Memory(Mutex<Option<String>>),
 }
@@ -51,9 +59,9 @@ pub struct Vault {
     cached: Mutex<Option<Option<Credentials>>>,
 }
 impl Vault {
-    pub fn native() -> Self {
+    pub fn native(identifier: &str) -> Self {
         Self {
-            backend: Backend::Native,
+            backend: Backend::Native(service_name(identifier)),
             cached: Mutex::new(None),
         }
     }
@@ -69,7 +77,7 @@ impl Vault {
             return Ok(cached);
         }
         let stored = match &self.backend {
-            Backend::Native => native_get()?,
+            Backend::Native(service) => native_get(service)?,
             #[cfg(any(test, feature = "test-support"))]
             Backend::Memory(value) => value.lock().map_err(|_| LOCKED)?.clone(),
         };
@@ -82,7 +90,7 @@ impl Vault {
     pub fn save(&self, credentials: &Credentials) -> Result<(), String> {
         let encoded = serde_json::to_string(credentials).map_err(|_| LOCKED)?;
         match &self.backend {
-            Backend::Native => native_set(&encoded)?,
+            Backend::Native(service) => native_set(service, &encoded)?,
             #[cfg(any(test, feature = "test-support"))]
             Backend::Memory(value) => *value.lock().map_err(|_| LOCKED)? = Some(encoded),
         }
@@ -93,7 +101,7 @@ impl Vault {
     }
     pub fn clear(&self) -> Result<(), String> {
         match &self.backend {
-            Backend::Native => native_clear()?,
+            Backend::Native(service) => native_clear(service)?,
             #[cfg(any(test, feature = "test-support"))]
             Backend::Memory(value) => *value.lock().map_err(|_| LOCKED)? = None,
         }
@@ -106,13 +114,13 @@ impl Vault {
 const LOCKED: &str = "사이버캠퍼스 로그인 정보에 접근하지 못했습니다.";
 
 #[cfg(any(target_os = "macos", windows))]
-fn entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(SERVICE, ACCOUNT)
+fn entry(service: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(service, ACCOUNT)
         .map_err(|_| "운영체제 보안 저장소에 접근하지 못했습니다.".to_owned())
 }
 #[cfg(any(target_os = "macos", windows))]
-fn native_get() -> Result<Option<String>, String> {
-    match entry()?.get_password() {
+fn native_get(service: &str) -> Result<Option<String>, String> {
+    match entry(service)?.get_password() {
         Ok(value) if !value.is_empty() => Ok(Some(value)),
         Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
         Err(_) => {
@@ -121,28 +129,46 @@ fn native_get() -> Result<Option<String>, String> {
     }
 }
 #[cfg(any(target_os = "macos", windows))]
-fn native_set(value: &str) -> Result<(), String> {
-    entry()?
+fn native_set(service: &str, value: &str) -> Result<(), String> {
+    entry(service)?
         .set_password(value)
         .map_err(|_| "로그인 정보를 운영체제 보안 저장소에 저장하지 못했습니다.".to_owned())
 }
 #[cfg(any(target_os = "macos", windows))]
-fn native_clear() -> Result<(), String> {
-    match entry()?.delete_credential() {
+fn native_clear(service: &str) -> Result<(), String> {
+    match entry(service)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(_) => Err("로그인 정보를 운영체제 보안 저장소에서 삭제하지 못했습니다.".into()),
     }
 }
 #[cfg(not(any(target_os = "macos", windows)))]
-fn native_get() -> Result<Option<String>, String> {
-    let _ = (SERVICE, ACCOUNT);
+fn native_get(service: &str) -> Result<Option<String>, String> {
+    let _ = (service, ACCOUNT);
     Ok(None)
 }
 #[cfg(not(any(target_os = "macos", windows)))]
-fn native_set(_value: &str) -> Result<(), String> {
+fn native_set(_service: &str, _value: &str) -> Result<(), String> {
     Err("이 운영체제에서는 사이버캠퍼스 로그인 정보를 저장할 수 없습니다.".into())
 }
 #[cfg(not(any(target_os = "macos", windows)))]
-fn native_clear() -> Result<(), String> {
+fn native_clear(service: &str) -> Result<(), String> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_identifier_has_its_own_service_and_production_is_unchanged() {
+        assert_eq!(
+            service_name(PRODUCTION_IDENTIFIER),
+            "io.github.hiyabye.rhythm.cybercampus"
+        );
+        let check = service_name("io.github.hiyabye.rhythm.corecheck");
+        let other = service_name("io.github.hiyabye.rhythm.updatecheck");
+        assert_eq!(check, "io.github.hiyabye.rhythm.corecheck.cybercampus");
+        assert_ne!(check, service_name(PRODUCTION_IDENTIFIER));
+        assert_ne!(check, other);
+    }
 }

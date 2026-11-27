@@ -62,8 +62,14 @@ pub struct TaskOutcome {
     pub cancelled: bool,
 }
 impl Controller {
+    /// A controller whose eClass login lives under the production identifier.
     pub fn new() -> Arc<Self> {
-        Self::with_connector(cybercampus::Connector::native())
+        Self::for_identifier(cybercampus::credentials::PRODUCTION_IDENTIFIER)
+    }
+    /// The eClass login is kept per bundle identifier, so a validation build
+    /// never reads or changes the production login.
+    pub fn for_identifier(identifier: &str) -> Arc<Self> {
+        Self::with_connector(cybercampus::Connector::native(identifier))
     }
     pub fn with_connector(cybercampus: cybercampus::Connector) -> Arc<Self> {
         Arc::new(Self {

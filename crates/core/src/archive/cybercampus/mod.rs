@@ -46,10 +46,10 @@ pub struct Connector {
     forgotten: std::sync::Mutex<u64>,
 }
 impl Connector {
-    pub fn native() -> Self {
+    pub fn native(identifier: &str) -> Self {
         Self {
             session: Session::default(),
-            vault: Vault::native(),
+            vault: Vault::native(identifier),
             forgotten: Default::default(),
         }
     }
