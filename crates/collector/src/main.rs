@@ -246,8 +246,8 @@ async fn crawl(
     if waiting > 0 {
         println!("{waiting} new boards wait for a later run");
     }
-    budget.history_until = history_minutes
-        .map(|minutes| Instant::now() + Duration::from_secs(u64::from(minutes) * 60));
+    budget.history_window =
+        history_minutes.map(|minutes| Duration::from_secs(u64::from(minutes) * 60));
     let cancel = AtomicBool::new(false);
     let report = crawl::run_boards(state, &client, &boards, budget, &cancel).await;
     let mut failed = 0;

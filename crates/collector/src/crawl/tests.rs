@@ -41,6 +41,8 @@ struct Fake {
     calls: Mutex<Vec<(String, Validators)>>,
     /// `Transport::server` answers by host; others are unknown.
     servers: Mutex<HashMap<String, IpAddr>>,
+    /// Pause before every response, to make a pass slow.
+    delay: Mutex<Duration>,
 }
 impl Fake {
     fn new(pages: Vec<Vec<u64>>) -> Self {
@@ -58,6 +60,7 @@ impl Fake {
             not_found: Mutex::default(),
             calls: Mutex::default(),
             servers: Mutex::default(),
+            delay: Mutex::default(),
         }
     }
     fn paths(&self) -> Vec<String> {
@@ -143,6 +146,10 @@ impl Transport for Fake {
         access: Access,
     ) -> Result<Fetch, FetchError> {
         assert_eq!(access, Access::Source);
+        let delay = *self.delay.lock().unwrap();
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
         self.calls
             .lock()
             .unwrap()
@@ -1940,4 +1947,28 @@ async fn the_admission_board_reads_through_its_html_robots_page() {
     assert_eq!((board.status.as_str(), board.failed), ("completed", 0));
     assert!(board.last_error.is_none() && skipped(&state).is_empty());
     assert!(state.seed_complete("admission-notice").unwrap());
+}
+
+#[tokio::test]
+async fn the_history_window_starts_after_the_new_notice_pass() {
+    // The incremental pass takes far longer than the window. Measured from the
+    // start of the run, history would get no time at all.
+    let (state, fake, boards) = owing_history();
+    *fake.delay.lock().unwrap() = Duration::from_millis(120);
+    let window = Duration::from_millis(500);
+    let budget = Budget {
+        articles: Some(1),
+        history_window: Some(window),
+        ..Budget::default()
+    };
+    let report = run_boards(&state, &fake, &boards, budget, &AtomicBool::new(false)).await;
+    assert!(report.outcomes.iter().all(|(_, outcome)| outcome.is_ok()));
+    assert!(report.incremental > window, "{:?}", report.incremental);
+    let history = details(&fake)
+        .into_iter()
+        .filter(|(_, id)| *id < 10)
+        .count();
+    assert!(history > 0, "history got no turns");
+    // The window itself still bounds the history phase.
+    assert!(report.history < window + Duration::from_millis(500));
 }

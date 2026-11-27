@@ -49,8 +49,14 @@ pub struct Budget {
     pub pages: Option<u32>,
     /// Notices per pass; in the history phase, per board and turn.
     pub articles: Option<u32>,
-    /// When the history phase stops starting work (`--history-minutes`). With
-    /// none, each board gets one history turn per run.
+    /// How long the history phase may run (`--history-minutes`), measured from
+    /// when the incremental phase has finished, so a slow new-notice pass never
+    /// eats the window. With none (and no `history_until`), each board gets one
+    /// history turn per run.
+    pub history_window: Option<Duration>,
+    /// When the history phase stops starting work. `run_boards` sets it from
+    /// `history_window` once the incremental phase is done; a caller may also
+    /// give a fixed instant, which `history_window` replaces.
     pub history_until: Option<Instant>,
 }
 
@@ -180,6 +186,13 @@ pub async fn run_boards<T: Transport>(
     })
     .await;
     let incremental = start.elapsed();
+    let budget = Budget {
+        history_until: budget
+            .history_window
+            .map(|window| Instant::now() + window)
+            .or(budget.history_until),
+        ..budget
+    };
     // History only for boards whose incremental pass succeeded.
     let ready: HashSet<usize> = outcomes
         .lock()
