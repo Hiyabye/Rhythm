@@ -91,6 +91,9 @@ fn escape_text_tags(body: &str) -> String {
         escaped.push_str(&rest[..index]);
         let after = &rest[index + 1..];
         let name = after.strip_prefix('/').unwrap_or(after);
+        // No element name is this long; without the cap a body of `<<<<…`
+        // scans to its end from every `<`.
+        let name = &name[..name.char_indices().nth(64).map_or(name.len(), |(at, _)| at)];
         let name = &name[..name
             .find(|c: char| c.is_ascii_whitespace() || c == '/' || c == '>')
             .unwrap_or(name.len())];
