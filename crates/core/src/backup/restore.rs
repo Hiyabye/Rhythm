@@ -528,11 +528,6 @@ pub(super) fn check_unjournaled_restore(root: &Path) -> Result<(), String> {
         "끝나지 않은 복원이 남아 있습니다. 복구 파일은 그대로 두었습니다. 데이터 폴더를 확인해 주세요."
             .to_string()
     };
-    if entry_exists(&root.join(STAGING))?
-        || entry_exists(&root.join(".rhythm-restore-journal.tmp"))?
-    {
-        return Err(ambiguous());
-    }
     for item in fs::read_dir(root).map_err(|_| ambiguous())? {
         let item = item.map_err(|_| ambiguous())?;
         let name = item.file_name().to_string_lossy().into_owned();
@@ -551,6 +546,11 @@ pub(super) fn check_unjournaled_restore(root: &Path) -> Result<(), String> {
             }
         }
     }
+    // Every earlier restore finished, so a staging folder without a journal
+    // was never installed: the journal is written last and recovery reads
+    // staging only through it. Kept, it would refuse every later launch.
+    let _ = fs::remove_file(root.join(".rhythm-restore-journal.tmp"));
+    let _ = fs::remove_dir_all(root.join(STAGING));
     Ok(())
 }
 
