@@ -637,6 +637,20 @@ fn a_newer_post_replaces_its_week_even_unreadable_and_an_older_one_never_does() 
 }
 
 #[test]
+fn posts_of_one_day_are_ordered_by_their_ids_as_numbers() {
+    let state = State::open_in_memory().unwrap();
+    let older = offered("999", "2026-11-23", "2026-11-17");
+    let newer = offered("1000", "2026-11-23", "2026-11-17");
+    for image in [&newer, &older] {
+        let week = unreadable(image);
+        state
+            .meal_record(image, &week, Some("banner_mismatch"), NOW)
+            .unwrap();
+    }
+    assert_eq!(stored_week(&state, "2026-11-23").unwrap().0, "1000");
+}
+
+#[test]
 fn health_counts_unreadable_images_since_the_last_read_one() {
     let state = State::open_in_memory().unwrap();
     assert!(state.feed_meals_health().unwrap().is_empty());
@@ -677,4 +691,25 @@ fn health_counts_unreadable_images_since_the_last_read_one() {
         Some("2026-11-20T00:00:00.000Z")
     );
     assert_eq!(health[0].consecutive_failures, 2);
+}
+
+#[test]
+fn the_banner_may_pad_the_month_and_the_day_separately() {
+    let week = parse_day("2026-03-02").unwrap();
+    for banner in [
+        "주간메뉴표 2026.3.2 ~ 3.8",
+        "주간메뉴표 2026.03.02 ~ 03.08",
+        "주간메뉴표 2026.3.02 ~ 3.08",
+        "주간메뉴표 2026/03/2 - 03/8",
+    ] {
+        assert!(banner_names_week(banner, week), "{banner}");
+    }
+    for banner in [
+        "주간메뉴표 2026.3.9 ~ 3.15",
+        "주간메뉴표 2026.3.2 ~ 3.18",
+        "주간메뉴표 2026.13.2 ~ 3.8",
+        "주간메뉴표 3.2 ~ 3.8",
+    ] {
+        assert!(!banner_names_week(banner, week), "{banner}");
+    }
 }

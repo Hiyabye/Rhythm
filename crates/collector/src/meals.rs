@@ -349,26 +349,9 @@ fn read_result(bytes: &[u8], image: &Offered) -> Result<Result<MealWeek, String>
 /// its Monday, and every cell is well formed.
 fn validate(result: OcrResult, image: &Offered) -> Option<MealWeek> {
     let start = parse_day(&image.week)?;
-    let (year, month, day) = civil(start);
-    let (_, end_month, end_day) = civil(start + 6);
-    let banner: String = result.banner.concat().split_whitespace().collect();
-    let banner = banner.replace([',', '/', '-'], ".");
-    let start_named = [
-        format!("{year}.{month:02}.{day:02}"),
-        format!("{year}.{month}.{day}"),
-    ]
-    .iter()
-    .any(|text| contains_number_text(&banner, text));
-    let end_named = [
-        format!("{end_month:02}.{end_day:02}"),
-        format!("{end_month}.{end_day}"),
-    ]
-    .iter()
-    .any(|text| contains_number_text(&banner, text));
     let [width, height] = result.image_size?;
     let pixels = u64::from(width) * u64::from(height);
-    if !start_named
-        || !end_named
+    if !banner_names_week(&result.banner.concat(), start)
         || result.headers.len() != 7
         || result.days.len() != 7
         || !(1..=MAX_PIXELS).contains(&pixels)
@@ -453,6 +436,26 @@ fn clock(text: &str) -> bool {
 }
 
 /// Whether `text` occurs in `haystack` without digits right around it.
+/// Whether the banner writes the week's first day with its year and its last
+/// day, as the OCR step requires: `2026.11.23 ~ 11.29`. Month and day may
+/// each be zero-padded or not (`2026.3.02`).
+fn banner_names_week(banner: &str, start: i64) -> bool {
+    let banner: String = banner.split_whitespace().collect();
+    let banner = banner.replace([',', '/', '-'], ".");
+    let (year, month, day) = civil(start);
+    let (_, end_month, end_day) = civil(start + 6);
+    let named = |prefix: &str, month: u32, day: u32| {
+        [format!("{month}"), format!("{month:02}")]
+            .iter()
+            .any(|month| {
+                [format!("{day}"), format!("{day:02}")]
+                    .iter()
+                    .any(|day| contains_number_text(&banner, &format!("{prefix}{month}.{day}")))
+            })
+    };
+    named(&format!("{year}."), month, day) && named("", end_month, end_day)
+}
+
 fn contains_number_text(haystack: &str, text: &str) -> bool {
     haystack.match_indices(text).any(|(at, _)| {
         let before = haystack[..at].chars().next_back();

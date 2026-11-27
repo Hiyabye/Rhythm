@@ -276,7 +276,8 @@ impl State {
         // with no full title anywhere in the row, so a listed title that
         // begins the archived one is unchanged. An edit past the cut cannot
         // show in the list; the deletion audit refetches recent notices.
-        .map(|stored| stored.is_some_and(|value| value.starts_with(title)))
+        // Every title begins with an empty one, which says nothing.
+        .map(|stored| stored.is_some_and(|value| !title.is_empty() && value.starts_with(title)))
     }
     pub fn checked(&self, source_id: &str, external_id: &str) -> Result<(), String> {
         self.with(|c| {
