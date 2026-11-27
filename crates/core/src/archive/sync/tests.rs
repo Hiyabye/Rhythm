@@ -1443,3 +1443,66 @@ async fn a_failed_file_waits_for_an_explicit_retry() {
         .unwrap();
     assert_eq!(resource_requests(&fake), 2);
 }
+
+/// One controller runs one job at a time, so turning off an extension must
+/// cancel only a job that extension owns.
+#[test]
+fn disabling_an_extension_cancels_only_the_job_it_owns() {
+    use crate::extensions::{Registry, CYBERCAMPUS, NOTICES};
+    let (_directory, store) = crate::storage::temp_store();
+    let controller = Controller::new();
+    let registry = Registry::new(
+        controller.clone(),
+        crate::studium::controller::Controller::new(),
+        Default::default(),
+    );
+    registry.set(&store, NOTICES, true).unwrap();
+    registry.set(&store, CYBERCAMPUS, true).unwrap();
+
+    controller.reserve_task(1, CYBERCAMPUS).unwrap();
+    registry.set(&store, NOTICES, false).unwrap();
+    assert!(!controller.cancel.load(Ordering::Acquire));
+    registry.set(&store, CYBERCAMPUS, false).unwrap();
+    assert!(controller.cancel.load(Ordering::Acquire));
+    controller.finish("완료".into());
+
+    // A retried notice file belongs to the notices extension.
+    registry.set(&store, CYBERCAMPUS, true).unwrap();
+    controller.reserve_task(0, NOTICES).unwrap();
+    registry.set(&store, CYBERCAMPUS, false).unwrap();
+    assert!(!controller.cancel.load(Ordering::Acquire));
+    registry.set(&store, NOTICES, false).unwrap();
+    assert!(controller.cancel.load(Ordering::Acquire));
+    controller.finish("완료".into());
+
+    // Nothing running: nothing to cancel.
+    controller.reserve_task(0, NOTICES).unwrap();
+    controller.finish("완료".into());
+    registry.set(&store, NOTICES, false).unwrap();
+    assert!(!controller.cancel.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn a_disable_waits_only_for_a_job_its_extension_owns() {
+    use crate::extensions::{CYBERCAMPUS, NOTICES};
+    let controller = Controller::new();
+    controller.reserve_task(1, CYBERCAMPUS).unwrap();
+    // Returns at once although the other extension's job is still running.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        controller.wait_owned_by(NOTICES),
+    )
+    .await
+    .unwrap();
+    let waiting = {
+        let controller = controller.clone();
+        tokio::spawn(async move { controller.wait_owned_by(CYBERCAMPUS).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(!waiting.is_finished());
+    controller.finish("완료".into());
+    tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+}

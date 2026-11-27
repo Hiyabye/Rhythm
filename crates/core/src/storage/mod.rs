@@ -365,25 +365,16 @@ impl Store {
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
         transaction.execute("INSERT INTO extension_preferences(extension_id,enabled) VALUES(?1,?2) ON CONFLICT(extension_id) DO UPDATE SET enabled=excluded.enabled",params![id,enabled]).map_err(|e|e.to_string())?;
-        if !enabled
-            && matches!(
-                id,
-                crate::extensions::STUDIUM | crate::extensions::PROACTIVE
-            )
-        {
-            transaction
-                .execute("DELETE FROM studium_alert_tokens", [])
-                .map_err(|e| e.to_string())?;
-        }
-        if !enabled
-            && matches!(
-                id,
-                crate::extensions::CALENDAR | crate::extensions::PROACTIVE
-            )
-        {
-            transaction
-                .execute("DELETE FROM calendar_reminder_tokens", [])
-                .map_err(|e| e.to_string())?;
+        if !enabled {
+            for tokens in crate::extensions::declaration(id).map_or(&[][..], |e| e.clears) {
+                let table = match tokens {
+                    crate::extensions::Tokens::StudiumAlerts => "studium_alert_tokens",
+                    crate::extensions::Tokens::CalendarReminders => "calendar_reminder_tokens",
+                };
+                transaction
+                    .execute(&format!("DELETE FROM {table}"), [])
+                    .map_err(|e| e.to_string())?;
+            }
         }
         transaction.commit().map_err(|e| e.to_string())
     }

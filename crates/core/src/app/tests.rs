@@ -237,3 +237,99 @@ async fn a_source_subscribes_only_while_its_extension_is_on() {
     assert_eq!(subscribed(&changed.sources), !before);
     app.shutdown().await;
 }
+
+/// The core is the all-off state: nothing an extension owns is on or running.
+/// The classifier loop, scheduler and Studium receiver start idle, so only
+/// their effective settings and the absence of work and processes are asserted.
+async fn assert_core_only(app: &App) {
+    {
+        let store = app.store.lock().unwrap();
+        for extension in crate::extensions::BUILT_IN {
+            assert!(!store.enabled(extension.id).unwrap(), "{}", extension.id);
+        }
+        assert!(
+            !store
+                .ai_effective_preferences()
+                .unwrap()
+                .classification_enabled
+        );
+        let proactive = store.proactive_effective_settings().unwrap();
+        assert!(
+            !proactive.scheduler_enabled
+                && !proactive.notifications_enabled
+                && !proactive.close_to_background
+                && !proactive.start_hidden
+        );
+    }
+    let snapshot = app.settings().snapshot().await.unwrap();
+    assert_eq!(snapshot.extensions.len(), 11);
+    assert!(snapshot.extensions.iter().all(|e| !e.enabled));
+    assert!(!app.archive.status().unwrap().running);
+    assert!(!app.feed.running());
+    assert!(!app.models.busy());
+    assert!(app.studium.completion().is_none());
+    tokio::time::timeout(Duration::from_secs(1), app.archive.bodies.wait())
+        .await
+        .expect("a body fetch is running");
+    assert!(matches!(app.classifier.status().state, "idle" | "disabled"));
+    // No embedding server: its private run directory holds no socket or pid.
+    let run = app.data_root.join("run").join("embedding");
+    if let Ok(mut entries) = std::fs::read_dir(run) {
+        assert!(entries.next().is_none());
+    }
+}
+
+#[tokio::test]
+async fn a_fresh_profile_runs_only_the_core_and_returns_to_it_after_each_extension() {
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+    app.start(Some(Arc::new(Views::default())));
+    assert_core_only(&app).await;
+
+    for extension in crate::extensions::BUILT_IN {
+        app.settings()
+            .set_extension(extension.id, true)
+            .await
+            .unwrap();
+        app.settings()
+            .set_extension(extension.id, false)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_core_only(&app).await;
+    }
+    app.shutdown().await;
+}
+
+#[test]
+fn every_extension_is_declared_once_and_its_links_exist() {
+    use crate::extensions::{Tokens, Work, BUILT_IN};
+    assert_eq!(BUILT_IN.len(), 11);
+    let mut ids: Vec<_> = BUILT_IN.iter().map(|e| e.id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), BUILT_IN.len());
+    for extension in BUILT_IN {
+        assert!(crate::extensions::is_built_in(extension.id));
+        // Everything a disable awaits it also signals, except the classifier,
+        // which stops itself and is only woken.
+        for work in extension.settles {
+            assert!(
+                *work == Work::Classifier || extension.cancels.contains(work),
+                "{} settles work it never cancels",
+                extension.id
+            );
+        }
+    }
+    // The cross-extension links: proactive's disable clears both token kinds.
+    let clears = |id: &str| crate::extensions::declaration(id).unwrap().clears;
+    assert_eq!(
+        clears(crate::extensions::PROACTIVE),
+        [Tokens::StudiumAlerts, Tokens::CalendarReminders]
+    );
+    assert_eq!(clears(crate::extensions::STUDIUM), [Tokens::StudiumAlerts]);
+    assert_eq!(
+        clears(crate::extensions::CALENDAR),
+        [Tokens::CalendarReminders]
+    );
+}
