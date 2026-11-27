@@ -333,3 +333,59 @@ fn every_extension_is_declared_once_and_its_links_exist() {
         [Tokens::CalendarReminders]
     );
 }
+
+/// A feed transport that holds the sync until it is cancelled, so a feed job
+/// is running when shutdown or maintenance asks it to stop.
+struct HeldFeed;
+
+impl crate::feed::transport::Transport for HeldFeed {
+    async fn get(
+        &self,
+        _url: &url::Url,
+        _limit: u64,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Vec<u8>, crate::feed::transport::FetchError> {
+        crate::job::cancelled(cancel, Duration::from_millis(5)).await;
+        Err(crate::feed::transport::FetchError::Cancelled)
+    }
+}
+
+/// Starts a feed sync that only a cancel can end and returns once it runs.
+async fn hold_feed(app: &Arc<App>) -> tokio::task::JoinHandle<Result<bool, String>> {
+    let held = app.clone();
+    let task =
+        tokio::spawn(async move { held.feed.run(&held.store, &held.data_root, &HeldFeed).await });
+    while !app.feed.running() {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    task
+}
+
+// Pins that exit and maintenance each cancel and join a running job. Only the
+// feed sync can be held through public API and a fake transport; the archive
+// job (needs an eClass login), body fetches (need a stored pending notice) and
+// model downloads (need a real catalog download) have no such hook, so a job
+// type missing from either list is caught here only for the feed. Even then
+// the scheduler's quiesce also cancels the feed, so this pins the outcome
+// (the job is joined), not that each site's own feed cancel is present.
+#[tokio::test]
+async fn shutdown_and_maintenance_leave_no_feed_job_running() {
+    let directory = tempfile::tempdir().unwrap();
+    let app = Arc::new(open(directory.path()).unwrap());
+
+    let task = hold_feed(&app).await;
+    let guard = tokio::time::timeout(Duration::from_secs(10), app.exclusive_maintenance())
+        .await
+        .expect("maintenance waits for the feed job")
+        .unwrap();
+    assert!(!app.feed.running());
+    assert_eq!(task.await.unwrap(), Ok(true));
+    drop(guard);
+
+    let task = hold_feed(&app).await;
+    tokio::time::timeout(Duration::from_secs(10), app.shutdown())
+        .await
+        .expect("shutdown waits for the feed job");
+    assert!(!app.feed.running());
+    assert_eq!(task.await.unwrap(), Ok(true));
+}
