@@ -3,6 +3,7 @@
 
 pub mod archive;
 pub mod extensions;
+pub mod feed;
 pub mod intelligence;
 pub mod operation_gate;
 pub mod paths;

@@ -2,8 +2,8 @@
 //! separate from the notice crawler's transport: the feed has no robots.txt,
 //! pacing or school routes, only a base URL from the app or a signed
 //! `moved_to` and the files the verified manifest names.
-use crate::archive::network::public_ip;
 use reqwest::{header, StatusCode};
+use rhythm_sources::transport::public_ip;
 use std::{
     future::Future,
     net::SocketAddr,
@@ -74,7 +74,7 @@ const INVALID_BASE: &str = "공지 피드 주소가 올바르지 않습니다.";
 /// Why a request failed. `Offline` is shown quietly (#46: an unreachable feed
 /// keeps cached data without repeated errors).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum FetchError {
+pub enum FetchError {
     Offline,
     RateLimited(Duration),
     Failed(String),
@@ -95,7 +95,7 @@ impl FetchError {
 }
 
 /// The network boundary; tests replace only this.
-pub(crate) trait Transport: Sync {
+pub trait Transport: Sync {
     /// GETs `url`, refusing a body larger than `limit` bytes.
     fn get(
         &self,
@@ -105,18 +105,32 @@ pub(crate) trait Transport: Sync {
     ) -> impl Future<Output = Result<Vec<u8>, FetchError>> + Send;
 }
 
-pub(crate) struct HttpsTransport;
+/// Sends the app's `user_agent` (`Rhythm/<version>`).
+pub struct HttpsTransport {
+    user_agent: &'static str,
+}
+
+impl HttpsTransport {
+    pub fn new(user_agent: &'static str) -> Self {
+        Self { user_agent }
+    }
+}
 
 impl Transport for HttpsTransport {
     async fn get(&self, url: &Url, limit: u64, cancel: &AtomicBool) -> Result<Vec<u8>, FetchError> {
         tokio::select! {
-            result = fetch(url, limit, cancel) => result,
+            result = fetch(url, limit, self.user_agent, cancel) => result,
             _ = cancelled(cancel) => Err(FetchError::Cancelled),
         }
     }
 }
 
-async fn fetch(url: &Url, limit: u64, cancel: &AtomicBool) -> Result<Vec<u8>, FetchError> {
+async fn fetch(
+    url: &Url,
+    limit: u64,
+    user_agent: &str,
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>, FetchError> {
     let host = url
         .host_str()
         .ok_or_else(|| FetchError::Failed(INVALID_BASE.into()))?;
@@ -144,7 +158,7 @@ async fn fetch(url: &Url, limit: u64, cancel: &AtomicBool) -> Result<Vec<u8>, Fe
         .connect_timeout(Duration::from_secs(15))
         .read_timeout(Duration::from_secs(45))
         .pool_max_idle_per_host(0)
-        .user_agent(concat!("Rhythm/", env!("CARGO_PKG_VERSION")))
+        .user_agent(user_agent)
         .build()
         .map_err(|_| FetchError::Failed("공지 피드 HTTPS 연결을 준비하지 못했습니다.".into()))?;
     let mut response = client

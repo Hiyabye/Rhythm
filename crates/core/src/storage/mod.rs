@@ -1,6 +1,9 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
 /// How a notice names its board everywhere it is shown, notifications
 /// included: `<unit> · <board>`, the unit being the organization after
@@ -201,6 +204,19 @@ pub struct StorageInfo {
 pub struct Store {
     connection: Connection,
     path: PathBuf,
+}
+/// The one store the app's jobs and commands share.
+pub type SharedStore = Arc<Mutex<Store>>;
+/// Runs `operation` under the store lock; the closure keeps the guard from
+/// living across an await.
+pub fn with_store<T>(
+    store: &SharedStore,
+    operation: impl FnOnce(&Store) -> Result<T, String>,
+) -> Result<T, String> {
+    let guard = store
+        .lock()
+        .map_err(|_| "로컬 저장소에 접근할 수 없습니다.")?;
+    operation(&guard)
 }
 impl Store {
     pub fn open(path: &Path) -> Result<Self, String> {

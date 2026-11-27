@@ -24,6 +24,10 @@ use std::{
 use storage::{proactive::ProactiveSettings, Store};
 use tauri::Manager;
 
+/// The User-Agent of the app's own requests (models, feed): `Rhythm/<version>`.
+/// `rhythm-core` cannot name it itself; its package version is 0.0.0.
+pub(crate) const USER_AGENT: &str = concat!("Rhythm/", env!("CARGO_PKG_VERSION"));
+
 pub(crate) struct AppState {
     _instance_lock: core::DataDirLock,
     pub(crate) store: Arc<Mutex<Store>>,
@@ -511,10 +515,7 @@ fn main() {
                 feed,
                 network,
                 classifier,
-                models: intelligence::models::Controller::new(concat!(
-                    "Rhythm/",
-                    env!("CARGO_PKG_VERSION")
-                )),
+                models: intelligence::models::Controller::new(USER_AGENT),
                 hardware,
                 ai_gate: tokio::sync::Mutex::new(()),
                 maintenance_shutdown: maintenance_shutdown.clone(),
