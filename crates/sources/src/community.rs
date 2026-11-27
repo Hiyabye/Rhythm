@@ -170,6 +170,21 @@ fn article_parts(board: &Board, url: &Url) -> Result<(String, u32), String> {
         .ok_or(PARSER_ERROR)?;
     Ok((external_id, page))
 }
+/// The stored link of a notice, independent of the listing page it appears on:
+/// it always carries `pNo=1`, so a notice that moves to another page keeps its
+/// link and so its `revision_hash`. Links stored before this carry the page
+/// they were listed on; `article_parts` still accepts them for detail requests.
+fn canonical_link(board: &Board, external_id: &str) -> Result<Url, String> {
+    let mut url = base(board)?;
+    url.query_pairs_mut()
+        .append_pair("m", "v")
+        .append_pair("idx", external_id)
+        .append_pair("pNo", "1");
+    if let Some(code) = board.code {
+        url.query_pairs_mut().append_pair("code", code);
+    }
+    Ok(url)
+}
 pub(super) fn detail_url(source: &SourceDefinition, entry: &ListingEntry) -> Result<Url, String> {
     let board = board(source)?;
     let url = Url::parse(&entry.url).map_err(|_| PARSER_ERROR)?;
@@ -315,8 +330,8 @@ fn listing_entry(
         return invalid();
     }
     Ok(ListingEntry {
+        url: canonical_link(board, &external_id)?.into(),
         external_id,
-        url: url.into(),
         pinned,
         modified_at: None,
         title: None,
@@ -619,7 +634,7 @@ pub(super) fn article(
     }
     Ok(ArticleInput {
         external_id: entry.external_id.clone(),
-        canonical_url: entry.url.clone(),
+        canonical_url: canonical_link(&board, &external_id)?.into(),
         title,
         author: None,
         category: Some(source.name.clone()),
