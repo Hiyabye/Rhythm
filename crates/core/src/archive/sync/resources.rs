@@ -206,47 +206,56 @@ pub(in crate::archive) async fn install_resource(
     static PARTS: AtomicU64 = AtomicU64::new(0);
     let part = PARTS.fetch_add(1, Ordering::Relaxed);
     let temporary = root.join(format!("resources/{hash}.{part}.part"));
-    tokio::fs::write(&temporary, &bytes)
-        .await
-        .map_err(|_| "첨부 파일을 저장하지 못했습니다. 남은 저장 공간과 권한을 확인해 주세요.")?;
     let destination = root.join(&relative);
-    // Generated hash paths never contain a remote filename. A completed file
-    // is installed before its reference is committed to SQLite.
-    if tokio::fs::try_exists(&destination)
-        .await
-        .map_err(|_| "첨부 파일 경로를 확인하지 못했습니다.")?
-    {
-        // A retry must repair corrupt bytes, not discard its verified download.
-        let size = tokio::fs::metadata(&destination)
+    let installed: Result<(), String> = async {
+        tokio::fs::write(&temporary, &bytes).await.map_err(|_| {
+            "첨부 파일을 저장하지 못했습니다. 남은 저장 공간과 권한을 확인해 주세요."
+        })?;
+        // Generated hash paths never contain a remote filename. A completed file
+        // is installed before its reference is committed to SQLite.
+        if tokio::fs::try_exists(&destination)
             .await
-            .map_err(|_| "기존 첨부 파일을 확인하지 못했습니다.")?
-            .len();
-        let matches = if size <= FILE_LIMIT as u64 {
-            let existing = tokio::fs::read(&destination)
+            .map_err(|_| "첨부 파일 경로를 확인하지 못했습니다.")?
+        {
+            // A retry must repair corrupt bytes, not discard its verified download.
+            let size = tokio::fs::metadata(&destination)
                 .await
-                .map_err(|_| "기존 첨부 파일을 확인하지 못했습니다.")?;
-            Sha256::digest(&existing) == Sha256::digest(&bytes)
+                .map_err(|_| "기존 첨부 파일을 확인하지 못했습니다.")?
+                .len();
+            let matches = if size <= FILE_LIMIT as u64 {
+                let existing = tokio::fs::read(&destination)
+                    .await
+                    .map_err(|_| "기존 첨부 파일을 확인하지 못했습니다.")?;
+                Sha256::digest(&existing) == Sha256::digest(&bytes)
+            } else {
+                false
+            };
+            if matches {
+                tokio::fs::remove_file(&temporary)
+                    .await
+                    .map_err(|_| "임시 첨부 파일을 정리하지 못했습니다.")?;
+            } else {
+                // Windows does not replace an existing destination on rename.
+                tokio::fs::remove_file(&destination)
+                    .await
+                    .map_err(|_| "손상된 첨부 파일을 교체하지 못했습니다.")?;
+                tokio::fs::rename(&temporary, &destination)
+                    .await
+                    .map_err(|_| "첨부 파일 복구를 완료하지 못했습니다.")?;
+            }
         } else {
-            false
-        };
-        if matches {
-            tokio::fs::remove_file(&temporary)
-                .await
-                .map_err(|_| "임시 첨부 파일을 정리하지 못했습니다.")?;
-        } else {
-            // Windows does not replace an existing destination on rename.
-            tokio::fs::remove_file(&destination)
-                .await
-                .map_err(|_| "손상된 첨부 파일을 교체하지 못했습니다.")?;
             tokio::fs::rename(&temporary, &destination)
                 .await
-                .map_err(|_| "첨부 파일 복구를 완료하지 못했습니다.")?;
+                .map_err(|_| "첨부 파일 저장을 완료하지 못했습니다.")?;
         }
-    } else {
-        tokio::fs::rename(&temporary, &destination)
-            .await
-            .map_err(|_| "첨부 파일 저장을 완료하지 못했습니다.")?;
+        Ok(())
     }
+    .await;
+    if installed.is_err() {
+        // A failed write or rename must not leave its partial file behind.
+        let _ = tokio::fs::remove_file(&temporary).await;
+    }
+    installed?;
     with_store(store, |s| {
         ensure_active(cancel)?;
         s.resource_result(

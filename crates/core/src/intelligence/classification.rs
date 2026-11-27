@@ -413,6 +413,8 @@ impl Controller {
                 *value = Some(identity.clone());
             }
         }
+        // Only an answered request shows the engine works again.
+        let mut embedded = false;
         let prototypes = {
             let mut slot = self.prototypes.lock().await;
             match slot.as_ref() {
@@ -435,6 +437,7 @@ impl Controller {
                         .zip(vectors)
                         .collect::<Vec<(&'static str, Vec<f32>)>>();
                     *slot = Some(loaded.clone());
+                    embedded = true;
                     loaded
                 }
             }
@@ -485,6 +488,7 @@ impl Controller {
                     results.extend(targets.into_iter().zip(vectors).map(
                         |((document_id, revision_id), vector)| (document_id, revision_id, vector),
                     ));
+                    embedded = true;
                 }
                 Err(error) => {
                     eprintln!("Classification embedding: {error}");
@@ -493,7 +497,9 @@ impl Controller {
                 }
             }
         }
-        self.clear_backoff();
+        if embedded {
+            self.clear_backoff();
+        }
         drop(worker);
         let mut written = 0u64;
         {
@@ -650,6 +656,7 @@ impl Controller {
             }
         };
         drop(worker);
+        self.clear_backoff();
         if let Ok(mut last) = self.last_work.lock() {
             *last = Some(Instant::now());
         }
@@ -998,6 +1005,31 @@ mod tests {
             .embed_query(directory.path(), &model, &identity, "장학")
             .await
             .is_some());
+        controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_answered_search_ends_the_backoff_and_an_idle_pass_does_not() {
+        let (directory, controller, model) = fake_controller();
+        let identity = model.sha256.clone().unwrap();
+        *controller.verified.lock().unwrap() = Some(identity.clone());
+        let (_data, store) = store_with_notice(&model);
+        let models = models::Controller::new("Rhythm/test");
+        let shutdown = AtomicBool::new(false);
+        seed_prototypes(&controller, &identity).await;
+        set_mode(directory.path(), "crash-on-embed");
+        controller
+            .advance(&store, &models, directory.path(), &shutdown)
+            .await;
+        assert!(controller.backoff.lock().unwrap().is_some());
+
+        set_mode(directory.path(), "ok");
+        end_pause(&controller);
+        assert!(controller
+            .embed_query(directory.path(), &model, &identity, "장학")
+            .await
+            .is_some());
+        assert!(controller.backoff.lock().unwrap().is_none());
         controller.shutdown().await;
     }
 

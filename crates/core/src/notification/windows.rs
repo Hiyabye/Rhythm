@@ -419,11 +419,23 @@ pub fn request_connection_test() -> Result<(&'static str, bool), String> {
 }
 
 fn escape_xml(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            '\t' | '\n' | '\r' => escaped.push(character),
+            // XML 1.0 cannot carry these even escaped, and one of them in a
+            // pasted title would make `LoadXml` refuse the whole toast.
+            '\u{FFFE}' | '\u{FFFF}' => {}
+            character if character.is_control() => {}
+            character => escaped.push(character),
+        }
+    }
+    escaped
 }
 
 pub struct PreparedToast {
@@ -553,6 +565,10 @@ mod tests {
         }
         assert!(token_from_uri(&format!("{prefix}{}", token.to_uppercase())).is_none());
         assert_eq!(escape_xml("<&>\"'"), "&lt;&amp;&gt;&quot;&apos;");
+        assert_eq!(
+            escape_xml("과제\u{0B}제출\u{1B}\u{0}\u{FFFF} 3장\t끝\n"),
+            "과제제출 3장\t끝\n"
+        );
         assert_ne!(new_token().unwrap(), new_token().unwrap());
     }
 

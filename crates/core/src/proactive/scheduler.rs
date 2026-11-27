@@ -665,8 +665,10 @@ async fn cycle(
     if !stop_requested(stop) {
         let (current, _) = settings(store)?;
         if should_discover_notifications(&current) {
-            discover_and_deliver(store, &current, shell, notifications, stop).await?;
+            // A notice that cannot be sent must not hold a reminder past its moment.
+            let notices = discover_and_deliver(store, &current, shell, notifications, stop).await;
             super::reminders::deliver(store, shell, notifications, stop).await?;
+            notices?;
         }
     }
     Ok(())

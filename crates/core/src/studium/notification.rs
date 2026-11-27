@@ -281,10 +281,12 @@ impl Notifications {
             let notified = self.wake.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if let Some(candidate) = self.pop() {
-                if responses.len() >= MAX_RESPONSES {
-                    continue;
-                }
+            // With every response slot taken a candidate waits in `pending`
+            // (the newest per room) until one of the alerts is answered.
+            let candidate = (responses.len() < MAX_RESPONSES)
+                .then(|| self.pop())
+                .flatten();
+            if let Some(candidate) = candidate {
                 let result = tokio::select! {
                     biased;
                     _ = super::cancelled(&run.cancel) => break,

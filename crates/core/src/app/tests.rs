@@ -372,6 +372,11 @@ async fn hold_feed(app: &Arc<App>) -> tokio::task::JoinHandle<Result<bool, Strin
 async fn shutdown_and_maintenance_leave_no_feed_job_running() {
     let directory = tempfile::tempdir().unwrap();
     let app = Arc::new(open(directory.path()).unwrap());
+    // A sync only starts while the notices extension is on.
+    crate::storage::with_store(&app.store, |s| {
+        s.set_enabled(crate::extensions::NOTICES, true)
+    })
+    .unwrap();
 
     let task = hold_feed(&app).await;
     let guard = tokio::time::timeout(Duration::from_secs(10), app.exclusive_maintenance())
