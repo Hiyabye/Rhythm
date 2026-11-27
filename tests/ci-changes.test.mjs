@@ -33,9 +33,10 @@ test('each area selects only its own jobs', () => {
   assert.deepEqual(classify(['crates/sources/Cargo.toml']), { ...none, rust: true, packaging: true });
   assert.deepEqual(classify(['Cargo.lock']), { ...none, rust: true, packaging: true });
   assert.deepEqual(classify(['scripts/desktop.mjs']), { ...none, frontend: true, packaging: true });
-  assert.deepEqual(classify(['src-tauri/tauri.windows.conf.json']), { ...none, rust: true, packaging: true });
+  assert.deepEqual(classify(['src-tauri/tauri.windows.conf.json']), { ...none, frontend: true, rust: true, packaging: true });
+  assert.deepEqual(classify(['src-tauri/tauri.conf.json']), { ...none, frontend: true, rust: true, packaging: true });
   assert.deepEqual(classify(['LICENSE']), { ...none, packaging: true });
-  assert.deepEqual(classify(['assets/licenses/chrono-LICENSE.txt']), { ...none, rust: true, packaging: true });
+  assert.deepEqual(classify(['assets/licenses/chrono-LICENSE.txt']), { ...none, frontend: true, rust: true, packaging: true });
   assert.equal(classify(['rust-toolchain.toml']).rust, true);
   for (const file of ['worker/src/index.ts', 'worker/test/index.test.mjs', 'worker/package-lock.json', 'worker/wrangler.toml']) {
     assert.deepEqual(classify([file]), { ...none, worker: true }, file);

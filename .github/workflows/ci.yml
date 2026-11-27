@@ -11,8 +11,11 @@ on:
 permissions:
   contents: read
 
+# Every push to main keeps its own run: in a shared group GitHub drops a
+# pending run when a newer one queues, and each run only classifies the files
+# of its own push, so the dropped push's packaging checks would never run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # Each concern runs once, and only when its files changed
