@@ -2010,3 +2010,37 @@ fn similarity_anchors_skip_disliked_trashed_and_expired_feedback() {
     store.restore_documents(&[1]).unwrap();
     assert!(points(&store, 2));
 }
+
+#[test]
+fn known_aliases_never_push_an_interest_past_the_alias_cap() {
+    let (_directory, store) = store();
+    let own = (1..=12).map(|n| format!("내 별칭 {n}")).collect::<Vec<_>>();
+    let saved = store
+        .personalization_save_interest(&PersonalInterestInput {
+            id: None,
+            name: "장학금".into(),
+            aliases: own.clone(),
+            priority: 3,
+            polarity: "positive".into(),
+        })
+        .unwrap();
+    assert_eq!(saved.interests[0].aliases, own);
+    // With room left, known aliases fill only up to the cap, after the user's.
+    let few = (1..=10).map(|n| format!("별칭 {n}")).collect::<Vec<_>>();
+    let saved = store
+        .personalization_save_interest(&PersonalInterestInput {
+            id: None,
+            name: "인턴십".into(),
+            aliases: few.clone(),
+            priority: 3,
+            polarity: "positive".into(),
+        })
+        .unwrap();
+    let stored = saved
+        .interests
+        .iter()
+        .find(|interest| interest.name == "인턴십")
+        .unwrap();
+    assert_eq!(stored.aliases.len(), 12);
+    assert_eq!(stored.aliases[..10], few[..]);
+}

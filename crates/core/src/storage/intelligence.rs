@@ -594,7 +594,8 @@ impl Store {
         Ok(())
     }
     /// Removes inventory only; never deletes files. Derived embedding vectors
-    /// and classifications are removed with the model identity they belong to.
+    /// and classifications are removed with the model identity they belong to,
+    /// once no other inventory row has that identity.
     pub fn ai_remove_model(&self, id: &str) -> Result<(), String> {
         let sha: Option<String> = self
             .connection
@@ -609,7 +610,20 @@ impl Store {
                 .execute("DELETE FROM ai_models WHERE id=?1", [id])
                 .map_err(|e| e.to_string())?,
         )?;
-        if let Some(sha) = sha {
+        // Another inventory row (a managed install and an external copy of the
+        // same file) may still own these vectors.
+        let shared = match &sha {
+            Some(sha) => self
+                .connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM ai_models WHERE sha256=?1)",
+                    [sha],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|e| e.to_string())?,
+            None => false,
+        };
+        if let Some(sha) = sha.filter(|_| !shared) {
             self.connection
                 .execute(
                     "DELETE FROM notice_embeddings WHERE model_sha256=?1",

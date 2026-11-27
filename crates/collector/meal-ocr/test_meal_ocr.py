@@ -204,6 +204,28 @@ class JobTests(unittest.TestCase):
             self.assertEqual(result, {"version": meal_ocr.VERSION, "image_sha256": sha,
                                       "status": "rejected", "reason": "unsupported_image_format"})
 
+    def test_missing_or_changed_weights_abort_the_step(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as home:
+            folder = Path(directory)
+            sha = self.write(folder)
+
+            def engine():
+                return lambda path: []
+
+            # No weight files at all: fatal, not a per-image failure.
+            with self.assertRaises(SystemExit):
+                meal_ocr.run(folder, engine, weights_home=Path(home))
+            self.assertFalse((folder / f"{sha}.result.json").exists())
+            # Present but different bytes: fatal too.
+            for model, files in meal_ocr.MODELS.items():
+                target = Path(home) / "official_models" / model
+                target.mkdir(parents=True)
+                for name in files:
+                    (target / name).write_bytes(b"other")
+            with self.assertRaises(SystemExit):
+                meal_ocr.run(folder, engine, weights_home=Path(home))
+            self.assertFalse((folder / f"{sha}.result.json").exists())
+
 
 @unittest.skipIf(Image is None, "Pillow and OpenCV from requirements.lock are needed")
 class GeometryTests(unittest.TestCase):
