@@ -18,6 +18,16 @@ async function commandArgs(page: Page, command: string) {
   return page.evaluate((name) => (window as FixtureWindow).__fixture.calls.find((call) => call.command === name)?.args, command);
 }
 
+test('creating a backup saves to the chosen file and reports what it holds', async ({ page }) => {
+  await mockDesktop(page);
+  await page.goto('/');
+  const backup = await openBackup(page);
+  await backup.getByRole('button', { name: '백업 파일 저장', exact: true }).click();
+  await expect(backup).toContainText('백업을 만들었습니다(공지 12건, 첨부 자료 3개).');
+  expect(await callCount(page, 'backup_create')).toBe(1);
+  expect(await commandArgs(page, 'backup_create')).toMatchObject({ destination: '/fixtures/Rhythm-backup.rhythm-backup' });
+});
+
 test('backup restore inspects selected file before confirmation and only invokes restore after acceptance', async ({ page }) => {
   await mockDesktop(page);
   await page.goto('/');

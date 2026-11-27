@@ -143,6 +143,15 @@ test('relevance search stays text-only without an embedding model', async ({ pag
   await expect(page.locator('.archive-search + .footnote')).not.toContainText('뜻이 비슷한');
 });
 
+test('a longer search term is highlighted whole when a shorter one is its prefix', async ({ page }) => {
+  await mockDesktop(page);
+  await page.goto('/');
+  await navigate(page, '검색');
+  await page.getByLabel('보관된 공지 검색').fill('컴 컴퓨터');
+  await page.getByRole('search').getByRole('button', { name: '검색', exact: true }).click();
+  await expect(page.locator('.notice-snippet mark').first()).toHaveText('컴퓨터');
+});
+
 test('relevance search marks notices found only by meaning, and date order is text-only', async ({ page }) => {
   await mockDesktop(page, { count: 3, aiSemanticSearch: true, aiEmbeddingInstalled: true });
   await page.goto('/');
