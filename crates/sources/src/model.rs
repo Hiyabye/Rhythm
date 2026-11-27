@@ -152,6 +152,20 @@ mod tests {
         }
     }
 
+    /// `Family::Main` replaced `parser::main_board(id).is_some()` in the JSON
+    /// and size rules, so the two must name the same boards.
+    #[test]
+    fn main_family_is_exactly_the_main_boards() {
+        for source in crate::catalog::definitions() {
+            assert_eq!(
+                source.family() == Ok(Family::Main),
+                crate::parser::main_board(&source.id).is_some(),
+                "{}",
+                source.id
+            );
+        }
+    }
+
     #[test]
     fn unknown_family_is_rejected() {
         assert_eq!(Family::parse("computin"), None);
