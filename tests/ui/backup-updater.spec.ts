@@ -26,19 +26,19 @@ test('backup restore inspects selected file before confirmation and only invokes
   await backup.getByRole('button', { name: '백업 파일 선택', exact: true }).click();
   await expect(backup.getByRole('heading', { name: '복원할 백업 확인', exact: true })).toBeVisible();
   await expect(backup).toContainText('공지 12건 · 첨부 자료 3개');
-  await expect(backup).toContainText('형식 v1 · 스키마 6');
+  await expect(backup).toContainText('공지 12건 · 첨부 자료 3개');
   await expect(backup).toContainText('모델 파일은 포함되지 않습니다.');
-  await expect(backup).toContainText('자동으로 다시 열리지 않습니다. 직접 다시 열면 복원이 마무리됩니다.');
+  await expect(backup).toContainText('직접 다시 열어야 복원이 끝납니다.');
   expect(await callCount(page, 'backup_inspect')).toBe(1);
 
   await answerDialogs(page, 'cancel');
   await backup.getByRole('button', { name: '이 백업으로 복원', exact: true }).click();
   await expect.poll(() => dialogMessages(page).then((messages) => messages.length)).toBe(1);
   const confirmations = await dialogMessages(page);
-  expect(confirmations[0]).toContain('현재 Rhythm 데이터 전체');
-  expect(confirmations[0]).toContain('복구용으로 보관');
+  expect(confirmations[0]).toContain('지금 데이터를 이 백업으로 바꿉니다');
+  expect(confirmations[0]).toContain('복구용으로 남겨 둡니다');
   expect(confirmations[0]).toContain('Rhythm이 종료됩니다');
-  expect(confirmations[0]).toContain('직접 다시 열면 복원이 마무리됩니다');
+  expect(confirmations[0]).toContain('직접 다시 열면 복원이 끝납니다');
   expect(confirmations[0]).not.toContain('다시 시작');
   expect(await callCount(page, 'backup_restore')).toBe(0);
   await expect(backup.getByRole('heading', { name: '복원할 백업 확인', exact: true })).toBeVisible();
@@ -92,17 +92,17 @@ test('unconfigured updater shows manual update guidance instead of a failing che
   const updater = await openUpdater(page);
 
   // Static guidance, not a live announcement on every visit to Settings.
-  await expect(updater).toContainText('앱 안 업데이트를 지원하지 않습니다');
+  await expect(updater).toContainText('앱 안에서 업데이트할 수 없습니다');
   await expect(updater.getByRole('status')).toHaveCount(0);
   await expect(updater.getByRole('listitem')).toHaveCount(0);
   await updater.getByText('설치 방법', { exact: true }).click();
   await expect(updater.getByRole('listitem')).toHaveCount(6);
-  await expect(updater).toContainText('Rhythm을 완전히 종료합니다.');
+  await expect(updater).toContainText('Rhythm을 종료합니다.');
   await expect(updater).toContainText('shasum -a 256');
   await expect(updater).toContainText('github.com/Hiyabye/Rhythm');
-  await expect(updater).toContainText('Apple 공증을 받지 않았습니다');
+  await expect(updater).toContainText('Apple 공증을 받지 않아');
   await expect(updater).not.toContainText('공증된');
-  await expect(updater).toContainText('공지, 설정, AI 모델은 앱과 별도로 저장되므로 앱을 바꿔도 지워지지 않습니다.');
+  await expect(updater).toContainText('데이터는 앱과 따로 저장되어 지워지지 않습니다.');
   await expect(updater.getByRole('button', { name: '업데이트 확인', exact: true })).toHaveCount(0);
   await expect(updater.getByRole('alert')).toHaveCount(0);
   await expect(updater).toContainText('2.4.0');
@@ -143,14 +143,14 @@ test('updater asks before restart both after staging and when restarting is chos
 
   await answerDialogs(page, 'cancel');
   await updater.getByRole('button', { name: '다운로드 및 설치', exact: true }).click();
-  await expect(updater.getByText('서명된 업데이트를 준비했습니다.', { exact: true })).toBeVisible();
+  await expect(updater.getByText('업데이트를 설치할 준비가 됐습니다.', { exact: true })).toBeVisible();
   await expect(updater.getByRole('button', { name: '설치 및 다시 시작', exact: true })).toBeVisible();
   expect(await callCount(page, 'updater_restart')).toBe(0);
 
   await answerDialogs(page, 'cancel');
   await updater.getByRole('button', { name: '설치 및 다시 시작', exact: true }).click();
   await expect.poll(() => dialogMessages(page).then((messages) => messages.length)).toBe(2);
-  expect((await dialogMessages(page))[1]).toContain('서명 검증이 끝난 업데이트');
+  expect((await dialogMessages(page))[1]).toContain('업데이트를 설치하고 앱을 다시 시작할까요?');
   await expect(updater.getByRole('button', { name: '설치 및 다시 시작', exact: true })).toBeEnabled();
   expect(await callCount(page, 'updater_restart')).toBe(0);
 

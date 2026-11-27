@@ -68,7 +68,7 @@ test('a board chip toggles its subscription and reflects the stored result', asy
   await expect(notice).toHaveAttribute('aria-pressed', 'true');
   await expect(category(page, '인문대학')).toHaveAccessibleName('인문대학, 구독 1/3');
   await expect(category(page, '단과대학')).toHaveAccessibleName('단과대학, 구독 1/3');
-  await expect(page.locator('.source-manager .archive-feedback')).toContainText('이 게시판 공지를 추천과 알림에 포함합니다');
+  await expect(page.locator('.source-manager .archive-feedback')).toContainText('구독을 시작했습니다.');
   const calls = await page.evaluate(() => (window as any).__fixture.calls.filter((call: any) => call.command === 'archive_subscribe').map((call: any) => call.args));
   expect(calls).toEqual([{ id: 'liberalarts-notice', subscribed: true }]);
   await notice.click();

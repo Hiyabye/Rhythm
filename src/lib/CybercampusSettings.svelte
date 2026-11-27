@@ -28,7 +28,7 @@
     feedback = '';
     try {
       status = await invoke<CybercampusStatus>('cybercampus_save_login', { id: id.trim(), password });
-      feedback = '로그인을 확인하고 운영체제 보안 저장소에 저장했습니다. 강의 공지를 구독하고 새로고침하면 가져옵니다.';
+      feedback = '로그인 정보를 저장했습니다. 강의 공지를 구독하고 새로고침하면 가져옵니다.';
       id = '';
     } catch (reason) { error = archiveError(reason); }
     finally { password = ''; busy = false; }
@@ -40,7 +40,7 @@
     feedback = '';
     try {
       status = await invoke<CybercampusStatus>('cybercampus_forget_login');
-      feedback = '저장된 로그인 정보를 삭제했습니다. 보관한 공지와 과제는 남습니다.';
+      feedback = '로그인 정보를 삭제했습니다. 보관한 공지와 과제는 남습니다.';
     } catch (reason) { error = archiveError(reason); }
     finally { busy = false; }
   }
@@ -48,8 +48,8 @@
 
 <div class="settings-group" role="group" aria-label="사이버캠퍼스 로그인">
   <div class="settings-row stacked">
-    <span class="row-label">사이버캠퍼스 로그인<Hint label="사이버캠퍼스 로그인">학번과 SAINT 비밀번호로 eClass에 로그인해, 이번 학기 수강 강좌의 공지, 첨부 파일, 과제와 마감을 이 기기로 가져옵니다. 비밀번호는 운영체제 보안 저장소(Keychain 또는 Credential Manager)에만 저장합니다. Rhythm 데이터베이스, 백업, 진단에는 들어가지 않습니다. 읽기만 하며 제출, 게시, 확인 표시는 하지 않습니다. 다만 공지 본문을 가져오면 eClass에는 그 공지를 연 것으로 기록됩니다.</Hint>
-      <span class="row-detail" class:error-text={status?.rejected}>{#if status?.rejected}eClass가 저장된 로그인을 거부했습니다. 다시 저장하기 전까지 자동으로 시도하지 않습니다.{:else if status?.id}{status.id} 계정으로 로그인 정보 저장됨{#if status.courses.length}{' · '}강좌 {status.courses.length}개{/if}{:else if status}저장된 로그인 정보 없음{/if}</span>
+    <span class="row-label">사이버캠퍼스 로그인<Hint label="사이버캠퍼스 로그인">학번과 SAINT 비밀번호로 이번 학기 강좌의 공지와 과제·마감을 가져옵니다. 비밀번호는 운영체제 보안 저장소에만 저장하고 백업에는 넣지 않습니다. 제출이나 게시는 하지 않지만, 가져온 공지는 eClass에 읽은 것으로 기록됩니다.</Hint>
+      <span class="row-detail" class:error-text={status?.rejected}>{#if status?.rejected}eClass가 로그인을 거부했습니다. 다시 저장할 때까지 시도하지 않습니다.{:else if status?.id}{status.id} 계정 저장됨{#if status.courses.length}{' · '}강좌 {status.courses.length}개{/if}{:else if status}저장된 로그인 없음{/if}</span>
     </span>
     <form class="field-with-button" onsubmit={save}>
       <input aria-label="사이버캠퍼스 아이디(학번)" type="text" bind:value={id} placeholder="학번" autocomplete="username" spellcheck="false" disabled={busy || locked} />

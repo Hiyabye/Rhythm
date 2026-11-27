@@ -15,7 +15,7 @@ test('the Cybercampus login is checked before it is saved and is never shown aga
   await page.goto('/');
   await openSettings(page, '사이버캠퍼스');
   const login = page.getByRole('group', { name: '사이버캠퍼스 로그인' });
-  await expect(login).toContainText('저장된 로그인 정보 없음');
+  await expect(login).toContainText('저장된 로그인 없음');
   const id = login.getByRole('textbox', { name: '사이버캠퍼스 아이디(학번)' });
   const password = login.getByLabel('사이버캠퍼스 비밀번호');
   const save = login.getByRole('button', { name: '확인 후 저장' });
@@ -28,12 +28,12 @@ test('the Cybercampus login is checked before it is saved and is never shown aga
   await expect(password).toHaveValue('');
   await password.fill('right');
   await password.press('Enter');
-  await expect(login).toContainText('20990001 계정으로 로그인 정보 저장됨 · 강좌 1개');
+  await expect(login).toContainText('20990001 계정 저장됨 · 강좌 1개');
   await expect(login).toContainText('자료구조실습');
   await expect(password).toHaveValue('');
-  await expect(login.getByRole('status')).toContainText('운영체제 보안 저장소에 저장했습니다');
+  await expect(login.getByRole('status')).toContainText('로그인 정보를 저장했습니다');
   await login.getByRole('button', { name: '저장된 로그인 정보 삭제' }).click();
-  await expect(login).toContainText('저장된 로그인 정보 없음');
+  await expect(login).toContainText('저장된 로그인 없음');
   await expect(login.getByRole('status')).toContainText('보관한 공지와 과제는 남습니다');
 });
 
@@ -53,7 +53,7 @@ test('Cybercampus collects only on request, reports each step, cancels and downl
   await expect(page.locator('.collect-status')).toContainText('이전 공지 가져오는 중 · 강의 공지 · 2쪽');
   await expect(page.locator('.board-state.spinning')).toHaveCount(1);
   await page.getByRole('button', { name: '가져오기 중단', exact: true }).click();
-  await expect(page.locator('.source-manager > .archive-feedback')).toContainText('이미 저장한 공지는 유지됩니다');
+  await expect(page.locator('.source-manager > .archive-feedback')).toContainText('저장한 공지는 남습니다');
   // The board can also be refreshed from its status popover.
   await page.getByRole('button', { name: '서강대학교 · 사이버캠퍼스 강의 공지 상태', exact: true }).click();
   await page.getByRole('dialog', { name: '강의 공지 상태', exact: true }).getByRole('button', { name: '새로고침', exact: true }).click();

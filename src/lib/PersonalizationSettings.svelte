@@ -104,8 +104,8 @@
     let confirmed: boolean;
     try {
       confirmed = await confirmAction(interest.origin === 'learned'
-        ? `학습된 관심사 '${interest.name}'을(를) 삭제할까요?\n\n지금까지의 저장·관심 표시 기록만으로는 다시 만들어지지 않습니다. 보관한 공지와 피드백은 그대로 남습니다.`
-        : `관심사 '${interest.name}'을(를) 삭제할까요? 추천에서 이 관심사를 더 이상 반영하지 않습니다. 보관한 공지는 그대로 유지됩니다.`, '삭제');
+        ? `학습된 관심사 '${interest.name}'을(를) 삭제할까요?\n\n지난 기록만으로는 다시 생기지 않습니다. 보관한 공지와 피드백은 남습니다.`
+        : `관심사 '${interest.name}'을(를) 삭제할까요? 추천에 더 이상 쓰지 않습니다. 보관한 공지는 남습니다.`, '삭제');
     } catch (reason) {
       error = `${archiveError(reason)} 확인 창을 열지 못해 삭제하지 않았습니다.`;
       return;
@@ -131,7 +131,7 @@
   async function resetPersonalization() {
     let confirmed: boolean;
     try {
-      confirmed = await confirmAction('개인화 프로필, 관심사, 학습된 기억과 공지별 피드백을 모두 지울까요? 지운 내용은 되돌릴 수 없습니다.\n\n보관한 공지, 읽음·저장 상태와 공지 분류 결과는 유지됩니다.', '초기화');
+      confirmed = await confirmAction('개인화 프로필, 관심사, 학습된 기억, 공지별 피드백을 모두 지울까요? 되돌릴 수 없습니다.\n\n보관한 공지, 읽음·저장 상태, 공지 분류는 남습니다.', '초기화');
     } catch (reason) {
       error = `${archiveError(reason)} 확인 창을 열지 못해 초기화하지 않았습니다.`;
       return;
@@ -182,7 +182,7 @@
           {#if interest.origin === 'learned'}<p class="popover-title">학습된 관심사 · 근거 {interest.evidence_count}건</p>{#if interest.evidence_summary}<p>{interest.evidence_summary}</p>{/if}{/if}
           <label class="popover-field">이름<input data-autofocus bind:value={name} maxlength="80" oninput={draftChanged} /></label>
           <label class="popover-field">별칭<input bind:value={aliases} maxlength="240" placeholder="한국어·영어 표현을 쉼표로 구분" oninput={draftChanged} /></label>
-          {#if invalidAliases}<p role="alert" class="archive-error">별칭은 최대 12개, 각 80자 이내로 입력해 주세요.</p>{/if}
+          {#if invalidAliases}<p role="alert" class="archive-error">별칭은 12개까지, 각 80자 이내로 입력해 주세요.</p>{/if}
           <div class="popover-field">우선순위<div class="segmented" role="group" aria-label="우선순위">{#each [1, 2, 3, 4, 5] as value}<button class:selected={priority === value} aria-pressed={priority === value} onclick={() => { priority = value; draftChanged(); }}>{value}</button>{/each}</div></div>
           <div class="popover-field">방향<div class="segmented" role="group" aria-label="관심 방향">{#each [['positive', '관심'], ['negative', '관심 없음']] as [value, text]}<button class:selected={polarity === value} aria-pressed={polarity === value} onclick={() => { polarity = value as Polarity; draftChanged(); }}>{text}</button>{/each}</div></div>
           <div class="popover-actions">
@@ -212,7 +212,7 @@
       </div>
     </div>
 
-    <div class="settings-group-title"><h3>관심 분야</h3><Hint label="관심 분야">추천 순위에만 쓰이며 이 기기에만 저장됩니다. 주제를 눌러 별칭과 우선순위를 바꿀 수 있습니다. 학습된 관심사는 저장하거나 관심 표시한 공지가 여러 개 쌓이면 생기고, 근거는 180일 뒤 사라집니다. 삭제한 관심사는 과거 행동만으로는 다시 생기지 않습니다.</Hint></div>
+    <div class="settings-group-title"><h3>관심 분야</h3><Hint label="관심 분야">추천 순서에만 쓰이고 이 기기에만 저장됩니다. 주제를 눌러 별칭과 우선순위를 바꿀 수 있습니다. 학습된 관심사는 저장하거나 관심 표시한 공지가 쌓이면 생깁니다.</Hint></div>
     <div class="settings-group">
       <div class="settings-row chip-row">
         <span class="row-label">추천 주제</span>
@@ -236,7 +236,7 @@
     </div>
 
     {#if !compact}<div class="settings-group">
-      <div class="settings-row"><span class="row-label">행동으로 배우기<Hint label="행동으로 배우기">관심 표시와 저장만 학습합니다. 읽기와 검색은 학습하지 않습니다. 끄면 새 행동을 학습에 쓰지 않습니다.</Hint></span><button class="switch" class:on={data.learning_enabled} role="switch" aria-checked={data.learning_enabled} aria-label="관심사 학습" disabled={busy} onclick={() => void action('personalization_set_learning', { enabled: !data!.learning_enabled })}><span></span></button></div>
+      <div class="settings-row"><span class="row-label">행동으로 배우기<Hint label="행동으로 배우기">관심 표시와 저장만 학습합니다. 읽기와 검색은 학습하지 않습니다.</Hint></span><button class="switch" class:on={data.learning_enabled} role="switch" aria-checked={data.learning_enabled} aria-label="관심사 학습" disabled={busy} onclick={() => void action('personalization_set_learning', { enabled: !data!.learning_enabled })}><span></span></button></div>
       <div class="settings-row"><span class="row-label">개인화 초기화</span><button class="button secondary small danger" type="button" disabled={busy} aria-label="개인화 데이터 초기화" onclick={resetPersonalization}>초기화</button></div>
     </div>{/if}
   {:else}

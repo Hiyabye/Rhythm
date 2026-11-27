@@ -367,7 +367,7 @@
     notice = '';
     try {
       snapshot = await invoke<Snapshot>('set_extension', { id, enabled });
-      notice = '확장 기능 사용 설정을 저장했습니다.';
+      notice = '확장 기능 설정을 저장했습니다.';
     } catch (reason) {
       error = message(reason);
     } finally { busy = false; }
@@ -501,10 +501,10 @@
             <div class="settings-group">
               <div class="settings-row"><span class="row-label">화면 테마</span><div class="segmented" role="group" aria-label="화면 테마">{#each themes as option}<button disabled={!snapshot || busy} class:selected={theme === option.id} aria-pressed={theme === option.id} onclick={() => save({ theme: option.id })}><Icon name={option.icon} size={15} />{option.label}</button>{/each}</div></div>
               <div class="settings-row"><span class="row-label">시간 표시<span class="row-detail">{clock.format === '12h' ? '오후 9:30' : '21:30'}</span></span><div class="segmented" role="group" aria-label="시간 표시">{#each clockFormats as option}<button disabled={!snapshot || busy} class:selected={clock.format === option.id} aria-pressed={clock.format === option.id} onclick={() => save({ clock_format: option.id })}>{option.label}</button>{/each}</div></div>
-              <div class="settings-row"><span class="row-label">전원 모드<Hint label="전원 모드">사이버캠퍼스 자동 동기화 간격을 정합니다. 절전은 60분, 균형은 30분, 성능은 15분마다 확인합니다. 공지 피드는 전원 모드와 관계없이 30분마다 받습니다.</Hint></span><div class="segmented" role="group" aria-label="전원 모드">{#each energyProfiles as option}<button disabled={!snapshot || busy} class:selected={snapshot?.settings.energy_profile === option.id} aria-pressed={snapshot?.settings.energy_profile === option.id} onclick={() => save({ energy_profile: option.id })}>{option.label}</button>{/each}</div></div>
+              <div class="settings-row"><span class="row-label">전원 모드<Hint label="전원 모드">사이버캠퍼스를 확인하는 간격입니다. 절전은 60분, 균형은 30분, 성능은 15분마다 확인합니다. 학교 공지는 항상 30분마다 받습니다.</Hint></span><div class="segmented" role="group" aria-label="전원 모드">{#each energyProfiles as option}<button disabled={!snapshot || busy} class:selected={snapshot?.settings.energy_profile === option.id} aria-pressed={snapshot?.settings.energy_profile === option.id} onclick={() => save({ energy_profile: option.id })}>{option.label}</button>{/each}</div></div>
             </div>
             <div class="settings-group">
-              <div class="settings-row"><span class="row-label">초기 설정<Hint label="초기 설정">처음 실행할 때 본 설정 단계를 다시 엽니다. 현재 설정은 바뀌지 않습니다.</Hint></span><button class="button secondary small" disabled={!snapshot || busy} onclick={openSetup}>다시 실행</button></div>
+              <div class="settings-row"><span class="row-label">초기 설정<Hint label="초기 설정">처음 실행할 때의 설정 단계를 다시 엽니다. 지금 설정은 그대로 남습니다.</Hint></span><button class="button secondary small" disabled={!snapshot || busy} onclick={openSetup}>다시 실행</button></div>
             </div>
           {:else if settingsPane === 'extensions'}
             {#if snapshot}<ExtensionSettings extensions={snapshot.extensions} {busy} ontoggle={toggleExtension} />
@@ -523,10 +523,10 @@
             <ProactiveSettings {desktop} part="notifications" onopen={openProactiveDocument} onactivation={handleProactiveActivation} />
           {:else}
             <div class="settings-group">
-              <div class="settings-row"><span class="row-label"><label for="auto-trash">오래된 공지 정리</label><Hint label="오래된 공지 정리">게시일이 선택한 기간보다 오래된 공지를 휴지통으로 옮깁니다. 저장한 공지는 옮기지 않습니다. 휴지통의 공지는 언제든 복원할 수 있고, 저절로 영구 삭제되지 않습니다. 설정을 바꿀 때, 동기화가 끝날 때, 앱이 열려 있는 동안 1시간마다 확인합니다.</Hint></span><select id="auto-trash" value={snapshot?.settings.auto_trash_months ?? 0} disabled={!snapshot || busy} onchange={(event) => save({ auto_trash_months: Number(event.currentTarget.value) as AutoTrashMonths })}>{#each autoTrashChoices as choice}<option value={choice.months}>{choice.label}</option>{/each}</select></div>
+              <div class="settings-row"><span class="row-label"><label for="auto-trash">오래된 공지 정리</label><Hint label="오래된 공지 정리">선택한 기간보다 오래된 공지를 휴지통으로 옮깁니다. 저장한 공지는 옮기지 않으며, 휴지통에서 언제든 복원할 수 있습니다.</Hint></span><select id="auto-trash" value={snapshot?.settings.auto_trash_months ?? 0} disabled={!snapshot || busy} onchange={(event) => save({ auto_trash_months: Number(event.currentTarget.value) as AutoTrashMonths })}>{#each autoTrashChoices as choice}<option value={choice.months}>{choice.label}</option>{/each}</select></div>
             </div>
             <div class="settings-group">
-              <div class="settings-row"><span class="row-label">로컬 데이터<Hint label="로컬 데이터">프로필, 관심사, 피드백, 공지는 이 기기의 SQLite{#if snapshot} (스키마 {snapshot.storage.schema_version}){/if}에만 저장합니다. 클라우드 저장, 원격 추론, 사용 정보 수집은 하지 않습니다.{#if snapshot}<code class="popover-code">{snapshot.storage.path}</code>{/if}</Hint></span><span class="value">{snapshot ? storageSize(snapshot.storage.bytes) : '—'}</span></div>
+              <div class="settings-row"><span class="row-label">로컬 데이터<Hint label="로컬 데이터">프로필, 관심사, 공지는 모두 이 기기에만 저장합니다. 클라우드 저장과 사용 정보 수집은 하지 않습니다.{#if snapshot}<code class="popover-code">{snapshot.storage.path}</code>{/if}</Hint></span><span class="value">{snapshot ? storageSize(snapshot.storage.bytes) : '—'}</span></div>
             </div>
             <BackupSettings {desktop} />
             <UpdaterSettings {desktop} />

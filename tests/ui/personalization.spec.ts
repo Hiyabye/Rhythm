@@ -99,7 +99,7 @@ test('interest alias limit is explained before invalid input reaches the backend
   const edit = editor(page, '분산 시스템');
   await expect(edit.getByLabel('이름')).toBeFocused();
   await edit.getByLabel('별칭').fill('one,two,three,four,five,six,seven,eight,nine,ten,eleven,twelve,thirteen');
-  await expect(edit.getByRole('alert')).toContainText('최대 12개');
+  await expect(edit.getByRole('alert')).toContainText('12개까지');
   await expect(edit.getByRole('button', { name: '저장', exact: true })).toBeDisabled();
   expect(await callCount(page, 'personalization_save_interest')).toBe(0);
 });
@@ -217,7 +217,7 @@ test('learned memory can be removed from the settings review list', async ({ pag
   // Cancelling keeps the memory; the dialog says it cannot be recreated from past activity.
   await edit.getByRole('button', { name: '인턴십 삭제', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__fixture.dialogs.length)).toBe(1);
-  expect(await page.evaluate(() => (window as any).__fixture.dialogs[0])).toContain('다시 만들어지지 않습니다');
+  expect(await page.evaluate(() => (window as any).__fixture.dialogs[0])).toContain('다시 생기지 않습니다');
   await expect(chip).toBeVisible();
   expect(await callCount(page, 'personalization_remove_interest')).toBe(0);
 
