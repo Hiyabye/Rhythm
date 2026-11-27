@@ -354,7 +354,7 @@ impl Store {
             .connection
             .prepare(&format!(
                 "SELECT {REMINDER_COLUMNS} AND day BETWEEN ?1 AND ?2
-                 ORDER BY day, time IS NULL, time, id LIMIT {MAX_DUE_REMINDERS}"
+                 ORDER BY day, time IS NULL, time, id"
             ))
             .map_err(|e| e.to_string())?;
         let rows = statement
@@ -364,6 +364,7 @@ impl Store {
             )
             .map_err(|e| e.to_string())?
             .filter_map(Result::transpose)
+            .take(MAX_DUE_REMINDERS)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string());
         rows

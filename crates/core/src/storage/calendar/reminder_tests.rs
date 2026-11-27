@@ -337,3 +337,19 @@ fn an_on_time_reminder_fires_once_in_a_short_window() {
         None
     );
 }
+
+#[test]
+fn the_cap_applies_after_the_window_filter() {
+    let (_directory, store) = fixture();
+    for index in 0..(MAX_DUE_REMINDERS + 5) {
+        todo(
+            &store,
+            &format!("나중 {index}"),
+            "2026-11-10",
+            Some("09:00"),
+            Some(10),
+        );
+    }
+    todo(&store, "지금", "2026-11-10", Some("23:00"), Some(0));
+    assert_eq!(due(&store, "2026-11-10 23:00"), ["지금"]);
+}
