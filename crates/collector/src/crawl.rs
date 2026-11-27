@@ -540,7 +540,7 @@ impl<T: Transport> Crawl<'_, T> {
             state.progress(board, "completed", None, true)?;
             return Ok(None);
         }
-        let first_page = if historical { board.next_page } else { 1 };
+        let mut first_page = if historical { board.next_page } else { 1 };
         let initial = parser::list_url(definition, first_page)?;
         let policy = self
             .policies
@@ -583,12 +583,25 @@ impl<T: Transport> Crawl<'_, T> {
             let listing = match response {
                 Fetch::Body { bytes, mime, .. } => {
                     parser::check_document_mime(definition, mime.as_deref(), true)?;
-                    parser::listing(
-                        definition,
-                        page,
-                        std::str::from_utf8(&bytes)
-                            .map_err(|_| "공지 목록 문자 인코딩을 지원하지 않습니다.")?,
-                    )?
+                    let text = std::str::from_utf8(&bytes)
+                        .map_err(|_| "공지 목록 문자 인코딩을 지원하지 않습니다.")?;
+                    match parser::listing(definition, page, text) {
+                        Ok(listing) => listing,
+                        // The saved cursor can lie past the end once the board
+                        // shrank, and every parser rejects such a page. Only a
+                        // valid page 1 that declares fewer pages proves that;
+                        // any other failure stays a failure.
+                        Err(error) if historical && page == first_page && first_page > 1 => {
+                            let last = self
+                                .last_page_below(definition, first_page, &policy)
+                                .await
+                                .ok_or(error)?;
+                            first_page = last;
+                            page = last;
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
                 Fetch::NotModified | Fetch::Redirect(_) => {
                     return Err(
@@ -788,6 +801,38 @@ impl<T: Transport> Crawl<'_, T> {
             state.progress(board, "running", None, false)?;
             page += 1;
         }
+    }
+
+    /// Re-reads page 1 of a board whose resumed history cursor `cursor` was
+    /// rejected. Returns the board's current last page only when page 1 parses
+    /// and declares fewer than `cursor` pages, so the cursor provably lies past
+    /// the end. Any fetch or parse failure returns `None` (a transient failure
+    /// of the original pass, never "history is complete").
+    async fn last_page_below(
+        &self,
+        definition: &SourceDefinition,
+        cursor: u32,
+        policy: &Robots,
+    ) -> Option<u32> {
+        let url = parser::list_url(definition, 1).ok()?;
+        let Fetch::Body { bytes, mime, .. } = fetch(
+            self.transport,
+            &url,
+            None,
+            LISTING_LIMIT,
+            self.cancel,
+            policy,
+        )
+        .await
+        .ok()?
+        else {
+            return None;
+        };
+        parser::check_document_mime(definition, mime.as_deref(), true).ok()?;
+        let listing = parser::listing(definition, 1, std::str::from_utf8(&bytes).ok()?).ok()?;
+        (1..cursor)
+            .contains(&listing.total_pages)
+            .then_some(listing.total_pages)
     }
 
     /// Deletion audit and skipped retries, after the passes. Neither changes the
