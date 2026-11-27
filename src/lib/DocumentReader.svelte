@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import type { AiClassification, DocumentDetail, NoticeDate, SimilarNotice, SyncStatus, TodoPrefill } from './types';
   import { archiveDate, archiveError, archiveSize, noticeDateMark, noticeDateSpan, noticeDateTodo, resourceStatus } from './archive-format';
@@ -99,6 +99,26 @@
     }
   }
 
+  // Fetches the open notice's body, or its files not yet tried, once each.
+  function requestMissing(result: DocumentDetail) {
+    if (result.revision_id !== result.revisions[0]?.id || result.removed
+      || !enabledSources.includes(result.item.source_id)) return;
+    if (result.summary_only && !bodyRequested) {
+      bodyRequested = true;
+      void fetchBody();
+    }
+    if (!result.summary_only && !filesRequested
+      && result.resources.some((resource) => resource.status === 'pending')) {
+      filesRequested = true;
+      void fetchFiles();
+    }
+  }
+  // The list of enabled sources can arrive after the notice (a notice opened
+  // from a notification mounts the archive page with it).
+  $effect(() => {
+    if (enabled && detail) untrack(() => requestMissing(detail!));
+  });
+
   // `refresh` rereads the open revision in place, keeping it on screen and focus where it is.
   async function load(revisionId: number | null, markRead = false, refresh = false) {
     const request = ++generation;
@@ -133,17 +153,7 @@
         await tick();
         heading?.focus({ preventScroll: true });
       }
-      if (result.summary_only && result.revision_id === result.revisions[0]?.id && !result.removed
-        && enabledSources.includes(result.item.source_id) && !bodyRequested) {
-        bodyRequested = true;
-        void fetchBody();
-      }
-      if (!result.summary_only && result.revision_id === result.revisions[0]?.id && !result.removed
-        && enabledSources.includes(result.item.source_id) && !filesRequested
-        && result.resources.some((resource) => resource.status === 'pending')) {
-        filesRequested = true;
-        void fetchFiles();
-      }
+      requestMissing(result);
       // A failed preference/state write must never make readable archival text
       // unavailable (for example when the disk is full or becomes read-only).
       if (markRead && !result.item.is_read) {

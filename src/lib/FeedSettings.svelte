@@ -14,6 +14,8 @@
   let feed = $state<FeedStatus | null>(null);
   let busy = $state(false);
   let error = $state('');
+  // A failed status poll; the next poll that works clears it, unlike a failed sync's `error`.
+  let statusError = $state('');
   let active = true;
 
   onMount(() => {
@@ -31,8 +33,8 @@
   async function load() {
     try {
       const next = await invoke<FeedStatus>('feed_status');
-      if (active) feed = next;
-    } catch (reason) { if (active) error = archiveError(reason); }
+      if (active) { feed = next; statusError = ''; }
+    } catch (reason) { if (active) statusError = archiveError(reason); }
   }
 
   async function sync() {
@@ -57,7 +59,7 @@
       {#if feed?.running}<Spinner />받는 중{:else if feed?.generated_at}{archiveDate(feed.generated_at, clock.format)} 기준{:else if feed}아직 받지 않음{/if}
     </span>
   </div>
-  {#if error}<p class="archive-error" role="alert">{error}</p>{/if}
+  {#if error || statusError}<p class="archive-error" role="alert">{error || statusError}</p>{/if}
   {#if feed && !feed.running}
     {#if feed.result === 'update_required' || feed.result === 'failed'}
       <p class="archive-error" role="alert">{feed.error}</p>
