@@ -167,7 +167,9 @@
   }
 
   function submitDraft(event: KeyboardEvent, direction: Polarity) {
-    if (event.key !== 'Enter' || event.isComposing) return;
+    // WebKit sends the Enter that commits a Hangul syllable after composition
+    // ended, marked only by keyCode 229.
+    if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) return;
     event.preventDefault();
     void addInterest(direction);
   }

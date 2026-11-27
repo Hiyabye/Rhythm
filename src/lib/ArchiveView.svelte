@@ -413,7 +413,8 @@
   // `null` empties 휴지통.
   async function deletePermanently(ids: number[] | null) {
     if (trashBusy || (ids !== null && !ids.length)) return;
-    const count = ids?.length ?? result.total;
+    // Emptying removes everything in 휴지통, whatever the list is filtered to.
+    const count = ids?.length ?? summary?.trashed ?? result.total;
     let confirmed = false;
     try {
       confirmed = await confirmAction(`${ids === null ? '휴지통의 공지' : '선택한 공지'} ${count}개를 영구 삭제할까요? 본문, 첨부 자료, AI 결과가 이 기기에서 지워집니다. 학교 사이트에 남아 있어도 다시 가져오지 않습니다.`, '영구 삭제');
@@ -716,7 +717,7 @@
         {:else}<strong>공지 피드가 {archiveDate(feedNotice.generated_at, clock.format)} 이후 갱신되지 않았습니다</strong><p>서버에서 3시간 넘게 새 피드를 만들지 못했습니다. 받은 공지는 그대로 볼 수 있고, 갱신되면 자동으로 받습니다.</p>{/if}
       </div><button class="text-button" onclick={() => onsettings('boards')}>상태 보기</button></div>
     {/if}
-    <div class="collection-heading archive-list-heading"><h2 bind:this={listHeading} tabindex="-1">{page === 'trash' ? '휴지통' : page === 'bookmark' ? '저장한 공지' : page === 'opportunities' ? '기회 공지' : query ? '검색 결과' : '보관된 공지'} <span class="muted">{result.total.toLocaleString('ko-KR')}</span></h2><div class="heading-actions">{#if result.items.length}<button class="text-button" aria-pressed={selecting} disabled={!desktop} onclick={() => selecting ? stopSelecting() : selecting = true}>{selecting ? '선택 끝내기' : '선택'}</button>{/if}{#if page === 'trash' && result.total}<button class="text-button danger" disabled={!desktop || trashBusy} onclick={() => void deletePermanently(null)}>휴지통 비우기</button>{/if}<button class="text-button" disabled={!desktop || loading} onclick={() => { revision++; void refreshContext(); }}>목록 새로고침</button></div></div>
+    <div class="collection-heading archive-list-heading"><h2 bind:this={listHeading} tabindex="-1">{page === 'trash' ? '휴지통' : page === 'bookmark' ? '저장한 공지' : page === 'opportunities' ? '기회 공지' : query ? '검색 결과' : '보관된 공지'} <span class="muted">{result.total.toLocaleString('ko-KR')}</span></h2><div class="heading-actions">{#if result.items.length}<button class="text-button" aria-pressed={selecting} disabled={!desktop} onclick={() => selecting ? stopSelecting() : selecting = true}>{selecting ? '선택 끝내기' : '선택'}</button>{/if}{#if page === 'trash' && (summary?.trashed ?? result.total)}<button class="text-button danger" disabled={!desktop || trashBusy} onclick={() => void deletePermanently(null)}>휴지통 비우기</button>{/if}<button class="text-button" disabled={!desktop || loading} onclick={() => { revision++; void refreshContext(); }}>목록 새로고침</button></div></div>
     {#if aiCounts && aiCategory && aiCounts.unclassified}<p class="footnote">아직 분류되지 않은 공지 {aiCounts.unclassified.toLocaleString('ko-KR')}건은 이 목록에 없습니다.</p>{/if}
     {#if page === 'opportunities'}<p class="footnote">AI가 공모전·대회, 인턴·채용, 교육·프로그램, 행사·활동으로 분류한 공지를 마감이 가까운 순서로 보여 줍니다. 마감을 찾지 못한 공지는 그 뒤에 최신순으로 표시합니다. 마감은 본문에서 찾은 날짜라 틀릴 수 있으니 원문에서 확인하세요.</p>{/if}
     {#if page === 'trash'}<p class="footnote">휴지통의 공지는 직접 비우기 전까지 이 기기에 보관됩니다. 목록, 검색, 추천, 알림에는 나타나지 않습니다. 영구 삭제한 공지는 학교 사이트에 남아 있어도 다시 가져오지 않습니다.</p>{/if}
