@@ -355,17 +355,20 @@ impl App {
             .expect("maintenance reservation remains until exclusive acquisition")
             .acquire()
             .await?;
-        preparation.armed = false;
-        // A classification batch writes SQLite; exclude it from backup/restore
-        // snapshots and wait for one already in flight before returning.
-        let classifier_guard = self.classifier.quiesce().await;
-        Ok(MaintenanceGuard {
+        // The guard takes over resuming now, so a caller dropped while the
+        // classifier quiesces still restarts the work, exactly once.
+        let mut guard = MaintenanceGuard {
             _gate: gate,
             proactive: self.proactive.clone(),
             studium_notifications: self.studium_notifications.clone(),
             views: self.views().cloned(),
-            classifier_guard: Some(classifier_guard),
-        })
+            classifier_guard: None,
+        };
+        preparation.armed = false;
+        // A classification batch writes SQLite; exclude it from backup/restore
+        // snapshots and wait for one already in flight before returning.
+        guard.classifier_guard = Some(self.classifier.quiesce().await);
+        Ok(guard)
     }
 }
 
