@@ -883,6 +883,120 @@ pub(super) fn handoff_validated<P>(
     }
 }
 
+/// Claims due and fresh events for one digest. Claiming spends an attempt, so
+/// an error after the first claim hands the claimed events back (deferred
+/// without a spent attempt) instead of leaving them to the five-minute lease.
+pub(super) fn claim_delivery_items(
+    store: &sync::SharedStore,
+    prefs: &ProactiveSettings,
+    slots: usize,
+    quiet_delay: Option<u32>,
+) -> Result<Vec<DeliveryItem>, String> {
+    let mut deliver = Vec::new();
+    let claimed = (|| -> Result<(), String> {
+        for event in with_store(store, notification::due_events)?
+            .into_iter()
+            .take(slots)
+        {
+            let item = {
+                let store = lock_store(store)?;
+                let candidate = store.proactive_event_candidate(event.id)?;
+                let score = store.personalization_notification_score(event.document_id)?;
+                let rejection_reason = notification::suppression_reason(
+                    candidate.source_active,
+                    prefs.notification_sensitivity,
+                    score.as_ref(),
+                );
+                if let Some(reason) = rejection_reason {
+                    store.proactive_suppress_event(
+                        event.id,
+                        (event.attempt_count > 0).then_some(event.attempt_count),
+                        Some(&reason),
+                    )?;
+                    None
+                } else if let Some(minutes) = quiet_delay {
+                    if event.state == crate::storage::proactive::ProactiveEventState::Claimed {
+                        store.proactive_defer_event(
+                            event.id,
+                            event.attempt_count,
+                            minutes,
+                            Some("조용한 시간에는 알림을 보내지 않습니다."),
+                        )?;
+                    } else {
+                        store.proactive_defer_pending_event(
+                            event.id,
+                            event.attempt_count,
+                            minutes,
+                            Some("조용한 시간에는 알림을 보내지 않습니다."),
+                        )?;
+                    }
+                    None
+                } else {
+                    let claimed = store.proactive_claim_due_event(event.id)?;
+                    Some(DeliveryItem {
+                        event_id: claimed.id,
+                        document_id: claimed.document_id,
+                        revision_id: claimed.revision_id,
+                        source_id: candidate.source_id,
+                        source_name: candidate.source_name,
+                        kind: claimed.event_type,
+                        title: candidate.title,
+                        attempt_count: claimed.attempt_count,
+                    })
+                }
+            };
+            if let Some(item) = item {
+                deliver.push(item);
+            }
+        }
+        if deliver.len() < slots {
+            let store = lock_store(store)?;
+            let fresh = notification::consider_candidates(&store, prefs)?;
+            for candidate in fresh.into_iter().take(slots - deliver.len()) {
+                let claim = store.proactive_claim_event(&ProactiveEventKey {
+                    document_id: candidate.document_id,
+                    revision_id: candidate.revision_id,
+                    event_type: candidate.kind,
+                })?;
+                if let ProactiveClaim::Claimed {
+                    event_id,
+                    attempt_count: 0,
+                } = claim
+                {
+                    if let Some(minutes) = quiet_delay {
+                        store.proactive_defer_pending_event(
+                            event_id,
+                            0,
+                            minutes,
+                            Some("조용한 시간에는 알림을 보내지 않습니다."),
+                        )?;
+                    } else {
+                        let claimed = store.proactive_claim_due_event(event_id)?;
+                        let mut item = candidate;
+                        item.event_id = event_id;
+                        item.attempt_count = claimed.attempt_count;
+                        deliver.push(item);
+                    }
+                }
+            }
+        }
+        Ok(())
+    })();
+    match claimed {
+        Ok(()) => Ok(deliver),
+        Err(error) => {
+            for item in &deliver {
+                let _ = with_store(store, |store| {
+                    store
+                        .proactive_defer_event(item.event_id, item.attempt_count, 1, None)
+                        .map(|_| ())
+                });
+            }
+            Err(error)
+        }
+    }
+}
+
 async fn discover_and_deliver(
     store: &sync::SharedStore,
     prefs: &ProactiveSettings,
@@ -921,93 +1035,7 @@ async fn discover_and_deliver(
     if slots == 0 {
         return Ok(());
     }
-    let mut deliver = Vec::new();
-    for event in with_store(store, notification::due_events)?
-        .into_iter()
-        .take(slots)
-    {
-        let item = {
-            let store = lock_store(store)?;
-            let candidate = store.proactive_event_candidate(event.id)?;
-            let score = store.personalization_notification_score(event.document_id)?;
-            let rejection_reason = notification::suppression_reason(
-                candidate.source_active,
-                prefs.notification_sensitivity,
-                score.as_ref(),
-            );
-            if let Some(reason) = rejection_reason {
-                store.proactive_suppress_event(
-                    event.id,
-                    (event.attempt_count > 0).then_some(event.attempt_count),
-                    Some(&reason),
-                )?;
-                None
-            } else if let Some(minutes) = quiet_delay {
-                if event.state == crate::storage::proactive::ProactiveEventState::Claimed {
-                    store.proactive_defer_event(
-                        event.id,
-                        event.attempt_count,
-                        minutes,
-                        Some("조용한 시간에는 알림을 보내지 않습니다."),
-                    )?;
-                } else {
-                    store.proactive_defer_pending_event(
-                        event.id,
-                        event.attempt_count,
-                        minutes,
-                        Some("조용한 시간에는 알림을 보내지 않습니다."),
-                    )?;
-                }
-                None
-            } else {
-                let claimed = store.proactive_claim_due_event(event.id)?;
-                Some(DeliveryItem {
-                    event_id: claimed.id,
-                    document_id: claimed.document_id,
-                    revision_id: claimed.revision_id,
-                    source_id: candidate.source_id,
-                    source_name: candidate.source_name,
-                    kind: claimed.event_type,
-                    title: candidate.title,
-                    attempt_count: claimed.attempt_count,
-                })
-            }
-        };
-        if let Some(item) = item {
-            deliver.push(item);
-        }
-    }
-    if deliver.len() < slots {
-        let store = lock_store(store)?;
-        let fresh = notification::consider_candidates(&store, prefs)?;
-        for candidate in fresh.into_iter().take(slots - deliver.len()) {
-            let claim = store.proactive_claim_event(&ProactiveEventKey {
-                document_id: candidate.document_id,
-                revision_id: candidate.revision_id,
-                event_type: candidate.kind,
-            })?;
-            if let ProactiveClaim::Claimed {
-                event_id,
-                attempt_count: 0,
-            } = claim
-            {
-                if let Some(minutes) = quiet_delay {
-                    store.proactive_defer_pending_event(
-                        event_id,
-                        0,
-                        minutes,
-                        Some("조용한 시간에는 알림을 보내지 않습니다."),
-                    )?;
-                } else {
-                    let claimed = store.proactive_claim_due_event(event_id)?;
-                    let mut item = candidate;
-                    item.event_id = event_id;
-                    item.attempt_count = claimed.attempt_count;
-                    deliver.push(item);
-                }
-            }
-        }
-    }
+    let deliver = claim_delivery_items(store, prefs, slots, quiet_delay)?;
     if deliver.is_empty() {
         return Ok(());
     }
