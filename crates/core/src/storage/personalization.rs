@@ -11,6 +11,7 @@ use ranking::*;
 pub use topics::*;
 
 const EXPLICIT_INTEREST_LIMIT: i64 = 50;
+const MAX_ALIASES: usize = 12;
 const LEARNED_INTEREST_LIMIT: i64 = 50;
 const RECENT_CANDIDATE_LIMIT: i64 = 500;
 const RECENT_COLLECTION_LIMIT: i64 = 250;
@@ -257,18 +258,22 @@ impl Store {
             || name.chars().count() > 80
             || !(1..=5).contains(&input.priority)
             || !["positive", "negative"].contains(&input.polarity.as_str())
-            || input.aliases.len() > 12
+            || input.aliases.len() > MAX_ALIASES
         {
             return Err("관심 분야를 확인해 주세요.".into());
         }
         let key = interest_key(name);
         let mut aliases = Vec::new();
-        for alias in input
+        // Known aliases fill only the room the user's own leave under the cap.
+        for (alias, known) in input
             .aliases
             .iter()
-            .map(String::as_str)
-            .chain(known_aliases(name).iter().copied())
+            .map(|alias| (alias.as_str(), false))
+            .chain(known_aliases(name).iter().map(|alias| (*alias, true)))
         {
+            if known && aliases.len() >= MAX_ALIASES {
+                break;
+            }
             let alias = alias.trim();
             if alias.is_empty() || alias.chars().count() > 80 {
                 return Err("관심 분야 별칭을 확인해 주세요.".into());
