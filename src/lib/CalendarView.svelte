@@ -79,7 +79,8 @@
     // Keep the day of month where the target month has it.
     const last = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
     target.setDate(Math.min(Number(selected.slice(8, 10)), last));
-    selected = localDayKey(target);
+    // As `select`: an open form belongs to the day it was opened on.
+    void select(localDayKey(target));
   }
   // Whole weeks from the Sunday on or before the 1st through the Saturday on or after the last day.
   let weeks = $derived.by(() => {

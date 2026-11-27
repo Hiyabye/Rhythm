@@ -427,3 +427,19 @@ test('a school event becomes a todo after the user checks the prefilled form', a
   // The todo starts on the event's first day.
   await expect(page.locator('[data-day="2026-10-26"]')).toHaveAccessibleName(/할 일 1개/);
 });
+
+test('changing the month closes an open todo form', async ({ page }) => {
+  await mockDesktop(page);
+  await page.goto('/');
+  await openCalendar(page);
+  const october = page.getByRole('region', { name: /10월 24일 토요일/ });
+  await october.getByRole('button', { name: '할 일 추가' }).click();
+  await october.getByRole('textbox', { name: '제목' }).fill('보고서 제출');
+
+  // The form was for October 24; it must not stay open under November 24.
+  await page.getByRole('button', { name: '다음 달' }).click();
+  await expect(page.getByRole('heading', { name: '2026년 11월' })).toBeVisible();
+  const november = page.getByRole('region', { name: /11월 24일/ });
+  await expect(november.getByRole('textbox', { name: '제목' })).toHaveCount(0);
+  await expect(november.getByRole('button', { name: '할 일 추가' })).toBeVisible();
+});
