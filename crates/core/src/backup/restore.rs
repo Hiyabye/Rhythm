@@ -638,13 +638,42 @@ pub(super) fn publish_without_replace(temporary: &Path, destination: &Path) -> R
         }
     });
     #[cfg(not(windows))]
-    fs::hard_link(temporary, destination).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::AlreadyExists {
-            "같은 이름의 파일이 이미 있습니다. 다른 저장 위치를 선택해 주세요.".into()
-        } else {
-            "백업 파일을 저장 위치로 옮기지 못했습니다. 저장 위치와 권한을 확인해 주세요.".into()
+    match fs::hard_link(temporary, destination) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            Err("같은 이름의 파일이 이미 있습니다. 다른 저장 위치를 선택해 주세요.".into())
         }
-    })
+        // exFAT, FAT and some network volumes have no hard links.
+        Err(_) => copy_without_replace(temporary, destination),
+    }
+}
+/// Publishes by copying where the volume cannot link. `create_new` keeps the
+/// promise never to replace a file, and a failed copy removes only the file
+/// this call created.
+#[cfg(not(windows))]
+pub(super) fn copy_without_replace(temporary: &Path, destination: &Path) -> Result<(), String> {
+    const FAILED: &str =
+        "백업 파일을 저장 위치로 옮기지 못했습니다. 저장 위치와 권한을 확인해 주세요.";
+    let mut target = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                "같은 이름의 파일이 이미 있습니다. 다른 저장 위치를 선택해 주세요."
+            } else {
+                FAILED
+            }
+        })?;
+    let copied = File::open(temporary)
+        .and_then(|mut source| io::copy(&mut source, &mut target))
+        .and_then(|_| target.sync_all());
+    drop(target);
+    if copied.is_err() {
+        let _ = fs::remove_file(destination);
+        return Err(FAILED.into());
+    }
+    Ok(())
 }
 #[cfg(unix)]
 pub(super) fn sync_directory(path: &Path) -> Result<(), String> {

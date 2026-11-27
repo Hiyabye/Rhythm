@@ -54,6 +54,25 @@ fn backup_publish_never_replaces_a_concurrently_created_destination() {
     assert_eq!(fs::read(&destination).unwrap(), b"preexisting user data");
     assert_eq!(fs::read(&temporary).unwrap(), b"completed backup");
 }
+#[cfg(unix)]
+#[test]
+fn a_backup_is_copied_into_place_where_the_volume_cannot_link() {
+    let directory = tempfile::tempdir().unwrap();
+    let temporary = directory.path().join("complete.tmp");
+    let destination = directory.path().join("backup.rhythm-backup");
+    fs::write(&temporary, b"completed backup").unwrap();
+    copy_without_replace(&temporary, &destination).unwrap();
+    assert_eq!(fs::read(&destination).unwrap(), b"completed backup");
+    // Never over a file that is already there, and that file stays whole.
+    fs::write(&temporary, b"another backup").unwrap();
+    assert!(copy_without_replace(&temporary, &destination).is_err());
+    assert_eq!(fs::read(&destination).unwrap(), b"completed backup");
+    // A copy that cannot finish leaves nothing behind.
+    let unfinished = directory.path().join("unfinished.rhythm-backup");
+    assert!(copy_without_replace(&directory.path().join("missing.tmp"), &unfinished).is_err());
+    assert!(!unfinished.exists());
+}
+
 #[test]
 fn a_staged_database_may_not_name_a_file_outside_resources_on_any_row() {
     let root = tempfile::tempdir().unwrap();
