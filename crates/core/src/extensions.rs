@@ -23,7 +23,7 @@ pub struct ExtensionInfo {
 }
 
 /// Work an extension owns and that its disable stops or settles.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Work {
     /// The archive job controller. A disable cancels only a job the extension
     /// owns: `Controller::cancel_owned_by`.
@@ -42,7 +42,7 @@ pub enum Work {
 
 /// Activation tokens a disable clears: one-use records that would otherwise
 /// let a stale notification act after the extension was turned off.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tokens {
     StudiumAlerts,
     CalendarReminders,
