@@ -93,8 +93,7 @@ pub(super) fn require_space(free: u64, remaining: u64) -> Result<(), String> {
     // Leave room for SQLite/WAL and the OS; never consume the last free bytes.
     if free < remaining.saturating_add(1024 * 1024 * 1024) {
         return Err(
-            "모델 설치 공간이 부족합니다. 모델 크기 외에 1 GiB 이상의 여유 공간이 필요합니다."
-                .into(),
+            "설치할 공간이 부족합니다. 모델 크기에 1 GiB를 더한 여유 공간이 필요합니다.".into(),
         );
     }
     Ok(())

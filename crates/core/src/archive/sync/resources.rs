@@ -93,7 +93,7 @@ pub(super) async fn download_resource<T: Transport>(
             network::Fetch::Body { bytes, mime, .. } => {
                 install_resource(store, root, cancel, resource, bytes, mime, limit, total).await
             }
-            _ => Err("첨부 파일에 잘못된 변경 없음 응답이 도착했습니다.".into()),
+            _ => Err("서버가 올바르지 않은 '변경 없음' 응답을 보냈습니다.".into()),
         }
     }
     .await;
@@ -277,7 +277,7 @@ pub(in crate::archive) async fn record_failure(
     }
     if resource.status == "downloaded" && local_resource(store, root, resource.id).await.is_ok() {
         return Ok(DownloadOutcome::Failed(format!(
-            "다시 내려받지 못했습니다. 기존 로컬 자료는 안전하게 유지됩니다. {error}"
+            "다시 내려받지 못했습니다. 저장된 자료는 그대로입니다. {error}"
         )));
     }
     let status = if error.contains("크기") || error.contains("한도") {
@@ -327,7 +327,7 @@ pub async fn local_resource(
         .await
         .map_err(|_| "로컬 첨부 파일을 읽지 못했습니다.")?;
     if Some(format!("{:x}", Sha256::digest(&bytes))) != resource.sha256 {
-        return Err("로컬 자료의 무결성 검증에 실패했습니다. 다시 내려받아 주세요.".into());
+        return Err("저장된 첨부 파일이 손상되었습니다. 다시 내려받아 주세요.".into());
     }
     Ok((resource, bytes))
 }

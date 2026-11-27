@@ -469,7 +469,7 @@ fn learning_requires_distinct_documents_and_feedback_updates_are_idempotent() {
         .evidence_summary
         .as_deref()
         .unwrap()
-        .contains("서로 다른 2개 공지에서 저장하거나 관심 표시한 행동을 근거로 제안"));
+        .contains("2개 공지를 저장하거나 관심 표시해서 제안"));
 
     store
         .personalization_set_feedback(1, Some("not_interested"))
@@ -1180,7 +1180,7 @@ fn cold_start_recommends_only_subscribed_sources_deterministically() {
     assert!(first
         .items
         .iter()
-        .all(|item| item.reasons == ["관심사 일치 신호가 없어 게시일 기준으로 보조 정렬"]));
+        .all(|item| item.reasons == ["관심사와 맞는 내용이 없어 게시일 순으로 정렬"]));
     assert_eq!(
         first
             .items
@@ -1453,7 +1453,7 @@ fn source_diversity_is_bounded_and_explained_when_it_changes_selection() {
             && item
                 .reasons
                 .iter()
-                .any(|reason| reason.contains("출처 편중"))));
+                .any(|reason| reason.contains("여러 출처가 섞이도록"))));
 }
 
 #[test]
@@ -1780,7 +1780,7 @@ fn notification_and_list_reasons_match_without_an_interest_match() {
     // ordering note.
     assert_eq!(
         item.reasons,
-        vec!["관심사 일치 신호가 없어 게시일 기준으로 보조 정렬".to_string()]
+        vec!["관심사와 맞는 내용이 없어 게시일 순으로 정렬".to_string()]
     );
 }
 

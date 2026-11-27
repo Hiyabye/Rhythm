@@ -337,7 +337,7 @@ impl Controller {
                         .map(|source| source.status == "completed" || !source.subscribed)
                 }) {
                     Ok(true) => Ok(()),
-                    Ok(false) => Err("정보원 동기화가 안전한 제한으로 완료되지 않았습니다.".into()),
+                    Ok(false) => Err("안전 한도에 걸려 동기화를 끝내지 못했습니다.".into()),
                     Err(error) => Err(error),
                 };
             }

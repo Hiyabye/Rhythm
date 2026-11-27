@@ -18,8 +18,7 @@ use std::{
 };
 use tokio::sync::Notify;
 
-const RATE_LIMITED: &str =
-    "학교 서버가 요청을 제한했습니다. 잠시 기다린 후 지금 확인을 다시 눌러 주세요.";
+const RATE_LIMITED: &str = "학교 서버가 요청을 제한했습니다. 잠시 후 지금 확인을 다시 눌러 주세요.";
 
 /// The shared transport's 429 text asks notice users to sync again; a seat
 /// check is repeated only with the 지금 확인 button.
@@ -71,10 +70,18 @@ impl Job {
         }
     }
     fn automatic_stop_error(&self) -> Option<String> {
-        self.stop_reason.lock().ok().and_then(|reason| match reason.as_ref()? {
-            StopReason::AccessDenied(error) => Some(format!("{error} 자동 확인을 정지했습니다. 연결을 확인한 뒤 다시 시작해 주세요.")),
-            StopReason::RateLimited => Some("학교 서버가 요청을 제한하여 자동 확인을 정지했습니다. 잠시 기다린 후 다시 시작해 주세요.".into()),
-        })
+        self.stop_reason
+            .lock()
+            .ok()
+            .and_then(|reason| match reason.as_ref()? {
+                StopReason::AccessDenied(error) => Some(format!(
+                    "{error} 자동 확인을 멈췄습니다. 연결을 확인한 뒤 다시 시작해 주세요."
+                )),
+                StopReason::RateLimited => Some(
+                    "학교 서버가 요청을 제한해 자동 확인을 멈췄습니다. 잠시 후 다시 시작해 주세요."
+                        .into(),
+                ),
+            })
     }
 }
 
@@ -152,7 +159,10 @@ impl Controller {
         })
     }
     pub fn ensure_idle(&self) -> Result<(), String> {
-        let state = self.state.lock().map_err(|_| "좌석 작업 잠금 오류")?;
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "좌석 확인 상태에 접근하지 못했습니다.")?;
         if state
             .job
             .as_ref()
@@ -164,7 +174,10 @@ impl Controller {
         }
     }
     pub fn snapshot(&self, preferences: Preferences) -> Result<Snapshot, String> {
-        let state = self.state.lock().map_err(|_| "좌석 작업 잠금 오류")?;
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "좌석 확인 상태에 접근하지 못했습니다.")?;
         let results = preferences
             .room_ids
             .iter()
@@ -213,10 +226,13 @@ impl Controller {
         lease: AdmissionLease,
         automatic_id: Option<u64>,
     ) -> Result<(), String> {
-        let mut state = self.state.lock().map_err(|_| "좌석 작업 잠금 오류")?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "좌석 확인 상태에 접근하지 못했습니다.")?;
         if let Some(id) = automatic_id {
             if !automatic::active(&state, id) {
-                return Err("자동 확인이 정지되었습니다.".into());
+                return Err("자동 확인이 멈춰 있습니다.".into());
             }
         }
         if state
@@ -226,7 +242,10 @@ impl Controller {
         {
             return Err("이미 좌석을 확인하고 있습니다.".into());
         }
-        state.next = state.next.checked_add(1).ok_or("좌석 작업 번호 오류")?;
+        state.next = state
+            .next
+            .checked_add(1)
+            .ok_or("좌석 확인을 시작할 수 없습니다.")?;
         let job = Job::new(state.next, automatic_id);
         state.results = preferences
             .room_ids
@@ -272,7 +291,10 @@ impl Controller {
         self.refresh_views();
     }
     pub fn cancel_job(&self, id: u64) -> Result<(), String> {
-        let state = self.state.lock().map_err(|_| "좌석 작업 잠금 오류")?;
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "좌석 확인 상태에 접근하지 못했습니다.")?;
         if let Some(job) = &state.job {
             if job.id == id {
                 job.cancel.store(true, Ordering::Release);
@@ -329,11 +351,14 @@ impl Controller {
         store: &Arc<Mutex<Store>>,
         value: RoomState,
     ) -> Result<(), String> {
-        let saved = store.lock().map_err(|_| "설정 잠금 오류")?;
+        let saved = store.lock().map_err(|_| "설정에 접근하지 못했습니다.")?;
         if !saved.enabled(crate::extensions::STUDIUM)? || job.cancel.load(Ordering::Acquire) {
             return Err("좌석 확인을 취소했습니다.".into());
         }
-        let mut state = self.state.lock().map_err(|_| "좌석 작업 잠금 오류")?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "좌석 확인 상태에 접근하지 못했습니다.")?;
         if state.job.as_ref().map(|j| j.id) != Some(job.id) || job.cancel.load(Ordering::Acquire) {
             return Err("이전 좌석 확인 결과를 무시했습니다.".into());
         }

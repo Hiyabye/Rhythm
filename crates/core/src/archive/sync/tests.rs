@@ -310,7 +310,7 @@ async fn downloaded_resources_and_states_survive_offline_reopen_and_detect_corru
     assert!(local_resource(&offline, dir.path(), image.id)
         .await
         .unwrap_err()
-        .contains("무결성"));
+        .contains("손상되었습니다"));
 }
 
 #[tokio::test]
@@ -409,7 +409,7 @@ async fn resource_retry_keeps_good_offline_copy_and_repairs_corrupt_or_oversized
     .unwrap()
     .into_result()
     .unwrap_err();
-    assert!(error.contains("기존 로컬 자료"));
+    assert!(error.contains("저장된 자료는 그대로"));
     assert_eq!(
         local_resource(&store, dir.path(), resource.id)
             .await

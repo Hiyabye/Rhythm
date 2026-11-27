@@ -229,7 +229,7 @@ impl Controller {
 
     /// Remembers the model that failed so it is not retried until invalidated.
     fn fail(&self, identity: &str) {
-        self.set_failure(identity, "분류 모델의 무결성을 확인하지 못했습니다.");
+        self.set_failure(identity, "분류 모델 파일을 확인하지 못했습니다.");
     }
 
     fn is_failed(&self, identity: &str) -> bool {
@@ -474,7 +474,7 @@ impl Controller {
             let expected = identity.to_owned();
             let verified = tokio::task::spawn_blocking(move || {
                 verify_file(&copy, Some((&expected, bytes)), &AtomicBool::new(false))
-                    .map_err(|_| "분류 모델의 무결성을 확인하지 못했습니다.".to_owned())
+                    .map_err(|_| "분류 모델 파일을 확인하지 못했습니다.".to_owned())
             })
             .await;
             if !matches!(verified, Ok(Ok(_))) {
