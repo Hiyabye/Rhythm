@@ -172,7 +172,7 @@ impl Store {
             .feed_cursor()?
             .ok_or("피드를 처음 받을 때는 스냅샷이 필요합니다.")?;
         if cursor + 1 < from_seq || cursor >= to_seq {
-            return Err("받은 피드 구간이 마지막으로 반영한 위치와 이어지지 않습니다.".into());
+            return Err("받은 피드가 마지막으로 반영한 내용과 이어지지 않습니다.".into());
         }
         let vectors = chunks(vectors)?;
         let transaction = self

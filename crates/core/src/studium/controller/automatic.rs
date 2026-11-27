@@ -51,7 +51,10 @@ impl Controller {
         shutdown: Arc<AtomicBool>,
         transport: T,
     ) -> Result<(), String> {
-        let mut state = self.state.lock().map_err(|_| "좌석 작업 잠금 오류")?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "좌석 확인 상태에 접근하지 못했습니다.")?;
         if state
             .automatic
             .as_ref()
@@ -62,7 +65,7 @@ impl Controller {
         state.next_automatic = state
             .next_automatic
             .checked_add(1)
-            .ok_or("자동 확인 번호 오류")?;
+            .ok_or("자동 확인을 시작할 수 없습니다.")?;
         let job = Job::new(state.next_automatic, None);
         let initial = state
             .job
@@ -160,13 +163,16 @@ impl Controller {
             changed.as_mut().enable();
             let lease = gate.shared().await?;
             let (running, deadline, wall_deadline, observed_completion) = {
-                let saved = store.lock().map_err(|_| "설정 잠금 오류")?;
+                let saved = store.lock().map_err(|_| "설정에 접근하지 못했습니다.")?;
                 gate.ensure_open()?;
                 if shutdown.load(Ordering::Acquire) || !saved.enabled(crate::extensions::STUDIUM)? {
                     return Ok(());
                 }
                 let interval = Duration::from_secs(u64::from(saved.studium_auto_interval()?) * 60);
-                let mut state = self.state.lock().map_err(|_| "좌석 작업 잠금 오류")?;
+                let mut state = self
+                    .state
+                    .lock()
+                    .map_err(|_| "좌석 확인 상태에 접근하지 못했습니다.")?;
                 if !active(&state, run.id) {
                     return Ok(());
                 }
@@ -194,7 +200,8 @@ impl Controller {
                 };
                 let delay = deadline.saturating_duration_since(tokio::time::Instant::now());
                 let wall_deadline = chrono::Utc::now()
-                    + chrono::Duration::from_std(delay).map_err(|_| "자동 확인 간격 오류")?;
+                    + chrono::Duration::from_std(delay)
+                        .map_err(|_| "자동 확인 간격을 계산하지 못했습니다.")?;
                 if let Some(current) = state.automatic.as_mut() {
                     current.next_check_at = if running.is_some() {
                         None
@@ -231,12 +238,15 @@ impl Controller {
             // Store, then atomically register through the existing controller.
             let lease = gate.shared().await?;
             let cycle = {
-                let saved = store.lock().map_err(|_| "설정 잠금 오류")?;
+                let saved = store.lock().map_err(|_| "설정에 접근하지 못했습니다.")?;
                 gate.ensure_open()?;
                 if shutdown.load(Ordering::Acquire) || !saved.enabled(crate::extensions::STUDIUM)? {
                     return Ok(());
                 }
-                let state = self.state.lock().map_err(|_| "좌석 작업 잠금 오류")?;
+                let state = self
+                    .state
+                    .lock()
+                    .map_err(|_| "좌석 확인 상태에 접근하지 못했습니다.")?;
                 if !active(&state, run.id) {
                     return Ok(());
                 }
@@ -272,7 +282,7 @@ impl Controller {
                 )?;
                 self.state
                     .lock()
-                    .map_err(|_| "좌석 작업 잠금 오류")?
+                    .map_err(|_| "좌석 확인 상태에 접근하지 못했습니다.")?
                     .job
                     .clone()
                     .expect("registered automatic cycle")

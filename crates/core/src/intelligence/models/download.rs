@@ -79,7 +79,7 @@ async fn download_part(
         if start.elapsed() > Duration::from_secs(2 * 60 * 60)
             || chunk.len() as u64 > total.saturating_sub(received)
         {
-            return Err("모델 다운로드 크기 또는 시간 제한을 초과했습니다.".into());
+            return Err("모델 다운로드가 크기 또는 시간 제한을 넘었습니다.".into());
         }
         file.write_all(&chunk)
             .await
@@ -96,7 +96,7 @@ async fn download_part(
         .map_err(|_| "모델 파일 저장을 마무리하지 못했습니다.")?;
     file.sync_all()
         .await
-        .map_err(|_| "모델 파일을 디스크에 저장하지 못했습니다.")?;
+        .map_err(|_| "모델 파일을 저장하지 못했습니다.")?;
     drop(file);
     if received != total {
         return Err("모델 파일을 끝까지 받지 못했습니다. 다시 선택하면 이어받습니다.".into());
@@ -125,7 +125,7 @@ pub(super) async fn install(
         // removal delete bytes Rhythm never wrote, so only adopt there when this
         // inventory already received every byte (a crash after the final rename).
         if model.storage_directory.is_some() && model.downloaded_bytes != entry.bytes {
-            return Err("선택한 폴더에 같은 모델 파일이 이미 있습니다. 삭제 권한을 넘겨받지 않도록 설치하지 않았습니다. 기존 파일을 옮기거나 다른 설치 폴더를 선택해 주세요.".into());
+            return Err("선택한 폴더에 같은 모델 파일이 이미 있어 설치하지 않았습니다. 기존 파일을 옮기거나 다른 폴더를 선택해 주세요.".into());
         }
         let file = full.clone();
         let expected = entry.clone();

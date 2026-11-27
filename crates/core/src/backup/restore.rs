@@ -71,7 +71,7 @@ pub(super) fn validate_staged_database_cancellable(
         .query_row("PRAGMA integrity_check", [], |row| row.get(0))
         .map_err(|_| "백업 데이터베이스를 검사하지 못했습니다.")?;
     if integrity != "ok" {
-        return Err("백업 데이터베이스의 내부 무결성이 손상되었습니다.".into());
+        return Err("백업 데이터베이스가 손상되었습니다.".into());
     }
     let schema: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -86,7 +86,7 @@ pub(super) fn validate_staged_database_cancellable(
         .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
         .map_err(|_| "백업 공지 수를 확인하지 못했습니다.")?;
     if documents < 0 || documents as u64 != expected_documents {
-        return Err("백업 공지 수가 매니페스트와 일치하지 않습니다.".into());
+        return Err("백업의 공지 수가 백업 정보와 맞지 않습니다.".into());
     }
     let mut check = connection
         .prepare("PRAGMA foreign_key_check")
@@ -500,7 +500,7 @@ pub(super) fn entry_exists(path: &Path) -> Result<bool, String> {
 #[cfg(windows)]
 pub(super) fn check_unjournaled_restore(root: &Path) -> Result<(), String> {
     let ambiguous = || {
-        "완료되지 않은 복원 흔적이 있습니다. 복구 파일을 보존했으며 데이터 폴더를 확인해야 합니다."
+        "끝나지 않은 복원이 남아 있습니다. 복구 파일은 그대로 두었습니다. 데이터 폴더를 확인해 주세요."
             .to_string()
     };
     if entry_exists(&root.join(STAGING))?
@@ -609,7 +609,7 @@ pub(super) fn publish_without_replace(temporary: &Path, destination: &Path) -> R
         if error.kind() == io::ErrorKind::AlreadyExists {
             "같은 이름의 파일이 이미 있습니다. 다른 저장 위치를 선택해 주세요.".into()
         } else {
-            "백업 파일을 안전하게 저장 위치로 옮기지 못했습니다. 저장 위치와 파일 시스템 권한을 확인해 주세요.".into()
+            "백업 파일을 저장 위치로 옮기지 못했습니다. 저장 위치와 권한을 확인해 주세요.".into()
         }
     });
     #[cfg(not(windows))]
@@ -617,7 +617,7 @@ pub(super) fn publish_without_replace(temporary: &Path, destination: &Path) -> R
         if error.kind() == std::io::ErrorKind::AlreadyExists {
             "같은 이름의 파일이 이미 있습니다. 다른 저장 위치를 선택해 주세요.".into()
         } else {
-            "백업 파일을 안전하게 저장 위치로 옮기지 못했습니다. 저장 위치와 파일 시스템 권한을 확인해 주세요.".into()
+            "백업 파일을 저장 위치로 옮기지 못했습니다. 저장 위치와 권한을 확인해 주세요.".into()
         }
     })
 }

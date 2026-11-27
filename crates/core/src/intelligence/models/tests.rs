@@ -210,7 +210,7 @@ async fn existing_file_in_chosen_folder_is_never_adopted_for_deletion() {
     )
     .await
     .unwrap_err();
-    assert!(error.contains("다른 설치 폴더"), "{error}");
+    assert!(error.contains("다른 폴더"), "{error}");
     assert_ne!(model.status, "installed");
     assert_eq!(std::fs::read(&foreign).unwrap(), bytes);
 

@@ -387,7 +387,7 @@ pub(super) fn score_candidate(context: &ScoringContext, candidate: &Candidate) -
         score = score.min(-negative_feedback_penalty);
     }
     let ranking_note = if context.has_preferences && reasons.is_empty() {
-        Some("관심사 일치 신호가 없어 게시일 기준으로 보조 정렬".into())
+        Some("관심사와 맞는 내용이 없어 게시일 순으로 정렬".into())
     } else {
         None
     };
@@ -822,7 +822,7 @@ impl Store {
                         .any(|(_, selected_item, _, _)| selected_item.source_id != item.source_id)
                     && has_preferences
                 {
-                    reasons.push("출처 편중을 줄이기 위해 함께 표시".into());
+                    reasons.push("여러 출처가 섞이도록 함께 표시".into());
                 }
                 *per_source.entry(item.source_id.clone()).or_default() += 1;
                 selected.push((score, item, reasons, feedback));
@@ -839,7 +839,7 @@ impl Store {
                 .any(|(_, selected_item, _, _)| selected_item.source_id != item.source_id)
                 && has_preferences
             {
-                reasons.push("출처 편중을 줄이기 위해 함께 표시".into());
+                reasons.push("여러 출처가 섞이도록 함께 표시".into());
             }
             selected.push((score, item, reasons, feedback));
         }

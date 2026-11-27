@@ -17,7 +17,10 @@ pub(crate) async fn studium_save_alert(
     minimum: u32,
 ) -> Result<Snapshot, String> {
     let _lease = state.operation_gate.shared().await?;
-    let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "설정에 접근하지 못했습니다.")?;
     store.studium_save_alert_rule(
         &room_id,
         &super::model::AlertRuleInput {
@@ -46,7 +49,10 @@ pub(crate) async fn studium_save_favorites(
     seat_numbers: Vec<u32>,
 ) -> Result<Snapshot, String> {
     let _lease = state.operation_gate.shared().await?;
-    let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "설정에 접근하지 못했습니다.")?;
     let value = save_favorites_with_store(&state.studium, &store, &room_id, &seat_numbers)?;
     state.studium_views.refresh();
     Ok(value)
@@ -68,7 +74,10 @@ pub(crate) async fn studium_save_interval(
     interval_minutes: u32,
 ) -> Result<Snapshot, String> {
     let _lease = state.operation_gate.shared().await?;
-    let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "설정에 접근하지 못했습니다.")?;
     store.studium_save_auto_interval(interval_minutes)?;
     // Saving changes the next cycle's interval, never wakes the current timer.
     state.studium_views.refresh();
@@ -97,14 +106,20 @@ pub(crate) async fn studium_automatic_pause(
 ) -> Result<Snapshot, String> {
     let _lease = state.operation_gate.shared().await?;
     let completion = {
-        let _store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
+        let _store = state
+            .store
+            .lock()
+            .map_err(|_| "설정에 접근하지 못했습니다.")?;
         state.studium.pause_automatic()
     };
     if let Some(completion) = completion {
         completion.wait().await;
     }
     state.studium_views.refresh();
-    let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "설정에 접근하지 못했습니다.")?;
     snapshot(&state, &store)
 }
 
@@ -113,7 +128,10 @@ pub(crate) async fn studium_snapshot(
     state: tauri::State<'_, AppState>,
 ) -> Result<Snapshot, String> {
     let _lease = state.operation_gate.shared().await?;
-    let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "설정에 접근하지 못했습니다.")?;
     snapshot(&state, &store)
 }
 
@@ -129,7 +147,10 @@ pub(crate) async fn studium_save_preferences(
     view_room: String,
 ) -> Result<Snapshot, String> {
     let _lease = state.operation_gate.shared().await?;
-    let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "설정에 접근하지 못했습니다.")?;
     state.studium.ensure_idle()?;
     store.studium_save_preferences(&room_ids, &view_room)?;
     state.studium_views.refresh();
@@ -142,7 +163,10 @@ pub(crate) async fn studium_set_view_room(
     room_id: String,
 ) -> Result<Snapshot, String> {
     let _lease = state.operation_gate.shared().await?;
-    let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "설정에 접근하지 못했습니다.")?;
     store.studium_set_view_room(&room_id)?;
     state.studium_views.refresh();
     snapshot(&state, &store)
@@ -166,7 +190,10 @@ pub(crate) async fn studium_cancel(
     job_id: u64,
 ) -> Result<Snapshot, String> {
     let _lease = state.operation_gate.shared().await?;
-    let store = state.store.lock().map_err(|_| "설정 잠금 오류")?;
+    let store = state
+        .store
+        .lock()
+        .map_err(|_| "설정에 접근하지 못했습니다.")?;
     state.studium.cancel_job(job_id)?;
     state.studium_views.refresh();
     snapshot(&state, &store)

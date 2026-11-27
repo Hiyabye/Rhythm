@@ -68,7 +68,7 @@ fn ensure_signing_key() -> Result<(), String> {
     if updater_configured() {
         Ok(())
     } else {
-        Err("공식 업데이트 서명 키가 앱에 구성되지 않았습니다. 이 빌드에서는 업데이트를 사용할 수 없습니다.".into())
+        Err("이 빌드에는 업데이트 서명 키가 없어 앱에서 업데이트할 수 없습니다.".into())
     }
 }
 /// Natural Korean for the failures a user can act on; plugin details are English.
@@ -89,7 +89,7 @@ fn update_error(stage: &str, error: &tauri_plugin_updater::Error) -> String {
         | Error::SignatureUtf8(_)
         | Error::SignedVersionMismatch { .. }
         | Error::MissingSignedVersion => {
-            "업데이트 파일의 서명이 이 앱의 공식 키와 일치하지 않아 설치하지 않았습니다. 현재 앱과 데이터는 그대로입니다."
+            "업데이트 파일의 서명이 이 앱의 공식 키와 달라 설치하지 않았습니다. 현재 앱과 데이터는 그대로입니다."
         }
         Error::Reqwest(_) | Error::Network(_) | Error::Http(_) => {
             "네트워크 연결을 확인한 뒤 다시 시도해 주세요. 현재 앱과 데이터는 그대로입니다."
@@ -122,7 +122,7 @@ fn require_confirmation(confirmed: bool) -> Result<(), String> {
     if confirmed {
         Ok(())
     } else {
-        Err("업데이트 설치를 진행하려면 다시 시작 확인이 필요합니다.".into())
+        Err("업데이트를 설치하려면 앱을 다시 시작해도 되는지 확인해야 합니다.".into())
     }
 }
 
@@ -420,7 +420,7 @@ mod tests {
             announced: "0.9.3".into(),
         };
         let message = super::update_error("업데이트를 내려받거나 검증하지 못했습니다.", &error);
-        assert!(message.contains("서명이 이 앱의 공식 키와 일치하지 않아 설치하지 않았습니다"));
+        assert!(message.contains("서명이 이 앱의 공식 키와 달라 설치하지 않았습니다"));
         assert!(!message.is_ascii() && !message.contains("signature"));
     }
 

@@ -714,8 +714,7 @@ impl Store {
             }
             let (name, aliases) = display_topic(&topic);
             let aliases_json = serde_json::to_string(aliases).map_err(|e| e.to_string())?;
-            let summary =
-                format!("서로 다른 {count}개 공지에서 저장하거나 관심 표시한 행동을 근거로 제안");
+            let summary = format!("{count}개 공지를 저장하거나 관심 표시해서 제안");
             tx.execute(
                 "INSERT INTO personalization_interests(name,normalized,aliases_json,priority,origin,evidence_count,evidence_summary)
                  VALUES(?1,?2,?3,1,'learned',?4,?5)

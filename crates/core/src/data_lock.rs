@@ -24,7 +24,7 @@ pub fn lock_data_dir(root: &std::path::Path) -> Result<DataDirLock, String> {
         .open(root.join("rhythm.lock"))
         .map_err(|_| "앱 실행 잠금 파일을 열지 못했습니다.")?;
     file.try_lock().map_err(|_| {
-        "Rhythm이 이미 실행 중이거나 데이터 폴더를 잠글 수 없습니다. 기존 창을 확인해 주세요."
+        "Rhythm이 이미 실행 중이거나 데이터 폴더를 사용할 수 없습니다. 열려 있는 창을 확인해 주세요."
     })?;
     Ok(DataDirLock { file })
 }
