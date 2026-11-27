@@ -454,7 +454,8 @@ impl Session {
     }
 }
 /// eClass signals an expired session by sending the browser to its login page
-/// or by answering a page request with an empty body or a login form.
+/// or by answering a page request with an empty body, the login form, or a
+/// short script page that sends the browser there.
 pub(super) fn expired(url: &Url, response: &Response) -> bool {
     if [LOGIN, INDEX, LOGIN_FORM, "/"].contains(&url.path()) {
         return true;
@@ -464,16 +465,31 @@ pub(super) fn expired(url: &Url, response: &Response) -> bool {
     }
     let body = String::from_utf8_lossy(&response.bytes);
     let body = body.trim();
-    body.is_empty() || has_password_field(body)
+    body.is_empty() || login_page(body)
 }
-/// True when the page has the login form's password input (`usr_pwd`, the
-/// field the login POST sends) as an element, not as text. Free text such as
-/// "로그인이 필요" in a course notice must not look like an expired session: it
-/// would log in again on every sync and keep the course from ever completing.
-fn has_password_field(body: &str) -> bool {
-    let selector = scraper::Selector::parse(r#"input[name="usr_pwd"]"#).expect("static selector");
-    scraper::Html::parse_document(body)
-        .select(&selector)
-        .next()
-        .is_some()
+/// A page this short cannot be a notice with its frame, so the login wording
+/// decides alone.
+const SHORT_PAGE: usize = 256;
+/// True for the login form (its password input `usr_pwd`, the field the login
+/// POST sends) and for a page that only tells the browser to log in: the
+/// wording inside a script, or a page of at most `SHORT_PAGE` bytes. The same
+/// wording as text of a full page is a course notice that mentions logging in
+/// and must not look like an expired session: it would log in again on every
+/// sync and keep the course from ever completing.
+fn login_page(body: &str) -> bool {
+    let wording = |text: &str| {
+        ["login_form", "member/login", "로그인이 필요"]
+            .iter()
+            .any(|marker| text.contains(marker))
+    };
+    if body.len() <= SHORT_PAGE && wording(body) {
+        return true;
+    }
+    let password = scraper::Selector::parse(r#"input[name="usr_pwd"]"#).expect("static selector");
+    let script = scraper::Selector::parse("script").expect("static selector");
+    let page = scraper::Html::parse_document(body);
+    page.select(&password).next().is_some()
+        || page
+            .select(&script)
+            .any(|script| wording(&script.text().collect::<String>()))
 }

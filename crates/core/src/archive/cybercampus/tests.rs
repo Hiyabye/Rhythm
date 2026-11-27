@@ -251,9 +251,25 @@ fn expiry_needs_a_redirect_an_empty_page_or_the_login_form() {
         &notice,
         &html(r#"<form action="/ilos/lo/login.acl"><input type="password" name="usr_pwd"></form>"#)
     ));
+    // A page that only sends the browser to the login form: a script, or a
+    // few words.
+    let filler = "가".repeat(1024);
+    assert!(client::expired(
+        &notice,
+        &html(&format!(
+            "<p>{filler}</p><script>alert('로그인이 필요합니다.'); location.href='/ilos/main/member/login_form.acl';</script>"
+        ))
+    ));
+    assert!(client::expired(
+        &notice,
+        &html("<p>로그인이 필요합니다.</p>")
+    ));
+    // The same wording as the text of a full notice page is not an expiry.
     assert!(!client::expired(
         &notice,
-        &html("<p>로그인이 필요합니다 login_form member/login usr_pwd</p>")
+        &html(&format!(
+            "<p>{filler}</p><p>로그인이 필요합니다 login_form member/login usr_pwd</p>"
+        ))
     ));
 }
 
