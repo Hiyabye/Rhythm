@@ -9,19 +9,19 @@ use std::{
 };
 use url::Url;
 
-pub(crate) const RESPONSE_LIMIT: usize = parser::MAX_PAGE_BYTES;
+pub const RESPONSE_LIMIT: usize = parser::MAX_PAGE_BYTES;
 
-pub(crate) use rhythm_sources::studium::validate_url;
+pub use rhythm_sources::studium::validate_url;
 
 /// One check cycle (manual or automatic) shares its policy. Transport keeps cross-cycle pacing.
-pub(crate) struct Session<'a, T> {
+pub struct Session<'a, T> {
     transport: &'a T,
     policy: Robots,
     last: Instant,
 }
 
 impl<'a, T: Transport> Session<'a, T> {
-    pub(crate) async fn new(transport: &'a T, cancel: &AtomicBool) -> Result<Self, FetchError> {
+    pub async fn new(transport: &'a T, cancel: &AtomicBool) -> Result<Self, FetchError> {
         let url = Url::parse(rooms::STATUS_URL).map_err(|_| "열람실 주소 오류")?;
         let policy = Robots::load(transport, &url, cancel, Access::Studium).await?;
         Ok(Self {
@@ -31,11 +31,7 @@ impl<'a, T: Transport> Session<'a, T> {
         })
     }
 
-    pub(crate) async fn html(
-        &mut self,
-        value: &str,
-        cancel: &AtomicBool,
-    ) -> Result<String, FetchError> {
+    pub async fn html(&mut self, value: &str, cancel: &AtomicBool) -> Result<String, FetchError> {
         let url = Url::parse(value).map_err(|_| "열람실 주소 오류")?;
         validate_url(&url)?;
         if !self.policy.permits(&url) {

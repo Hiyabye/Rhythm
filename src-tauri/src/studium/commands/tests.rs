@@ -2,17 +2,24 @@
 //! transport blocked inside fetch. No Tauri window, OS sender or school request.
 use super::*;
 use crate::{
-    archive::network::{Access, Fetch, FetchError},
-    commands::{change_extension, finish_studium_disable},
+    archive::{
+        network::{Access, Fetch, FetchError},
+        sync::{SharedStore, Transport},
+    },
+    commands::change_extension,
     extensions::{Registry, STUDIUM},
-    studium::controller::Controller,
+    operation_gate::AdmissionGate,
+    studium::{
+        controller::Controller,
+        jobs::{cancel_at_boundary, finish_disable, register, reserve_maintenance},
+    },
 };
 use std::{
     future::{pending, Future},
     path::PathBuf,
     sync::{
-        atomic::{AtomicUsize, Ordering},
-        Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
     },
     task::Poll,
     time::Duration,
@@ -239,11 +246,10 @@ async fn extension_disable_commits_joins_without_store_lock_and_clears_results()
     let transport = BlockedTransport::new();
     h.start(transport.clone()).await.unwrap();
     transport.entered().await;
-    let completion =
-        change_extension(&h.registry, &h.store, &h.controller, STUDIUM, false).unwrap();
+    let completion = change_extension(&h.registry, &h.store, STUDIUM, false).unwrap();
     assert!(!h.store.lock().unwrap().enabled(STUDIUM).unwrap());
     assert!(h.start(BlockedTransport::new()).await.is_err());
-    let mut finish = Box::pin(finish_studium_disable(&h.store, &h.controller, completion));
+    let mut finish = Box::pin(finish_disable(&h.store, &h.controller, completion));
     // Poll the production join before the controller gets its next cancel tick.
     std::future::poll_fn(|cx| {
         assert!(matches!(finish.as_mut().poll(cx), Poll::Pending));
@@ -267,15 +273,14 @@ async fn delayed_disable_completion_does_not_clear_reenabled_generation() {
     let first_transport = BlockedTransport::new();
     let first = h.start(first_transport.clone()).await.unwrap();
     first_transport.entered().await;
-    let old_completion =
-        change_extension(&h.registry, &h.store, &h.controller, STUDIUM, false).unwrap();
+    let old_completion = change_extension(&h.registry, &h.store, STUDIUM, false).unwrap();
     h.controller.wait().await;
-    change_extension(&h.registry, &h.store, &h.controller, STUDIUM, true).unwrap();
+    change_extension(&h.registry, &h.store, STUDIUM, true).unwrap();
     let second_transport = BlockedTransport::new();
     let second = h.start(second_transport.clone()).await.unwrap();
     second_transport.entered().await;
     assert_ne!(first.job_id, second.job_id);
-    finish_studium_disable(&h.store, &h.controller, old_completion)
+    finish_disable(&h.store, &h.controller, old_completion)
         .await
         .unwrap();
     let current = h.snapshot();
@@ -299,7 +304,7 @@ async fn failed_extension_write_preserves_enabled_flag_and_running_result() {
              BEGIN SELECT RAISE(ABORT, 'simulated write failure'); END;",
         )
         .unwrap();
-    assert!(change_extension(&h.registry, &h.store, &h.controller, STUDIUM, false).is_err());
+    assert!(change_extension(&h.registry, &h.store, STUDIUM, false).is_err());
     assert!(h.store.lock().unwrap().enabled(STUDIUM).unwrap());
     let after = h.snapshot();
     assert!(after.running);

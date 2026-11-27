@@ -8,6 +8,7 @@ pub mod intelligence;
 pub mod notification;
 pub mod operation_gate;
 pub mod paths;
+pub mod shell;
 pub mod storage;
 pub mod studium;
 #[cfg(any(windows, test, feature = "test-support"))]

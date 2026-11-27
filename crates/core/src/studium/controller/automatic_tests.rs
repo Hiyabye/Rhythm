@@ -3,10 +3,11 @@
 use super::*;
 use crate::{
     archive::network::{Access, Fetch, FetchError},
-    commands::{change_extension, finish_studium_disable},
     extensions::{Registry, STUDIUM},
     operation_gate::AdmissionGate,
-    studium::commands::{automatic_start_with_transport, start_with_transport},
+    studium::jobs::{
+        automatic_start_with_transport, finish_disable, reserve_maintenance, start_with_transport,
+    },
 };
 use chrono::{Datelike, Timelike};
 use std::sync::atomic::AtomicUsize;
@@ -441,8 +442,7 @@ async fn maintenance_joins_an_idle_automatic_owner_and_recovery_starts_no_reques
     h.start_auto(fake.clone()).await.unwrap();
     waiting(&h).await;
     let count = fake.count();
-    let (reservation, completion) =
-        crate::studium::commands::reserve_maintenance(&h.gate, &h.store, &h.controller).unwrap();
+    let (reservation, completion) = reserve_maintenance(&h.gate, &h.store, &h.controller).unwrap();
     if let Some(completion) = completion {
         completion.wait().await;
     }
@@ -501,8 +501,7 @@ async fn paused_automatic_keeps_no_error_after_maintenance() {
     if let Some(completion) = completion {
         completion.wait().await;
     }
-    let (reservation, completion) =
-        crate::studium::commands::reserve_maintenance(&h.gate, &h.store, &h.controller).unwrap();
+    let (reservation, completion) = reserve_maintenance(&h.gate, &h.store, &h.controller).unwrap();
     if let Some(completion) = completion {
         completion.wait().await;
     }
@@ -522,8 +521,10 @@ async fn disabling_automatic_joins_its_fetch_clears_results_and_enable_does_not_
         h.controller.clone(),
         Default::default(),
     );
-    let completion = change_extension(&registry, &h.store, &h.controller, STUDIUM, false).unwrap();
-    finish_studium_disable(&h.store, &h.controller, completion)
+    let changed = registry
+        .change(&h.store, STUDIUM, false, || None::<()>)
+        .unwrap();
+    finish_disable(&h.store, &h.controller, changed.studium)
         .await
         .unwrap();
     assert!(block.dropped.load(Ordering::Acquire));

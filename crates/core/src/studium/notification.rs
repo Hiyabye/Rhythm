@@ -1,7 +1,11 @@
 //! Session-owned seat alerts. Candidates and seat data stay in memory; Store
 //! owns the small rule/latch, rate reservation and one-use activation ledger.
 use super::{controller::Controller, model::AlertCandidate, rooms};
-use crate::{archive::sync::SharedStore, operation_gate::AdmissionGate};
+use crate::{
+    operation_gate::AdmissionGate,
+    shell::{Event, Shell},
+    storage::SharedStore,
+};
 #[cfg(any(target_os = "macos", test))]
 use std::time::Duration;
 use std::{
@@ -11,14 +15,11 @@ use std::{
         Arc, Mutex, Weak,
     },
 };
-use tauri::{AppHandle, Emitter};
-use tokio::sync::Notify;
+use tokio::{runtime::Handle, sync::Notify};
 
 #[cfg(any(windows, test))]
-pub(crate) fn token_prefix() -> &'static str {
-    crate::core::windows_identity::current()
-        .studium_prefix
-        .as_str()
+pub fn token_prefix() -> &'static str {
+    crate::windows_identity::current().studium_prefix.as_str()
 }
 const MAX_RESPONSES: usize = 12;
 
@@ -28,12 +29,12 @@ struct Run {
     done: Notify,
 }
 
-pub(crate) struct Completion {
+pub struct Completion {
     run: Arc<Run>,
     callback_gate: Arc<Mutex<()>>,
 }
 impl Completion {
-    pub(crate) async fn wait(self) {
+    pub async fn wait(self) {
         loop {
             let done = self.run.done.notified();
             tokio::pin!(done);
@@ -61,11 +62,13 @@ struct PendingActivation {
     run: Weak<Run>,
 }
 
-pub(crate) struct Notifications {
+pub struct Notifications {
     store: SharedStore,
     controller: Weak<Controller>,
     gate: Arc<AdmissionGate>,
-    app: Option<AppHandle>,
+    shell: Option<Arc<dyn Shell>>,
+    /// Where the receiver runs; `start` may be called outside any runtime.
+    runtime: Handle,
     control: Mutex<Option<Arc<Run>>>,
     memory: Mutex<Memory>,
     wake: Notify,
@@ -76,17 +79,19 @@ pub(crate) struct Notifications {
 }
 
 impl Notifications {
-    pub(crate) fn new(
+    pub fn new(
         store: SharedStore,
         controller: Weak<Controller>,
         gate: Arc<AdmissionGate>,
-        app: AppHandle,
+        shell: Arc<dyn Shell>,
+        runtime: Handle,
     ) -> Arc<Self> {
         Arc::new(Self {
             store,
             controller,
             gate,
-            app: Some(app),
+            shell: Some(shell),
+            runtime,
             control: Mutex::new(None),
             memory: Mutex::new(Memory::default()),
             wake: Notify::new(),
@@ -98,7 +103,7 @@ impl Notifications {
     }
 
     /// Starts an idle receiver only; startup/recovery never evaluates old data.
-    pub(crate) fn start(self: &Arc<Self>) -> Result<(), String> {
+    pub fn start(self: &Arc<Self>) -> Result<(), String> {
         if self.shutdown.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -124,20 +129,13 @@ impl Notifications {
             let _finish = Finish(run.clone());
             owner.run(run).await;
         };
-        match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => {
-                runtime.spawn(task);
-            }
-            Err(_) => {
-                tauri::async_runtime::spawn(task);
-            }
-        }
+        self.runtime.spawn(task);
         Ok(())
     }
 
     /// Called under Store for extension disable. The captured handle cannot
     /// stop or join a later re-enabled generation.
-    pub(crate) fn cancel(&self) -> Option<Completion> {
+    pub fn cancel(&self) -> Option<Completion> {
         let run = self.control.lock().ok()?.as_ref()?.clone();
         run.cancel.store(true, Ordering::Release);
         if let Ok(mut memory) = self.memory.lock() {
@@ -152,7 +150,7 @@ impl Notifications {
         })
     }
 
-    pub(crate) async fn quiesce(&self) {
+    pub async fn quiesce(&self) {
         let completion = self.cancel();
         if let Ok(store) = self.store.lock() {
             if let Err(error) = store.studium_alert_invalidate_tokens() {
@@ -164,12 +162,12 @@ impl Notifications {
         }
     }
 
-    pub(crate) async fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         self.shutdown.store(true, Ordering::Release);
         self.quiesce().await;
     }
 
-    pub(crate) async fn resume_after_quiesce(self: &Arc<Self>) {
+    pub async fn resume_after_quiesce(self: &Arc<Self>) {
         let run = self.control.lock().ok().and_then(|control| control.clone());
         if let Some(run) = run.filter(|run| run.cancel.load(Ordering::Acquire)) {
             Completion {
@@ -184,7 +182,7 @@ impl Notifications {
         }
     }
 
-    pub(crate) fn take_activation(&self) -> Result<Option<String>, String> {
+    pub fn take_activation(&self) -> Result<Option<String>, String> {
         // Store is always acquired before runtime memory, as in publication
         // and OS activation. A click can precede the frontend subscription by
         // enough time for the room, settings or worker generation to change.
@@ -218,21 +216,21 @@ impl Notifications {
         Ok(Some(activation.room_id))
     }
 
-    pub(crate) fn last_error(&self) -> Option<String> {
+    pub fn last_error(&self) -> Option<String> {
         self.memory
             .lock()
             .ok()
             .and_then(|memory| memory.error.clone())
     }
 
-    pub(crate) fn record_error(&self, error: String) {
+    pub fn record_error(&self, error: String) {
         if let Ok(mut memory) = self.memory.lock() {
             memory.error = Some(error);
         }
     }
 
     /// Every publish replaces the room's candidate, including a failed result.
-    pub(crate) fn observe(&self, room: &str, candidate: Option<AlertCandidate>) {
+    pub fn observe(&self, room: &str, candidate: Option<AlertCandidate>) {
         if rooms::get(room).is_err() {
             return;
         }
@@ -314,11 +312,11 @@ impl Notifications {
         #[cfg(test)]
         let authorization = match &self.wire {
             Some(wire) => wire.authorization().await,
-            None => crate::notification_permission::notification_authorization_status().await,
+            None => crate::notification::permission::notification_authorization_status().await,
         };
         #[cfg(not(test))]
         let authorization =
-            crate::notification_permission::notification_authorization_status().await;
+            crate::notification::permission::notification_authorization_status().await;
         if !matches!(
             authorization.as_str(),
             "authorized" | "provisional" | "ephemeral"
@@ -351,8 +349,7 @@ impl Notifications {
             }
             let (title, body) = text(&candidate)?;
             // Preparation may fail without consuming the latch or rate slot.
-            let prepared =
-                crate::proactive::windows_notification::prepare_studium(&title, &body, &token)?;
+            let prepared = crate::notification::windows::prepare_studium(&title, &body, &token)?;
             if !self.current(run, &candidate)?
                 || !store.studium_alert_reserve(&candidate, &token)?
             {
@@ -360,7 +357,7 @@ impl Notifications {
             }
             // This synchronous handoff shares Store with disable/settings. An
             // error after Show begins is ambiguous: retain the latch/attempt.
-            crate::proactive::windows_notification::show(prepared).map_err(|_| {
+            crate::notification::windows::show(prepared).map_err(|_| {
                 "좌석 알림 전달 결과를 확인하지 못했습니다. 자동 재전송하지 않습니다.".into()
             })
         }
@@ -452,7 +449,7 @@ impl Notifications {
     }
 
     #[cfg(windows)]
-    pub(crate) async fn handle_windows_activation(&self, uri: &str) -> Result<bool, String> {
+    pub async fn handle_windows_activation(&self, uri: &str) -> Result<bool, String> {
         let Some(token) = token_from_uri(uri) else {
             return Ok(false);
         };
@@ -501,19 +498,20 @@ impl Notifications {
             room_id: room.clone(),
             run: Arc::downgrade(run),
         });
-        if let Some(app) = &self.app {
-            let handle = app.clone();
+        if let Some(shell) = &self.shell {
+            let window = shell.clone();
             let run = run.clone();
-            app.run_on_main_thread(move || {
-                if run.cancel.load(Ordering::Acquire) {
-                    return;
-                }
-                if let Err(error) = crate::core::lifecycle::show_main_window(&handle) {
-                    eprintln!("Studium: 알림 창 복원 실패: {error}");
-                }
-            })
-            .map_err(|_| "좌석 알림 창을 열지 못했습니다.")?;
-            let _ = app.emit("studium://notification-clicked", room);
+            shell
+                .run_on_main_thread(Box::new(move || {
+                    if run.cancel.load(Ordering::Acquire) {
+                        return;
+                    }
+                    if let Err(error) = window.show_main_window() {
+                        eprintln!("Studium: 알림 창 복원 실패: {error}");
+                    }
+                }))
+                .map_err(|_| "좌석 알림 창을 열지 못했습니다.")?;
+            shell.emit(Event::StudiumClicked(room));
         }
         Ok(true)
     }
@@ -534,8 +532,8 @@ fn token() -> Result<String, String> {
 }
 
 #[cfg(any(windows, test))]
-pub(crate) fn token_from_uri(uri: &str) -> Option<&str> {
-    crate::core::windows_identity::current().studium_token_from_uri(uri)
+pub fn token_from_uri(uri: &str) -> Option<&str> {
+    crate::windows_identity::current().studium_token_from_uri(uri)
 }
 
 fn text(candidate: &AlertCandidate) -> Result<(String, String), String> {

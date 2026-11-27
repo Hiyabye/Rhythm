@@ -34,6 +34,8 @@ sha2 = "0.10"
 # The retired remote AI key is deleted from the OS credential store on upgrade.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
+# Seat alerts (vendored and patched, see the root Cargo.toml).
+mac-usernotifications = { version = "=0.3.1", default-features = false }
 objc2-user-notifications = { version = "0.3.2", features = ["block2", "UNUserNotificationCenter", "UNNotificationSettings"] }
 keyring = { version = "4.2", default-features = false, features = ["v1", "apple-native-keyring-store"] }
 [target.'cfg(windows)'.dependencies]

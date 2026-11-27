@@ -13,6 +13,7 @@ pub(crate) use rhythm_core::operation_gate;
 mod personalization;
 mod platform_support;
 mod proactive;
+mod shell;
 use rhythm_core::storage;
 mod studium;
 mod updater;
@@ -114,11 +115,8 @@ impl Drop for MaintenancePreparation {
 
 impl AppState {
     pub(crate) async fn exclusive_maintenance(&self) -> Result<AppMaintenanceGuard, String> {
-        let (reservation, studium_completion) = studium::commands::reserve_maintenance(
-            &self.operation_gate,
-            &self.store,
-            &self.studium,
-        )?;
+        let (reservation, studium_completion) =
+            studium::jobs::reserve_maintenance(&self.operation_gate, &self.store, &self.studium)?;
         let mut preparation = MaintenancePreparation {
             reservation: Some(reservation),
             proactive: self.proactive.clone(),
@@ -463,7 +461,8 @@ fn main() {
                 store.clone(),
                 Arc::downgrade(&studium),
                 operation_gate.clone(),
-                app.handle().clone(),
+                Arc::new(shell::AppShell(app.handle().clone())),
+                tauri::async_runtime::handle().inner().clone(),
             );
             studium.attach_notifications(&studium_notifications);
             let studium_views = studium::views::Views::new(
@@ -472,7 +471,6 @@ fn main() {
                 operation_gate.clone(),
                 app.handle().clone(),
             );
-            studium.attach_views(&studium_views);
             let network = archive::client().map_err(std::io::Error::other)?;
             let feed = Arc::new(feed::Controller::default());
             let proactive = proactive::Scheduler::new(
@@ -700,7 +698,7 @@ fn main() {
             // Serialize cancellation against a start already admitted by the
             // gate but not yet registered. Starts recheck shutdown under Store.
             let studium_completion =
-                studium::commands::cancel_at_boundary(&state.store, &state.studium)
+                studium::jobs::cancel_at_boundary(&state.store, &state.studium)
                     .ok()
                     .flatten();
             state.registry.stop_all();

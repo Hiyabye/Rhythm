@@ -80,9 +80,9 @@ impl Job {
 
 /// Captured under the registration boundary so a delayed disable joins only
 /// the generation it cancelled, even after a later enable/start.
-pub(crate) struct CompletionHandle(Vec<Arc<Job>>);
+pub struct CompletionHandle(Vec<Arc<Job>>);
 impl CompletionHandle {
-    pub(crate) async fn wait(self) {
+    pub async fn wait(self) {
         for job in self.0 {
             loop {
                 let notified = job.done.notified();
@@ -108,40 +108,24 @@ struct State {
 }
 
 #[derive(Default)]
-pub(crate) struct Controller {
+pub struct Controller {
     state: Mutex<State>,
     changed: Notify,
     notifications: Mutex<std::sync::Weak<super::notification::Notifications>>,
-    views: Mutex<std::sync::Weak<super::views::Views>>,
     view_changed: Notify,
 }
 
 impl Controller {
-    pub(crate) fn new() -> Arc<Self> {
+    pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
-    pub(crate) fn attach_views(&self, views: &Arc<super::views::Views>) {
-        if let Ok(mut saved) = self.views.lock() {
-            *saved = Arc::downgrade(views);
-        }
-    }
-    pub(crate) fn capture_views_close(&self) -> Option<super::views::CloseTicket> {
-        self.views
-            .lock()
-            .ok()
-            .and_then(|saved| saved.upgrade())
-            .and_then(|views| views.capture_close())
-    }
-    pub(crate) fn refresh_views(&self) {
+    pub fn refresh_views(&self) {
         self.view_changed.notify_one();
     }
-    pub(crate) async fn wait_for_view_change(&self) {
+    pub async fn wait_for_view_change(&self) {
         self.view_changed.notified().await;
     }
-    pub(crate) fn attach_notifications(
-        &self,
-        notifications: &Arc<super::notification::Notifications>,
-    ) {
+    pub fn attach_notifications(&self, notifications: &Arc<super::notification::Notifications>) {
         if let Ok(mut saved) = self.notifications.lock() {
             *saved = Arc::downgrade(notifications);
         }
@@ -152,11 +136,11 @@ impl Controller {
             .ok()
             .and_then(|saved| saved.upgrade())
     }
-    pub(crate) fn cancel_notifications(&self) -> Option<super::notification::Completion> {
+    pub fn cancel_notifications(&self) -> Option<super::notification::Completion> {
         self.notifications()
             .and_then(|notifications| notifications.cancel())
     }
-    pub(crate) fn notification_current(&self, candidate: &super::model::AlertCandidate) -> bool {
+    pub fn notification_current(&self, candidate: &super::model::AlertCandidate) -> bool {
         self.state.lock().ok().is_some_and(|state| {
             state.job.as_ref().is_some_and(|job| {
                 job.id == candidate.job_id && !job.cancel.load(Ordering::Acquire)
@@ -167,7 +151,7 @@ impl Controller {
             })
         })
     }
-    pub(crate) fn ensure_idle(&self) -> Result<(), String> {
+    pub fn ensure_idle(&self) -> Result<(), String> {
         let state = self.state.lock().map_err(|_| "좌석 작업 잠금 오류")?;
         if state
             .job
@@ -179,7 +163,7 @@ impl Controller {
             Ok(())
         }
     }
-    pub(crate) fn snapshot(&self, preferences: Preferences) -> Result<Snapshot, String> {
+    pub fn snapshot(&self, preferences: Preferences) -> Result<Snapshot, String> {
         let state = self.state.lock().map_err(|_| "좌석 작업 잠금 오류")?;
         let results = preferences
             .room_ids
@@ -212,7 +196,7 @@ impl Controller {
     }
     /// Caller holds Store's mutex, the same boundary as extension disable and
     /// target editing. No await or network operation happens while registering.
-    pub(crate) fn start<T: Transport + 'static>(
+    pub fn start<T: Transport + 'static>(
         self: &Arc<Self>,
         preferences: Preferences,
         transport: T,
@@ -274,7 +258,7 @@ impl Controller {
         });
         Ok(())
     }
-    pub(crate) fn cancel(&self) {
+    pub fn cancel(&self) {
         if let Ok(state) = self.state.lock() {
             if let Some(run) = &state.automatic {
                 run.job.cancel.store(true, Ordering::Release);
@@ -287,7 +271,7 @@ impl Controller {
         self.cancel_notifications();
         self.refresh_views();
     }
-    pub(crate) fn cancel_job(&self, id: u64) -> Result<(), String> {
+    pub fn cancel_job(&self, id: u64) -> Result<(), String> {
         let state = self.state.lock().map_err(|_| "좌석 작업 잠금 오류")?;
         if let Some(job) = &state.job {
             if job.id == id {
@@ -296,7 +280,7 @@ impl Controller {
         }
         Ok(())
     }
-    pub(crate) fn completion(&self) -> Option<CompletionHandle> {
+    pub fn completion(&self) -> Option<CompletionHandle> {
         let state = self.state.lock().ok()?;
         let mut jobs = Vec::new();
         if let Some(run) = &state.automatic {
@@ -307,12 +291,12 @@ impl Controller {
         }
         (!jobs.is_empty()).then_some(CompletionHandle(jobs))
     }
-    pub(crate) async fn wait(&self) {
+    pub async fn wait(&self) {
         if let Some(completion) = self.completion() {
             completion.wait().await;
         }
     }
-    pub(crate) fn clear(&self) {
+    pub fn clear(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.results.clear();
             automatic::clear(&mut state);
