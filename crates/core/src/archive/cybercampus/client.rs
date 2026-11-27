@@ -450,7 +450,7 @@ impl Session {
 }
 /// eClass signals an expired session by sending the browser to its login page
 /// or by answering a page request with an empty body or a login form.
-fn expired(url: &Url, response: &Response) -> bool {
+pub(super) fn expired(url: &Url, response: &Response) -> bool {
     if [LOGIN, INDEX, LOGIN_FORM, "/"].contains(&url.path()) {
         return true;
     }
@@ -459,8 +459,16 @@ fn expired(url: &Url, response: &Response) -> bool {
     }
     let body = String::from_utf8_lossy(&response.bytes);
     let body = body.trim();
-    body.is_empty()
-        || body.contains("login_form")
-        || body.contains("member/login")
-        || body.contains("로그인이 필요")
+    body.is_empty() || has_password_field(body)
+}
+/// True when the page has the login form's password input (`usr_pwd`, the
+/// field the login POST sends) as an element, not as text. Free text such as
+/// "로그인이 필요" in a course notice must not look like an expired session: it
+/// would log in again on every sync and keep the course from ever completing.
+fn has_password_field(body: &str) -> bool {
+    let selector = scraper::Selector::parse(r#"input[name="usr_pwd"]"#).expect("static selector");
+    scraper::Html::parse_document(body)
+        .select(&selector)
+        .next()
+        .is_some()
 }

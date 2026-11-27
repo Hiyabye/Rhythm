@@ -46,6 +46,11 @@ pub struct Fake {
     pub expire_after: Mutex<Option<usize>>,
     pub session: Mutex<Option<String>>,
     pub notice_list: Mutex<Option<String>>,
+    /// Replaces the first notice's view page.
+    pub first_view: Mutex<Option<String>>,
+    /// Pages answered to the next login POSTs (one each, in order) instead of
+    /// the password check.
+    pub login_pages: Mutex<Vec<String>>,
 }
 impl Fake {
     pub fn requests(&self) -> Vec<Recorded> {
@@ -109,6 +114,12 @@ impl client::Http for Fake {
             }
             "/ilos/lo/login.acl" => {
                 self.logins.fetch_add(1, Ordering::SeqCst);
+                {
+                    let mut scripted = self.login_pages.lock().unwrap();
+                    if !scripted.is_empty() {
+                        return Ok(page(scripted.remove(0)));
+                    }
+                }
                 return Ok(if field(&form, "usr_pwd") == "right" {
                     page("<script>top.location.href='/ilos/main/main_form.acl';</script>")
                 } else {
@@ -171,7 +182,13 @@ impl client::Http for Fake {
             }
             "/ilos/cls/st/notice/notice_view_pop.acl" => match field(&form, "ARTL_NUM") {
                 "9000002" => page(fixture("notice_view.html")),
-                "9000001" => page(FIRST_VIEW),
+                "9000001" => page(
+                    self.first_view
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .unwrap_or_else(|| FIRST_VIEW.into()),
+                ),
                 _ => page(""),
             },
             "/ilos/cls/st/co/efile_list.acl" => page(fixture("efile_list.html")),

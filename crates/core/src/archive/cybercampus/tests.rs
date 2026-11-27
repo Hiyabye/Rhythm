@@ -215,6 +215,49 @@ async fn an_expired_session_logs_in_again_once() {
 }
 
 #[tokio::test]
+async fn a_notice_that_mentions_logging_in_is_not_an_expired_session() {
+    let setup = setup(Some("right"));
+    *setup.fake.first_view.lock().unwrap() = Some(
+        r#"<div class="view_title"><span class="font_headline2">접속 안내</span></div>
+<table><tr><th scope="row">작성자</th><td>김교수</td></tr><tr><th scope="row">게시일</th><td>9월 1일 (화) 09:00</td></tr>
+<tr><td colspan="2"><div class="editor_content"><p>로그인이 필요합니다. login_form 과 member/login 주소를 확인하세요.</p></div></td></tr></table>"#
+            .into(),
+    );
+    run(&setup).await.unwrap();
+    assert_eq!(setup.fake.logins.load(Ordering::SeqCst), 1);
+    let store = setup.store.lock().unwrap();
+    let page = store
+        .archive_query(&ArchiveQuery {
+            source_id: Some(SOURCE_ID.into()),
+            ..ArchiveQuery::default()
+        })
+        .unwrap();
+    assert_eq!(page.total, 2);
+}
+
+#[test]
+fn expiry_needs_a_redirect_an_empty_page_or_the_login_form() {
+    let html = |body: &str| Response {
+        status: 200,
+        mime: Some("text/html".into()),
+        bytes: body.as_bytes().to_vec(),
+        ..Response::default()
+    };
+    let url = |path: &str| Url::parse(&format!("{}{path}", parser::ORIGIN)).unwrap();
+    let notice = url("/ilos/cls/st/notice/notice_view_pop.acl");
+    assert!(client::expired(&url("/ilos/index.acl"), &html("<p>x</p>")));
+    assert!(client::expired(&notice, &html("  ")));
+    assert!(client::expired(
+        &notice,
+        &html(r#"<form action="/ilos/lo/login.acl"><input type="password" name="usr_pwd"></form>"#)
+    ));
+    assert!(!client::expired(
+        &notice,
+        &html("<p>로그인이 필요합니다 login_form member/login usr_pwd</p>")
+    ));
+}
+
+#[tokio::test]
 async fn a_rejected_login_is_not_retried_automatically() {
     let setup = setup(Some("wrong"));
     assert_eq!(run(&setup).await.unwrap_err(), client::REJECTED);
