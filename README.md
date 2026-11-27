@@ -25,7 +25,7 @@ macOS(Apple Silicon)와 Windows 11 x64를 지원합니다. [Releases](https://gi
 - **macOS:** `.dmg`를 열어 Rhythm을 응용 프로그램 폴더로 옮깁니다. Apple 공증을 받지 않아 처음 열 때 경고가 나오면, **시스템 설정 → 개인정보 보호 및 보안**에서 **그래도 열기**를 누릅니다.
 - **Windows:** `_x64-setup.exe`를 실행합니다. 코드 서명이 없어 SmartScreen 경고가 나올 수 있습니다.
 
-같은 이름의 `.sha256` 파일로 체크섬을 확인하고, 다르면 실행하지 마세요. Gatekeeper나 Windows 보안 기능은 끄지 마세요.
+내려받은 파일의 체크섬이 같은 이름의 `.sha256` 파일과 다르면 실행하지 마세요. Gatekeeper나 Windows 보안 기능은 끄지 마세요.
 
 업데이트는 **설정 → 데이터 및 정보**에서 합니다.
 

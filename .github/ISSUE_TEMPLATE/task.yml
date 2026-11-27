@@ -1,5 +1,5 @@
 name: Task
-description: A feature, fix or change, written so a person or an AI agent can pick it up
+description: A feature, fix or change that a person or an AI agent can pick up
 body:
   - type: textarea
     id: goal
@@ -12,12 +12,12 @@ body:
     id: current
     attributes:
       label: Current state
-      description: What happens now. Include the relevant files, boards or docs (e.g. `crates/sources/src/k2web/boards.rs`, `docs/ARCHITECTURE.md`).
+      description: What happens now. Name relevant files, boards or docs.
   - type: textarea
     id: done
     attributes:
       label: Done when
-      description: Checkable acceptance criteria.
+      description: Checkable criteria.
       placeholder: |
         - [ ] ...
     validations:
@@ -26,9 +26,9 @@ body:
     id: scope
     attributes:
       label: Out of scope and constraints
-      description: What not to touch, user decisions that apply, approvals needed (live runs, deploys, releases).
+      description: What not to touch, decisions that apply, approvals needed (live runs, deploys, releases).
   - type: textarea
     id: verification
     attributes:
       label: Verification
-      description: Checks that must run beyond the defaults in AGENTS.md (native app, Windows, live collector run, real model).
+      description: Checks beyond the AGENTS.md defaults (native app, Windows, live collector run, real model).
