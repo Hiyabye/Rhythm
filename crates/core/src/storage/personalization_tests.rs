@@ -743,6 +743,49 @@ fn ranking_uses_full_indexed_body_beyond_the_display_snippet() {
 }
 
 #[test]
+fn an_english_interest_matches_whole_words_only_in_the_indexed_body() {
+    let (_directory, store) = store();
+    let padding = "무관한 본문 내용 ".repeat(60);
+    let set_body = |body: &str| {
+        store
+            .connection
+            .execute(
+                "UPDATE documents SET title='일반 소식',category='일반',body_text=?1 WHERE id=1",
+                [body],
+            )
+            .unwrap();
+    };
+    let matched = |name: &str| {
+        store
+            .personalization_recommendations(3)
+            .unwrap()
+            .items
+            .iter()
+            .any(|item| {
+                item.item.id == 1
+                    && item
+                        .reasons
+                        .iter()
+                        .any(|reason| reason.contains(&format!("관심 분야 ‘{name}’")))
+            })
+    };
+    // Past the snippet, so only the index probe can see it.
+    set_body(&format!(
+        "{padding}문의: e-mail available, maintain the start"
+    ));
+    save_interest(&store, "AI", 5);
+    save_interest(&store, "art", 5);
+    assert!(!matched("AI"), "AI inside mail/available/maintain");
+    assert!(!matched("art"), "art inside start");
+
+    set_body(&format!("{padding}생성형 AI, Art 전시 안내"));
+    assert!(matched("AI"));
+    assert!(matched("art"));
+    set_body(&format!("{padding}모집 분야는 AI"));
+    assert!(matched("AI"), "a word at the very end");
+}
+
+#[test]
 fn short_interest_terms_retrieve_old_documents_outside_recent_candidates() {
     let (_directory, store) = store();
     add_document(

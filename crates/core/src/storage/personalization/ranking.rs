@@ -118,20 +118,37 @@ pub(super) fn matched_terms_sql(terms: &[String], first_parameter: usize) -> Str
         .enumerate()
         .map(|(offset, term)| {
             let parameter = first_parameter + offset;
+            let whole_word = whole_word_sql(term);
             if is_fts_term(term) {
                 format!(
                     ",EXISTS(SELECT 1 FROM documents_fts WHERE documents_fts.rowid=d.id \
-                     AND documents_fts MATCH ?{parameter})"
+                     AND documents_fts MATCH ?{parameter}{whole_word})"
                 )
             } else {
                 format!(
                     ",EXISTS(SELECT 1 FROM documents_fts WHERE documents_fts.rowid=d.id \
                      AND (documents_fts.title LIKE ?{parameter} ESCAPE '\\' \
-                          OR documents_fts.body_text LIKE ?{parameter} ESCAPE '\\'))"
+                          OR documents_fts.body_text LIKE ?{parameter} ESCAPE '\\'){whole_word})"
                 )
             }
         })
         .collect()
+}
+
+/// The word-boundary rule of `matches_folded` for the index probes: `MATCH`
+/// and `LIKE` find a term anywhere, so `AI` would match `mail`. Only a term
+/// of ASCII letters, digits and spaces gets it (as there), which also makes
+/// the term safe to write into the pattern. SQLite's `lower` folds ASCII only,
+/// which is all such a term needs.
+fn whole_word_sql(term: &str) -> String {
+    let term = folded(term);
+    if term.is_empty() || !term.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ') {
+        return String::new();
+    }
+    format!(
+        " AND (' '||lower(documents_fts.title)||' '||lower(documents_fts.body_text)||' ') \
+         GLOB '*[^a-z0-9]{term}[^a-z0-9]*'"
+    )
 }
 
 pub(super) fn map_candidate(
