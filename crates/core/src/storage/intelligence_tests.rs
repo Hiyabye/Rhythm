@@ -1516,3 +1516,41 @@ fn ai_category_filter_and_counts_use_latest_revision_under_the_installed_model()
     assert_eq!(page.total, 0);
     assert_eq!(page.ai_categories.unwrap().unclassified, documents);
 }
+
+#[test]
+fn removing_one_of_two_inventory_rows_with_one_sha_keeps_the_vectors() {
+    let (_directory, store) = database();
+    let sha = "a".repeat(64);
+    let revision = store.document(1, None).unwrap().revision_id;
+    store.ai_upsert_model(&model("managed", "managed")).unwrap();
+    store
+        .ai_upsert_model(&model("external", "external"))
+        .unwrap();
+    store
+        .ai_save_embedding(1, revision, &sha, &[0.6, 0.8])
+        .unwrap();
+    store
+        .ai_save_classification(&ClassificationWrite {
+            document_id: 1,
+            revision_id: revision,
+            model_sha256: &sha,
+            config_hash: &"c".repeat(64),
+            category: "장학",
+            score: 0.8,
+            margin: 0.1,
+            low_confidence: false,
+        })
+        .unwrap();
+    store.ai_remove_model("managed").unwrap();
+    assert!(store.ai_embedding(1, revision, &sha).unwrap().is_some());
+    assert!(store
+        .ai_classification(1, revision, Some((&sha, &"c".repeat(64))))
+        .unwrap()
+        .is_some());
+    store.ai_remove_model("external").unwrap();
+    assert!(store.ai_embedding(1, revision, &sha).unwrap().is_none());
+    assert!(store
+        .ai_classification(1, revision, Some((&sha, &"c".repeat(64))))
+        .unwrap()
+        .is_none());
+}
