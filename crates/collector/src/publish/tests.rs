@@ -622,6 +622,46 @@ async fn a_failed_read_of_the_live_manifest_still_fails_the_run() {
 }
 
 #[tokio::test]
+async fn a_failed_delete_does_not_stop_the_run_and_is_retried() {
+    let state = State::open_in_memory().unwrap();
+    let bucket = Bucket::default();
+    let signer = signer();
+    let key = signer.public_key();
+    add(&state, 1, "공지");
+    run(&state, &bucket, &signer, "2026-11-18T03:00:00.000Z").await;
+    let first_run = format!(
+        "{PREFIX}{}",
+        manifest_of(&bucket, key).segments[0].records.path
+    );
+    let stray = format!("{PREFIX}segments/stray.jsonl.zst");
+    // The run segment is compacted (retired) the next day.
+    add(&state, 2, "둘째 공지");
+    run(&state, &bucket, &signer, "2026-11-19T00:30:00.000Z").await;
+
+    bucket
+        .objects
+        .lock()
+        .unwrap()
+        .insert(stray.clone(), vec![1]);
+    bucket
+        .failing_deletes
+        .lock()
+        .unwrap()
+        .extend([first_run.clone(), stray.clone()]);
+    // Only the replaced day-one snapshot, whose delete works, goes.
+    let report = run(&state, &bucket, &signer, "2026-11-20T01:00:00.000Z").await;
+    assert_eq!(report.deleted, 1);
+    assert!(bucket.keys().contains(&first_run));
+    assert!(bucket.keys().contains(&stray));
+    manifest_of(&bucket, key);
+
+    let report = run(&state, &bucket, &signer, "2026-11-20T02:00:00.000Z").await;
+    assert_eq!(report.deleted, 2);
+    assert!(!bucket.keys().contains(&first_run));
+    assert!(!bucket.keys().contains(&stray));
+}
+
+#[tokio::test]
 async fn a_state_behind_the_published_feed_is_refused() {
     let bucket = Bucket::default();
     let signer = signer();

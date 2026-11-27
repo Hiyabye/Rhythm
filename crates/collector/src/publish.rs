@@ -380,14 +380,25 @@ async fn clean<S: ObjectStore>(
         if listed.contains(&file.records_path) {
             continue;
         }
+        let mut gone = true;
         for path in paths(&file) {
             let key = format!("{prefix}{path}");
             if keys.contains(&key) {
-                store.delete(&key).await?;
-                deleted.insert(key);
+                match store.delete(&key).await {
+                    Ok(()) => {
+                        deleted.insert(key);
+                    }
+                    Err(error) => {
+                        eprintln!("could not delete {key}, retrying next run: {error}");
+                        gone = false;
+                    }
+                }
             }
         }
-        state.feed_forget(&file.records_path)?;
+        // The row stays until every object is gone, so the next run retries.
+        if gone {
+            state.feed_forget(&file.records_path)?;
+        }
     }
     let known: HashSet<String> = state.feed_files(false)?.iter().flat_map(paths).collect();
     for key in keys {
@@ -398,8 +409,12 @@ async fn clean<S: ObjectStore>(
             && !listed.contains(path)
             && !deleted.contains(key);
         if orphan {
-            store.delete(key).await?;
-            deleted.insert(key.clone());
+            match store.delete(key).await {
+                Ok(()) => {
+                    deleted.insert(key.clone());
+                }
+                Err(error) => eprintln!("could not delete {key}, retrying next run: {error}"),
+            }
         }
     }
     Ok(deleted.len())
