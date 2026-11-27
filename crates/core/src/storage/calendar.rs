@@ -20,7 +20,10 @@ const TIMED_REMINDERS: [i64; 5] = [0, 10, 30, 60, 1440];
 const UNTIMED_REMINDERS: [i64; 2] = [0, 1440];
 const UNTIMED_REMINDER_HOUR: u32 = 9;
 const MAX_REMINDER_TOKENS: i64 = 64;
-const MAX_DUE_REMINDERS: i64 = 50;
+const MAX_DUE_REMINDERS: usize = 50;
+/// How long after its time a "제시간" reminder is still sent: the scheduler wakes
+/// every 15 seconds, and a quiet-hours or rate-limit hold retries on later passes.
+const ON_TIME_GRACE_MINUTES: i64 = 5;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CalendarTodo {
@@ -133,8 +136,9 @@ fn validated(input: &TodoInput) -> Result<(String, Option<&str>, String), String
 }
 
 /// When the reminder is due and until when it still helps: a timed todo's own
-/// time, or the end of an untimed todo's day. A reminder missed while Rhythm
-/// was closed is still sent late within that window, never after it.
+/// time (a few minutes after it for an on-time reminder), or the end of an
+/// untimed todo's day. A reminder missed while Rhythm was closed is still sent
+/// late within that window, never after it.
 fn reminder_window(
     day: &str,
     time: Option<&str>,
@@ -144,7 +148,13 @@ fn reminder_window(
     let (anchor, until) = match time {
         Some(time) => {
             let at = day.and_time(NaiveTime::parse_from_str(time, "%H:%M").ok()?);
-            (at, at)
+            // An on-time reminder would otherwise have an empty window.
+            let grace = if minutes == 0 {
+                ON_TIME_GRACE_MINUTES
+            } else {
+                0
+            };
+            (at, at + Duration::minutes(grace))
         }
         None => (
             day.and_hms_opt(UNTIMED_REMINDER_HOUR, 0, 0)?,
@@ -348,7 +358,7 @@ impl Store {
             .connection
             .prepare(&format!(
                 "SELECT {REMINDER_COLUMNS} AND day BETWEEN ?1 AND ?2
-                 ORDER BY day, time IS NULL, time, id LIMIT {MAX_DUE_REMINDERS}"
+                 ORDER BY day, time IS NULL, time, id"
             ))
             .map_err(|e| e.to_string())?;
         let rows = statement
@@ -358,6 +368,7 @@ impl Store {
             )
             .map_err(|e| e.to_string())?
             .filter_map(Result::transpose)
+            .take(MAX_DUE_REMINDERS)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string());
         rows

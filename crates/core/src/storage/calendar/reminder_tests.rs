@@ -317,3 +317,39 @@ fn schema_thirty_four_upgrades_todos_without_reminders() {
         ("예전 할 일", None)
     );
 }
+
+#[test]
+fn an_on_time_reminder_fires_once_in_a_short_window() {
+    let (_directory, store) = fixture();
+    let id = todo(&store, "제시간", "2026-11-10", Some("09:00"), Some(0));
+    assert!(due(&store, "2026-11-10 08:59").is_empty());
+    assert_eq!(due(&store, "2026-11-10 09:00"), ["제시간"]);
+    assert_eq!(due(&store, "2026-11-10 09:04"), ["제시간"]);
+    assert!(due(&store, "2026-11-10 09:05").is_empty());
+    let now = at("2026-11-10 09:01");
+    assert!(store
+        .calendar_reminder_reserve(id, &token(1), now)
+        .unwrap()
+        .is_some());
+    assert!(due(&store, "2026-11-10 09:01").is_empty());
+    assert_eq!(
+        store.calendar_reminder_reserve(id, &token(2), now).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn the_cap_applies_after_the_window_filter() {
+    let (_directory, store) = fixture();
+    for index in 0..(MAX_DUE_REMINDERS + 5) {
+        todo(
+            &store,
+            &format!("나중 {index}"),
+            "2026-11-10",
+            Some("09:00"),
+            Some(10),
+        );
+    }
+    todo(&store, "지금", "2026-11-10", Some("23:00"), Some(0));
+    assert_eq!(due(&store, "2026-11-10 23:00"), ["지금"]);
+}

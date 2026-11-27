@@ -37,10 +37,31 @@ pub async fn export(store: &SharedStore, destination: &Path) -> Result<CalendarE
     if summary.todos + summary.deadlines == 0 {
         return Err("내보낼 할 일이나 마감이 없습니다.".into());
     }
-    tokio::fs::write(destination, text)
+    write_replacing(destination, &text)
         .await
         .map_err(|_| "캘린더 파일을 저장하지 못했습니다. 저장 위치와 권한을 확인해 주세요.")?;
     Ok(summary)
+}
+
+/// Writes beside `destination` and renames over it, so a failed write leaves an
+/// existing file intact. `rename` replaces an existing file on macOS and on
+/// Windows (`MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`).
+async fn write_replacing(destination: &Path, text: &str) -> std::io::Result<()> {
+    let mut name = destination
+        .file_name()
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?
+        .to_os_string();
+    name.push(".rhythm-export.tmp");
+    let temporary = destination.with_file_name(name);
+    let result = async {
+        tokio::fs::write(&temporary, text).await?;
+        tokio::fs::rename(&temporary, destination).await
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temporary).await;
+    }
+    result
 }
 
 fn kst() -> FixedOffset {
@@ -215,6 +236,33 @@ fn ics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn writing_replaces_an_existing_file_and_leaves_no_temporary_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("rhythm.ics");
+        std::fs::write(&destination, "old").unwrap();
+        write_replacing(&destination, "new").await.unwrap();
+        assert_eq!(std::fs::read_to_string(&destination).unwrap(), "new");
+        let names = std::fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["rhythm.ics"]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_replacement_keeps_the_old_file_and_removes_the_temporary_one() {
+        let directory = tempfile::tempdir().unwrap();
+        // A directory cannot be replaced by a file, so the rename fails.
+        let destination = directory.path().join("rhythm.ics");
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::write(destination.join("keep"), "x").unwrap();
+        assert!(write_replacing(&destination, "new").await.is_err());
+        assert!(destination.join("keep").exists());
+        let names = std::fs::read_dir(directory.path()).unwrap().count();
+        assert_eq!(names, 1);
+    }
 
     fn todo(id: i64, day: &str, time: Option<&str>, title: &str) -> CalendarTodo {
         CalendarTodo {

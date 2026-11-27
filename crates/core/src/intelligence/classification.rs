@@ -47,6 +47,20 @@ type Prototypes = Vec<(&'static str, Vec<f32>)>;
 
 /// Holds classification quiesced. Drop resumes work after releasing the batch
 /// guard, so a slow batch cannot be interrupted and a later one cannot start early.
+/// Resets a "classifying" state left behind by an early return of `advance`
+/// (contended lock, pause, shutdown). A state a failure or the end of the pass
+/// already set is kept.
+struct ClassifyingGuard<'a>(&'a Mutex<&'static str>);
+
+impl Drop for ClassifyingGuard<'_> {
+    fn drop(&mut self) {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if *state == "classifying" {
+            *state = "idle";
+        }
+    }
+}
+
 pub struct PauseGuard {
     controller: Arc<Controller>,
     guard: Option<tokio::sync::OwnedMutexGuard<()>>,
@@ -302,6 +316,7 @@ impl Controller {
         if let Ok(mut detail) = self.detail.lock() {
             *detail = None;
         }
+        let _classifying = ClassifyingGuard(&self.state);
         let Ok(_batch) = self.batch.try_lock() else {
             return;
         };
@@ -693,6 +708,53 @@ mod tests {
             .await
             .is_none());
         controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_early_return_does_not_leave_the_state_classifying() {
+        let (directory, controller, model) = fake_controller();
+        let (_data, store) = crate::storage::temp_store();
+        store.catalog(&crate::archive::definitions()).unwrap();
+        store.set_enabled(crate::extensions::AI, true).unwrap();
+        store
+            .upsert_article(
+                "cybercampus",
+                &crate::archive::model::ArticleInput {
+                    external_id: "1".into(),
+                    canonical_url: "https://eclass.sogang.ac.kr/1".into(),
+                    title: "공지".into(),
+                    author: None,
+                    category: None,
+                    published_at: "2026-03-01".into(),
+                    modified_at: None,
+                    original: "본문".into(),
+                    unsupported_body: false,
+                    body_html: "<p>본문</p>".into(),
+                    body_text: "본문".into(),
+                    resources: vec![],
+                    etag: None,
+                    last_modified: None,
+                },
+                true,
+            )
+            .unwrap();
+        let mut installed = model.clone();
+        installed.bytes = 1;
+        installed.downloaded_bytes = 1;
+        store.ai_upsert_model(&installed).unwrap();
+        let mut preferences = store.ai_preferences().unwrap();
+        preferences.embedding_model_id = Some(installed.id.clone());
+        preferences.classification_enabled = true;
+        store.ai_save_preferences(&preferences).unwrap();
+        let store = Mutex::new(store);
+        let models = models::Controller::new("Rhythm/test");
+        let shutdown = AtomicBool::new(false);
+        // A pass already in flight holds the batch lock.
+        let _busy = controller.batch.try_lock().unwrap();
+        controller
+            .advance(&store, &models, directory.path(), &shutdown)
+            .await;
+        assert_eq!(controller.status().state, "idle");
     }
 
     #[tokio::test]
