@@ -952,3 +952,25 @@ fn an_error_after_the_claim_hands_the_event_back_without_a_spent_attempt() {
         assert_eq!(event.attempt_count, 0, "windows path: {windows_path}");
     }
 }
+
+#[test]
+fn recording_a_sent_notification_is_retried_once() {
+    let mut calls = 0;
+    assert!(scheduler::retry_once(|| {
+        calls += 1;
+        if calls == 1 {
+            Err("database is busy".into())
+        } else {
+            Ok(())
+        }
+    })
+    .is_ok());
+    assert_eq!(calls, 2);
+    let mut calls = 0;
+    assert!(scheduler::retry_once(|| {
+        calls += 1;
+        Err("still failing".into())
+    })
+    .is_err());
+    assert_eq!(calls, 2);
+}
