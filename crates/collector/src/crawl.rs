@@ -1008,6 +1008,12 @@ impl<T: Transport> Crawl<'_, T> {
                 } else {
                     article.etag = etag;
                     article.last_modified = last_modified;
+                    // The state's bounds depend only on these bytes, so a refusal
+                    // repeats on every run: permanent, unlike a storage error
+                    // from `upsert` below.
+                    crate::state::validate(&definition.id, &article).map_err(|_| {
+                        permanent("공지가 보관 한도를 넘거나 형식이 올바르지 않습니다.")
+                    })?;
                     state.upsert(&definition.id, &article, historical)?;
                     existing_id.is_none()
                 }

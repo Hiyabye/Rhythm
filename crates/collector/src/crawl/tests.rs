@@ -785,6 +785,26 @@ async fn a_failed_seed_stays_pending_until_a_safe_completion() {
 }
 
 #[tokio::test]
+async fn a_notice_the_state_refuses_is_skipped_instead_of_holding_its_page() {
+    // The fetch limit on main is 16 MiB but the state keeps at most 8 MiB of
+    // text: the same bytes would be refused on every run.
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new(vec![vec![2, 3], vec![4]]);
+    fake.changed
+        .lock()
+        .unwrap()
+        .insert(3, format!("<p>{}</p>", "a".repeat(9 * 1024 * 1024)));
+    historical(&state, &fake, Budget::default()).await;
+    let board = state.board(MAIN).unwrap();
+    assert_eq!(board.status, "completed", "{:?}", board.last_error);
+    assert!(board.history_complete);
+    assert_eq!((board.next_page, board.failed), (3, 0));
+    assert_eq!(skipped(&state), ["3"]);
+    let ids: Vec<_> = notices(&state).into_iter().map(|n| n.external_id).collect();
+    assert_eq!(ids, ["2", "4"]);
+}
+
+#[tokio::test]
 async fn a_permanent_failure_is_skipped_but_a_transient_one_holds_the_page() {
     let state = State::open_in_memory().unwrap();
     let fake = Fake::new(vec![vec![2, 3], vec![4]]);

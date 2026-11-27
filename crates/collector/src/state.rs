@@ -938,7 +938,7 @@ fn https_url(value: &str) -> bool {
 }
 /// The same bounds the app applies before archiving; a parser regression must
 /// fail here instead of publishing a malformed notice.
-fn validate(source_id: &str, article: &ArticleInput) -> Result<(), String> {
+pub fn validate(source_id: &str, article: &ArticleInput) -> Result<(), String> {
     let empty_body = article.body_text.trim().is_empty() && article.body_html.trim().is_empty();
     // The approved metadata-only exceptions: main-site iframe bodies and k2web
     // poster bodies.
