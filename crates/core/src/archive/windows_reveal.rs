@@ -25,7 +25,7 @@ extern "system" {
     fn ILFree(item: *const c_void);
 }
 
-pub(super) fn resource_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
+pub fn resource_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
     let mut pieces = relative.split('/');
     if pieces.next() != Some("resources") {
         return Err("로컬 자료 경로가 안전하지 않습니다.".into());
@@ -75,7 +75,7 @@ fn resolved_resource(root: &Path, path: &Path) -> Result<PathBuf, String> {
     Ok(shell_path(&target))
 }
 
-pub(super) fn reveal(root: &Path, path: &Path) -> Result<(), String> {
+pub fn reveal(root: &Path, path: &Path) -> Result<(), String> {
     // Shell may run in a different file-system namespace than this process.
     let path = resolved_resource(root, path)?;
     // A fresh thread has no incompatible pre-existing COM apartment, and Shell

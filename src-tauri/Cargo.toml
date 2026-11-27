@@ -17,7 +17,6 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tokio = { version = "1", features = ["process", "io-util", "time", "sync", "rt-multi-thread", "macros", "fs", "net", "signal"] }
 rusqlite = { version = "0.38", default-features = false, features = ["bundled", "backup"] }
-zip = { version = "9.2.2", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
@@ -48,7 +47,6 @@ keyring = { version = "4.2", default-features = false, features = ["v1", "apple-
 tauri-plugin-autostart = "2.7"
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "4.2", default-features = false, features = ["v1", "windows-native-keyring-store"] }
-windows = { version = "0.61", features = ["Data_Xml_Dom", "UI_Notifications", "Foundation", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_System_Registry", "Win32_System_WinRT", "Win32_Security", "Win32_System_JobObjects"] }
 
 
 [dev-dependencies]

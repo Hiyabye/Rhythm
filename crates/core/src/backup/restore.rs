@@ -697,7 +697,7 @@ pub(super) fn clear_restored_activation_tokens(stage: &Path) -> Result<(), Strin
 
 /// What a completed next-launch restore installed, for the reopened window.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub(crate) struct RestoreOutcome {
+pub struct RestoreOutcome {
     pub(super) documents: u64,
     /// Distinct verified resource files restored.
     pub(super) resources: u64,
@@ -738,7 +738,7 @@ pub(super) fn restore_outcome(
 }
 
 /// Stale online-backup snapshots are private to an interrupted `backup_create`.
-pub(crate) fn remove_stale_backup_snapshots(root: &Path) {
+pub fn remove_stale_backup_snapshots(root: &Path) {
     let Ok(items) = fs::read_dir(root) else {
         return;
     };
@@ -757,7 +757,7 @@ pub(crate) fn remove_stale_backup_snapshots(root: &Path) {
 /// Called after the process lock is acquired and before Store::open. Each rename
 /// is recoverable from the journal and previous files remain available.
 /// Returns what was installed when this launch finished a pending restore.
-pub(crate) fn recover_pending_restore(root: &Path) -> Result<Option<RestoreOutcome>, String> {
+pub fn recover_pending_restore(root: &Path) -> Result<Option<RestoreOutcome>, String> {
     let journal = root.join(JOURNAL);
     if !entry_exists(&journal)? {
         #[cfg(windows)]
@@ -940,15 +940,6 @@ pub(crate) fn recover_pending_restore(root: &Path) -> Result<Option<RestoreOutco
     Ok(Some(outcome))
 }
 
-/// The restore this launch finalized, if any; it stays available for the
-/// whole session so a remounted window still reports it.
-#[tauri::command]
-pub(crate) fn backup_restore_outcome(
-    state: tauri::State<'_, crate::AppState>,
-) -> Option<RestoreOutcome> {
-    state.restore_outcome.clone()
-}
-
 /// Verifies the archive into staging and writes the durable restore journal.
 /// The next launch finalizes it through `recover_pending_restore`.
 pub(super) fn stage_restore(
@@ -1014,41 +1005,4 @@ pub(super) fn stage_restore(
         let _ = fs::remove_dir_all(&stage);
     }
     result
-}
-
-#[tauri::command]
-pub(crate) async fn backup_restore(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, crate::AppState>,
-    source: String,
-    confirmed: bool,
-    operation_id: String,
-) -> Result<(), String> {
-    if !confirmed {
-        return Err("복원을 시작하려면 확인이 필요합니다.".into());
-    }
-    let registration = register_cancellation(operation_id)?;
-    let cancellation = registration.cancellation.clone();
-    restore_support(&state.data_root)?;
-    let maintenance = state.exclusive_maintenance().await?;
-    let root = state.data_root.clone();
-    let app_for_exit = app.clone();
-    tokio::task::spawn_blocking(move || {
-        let _registration = registration;
-        check_cancellation(Some(&cancellation))?;
-        let maintenance = maintenance;
-        let output = stage_restore(&root, Path::new(&source), &cancellation);
-        if output.is_ok() || root.join(JOURNAL).exists() {
-            // Keep maintenance closed until exit. The restore is finalized by the
-            // next launch; Rhythm does not relaunch itself because a relaunched
-            // instance can race this process for the single-instance socket and
-            // data-directory lock and then exit silently.
-            maintenance.hold_until_exit();
-            app_for_exit.exit(0);
-        }
-        output
-    })
-    .await
-    .map_err(|_| "복원 준비를 마치지 못했습니다.".to_owned())??;
-    Ok(())
 }

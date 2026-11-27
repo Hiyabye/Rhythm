@@ -30,6 +30,7 @@ rhythm-sources = { path = "../sources", features = ["studium"] }
 scraper = { version = "0.24", default-features = false }
 encoding_rs = "0.8"
 sha2 = "0.10"
+zip = { version = "9.2.2", default-features = false, features = ["deflate"] }
 
 # The retired remote AI key is deleted from the OS credential store on upgrade.
 [target.'cfg(target_os = "macos")'.dependencies]

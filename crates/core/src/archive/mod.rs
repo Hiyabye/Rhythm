@@ -1,6 +1,8 @@
 pub mod cybercampus;
 pub mod model;
 pub mod sync;
+#[cfg(windows)]
+pub mod windows_reveal;
 
 pub use network::Client;
 pub use rhythm_sources::{catalog, dates, parser, pdf, selector, tls, transport as network};
