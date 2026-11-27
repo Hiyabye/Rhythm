@@ -1,29 +1,14 @@
 pub mod cybercampus;
 #[cfg(windows)]
 use rhythm_core::archive::windows_reveal;
-pub use rhythm_core::archive::{app_collected, catalog, model, sync};
+pub use rhythm_core::archive::{model, sync};
 #[cfg(test)]
 pub use rhythm_core::archive::{network, Client};
 
 use crate::AppState;
-use base64::Engine;
 use model::*;
-use std::sync::Arc;
-use sync::with_store;
 use tauri::State;
-use url::Url;
 
-/// The sources an `archive_start` request may collect: every request names
-/// only app-collected sources, and none means all of them.
-fn collected_ids(ids: Option<Vec<String>>) -> Result<Vec<String>, String> {
-    match ids {
-        None => Ok(vec![catalog::CYBERCAMPUS_SOURCE_ID.to_string()]),
-        Some(ids) if ids.iter().all(|id| app_collected(id)) => Ok(ids),
-        Some(_) => Err(
-            "학교 게시판 공지는 공지 피드로 받습니다. 공지 피드의 지금 받기를 눌러 주세요.".into(),
-        ),
-    }
-}
 #[cfg(test)]
 pub fn client() -> Result<Client, String> {
     network::Client::new(concat!(
@@ -35,8 +20,7 @@ pub fn client() -> Result<Client, String> {
 
 #[tauri::command]
 pub async fn archive_sources(state: State<'_, AppState>) -> Result<Vec<SourceInfo>, String> {
-    let _lease = state.operation_gate.shared().await?;
-    with_store(&state.store, |s| s.sources())
+    state.archive().sources().await
 }
 #[tauri::command]
 pub async fn archive_subscribe(
@@ -44,90 +28,37 @@ pub async fn archive_subscribe(
     id: String,
     subscribed: bool,
 ) -> Result<SubscribeResult, String> {
-    let _lease = state.operation_gate.shared().await?;
-    with_store(&state.store, |s| {
-        if !s.source_extension_enabled(&id)? {
-            return Err("이 정보원의 확장 기능을 먼저 켜 주세요.".into());
-        }
-        s.subscribe(&id, subscribed)?;
-        // Under the store lock, as job admission, so a running job and this
-        // choice agree on whether it collects the source.
-        if !subscribed {
-            state.archive.cancel_source(&id);
-        }
-        Ok(SubscribeResult {
-            sources: s.sources()?,
-            groups: s.source_groups()?,
-        })
-    })
+    state.archive().subscribe(&id, subscribed).await
 }
 #[tauri::command]
 pub async fn archive_source_groups(state: State<'_, AppState>) -> Result<Vec<SourceGroup>, String> {
-    let _lease = state.operation_gate.shared().await?;
-    with_store(&state.store, |s| s.source_groups())
+    state.archive().source_groups().await
 }
-/// Turns a settings group of public boards on or off.
 #[tauri::command]
 pub async fn archive_set_group(
     state: State<'_, AppState>,
     id: String,
     enabled: bool,
 ) -> Result<SubscribeResult, String> {
-    let _lease = state.operation_gate.shared().await?;
-    with_store(&state.store, |s| {
-        if !s.enabled(crate::extensions::NOTICES)? {
-            return Err("이 정보원의 확장 기능을 먼저 켜 주세요.".into());
-        }
-        s.set_source_group(&id, enabled)?;
-        Ok(SubscribeResult {
-            sources: s.sources()?,
-            groups: s.source_groups()?,
-        })
-    })
+    state.archive().set_group(&id, enabled).await
 }
 #[tauri::command]
 pub async fn archive_summary(state: State<'_, AppState>) -> Result<ArchiveSummary, String> {
-    let _lease = state.operation_gate.shared().await?;
-    with_store(&state.store, |s| s.archive_summary())
+    state.archive().summary().await
 }
 #[tauri::command]
 pub async fn archive_query(
     state: State<'_, AppState>,
     query: ArchiveQuery,
 ) -> Result<ArchivePage, String> {
-    let store = state.store.clone();
-    let _lease = state.operation_gate.shared().await?;
-    tauri::async_runtime::spawn_blocking(move || with_store(&store, |s| s.archive_query(&query)))
-        .await
-        .map_err(|_| "로컬 검색 작업을 완료하지 못했습니다.")?
+    state.archive().query(query).await
 }
-/// Relevance-ordered search. When the local embedding model can embed the
-/// query, notices with a similar meaning join the text matches; otherwise the
-/// ranking is text-only. The query never leaves the device.
 #[tauri::command]
 pub async fn archive_ranked_query(
     state: State<'_, AppState>,
     query: ArchiveQuery,
 ) -> Result<ArchivePage, String> {
-    let _lease = state.operation_gate.shared().await?;
-    crate::storage::search_terms(&query.query)?;
-    let semantic = state
-        .classifier
-        .query_vector(&state.store, &state.models, &state.data_root, &query.query)
-        .await;
-    let store = state.store.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        with_store(&store, |s| {
-            s.archive_ranked_query(
-                &query,
-                semantic
-                    .as_ref()
-                    .map(|(identity, vector)| (identity.as_str(), vector.as_slice())),
-            )
-        })
-    })
-    .await
-    .map_err(|_| "로컬 검색 작업을 완료하지 못했습니다.")?
+    state.archive().ranked_query(query).await
 }
 #[tauri::command]
 pub async fn archive_document(
@@ -135,31 +66,15 @@ pub async fn archive_document(
     id: i64,
     revision_id: Option<i64>,
 ) -> Result<DocumentDetail, String> {
-    let _lease = state.operation_gate.shared().await?;
-    with_store(&state.store, |s| s.document(id, revision_id))
+    state.archive().document(id, revision_id).await
 }
-/// Fetches the body of an opened feed notice from the school; the reader
-/// shows the feed's excerpt meanwhile. Returns whether the school's text
-/// differs from the revision the feed described.
 #[tauri::command]
 pub async fn archive_fetch_body(state: State<'_, AppState>, id: i64) -> Result<bool, String> {
-    let _lease = state.operation_gate.shared().await?;
-    state
-        .archive
-        .bodies
-        .fetch(&state.store, &state.data_root, &state.network, id)
-        .await
+    state.archive().fetch_body(id).await
 }
-/// Downloads the images and attachments of an opened notice that were not
-/// tried yet. The reader calls it once the body is here and reloads after.
 #[tauri::command]
 pub async fn archive_fetch_resources(state: State<'_, AppState>, id: i64) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
-    state
-        .archive
-        .bodies
-        .resources(&state.store, &state.data_root, &state.network, id)
-        .await
+    state.archive().fetch_resources(id).await
 }
 #[tauri::command]
 pub async fn archive_state(
@@ -168,32 +83,22 @@ pub async fn archive_state(
     is_read: Option<bool>,
     saved: Option<bool>,
 ) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
-    with_store(&state.store, |s| s.set_document_state(id, is_read, saved))
+    state.archive().set_state(id, is_read, saved).await
 }
 #[tauri::command]
 pub async fn archive_trash(state: State<'_, AppState>, ids: Vec<i64>) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
-    with_store(&state.store, |s| s.trash_documents(&ids))
+    state.archive().trash(&ids).await
 }
 #[tauri::command]
 pub async fn archive_restore(state: State<'_, AppState>, ids: Vec<i64>) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
-    with_store(&state.store, |s| s.restore_documents(&ids))
+    state.archive().restore(&ids).await
 }
-/// Permanently deletes the given trashed notices, or all of 휴지통 without `ids`.
 #[tauri::command]
 pub async fn archive_purge(
     state: State<'_, AppState>,
     ids: Option<Vec<i64>>,
 ) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
-    let orphaned = with_store(&state.store, |s| s.purge_trashed(ids.as_deref()))?;
-    // The rows are gone, so a file left behind is only unused disk space.
-    for path in orphaned {
-        let _ = tokio::fs::remove_file(state.data_root.join(path)).await;
-    }
-    Ok(())
+    state.archive().purge(ids.as_deref()).await
 }
 #[tauri::command]
 pub async fn archive_start(
@@ -201,78 +106,34 @@ pub async fn archive_start(
     source_ids: Option<Vec<String>>,
     mode: String,
 ) -> Result<SyncStatus, String> {
-    let source_ids = collected_ids(source_ids)?;
-    let lease = state.operation_gate.shared().await?;
-    state
-        .archive
-        .start_tracked_admitted(
-            state.store.clone(),
-            state.data_root.clone(),
-            Arc::new(cybercampus::client::Reqwest::new(crate::USER_AGENT)),
-            Some(source_ids),
-            mode,
-            lease,
-        )
-        .map(|(status, _)| status)
+    state.archive().start(source_ids, mode).await
 }
 #[tauri::command]
 pub async fn archive_cancel(state: State<'_, AppState>) -> Result<SyncStatus, String> {
-    let _lease = state.operation_gate.shared().await?;
-    state.archive.cancel();
-    state.archive.status()
+    state.archive().cancel().await
 }
 #[tauri::command]
 pub async fn archive_status(state: State<'_, AppState>) -> Result<SyncStatus, String> {
-    let _lease = state.operation_gate.shared().await?;
-    state.archive.status()
+    state.archive().status().await
 }
 #[tauri::command]
 pub async fn archive_retry_resource(
     state: State<'_, AppState>,
     id: i64,
 ) -> Result<SyncStatus, String> {
-    let lease = state.operation_gate.shared().await?;
-    state.archive.retry_admitted(
-        state.store.clone(),
-        state.data_root.clone(),
-        state.network.clone(),
-        Arc::new(cybercampus::client::Reqwest::new(crate::USER_AGENT)),
-        id,
-        lease,
-    )
+    state.archive().retry_resource(id).await
 }
 #[tauri::command]
 pub async fn archive_resource_image(state: State<'_, AppState>, id: i64) -> Result<String, String> {
-    let _lease = state.operation_gate.shared().await?;
-    let (_, bytes) = sync::local_resource(&state.store, &state.data_root, id).await?;
-    // Released archives may label an inline raster as an attachment when both
-    // roles shared its URL. Local integrity, size and raster bytes are the boundary.
-    image_data_uri(&bytes)
+    state.archive().resource_image(id).await
 }
-fn image_data_uri(bytes: &[u8]) -> Result<String, String> {
-    if bytes.len() > 10 * 1024 * 1024 {
-        return Err("이 자료는 지원되는 로컬 이미지가 아닙니다.".into());
-    }
-    let mime = sync::image_mime(bytes).ok_or("안전한 로컬 이미지 형식이 아닙니다.")?;
-    Ok(format!(
-        "data:{mime};base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(bytes)
-    ))
-}
+/// Reveals an integrity-checked archive file in the file manager; never
+/// executes or opens its contents.
 #[tauri::command]
 pub async fn archive_reveal_resource(state: State<'_, AppState>, id: i64) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
-    let (resource, _) = sync::local_resource(&state.store, &state.data_root, id).await?;
-    // Reveal only an integrity-checked archive file; never execute/open its contents.
+    let path = state.archive().resource_to_reveal(id).await?;
     #[cfg(windows)]
     {
-        let path = windows_reveal::resource_path(
-            &state.data_root,
-            resource
-                .local_path
-                .as_deref()
-                .ok_or("로컬 자료 경로가 없습니다.")?,
-        )?;
         let root = state.data_root.clone();
         tokio::task::spawn_blocking(move || windows_reveal::reveal(&root, &path))
             .await
@@ -281,53 +142,13 @@ pub async fn archive_reveal_resource(state: State<'_, AppState>, id: i64) -> Res
             })?
     }
     #[cfg(not(windows))]
-    tauri_plugin_opener::reveal_item_in_dir(
-        state
-            .data_root
-            .join(resource.local_path.ok_or("로컬 자료 경로가 없습니다.")?),
-    )
-    .map_err(|_| "저장 폴더를 열지 못했습니다. 데이터 저장 위치를 확인해 주세요.".into())
+    tauri_plugin_opener::reveal_item_in_dir(path)
+        .map_err(|_| "저장 폴더를 열지 못했습니다. 데이터 저장 위치를 확인해 주세요.".into())
 }
+/// Opens a notice's original page in the OS browser after core checks it.
 #[tauri::command]
 pub async fn archive_open_original(url: String) -> Result<(), String> {
-    let parsed = Url::parse(&url).map_err(|_| "외부 링크 주소가 올바르지 않습니다.")?;
-    if !matches!(parsed.scheme(), "https" | "http")
-        || parsed.host_str().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || url.len() > 8192
-    {
-        return Err("HTTP 또는 HTTPS 외부 링크만 열 수 있습니다.".into());
-    }
+    let parsed = rhythm_core::app::original_link(&url)?;
     tauri_plugin_opener::open_url(parsed.as_str(), None::<&str>)
         .map_err(|_| "기본 브라우저에서 외부 링크를 열지 못했습니다.".into())
-}
-
-#[cfg(test)]
-mod image_tests {
-    use super::*;
-    #[test]
-    fn archive_start_collects_only_cybercampus() {
-        assert_eq!(collected_ids(None).unwrap(), ["cybercampus"]);
-        assert_eq!(
-            collected_ids(Some(vec!["cybercampus".into()])).unwrap(),
-            ["cybercampus"]
-        );
-        for ids in [
-            vec!["sogang-academic".to_string()],
-            vec!["cybercampus".into(), "computing-updates".into()],
-        ] {
-            assert!(collected_ids(Some(ids)).unwrap_err().contains("공지 피드"));
-        }
-    }
-    #[test]
-    fn verified_raster_images_do_not_depend_on_legacy_resource_role() {
-        let png = b"\x89PNG\r\n\x1a\nlocal raster";
-        assert!(image_data_uri(png)
-            .unwrap()
-            .starts_with("data:image/png;base64,"));
-        assert!(image_data_uri(b"%PDF-document").is_err());
-        assert!(image_data_uri(b"<svg onload=\"alert(1)\"></svg>").is_err());
-        assert!(image_data_uri(&vec![0; 10 * 1024 * 1024 + 1]).is_err());
-    }
 }
