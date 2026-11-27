@@ -169,7 +169,10 @@
         error = archiveError(reason);
       }
     } finally {
-      if (mounted && token === generation) { busy = false; void refreshChangedState(); }
+      // A reload in between (a notification click) moves the generation on; the
+      // controls must still come back, and only this call can clear its own flag.
+      if (mounted) busy = false;
+      if (mounted && token === generation) void refreshChangedState();
     }
   }
 
