@@ -27,7 +27,7 @@ use windows::{
     },
 };
 
-use crate::core::windows_identity;
+use crate::windows_identity;
 
 const SETTING_NOT_FOUND: i32 = 0x80070490_u32 as i32;
 
@@ -37,7 +37,7 @@ fn to_wide(value: &str) -> Vec<u16> {
 
 /// Call before creating any window so Windows associates this process with
 /// the same identity as the installed Start Menu shortcut.
-pub(crate) fn initialize_process_identity() -> Result<(), String> {
+pub fn initialize_process_identity() -> Result<(), String> {
     let aumid = to_wide(&windows_identity::current().aumid);
     unsafe {
         windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(PCWSTR::from_raw(
@@ -325,17 +325,17 @@ impl Drop for RuntimeGuard {
     }
 }
 
-pub(crate) fn token_from_uri(uri: &str) -> Option<&str> {
+pub fn token_from_uri(uri: &str) -> Option<&str> {
     windows_identity::current().notification_token_from_uri(uri)
 }
 
-pub(super) fn new_token() -> Result<String, String> {
+pub fn new_token() -> Result<String, String> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).map_err(|_| "알림 보안 토큰을 만들지 못했습니다.".to_string())?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-pub(crate) fn authorization() -> &'static str {
+pub fn authorization() -> &'static str {
     if !protocol_registered_to_current_exe() {
         return "unavailable";
     }
@@ -356,7 +356,7 @@ pub(crate) fn authorization() -> &'static str {
 /// User-invoked connection test, separate from the ordinary delivery ledger.
 /// A not-found error is unknown, never permission. Only this explicit action
 /// may submit a neutral test toast, which lets Windows initialize its sender.
-pub(crate) fn request_connection_test() -> Result<(&'static str, bool), String> {
+pub fn request_connection_test() -> Result<(&'static str, bool), String> {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
     static LAST_TEST: Mutex<Option<Instant>> = Mutex::new(None);
@@ -426,14 +426,14 @@ fn escape_xml(text: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-pub(crate) struct PreparedToast {
+pub struct PreparedToast {
     notifier: ToastNotifier,
     toast: ToastNotification,
     // Declared last so the COM objects are released before uninitialization.
     _runtime: RuntimeGuard,
 }
 
-pub(super) fn prepare(title: &str, body: &str, token: &str) -> Result<PreparedToast, String> {
+pub fn prepare(title: &str, body: &str, token: &str) -> Result<PreparedToast, String> {
     prepare_for_uri(
         title,
         body,
@@ -441,27 +441,19 @@ pub(super) fn prepare(title: &str, body: &str, token: &str) -> Result<PreparedTo
     )
 }
 
-pub(crate) fn prepare_studium(
-    title: &str,
-    body: &str,
-    token: &str,
-) -> Result<PreparedToast, String> {
+pub fn prepare_studium(title: &str, body: &str, token: &str) -> Result<PreparedToast, String> {
     prepare_for_uri(
         title,
         body,
-        &format!("{}{token}", crate::studium::notification::token_prefix()),
+        &format!("{}{token}", windows_identity::current().studium_prefix),
     )
 }
 
-pub(super) fn prepare_reminder(
-    title: &str,
-    body: &str,
-    token: &str,
-) -> Result<PreparedToast, String> {
+pub fn prepare_reminder(title: &str, body: &str, token: &str) -> Result<PreparedToast, String> {
     prepare_for_uri(
         title,
         body,
-        &format!("{}{token}", super::reminders::token_prefix()),
+        &format!("{}{token}", windows_identity::current().reminder_prefix),
     )
 }
 
@@ -479,8 +471,12 @@ fn prepare_for_uri(title: &str, body: &str, uri: &str) -> Result<PreparedToast, 
         );
     }
     if token_from_uri(uri).is_none()
-        && crate::studium::notification::token_from_uri(uri).is_none()
-        && super::reminders::token_from_uri(uri).is_none()
+        && windows_identity::current()
+            .studium_token_from_uri(uri)
+            .is_none()
+        && windows_identity::current()
+            .reminder_token_from_uri(uri)
+            .is_none()
     {
         return Err("알림 활성화 정보가 올바르지 않습니다.".into());
     }
@@ -504,7 +500,7 @@ fn prepare_for_uri(title: &str, body: &str, uri: &str) -> Result<PreparedToast, 
     })
 }
 
-pub(crate) fn show(prepared: PreparedToast) -> Result<(), String> {
+pub fn show(prepared: PreparedToast) -> Result<(), String> {
     // After this call starts, an error is an attempted handoff; do not retract
     // the durable attempt because the OS result can be ambiguous.
     prepared

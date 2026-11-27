@@ -1,5 +1,5 @@
-//! Per-build Windows OS identity derived from Tauri's bundle `identifier` and
-//! `productName`.
+//! Per-build Windows OS identity derived from the app's bundle `identifier`
+//! and `productName`.
 //!
 //! Production (`io.github.hiyabye.rhythm` / `Rhythm`) keeps its historical
 //! AUMID, `rhythm-win:` protocol scheme, `Rhythm.lnk` shortcut and `Run` value
@@ -29,7 +29,7 @@ pub struct WindowsIdentity {
 
 static CURRENT: OnceLock<WindowsIdentity> = OnceLock::new();
 
-/// Initialize the process-wide Windows identity from Tauri's resolved config.
+/// Initialize the process-wide Windows identity from the app's resolved config.
 /// Call once at the start of `main()` before registering the process AUMID or
 /// handling single-instance protocol arguments.
 #[cfg(windows)]
@@ -102,7 +102,7 @@ impl WindowsIdentity {
         }
     }
 
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, test, feature = "test-support"))]
     pub fn notification_token_from_uri<'a>(&self, uri: &'a str) -> Option<&'a str> {
         let token = uri.strip_prefix(self.notification_prefix.as_str())?;
         crate::storage::notification_activation::valid_token(token).then_some(token)

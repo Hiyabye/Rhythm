@@ -33,10 +33,13 @@ sha2 = "0.10"
 
 # The retired remote AI key is deleted from the OS credential store on upgrade.
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2-user-notifications = { version = "0.3.2", features = ["block2", "UNUserNotificationCenter", "UNNotificationSettings"] }
 keyring = { version = "4.2", default-features = false, features = ["v1", "apple-native-keyring-store"] }
 [target.'cfg(windows)'.dependencies]
-# Job objects tie the embedding server to Rhythm; disk and memory checks.
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_System_JobObjects", "Win32_Security"] }
+# Job objects tie the embedding server to Rhythm; disk and memory checks; the
+# WinRT toast sender with its shortcut, protocol and settings checks.
+windows = { version = "0.61", features = ["Data_Xml_Dom", "UI_Notifications", "Foundation", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_System_Registry", "Win32_System_WinRT", "Win32_System_JobObjects", "Win32_Security"] }
 keyring = { version = "4.2", default-features = false, features = ["v1", "windows-native-keyring-store"] }
 
 [dev-dependencies]
