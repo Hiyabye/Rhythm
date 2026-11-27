@@ -6,79 +6,99 @@
 
 web
 
-(A Tauri 2 desktop app: the UI is Svelte 5 in the system webview, WebKit on macOS and WebView2 on Windows. Supported targets are macOS on Apple Silicon and Windows 11 x64. It is not a website and not a native iOS/Android app.)
+Rhythm is a Tauri 2 desktop app. The UI is Svelte 5 in the system webview (WebKit on macOS, WebView2 on Windows). Supported targets are macOS on Apple Silicon and Windows 11 x64. It is not a website and not a native iOS/Android app.
 
 ## Users
 
 One primary user: the author, a Sogang University computer science and engineering student, using Rhythm on their own Mac for their own day. Other people may install it, but they do not drive product decisions.
 
-The job: never miss school information that matters, without checking a dozen university boards by hand, while keeping all personal data on the device.
+The job: never miss school information that matters, without checking a dozen university boards by hand, and keep all personal data on the device.
 
-Since v2.0.0 one central collector (a scheduled GitHub Actions job) gathers the public boards, embeds and classifies them once through Cloudflare Workers AI, and publishes a signed feed; every app mirrors the whole feed, so the server learns nothing about any user. Personal data (interests, feedback, saved and read state, todos, search queries, Cybercampus) never leaves the device.
+One central collector (a scheduled GitHub Actions job) gathers the public boards, embeds and classifies them once, and publishes a signed feed. Every app mirrors the whole feed, so the server learns nothing about any user. Interests, feedback, saved and read state, todos, search queries and Cybercampus data never leave the device.
 
 ## Product Purpose
 
-Rhythm mirrors public Sogang notice boards from the signed feed into a local archive and fetches a notice's full body and files from the school when the user opens it. It ranks what matters to this user with explainable, deterministic rules, shows the feed's dates in a local calendar and the feed's categories and similar notices, and embeds search queries and Cybercampus notices with a small local embedding model. Archived content stays readable and searchable offline.
+Rhythm mirrors public Sogang notice boards from the signed feed into a local archive. It fetches a notice's full body and files from the school when the user opens it. Archived notices stay readable and searchable offline.
 
-The direction is a personal planning hub: the place the user's day is organized around. Notices are the first data source. An opt-in Cybercampus connector adds the user's own course notices and deadlines. Opportunities (기회), a calendar with todos and Studium seat checks ship as opt-in extensions on the same archive, search and personalization core; a personal agent remains a possible future decision, not a current feature.
+It ranks what matters to this user with explainable, deterministic rules. It shows the feed's dates in a local calendar, and the feed's categories and similar notices. A small local embedding model handles search queries and Cybercampus notices.
 
-Success: the user trusts Rhythm to bring forward what matters, at the right time, and rarely needs to visit school sites to check.
+The direction is a personal planning hub, the place the user's day is organized around. Notices come first. Opt-in extensions add more on the same archive, search and personalization core:
+
+- Cybercampus: the user's own course notices and deadlines.
+- Opportunities (기회), a calendar with todos, and Studium seat checks.
+
+A personal agent is a possible future decision, not a current feature.
+
+Success: the user trusts Rhythm to bring forward what matters at the right time, and rarely needs to visit school sites.
 
 ## Positioning
 
-- **Local-first for everything personal.** No account, telemetry or cloud storage of user data. Public notices come from one signed feed that is identical for every user; the app never uploads anything. Search queries and Cybercampus notices are embedded on the device in a bundled llama.cpp server that only Rhythm starts and can reach.
-- **Explainable, not oracular.** Recommendations are ranked by deterministic score signals, never by a model. Today keeps each pick to one line, so the signals are not shown there (user decision, 2026-11-07). AI output is optional and labeled. Its only effect on ranking is a small, capped bonus for notices similar to ones the user saved or marked interested, shown as a reason and off while AI is off; it never creates urgency.
-- **User decides.** Subscriptions, collection, model installs, background sync and notifications are all off until the user turns them on. Learned preferences can be inspected, edited and deleted.
-- **An archive, not just a feed reader.** Notices are preserved with meaningful revision history, local attachments and offline reading once opened. Fetch/parse failures never erase good content.
+- **Local-first for everything personal.** No account, telemetry or cloud storage of user data. Public notices come from one signed feed that is the same for every user, and the app uploads nothing. Embedding runs on the device in a bundled llama.cpp server that only Rhythm starts and can reach.
+- **Explainable, not oracular.** Deterministic score signals rank recommendations, never a model. Today shows one line per pick, so it does not show the signals (user decision, 2026-11-07). AI output is optional and labeled. Its only effect on ranking is a small, capped bonus for notices similar to ones the user saved or marked interested. That bonus is shown as a reason, is off while AI is off, and never creates urgency.
+- **User decides.** Subscriptions, collection, model installs, background sync and notifications are off until the user turns them on. The user can inspect, edit and delete learned preferences.
+- **An archive, not just a feed reader.** Notices keep meaningful revision history and local attachments. Fetch or parse failures never erase good content.
 
 ## Operating Context
 
-The usage moments that matter most:
+The moments that matter most:
 
-1. **Background + alerts.** Rhythm runs from the menu bar (the notification area on Windows) with the window closed. The feed sync (every 30 minutes while open), opt-in Cybercampus sync and native notifications pull the user in only when something matters (sensitivity modes, quiet hours, deduplication, rate limits).
-2. **Planning hub.** Rhythm becomes the center of the day, especially as planning-oriented extensions arrive.
+1. **Background and alerts.** Rhythm runs from the menu bar (the notification area on Windows) with the window closed. Feed sync, the opt-in Cybercampus sync and native notifications interrupt the user only when something matters. Sensitivity modes, quiet hours, deduplication and rate limits control this.
+2. **Planning hub.** Rhythm is the center of the day, more so as planning extensions arrive.
 
-Also supported but secondary: a quick check of Today, deep reading of long notices with tables and attachments, and archive search.
+Secondary: a quick look at Today, deep reading of long notices with tables and attachments, and archive search.
 
-Environment: a desktop window with native window controls and a 640 px minimum width, a tray item (menu bar on macOS, notification area on Windows), native notifications and native confirmation dialogs. The window may be hidden for long periods.
+Environment: a desktop window with native window controls and a 640 px minimum width, a tray item, native notifications and native confirmation dialogs. The window may stay hidden for long periods.
 
-Current information architecture: every feature beyond the core shell is a built-in extension the user turns on, modeled on Obsidian's plugins (built-in only, never loaded from outside). The core is 오늘 and 설정 (확장 기능, 일반, 데이터 및 정보 with backup and updates). Extensions add 받은 소식 and its boards (서강대학교 공지), 과제·마감 (사이버캠퍼스), 검색, 보관함, Today's 나를 위한 소식 and 앞으로 7일, 기회 (AI 분류), 캘린더, 열람실 and 알림·백그라운드; boards, Cybercampus, personalization, AI and 알림·백그라운드 add settings panes. 휴지통 shows while a source extension is on or it still holds notices. A new profile starts blank; upgraded profiles keep what they had.
+Information architecture: every feature beyond the core shell is a built-in extension the user turns on, like Obsidian's plugins. Extensions are built in and never loaded from outside.
+
+- The core is 오늘 and 설정 (확장 기능, 일반, 데이터 및 정보 with backup and updates).
+- Extensions add 받은 소식 and its boards (서강대학교 공지), 과제·마감 (사이버캠퍼스), 검색, 보관함, Today's 나를 위한 소식 and 앞으로 7일, 기회 (AI 분류), 캘린더, 열람실 and 알림·백그라운드.
+- Boards, Cybercampus, personalization, AI and 알림·백그라운드 add settings panes.
+- 휴지통 shows while a source extension is on or while it still holds notices.
+- A new profile starts blank. Upgraded profiles keep what they had.
 
 ## Capabilities and Constraints
 
-- 172 cataloged public boards (main site, colleges, departments, graduate schools, offices and institutes; the catalog is in `crates/sources/AGENTS.md`), delivered through the feed, plus the opt-in Cybercampus course-notice source that the app collects itself with the user's own login. Unsupported sources, if any, are shown as such and are never presented as working.
-- Public boards have no collect controls in the app: the board settings show the feed's age, the last check and each board's collector health, and a stale feed or a feed format the app cannot read is shown, never hidden. Cybercampus keeps **새로고침**; its progress shows real counts and phases, never fabricated percentages.
-- Reader: sanitized local content only, with no scripts, iframes, remote images or live school pages. Original links open in the OS browser on explicit action. Attachments are revealed in Finder or File Explorer, never executed. Iframe-only notices keep metadata only and explain why, except that a school PDF-viewer body is shown as the PDF's extracted text with the PDF attached.
-- AI: feed notices carry the collector's Qwen3-Embedding 0.6B vectors and categories (Workers AI), so categories and similar notices need no local model. The same model as a user-installed GGUF, run by a bundled llama.cpp server (Metal or CPU on macOS; CPU on Windows), embeds search queries for meaning-based search and classifies Cybercampus notices. AI summaries and the remote engine were retired (#226). Calendar dates come from deterministic text rules, not a model. Classification and dates can be wrong, and the UI must say to verify in the original.
-- Personalization: explicit interests, per-notice interested/not interested feedback, learned topics from saves and positive feedback only, 180-day expiry, full reset.
-- Lifecycle: close-to-background, login start, hidden login start, scheduler and notifications all default off. The automatic update check (builds with the updater key) defaults on by user decision; it only announces, and installing always needs confirmation.
-- Single-file `.rhythm-backup` backup/restore (unencrypted, excludes model weights). Restore quits the app and finalizes on the next manual launch.
-- Destructive actions require a confirmation that names what changes and what is kept.
-- Distribution: ad-hoc-signed macOS DMG (not notarized) and unsigned per-user Windows installer. These are deliberate choices, not gaps. Releases carry Tauri-updater-signed packages for in-app updates, which the user confirms before installing; the in-app install path is verified only under validation identifiers with a loopback manifest (one Mac, one Windows PC), and builds without the key show manual steps.
-- Frontend: Svelte 5 runes, TypeScript, Tailwind plus semantic CSS (`src/app.css`), Pretendard bundled locally (no font CDN). The Tauri webview cannot rely on remote assets.
+- **Sources:** 172 cataloged public boards (catalog: `crates/sources/AGENTS.md`), delivered through the feed. The opt-in Cybercampus source is collected by the app with the user's own login. Unsupported sources are shown as unsupported, never as working.
+- **Board controls:** Public boards have no collect controls in the app. Board settings show the feed's age, the last check and each board's collector health. A stale feed or an unreadable feed format is shown, never hidden. Cybercampus keeps **새로고침**, and its progress shows real counts and phases, never made-up percentages.
+- **Reader:** Sanitized local content only. No scripts, iframes, remote images or live school pages. Original links open in the OS browser on explicit action. Attachments are revealed in Finder or File Explorer, never executed. Iframe-only notices keep metadata only and say why. The exception is a school PDF-viewer body, which shows the PDF's extracted text with the PDF attached.
+- **AI:** Feed notices carry the collector's Qwen3-Embedding 0.6B vectors and categories, so categories and similar notices need no local model. The same model, installed by the user as a GGUF and run by the bundled llama.cpp server (Metal or CPU on macOS, CPU on Windows), embeds search queries for meaning-based search and classifies Cybercampus notices. AI summaries and the remote engine are retired. Calendar dates come from deterministic text rules, not a model. Classification and dates can be wrong, and the UI must say to check the original.
+- **Personalization:** Explicit interests, per-notice interested/not interested feedback, topics learned only from saves and positive feedback, 180-day expiry, full reset.
+- **Lifecycle:** Close-to-background, login start, hidden login start, the scheduler and notifications are all off by default. The automatic update check (only in builds with the updater key) is on by default by user decision. It only announces, and installing always needs confirmation.
+- **Backup:** One `.rhythm-backup` file, unencrypted, without model weights. Restore quits the app and finishes on the next manual launch.
+- **Destructive actions** need a confirmation that names what changes and what is kept.
+- **Distribution:** An ad-hoc-signed macOS DMG (not notarized) and an unsigned per-user Windows installer. These are deliberate choices, not gaps. Releases carry Tauri-updater-signed packages for in-app updates, which the user confirms before installing. The in-app install path is verified only under validation identifiers with a loopback manifest (one Mac, one Windows PC). Builds without the key show manual steps.
+- **Frontend:** Svelte 5 runes, TypeScript, Tailwind plus semantic CSS (`src/app.css`), Pretendard bundled locally with no font CDN. The webview cannot rely on remote assets.
 
 ## Brand Commitments
 
-- **Native macOS look for the whole app (standing user decision, 2026-11-02).** In the redesign direction round, the user chose the category standard on purpose: a macOS-native app (source-list sidebar, system list rows, one system accent, light and dark themes) built without irony. Things 3 and Fantastical set the craft bar. This covers every screen, including Settings and the reader, not only the shell and Today. The same UI currently renders on Windows; whether Windows should get its own look has not been decided.
-- Otherwise nothing is binding. The name "Rhythm", the Beat four-bar mark (`assets/branding/beat.svg`), the source-list navigation and the "command center" tagline are current but replaceable.
+- **Native macOS look for the whole app (standing user decision, 2026-11-02).** The user chose the category standard on purpose: a macOS-native app with a source-list sidebar, system list rows, one system accent and light and dark themes, built without irony. Things 3 and Fantastical set the craft bar. This covers every screen, including Settings and the reader. The same UI renders on Windows. Whether Windows gets its own look is undecided.
+- Nothing else is binding. The name "Rhythm", the Beat four-bar mark (`assets/branding/beat.svg`), the source-list navigation and the "command center" tagline are current but replaceable.
 
-Voice that stays: all user-facing UI, feedback and errors are in natural Korean. Internal identifiers and model names stay recognizable. Copy is honest about limits: it never claims delivery, verification, completeness or accuracy that wasn't established.
+Voice: all user-facing UI, feedback and errors are in natural Korean. Internal identifiers and model names stay recognizable. Copy is honest about limits. It never claims delivery, verification, completeness or accuracy that was not established.
 
 ## Evidence on Hand
 
 - Real archived Sogang notices exist only in the user's local profile. Fixtures in `crates/sources/src/fixtures/` hold official notice content that keeps its original rights.
 - No testimonials, user counts, benchmarks or press exist. Do not invent any.
-- Inference speed was measured on one machine only ([AI evaluation](docs/AI_EVALUATION.md)); it is not a performance promise.
+- Inference speed was measured on one machine only ([AI evaluation](docs/AI_EVALUATION.md)). It is not a performance promise.
 - Mocked-IPC Playwright UI tests (`npm run test:ui`) build and serve the real frontend for visual checks. They do not verify native behavior.
 
 ## Product Principles
 
-1. **Quiet until it matters.** Rhythm spends most of its life in the background. Interruptions must be earned, and the open window should be calm, not a dashboard of alerts.
-2. **Truth over reassurance.** Show real state: unconfirmed, partial, failed, stale, unsupported. Never fill gaps with fictional summaries, fake activity or success claims.
+1. **Quiet until it matters.** Rhythm spends most of its life in the background. Interruptions must be earned. The open window should be calm, not a dashboard of alerts.
+2. **Truth over reassurance.** Show real state: unconfirmed, partial, failed, stale, unsupported. Never fill gaps with made-up summaries, fake activity or success claims.
 3. **The user stays in control.** Nothing collects, downloads, learns or notifies without an explicit choice, and every choice can be reversed.
 4. **Grounded intelligence.** AI is an optional, labeled layer beside the original. Rankings and reasons come from deterministic signals.
 5. **Built to grow into a hub.** New data sources and planning extensions should fit the same structure without redesigning the shell.
 
 ## Accessibility & Inclusion
 
-Keep existing commitments: keyboard operation with visible focus, a skip link, landmarks and ordered headings, status/alert semantics, accessible names on icon buttons, no state communicated by color alone, 4.5:1 normal-text contrast in light and dark themes, and reduced-motion styles. Light, dark and system themes. Not yet verified: spoken VoiceOver output, OS text size/zoom and increased contrast.
+Keep these commitments:
+
+- Keyboard operation with visible focus, a skip link, landmarks and ordered headings.
+- Status and alert semantics, and accessible names on icon buttons.
+- No state shown by color alone, and 4.5:1 normal-text contrast in light and dark themes.
+- Reduced-motion styles, and light, dark and system themes.
+
+Not yet verified: spoken VoiceOver output, OS text size and zoom, and increased contrast.
