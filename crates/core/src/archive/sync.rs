@@ -183,6 +183,15 @@ impl Controller {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
     }
+    /// Waits for the running job only while `extension` owns it; a job of
+    /// another extension keeps running and is not waited for.
+    pub async fn wait_owned_by(&self, extension: &str) {
+        while self.busy.load(Ordering::Acquire)
+            && self.owner.lock().is_ok_and(|owner| *owner == extension)
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
     #[cfg(test)]
     fn reserve(&self) -> Result<(), String> {
         self.reserve_task(0, crate::extensions::CYBERCAMPUS)

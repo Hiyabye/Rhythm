@@ -112,7 +112,7 @@ impl Settings<'_> {
             let mut studium = changed.studium;
             for work in extension.settles {
                 match work {
-                    Work::Archive => app.archive.wait().await,
+                    Work::Archive => app.archive.wait_owned_by(id).await,
                     Work::Bodies => app.archive.bodies.wait().await,
                     Work::Studium => {
                         crate::studium::jobs::finish_disable(
