@@ -5,6 +5,10 @@
 /// A notification click for the main window.
 #[derive(Clone, Debug)]
 pub enum Event {
+    /// A notice digest (`proactive://notification-clicked`).
+    NoticeClicked(crate::proactive::NotificationActivation),
+    /// A todo reminder (`calendar://reminder-clicked`): the todo's day.
+    ReminderClicked(String),
     /// A seat alert (`studium://notification-clicked`): the room's ID.
     StudiumClicked(String),
 }

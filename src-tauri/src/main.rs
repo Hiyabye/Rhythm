@@ -478,7 +478,9 @@ fn main() {
                 archive.clone(),
                 feed.clone(),
                 data_root.clone(),
-                app.handle().clone(),
+                Arc::new(shell::AppShell(app.handle().clone())),
+                tauri::async_runtime::handle().inner().clone(),
+                USER_AGENT,
                 operation_gate.clone(),
             );
             // Bundled llama.cpp builds; the private runtime directory holds the

@@ -14,6 +14,10 @@ impl Shell for AppShell {
     }
     fn emit(&self, event: Event) {
         let _ = match event {
+            Event::NoticeClicked(activation) => {
+                self.0.emit("proactive://notification-clicked", activation)
+            }
+            Event::ReminderClicked(day) => self.0.emit("calendar://reminder-clicked", day),
             Event::StudiumClicked(room) => self.0.emit("studium://notification-clicked", room),
         };
     }
