@@ -105,8 +105,9 @@ pub(super) async fn download_resource<T: Transport>(
         Err(error) => record_failure(store, root, cancel, resource, error, budget_bound).await,
     }
 }
-const UNSUPPORTED_ATTACHMENT: &str = "자동 다운로드를 지원하지 않는 첨부 파일 형식입니다.";
-fn supported_attachment(filename: &str) -> bool {
+pub(crate) const UNSUPPORTED_ATTACHMENT: &str =
+    "자동 다운로드를 지원하지 않는 첨부 파일 형식입니다.";
+pub(crate) fn supported_attachment(filename: &str) -> bool {
     let lower = filename.to_ascii_lowercase();
     [
         ".pdf", ".hwp", ".hwpx", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip", ".txt",

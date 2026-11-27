@@ -721,6 +721,11 @@ pub async fn download<H: Http>(
                 "사이버캠퍼스 밖의 자료는 자동으로 내려받지 않아 지원하지 않습니다.".into(),
             );
         }
+        // The name alone decides this, so the file is never requested: a
+        // request would be an eClass view and its bytes would use the budget.
+        if resource.kind != "image" && !sync::supported_attachment(&resource.filename) {
+            return Err(sync::UNSUPPORTED_ATTACHMENT.into());
+        }
         let limit =
             sync::resource_limit(resource, total.load(Ordering::Acquire), &mut budget_bound)?;
         let path = match url.query() {

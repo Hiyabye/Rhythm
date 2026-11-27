@@ -74,6 +74,41 @@ fn a_backup_is_copied_into_place_where_the_volume_cannot_link() {
 }
 
 #[test]
+fn a_staged_database_may_not_name_a_file_outside_resources_on_any_row() {
+    let root = tempfile::tempdir().unwrap();
+    let db = root.path().join("rhythm.sqlite3");
+    database(&db, 0, None);
+    fs::create_dir(root.path().join("resources")).unwrap();
+    let connection = rusqlite::Connection::open(&db).unwrap();
+    // The last-good path of a file that is no longer there is fine.
+    connection
+        .execute(
+            "INSERT INTO resources VALUES('resources/gone.pdf',NULL,NULL,'failed')",
+            [],
+        )
+        .unwrap();
+    validate_staged_database(root.path(), 6, 0, 0).unwrap();
+    for unsafe_path in [
+        "../outside",
+        "/etc/hosts",
+        "resources/../../outside",
+        "rhythm.sqlite3",
+    ] {
+        connection.execute("DELETE FROM resources", []).unwrap();
+        connection
+            .execute(
+                "INSERT INTO resources VALUES(?1,NULL,NULL,'pending')",
+                [unsafe_path],
+            )
+            .unwrap();
+        assert!(
+            validate_staged_database(root.path(), 6, 0, 0).is_err(),
+            "{unsafe_path}"
+        );
+    }
+}
+
+#[test]
 fn journal_directory_sync_failure_keeps_recovery_journal_and_stage() {
     let root = tempfile::tempdir().unwrap();
     let stage = root.path().join(STAGING);

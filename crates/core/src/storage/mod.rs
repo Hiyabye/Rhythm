@@ -363,13 +363,18 @@ impl Store {
             .map_err(|e| e.to_string())
     }
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), String> {
+        let declaration = crate::extensions::declaration(id);
+        let turned_on = enabled && !self.enabled(id)?;
         let transaction = self
             .connection
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
         transaction.execute("INSERT INTO extension_preferences(extension_id,enabled) VALUES(?1,?2) ON CONFLICT(extension_id) DO UPDATE SET enabled=excluded.enabled",params![id,enabled]).map_err(|e|e.to_string())?;
+        if turned_on && declaration.is_some_and(|e| e.announces_from_enable) {
+            proactive::advance_baseline(&transaction)?;
+        }
         if !enabled {
-            for tokens in crate::extensions::declaration(id).map_or(&[][..], |e| e.clears) {
+            for tokens in declaration.map_or(&[][..], |e| e.clears) {
                 let table = match tokens {
                     crate::extensions::Tokens::StudiumAlerts => "studium_alert_tokens",
                     crate::extensions::Tokens::CalendarReminders => "calendar_reminder_tokens",

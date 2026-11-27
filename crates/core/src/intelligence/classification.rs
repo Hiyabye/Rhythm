@@ -1023,8 +1023,32 @@ mod tests {
             .await;
         assert!(controller.backoff.lock().unwrap().is_some());
 
+        // A pass that finds every vector stored asks the engine nothing, so
+        // it says nothing about the engine either.
         set_mode(directory.path(), "ok");
         end_pause(&controller);
+        let (document_id, revision_id) = store
+            .lock()
+            .unwrap()
+            .ai_embedding_candidates(&identity, config_hash(), BATCH)
+            .unwrap()[0];
+        let dimension = controller.prototypes.lock().await.as_ref().unwrap()[0]
+            .1
+            .len();
+        let mut vector = vec![0.0; dimension];
+        vector[0] = 1.0;
+        store
+            .lock()
+            .unwrap()
+            .ai_save_embedding(document_id, revision_id, &identity, &vector)
+            .unwrap();
+        let requests = embedding_requests(directory.path());
+        controller
+            .advance(&store, &models, directory.path(), &shutdown)
+            .await;
+        assert_eq!(embedding_requests(directory.path()), requests);
+        assert!(controller.backoff.lock().unwrap().is_some());
+
         assert!(controller
             .embed_query(directory.path(), &model, &identity, "장학")
             .await

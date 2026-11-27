@@ -258,9 +258,7 @@ async fn backfill(
         let applied = apply(store, cancel, |s| {
             s.feed_backfill(boards, kinds, after, &entries, &vectors)
         })?;
-        for path in &applied.orphaned {
-            let _ = tokio::fs::remove_file(data_root.join(path)).await;
-        }
+        crate::archive::remove_orphans(data_root, &applied.orphaned).await;
         summary.files += 1;
         summary.revised += applied.revised;
         summary.removed += applied.removed;
@@ -339,10 +337,7 @@ pub(crate) async fn sync(
                 })?
             }
         };
-        // The rows are gone, so a file left behind is only unused disk space.
-        for path in &applied.orphaned {
-            let _ = tokio::fs::remove_file(data_root.join(path)).await;
-        }
+        crate::archive::remove_orphans(data_root, &applied.orphaned).await;
         summary.files += 1;
         summary.revised += applied.revised;
         summary.removed += applied.removed;

@@ -492,6 +492,47 @@ fn default_settings_are_opt_in_and_validation_never_mutates() {
 }
 
 #[test]
+fn turning_the_extension_back_on_skips_notices_that_arrived_while_it_was_off() {
+    let (_directory, store) = store();
+    add_source(&store, "one");
+    store
+        .set_enabled(crate::extensions::PROACTIVE, true)
+        .unwrap();
+    let mut settings = store.proactive_settings().unwrap();
+    settings.notifications_enabled = true;
+    store.proactive_save_settings(&settings).unwrap();
+    store
+        .set_enabled(crate::extensions::PROACTIVE, false)
+        .unwrap();
+    let missed = add_document(&store, 1, "one", false);
+    assert!(store.proactive_baseline().unwrap() < missed);
+
+    store
+        .set_enabled(crate::extensions::PROACTIVE, true)
+        .unwrap();
+    assert_eq!(store.proactive_baseline().unwrap(), missed);
+    assert!(matches!(
+        store
+            .proactive_claim_event(&key(1, missed, ProactiveEventKind::New))
+            .unwrap(),
+        ProactiveClaim::Baseline { .. }
+    ));
+
+    // Saving it on again while it is on is not a new start.
+    let later = add_document(&store, 2, "one", false);
+    store
+        .set_enabled(crate::extensions::PROACTIVE, true)
+        .unwrap();
+    assert_eq!(store.proactive_baseline().unwrap(), missed);
+    assert!(later > missed);
+    // Another extension turning on leaves the baseline alone.
+    store
+        .set_enabled(crate::extensions::CALENDAR, true)
+        .unwrap();
+    assert_eq!(store.proactive_baseline().unwrap(), missed);
+}
+
+#[test]
 fn baseline_and_notification_opt_in_suppress_old_notices_but_allow_historical_revisions() {
     let (_directory, store) = store();
     add_source(&store, "one");

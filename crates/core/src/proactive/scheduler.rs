@@ -592,13 +592,15 @@ async fn cycle(
         store.proactive_finalize_expired_claims().map(|_| ())
     })?;
     reconcile_tasks(store, &prefs, &energy)?;
+    // A notice that cannot be sent is reported at the end of the pass: it
+    // must not hold a todo reminder past its moment.
+    let mut notification_error = None;
     if prefs.scheduler_enabled && !prefs.scheduler_paused {
         let due = with_store(store, |store| store.proactive_due_tasks())?;
         let http = Arc::new(archive::cybercampus::client::Reqwest::new(user_agent));
         let mut failures = 0;
         let mut successes = 0;
         let mut cancelled = 0;
-        let mut notification_error = None;
         let mut skipped = 0;
         for task in &due {
             if stop_requested(stop) {
@@ -632,7 +634,11 @@ async fn cycle(
             }
             let (updated, extension, subscribed) = task_inputs(store, &source_id)?;
             if can_admit_task(stop, &updated, extension, subscribed) {
-                discover_and_deliver(store, &updated, shell, notifications, stop).await?;
+                if let Err(error) =
+                    discover_and_deliver(store, &updated, shell, notifications, stop).await
+                {
+                    notification_error.get_or_insert(error);
+                }
             }
         }
         if !due.is_empty() {
@@ -658,20 +664,19 @@ async fn cycle(
                     .map(|_| ())
             })?;
         }
-        if let Some(error) = notification_error {
-            return Err(error);
-        }
     }
     if !stop_requested(stop) {
         let (current, _) = settings(store)?;
         if should_discover_notifications(&current) {
-            // A notice that cannot be sent must not hold a reminder past its moment.
-            let notices = discover_and_deliver(store, &current, shell, notifications, stop).await;
+            if let Err(error) =
+                discover_and_deliver(store, &current, shell, notifications, stop).await
+            {
+                notification_error.get_or_insert(error);
+            }
             super::reminders::deliver(store, shell, notifications, stop).await?;
-            notices?;
         }
     }
-    Ok(())
+    notification_error.map_or(Ok(()), Err)
 }
 
 async fn wait_for_scheduled_task_and_notifications<F>(

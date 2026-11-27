@@ -130,6 +130,31 @@ pub(super) fn validate_staged_database_cancellable(
             return Err("백업 첨부 자료가 데이터베이스와 일치하지 않습니다.".into());
         }
     }
+    drop(rows);
+    drop(statement);
+    // Rows without a downloaded file can still carry the path of an earlier
+    // one, which later cleanup deletes: it must not name a file elsewhere.
+    let mut statement = connection
+        .prepare(
+            "SELECT DISTINCT local_path FROM resources
+             WHERE local_path IS NOT NULL AND status<>'downloaded'",
+        )
+        .map_err(|_| "백업 첨부 자료를 확인하지 못했습니다.")?;
+    let mut rows = statement
+        .query([])
+        .map_err(|_| "백업 첨부 자료를 확인하지 못했습니다.")?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|_| "백업 첨부 자료를 확인하지 못했습니다.")?
+    {
+        check_cancellation(cancellation)?;
+        let name: String = row
+            .get(0)
+            .map_err(|_| "백업 첨부 경로가 올바르지 않습니다.")?;
+        if !valid_path(&name) || name == "rhythm.sqlite3" {
+            return Err("백업 첨부 경로가 안전하지 않습니다.".into());
+        }
+    }
     let resources_root = staging.join("resources");
     match fs::symlink_metadata(&resources_root) {
         Ok(metadata) if metadata.is_dir() && !unsafe_link(&metadata) => {

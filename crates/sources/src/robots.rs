@@ -51,8 +51,11 @@ impl Robots {
         }
     }
     pub fn parse(url: &Url, body: &str) -> Result<Self, String> {
+        // A byte-order mark is not whitespace: left on the first line it
+        // would hide that line's `User-agent` and with it the group's rules.
+        let body = body.trim_start_matches('\u{feff}');
         // An HTTP-200 error page is not an empty allow-all robots policy.
-        let start = body.trim_start_matches('\u{feff}').trim_start();
+        let start = body.trim_start();
         if start.starts_with('<') || start.contains('\0') {
             return Err("학교의 수집 정책 대신 해석할 수 없는 자료를 받았습니다.".into());
         }
@@ -283,6 +286,15 @@ mod tests {
             Robots::parse(&url, SCC_ROBOTS).is_err(),
             "other hosts stay strict"
         );
+    }
+
+    #[test]
+    fn a_byte_order_mark_does_not_hide_the_first_group() {
+        let url = Url::parse("https://www.sogang.ac.kr/x").unwrap();
+        let policy =
+            Robots::parse(&url, "\u{feff}User-agent: *\r\nDisallow: /private/\r\n").unwrap();
+        assert!(policy.permits(&url));
+        assert!(!policy.permits(&url.join("/private/a").unwrap()));
     }
 
     #[test]
