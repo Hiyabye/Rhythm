@@ -82,6 +82,23 @@ impl PauseGuard {
     }
 }
 
+/// Pauses after consecutive failed embedding requests of one model identity;
+/// the last one repeats.
+const EMBED_RETRY_PAUSES: [Duration; 3] = [
+    Duration::from_secs(60),
+    Duration::from_secs(5 * 60),
+    Duration::from_secs(15 * 60),
+];
+
+/// A failed embedding request (not an integrity failure): the model is tried
+/// again at `until`, with a longer pause after each further failure. Memory
+/// only; a success or `invalidate` clears it.
+struct EmbedBackoff {
+    identity: String,
+    failures: usize,
+    until: Instant,
+}
+
 pub struct Controller {
     worker: AsyncMutex<Worker>,
     batch: Arc<AsyncMutex<()>>,
@@ -92,6 +109,7 @@ pub struct Controller {
     last_work: Mutex<Option<Instant>>,
     verified: Mutex<Option<String>>,
     failed: Mutex<Option<String>>,
+    backoff: Mutex<Option<EmbedBackoff>>,
     prototypes: AsyncMutex<Option<Prototypes>>,
     prototypes_sha: Mutex<Option<String>>,
     /// Last search query vector (model identity, query, vector), so paging
@@ -138,6 +156,7 @@ impl Controller {
             last_work: Mutex::new(None),
             verified: Mutex::new(None),
             failed: Mutex::new(None),
+            backoff: Mutex::new(None),
             prototypes: AsyncMutex::new(None),
             prototypes_sha: Mutex::new(None),
             last_query: Mutex::new(None),
@@ -166,6 +185,7 @@ impl Controller {
         if let Ok(mut failed) = self.failed.lock() {
             *failed = None;
         }
+        self.clear_backoff();
         if let Ok(mut detail) = self.detail.lock() {
             *detail = None;
         }
@@ -246,6 +266,49 @@ impl Controller {
         self.set_failure(identity, "분류 모델 파일을 확인하지 못했습니다.");
     }
 
+    /// A failed embedding request keeps classification and semantic search
+    /// off only for a growing pause; a later pass tries the engine again.
+    fn embed_failed(&self, identity: &str, detail: &str, now: Instant) {
+        if let Ok(mut backoff) = self.backoff.lock() {
+            let failures = backoff
+                .as_ref()
+                .filter(|current| current.identity == identity)
+                .map_or(1, |current| current.failures + 1);
+            let pause = EMBED_RETRY_PAUSES[(failures - 1).min(EMBED_RETRY_PAUSES.len() - 1)];
+            *backoff = Some(EmbedBackoff {
+                identity: identity.to_owned(),
+                failures,
+                until: now + pause,
+            });
+        }
+        if let Ok(mut stored) = self.detail.lock() {
+            *stored = Some(detail.to_owned());
+        }
+        *self.state.lock().unwrap_or_else(|error| error.into_inner()) = "failed";
+    }
+
+    fn clear_backoff(&self) {
+        if let Ok(mut backoff) = self.backoff.lock() {
+            *backoff = None;
+        }
+    }
+
+    fn backing_off(&self, identity: &str, now: Instant) -> bool {
+        self.backoff
+            .lock()
+            .map(|value| {
+                value
+                    .as_ref()
+                    .is_some_and(|current| current.identity == identity && now < current.until)
+            })
+            .unwrap_or(false)
+    }
+
+    /// Permanently failed (until invalidated) or paused after a failed request.
+    fn stopped(&self, identity: &str) -> bool {
+        self.is_failed(identity) || self.backing_off(identity, Instant::now())
+    }
+
     fn is_failed(&self, identity: &str) -> bool {
         self.failed
             .lock()
@@ -287,7 +350,7 @@ impl Controller {
             self.unload_if_idle(true).await;
             return;
         };
-        if self.is_failed(&identity) {
+        if self.stopped(&identity) {
             self.unload_if_idle(false).await;
             return;
         }
@@ -352,7 +415,7 @@ impl Controller {
                             Ok(values) => vectors.extend(values),
                             Err(error) => {
                                 eprintln!("Classification prototypes: {error}");
-                                self.set_failure(&identity, &error);
+                                self.embed_failed(&identity, &error, Instant::now());
                                 return;
                             }
                         }
@@ -415,11 +478,12 @@ impl Controller {
                 }
                 Err(error) => {
                     eprintln!("Classification embedding: {error}");
-                    self.set_failure(&identity, &error);
+                    self.embed_failed(&identity, &error, Instant::now());
                     return;
                 }
             }
         }
+        self.clear_backoff();
         drop(worker);
         let mut written = 0u64;
         {
@@ -554,7 +618,7 @@ impl Controller {
         }) {
             return Some(vector);
         }
-        if self.is_failed(identity) || self.paused.load(Ordering::Acquire) {
+        if self.stopped(identity) || self.paused.load(Ordering::Acquire) {
             return None;
         }
         let _batch = self.batch.lock().await;
@@ -710,10 +774,9 @@ mod tests {
         controller.shutdown().await;
     }
 
-    #[tokio::test]
-    async fn an_early_return_does_not_leave_the_state_classifying() {
-        let (directory, controller, model) = fake_controller();
-        let (_data, store) = crate::storage::temp_store();
+    /// A store with one Cybercampus notice and `model` selected and installed.
+    fn store_with_notice(model: &AiModel) -> (tempfile::TempDir, Mutex<Store>) {
+        let (data, store) = crate::storage::temp_store();
         store.catalog(&crate::archive::definitions()).unwrap();
         store.set_enabled(crate::extensions::AI, true).unwrap();
         store
@@ -746,7 +809,13 @@ mod tests {
         preferences.embedding_model_id = Some(installed.id.clone());
         preferences.classification_enabled = true;
         store.ai_save_preferences(&preferences).unwrap();
-        let store = Mutex::new(store);
+        (data, Mutex::new(store))
+    }
+
+    #[tokio::test]
+    async fn an_early_return_does_not_leave_the_state_classifying() {
+        let (directory, controller, model) = fake_controller();
+        let (_data, store) = store_with_notice(&model);
         let models = models::Controller::new("Rhythm/test");
         let shutdown = AtomicBool::new(false);
         // A pass already in flight holds the batch lock.
@@ -793,5 +862,173 @@ mod tests {
             .await
             .is_none());
         assert!(!controller.is_failed(&identity));
+    }
+
+    /// Authored prototypes would need a multi-vector reply the fake cannot
+    /// give; seed two so a pass reaches the batch request.
+    async fn seed_prototypes(controller: &Controller, identity: &str) {
+        *controller.prototypes.lock().await =
+            Some(vec![("학사", vec![0.6, 0.8]), ("장학", vec![0.8, 0.6])]);
+        *controller.prototypes_sha.lock().unwrap() = Some(identity.to_owned());
+    }
+
+    fn set_mode(directory: &Path, mode: &str) {
+        std::fs::write(directory.join("mode"), mode).unwrap();
+    }
+
+    fn embedding_requests(directory: &Path) -> usize {
+        std::fs::read_to_string(directory.join("requests"))
+            .map(|text| text.lines().filter(|line| *line == "embedding").count())
+            .unwrap_or(0)
+    }
+
+    fn pause_of(controller: &Controller) -> Duration {
+        let backoff = controller.backoff.lock().unwrap();
+        backoff.as_ref().unwrap().until - Instant::now()
+    }
+
+    /// Ends the pause as if it had elapsed, without sleeping.
+    fn end_pause(controller: &Controller) {
+        controller.backoff.lock().unwrap().as_mut().unwrap().until = Instant::now();
+    }
+
+    #[test]
+    fn consecutive_embedding_failures_pause_one_five_then_fifteen_minutes() {
+        let (_directory, controller, _model) = fake_controller();
+        let now = Instant::now();
+        let mut pauses = Vec::new();
+        for _ in 0..5 {
+            controller.embed_failed("m", "err", now);
+            let until = controller.backoff.lock().unwrap().as_ref().unwrap().until;
+            pauses.push(until - now);
+        }
+        let minutes = |value: u64| Duration::from_secs(value * 60);
+        assert_eq!(
+            pauses,
+            [
+                minutes(1),
+                minutes(5),
+                minutes(15),
+                minutes(15),
+                minutes(15)
+            ]
+        );
+        assert!(controller.backing_off("m", now + minutes(14)));
+        assert!(!controller.backing_off("m", now + minutes(15)));
+        // Another model identity starts over, and a success resets the count.
+        controller.embed_failed("other", "err", now);
+        assert_eq!(
+            controller
+                .backoff
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .failures,
+            1
+        );
+        controller.clear_backoff();
+        controller.embed_failed("other", "err", now);
+        assert_eq!(
+            controller
+                .backoff
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .failures,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_embedding_request_is_retried_after_the_pause_and_search_follows() {
+        let (directory, controller, model) = fake_controller();
+        let identity = model.sha256.clone().unwrap();
+        // The fake GGUF cannot pass file integrity, which has its own tests.
+        *controller.verified.lock().unwrap() = Some(identity.clone());
+        let (_data, store) = store_with_notice(&model);
+        let models = models::Controller::new("Rhythm/test");
+        let shutdown = AtomicBool::new(false);
+        seed_prototypes(&controller, &identity).await;
+        set_mode(directory.path(), "crash-on-embed");
+
+        controller
+            .advance(&store, &models, directory.path(), &shutdown)
+            .await;
+        assert_eq!(controller.status().state, "failed");
+        assert!(!controller.is_failed(&identity), "no permanent latch");
+        let first = pause_of(&controller);
+        assert!(first > Duration::from_secs(50) && first <= Duration::from_secs(60));
+        let requests = embedding_requests(directory.path());
+        assert!(requests > 0);
+
+        // During the pause neither the loop nor search touches the engine.
+        controller
+            .advance(&store, &models, directory.path(), &shutdown)
+            .await;
+        assert!(controller
+            .embed_query(directory.path(), &model, &identity, "장학")
+            .await
+            .is_none());
+        assert_eq!(embedding_requests(directory.path()), requests);
+
+        // The engine recovers; after the pause classification resumes by itself.
+        set_mode(directory.path(), "ok");
+        end_pause(&controller);
+        controller
+            .advance(&store, &models, directory.path(), &shutdown)
+            .await;
+        assert!(controller.backoff.lock().unwrap().is_none());
+        assert!(controller.status().processed > 0);
+        assert_ne!(controller.status().state, "failed");
+        assert!(controller
+            .embed_query(directory.path(), &model, &identity, "장학")
+            .await
+            .is_some());
+        controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_repeated_failure_lengthens_the_pause_and_invalidate_clears_it() {
+        let (directory, controller, model) = fake_controller();
+        let identity = model.sha256.clone().unwrap();
+        *controller.verified.lock().unwrap() = Some(identity.clone());
+        let (_data, store) = store_with_notice(&model);
+        let models = models::Controller::new("Rhythm/test");
+        let shutdown = AtomicBool::new(false);
+        seed_prototypes(&controller, &identity).await;
+        set_mode(directory.path(), "crash-on-embed");
+        controller
+            .advance(&store, &models, directory.path(), &shutdown)
+            .await;
+        end_pause(&controller);
+        controller
+            .advance(&store, &models, directory.path(), &shutdown)
+            .await;
+        let second = pause_of(&controller);
+        assert!(second > Duration::from_secs(290) && second <= Duration::from_secs(300));
+        assert!(controller.backing_off(&identity, Instant::now()));
+        controller.invalidate();
+        assert!(!controller.backing_off(&identity, Instant::now()));
+        controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_integrity_failure_still_stops_until_invalidated() {
+        let (directory, controller, model) = fake_controller();
+        let (_data, store) = store_with_notice(&model);
+        let identity = model.sha256.clone().unwrap();
+        let models = models::Controller::new("Rhythm/test");
+        let shutdown = AtomicBool::new(false);
+        // No `verified` mark: the fake GGUF fails the SHA-256 check.
+        controller
+            .advance(&store, &models, directory.path(), &shutdown)
+            .await;
+        assert!(controller.is_failed(&identity));
+        assert!(controller.backoff.lock().unwrap().is_none());
+        controller.invalidate();
+        assert!(!controller.is_failed(&identity));
+        controller.shutdown().await;
     }
 }
