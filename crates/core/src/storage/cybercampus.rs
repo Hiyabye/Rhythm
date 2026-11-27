@@ -227,6 +227,22 @@ impl Store {
         }
         transaction.commit().map_err(|e| e.to_string())
     }
+    /// Whether the notice was recorded as skipped with this very fingerprint.
+    pub fn skipped_unchanged(
+        &self,
+        source: &str,
+        external: &str,
+        sha256: &str,
+    ) -> Result<bool, String> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM skipped_articles
+                   WHERE source_id=?1 AND external_id=?2 AND response_sha256=?3)",
+                params![source, external, sha256],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())
+    }
     /// Stored rows of one course, so a sync can skip pages it already read.
     pub fn cybercampus_stored_tasks(
         &self,

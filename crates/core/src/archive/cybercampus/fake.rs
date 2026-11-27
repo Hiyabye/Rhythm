@@ -51,6 +51,10 @@ pub struct Fake {
     /// Pages answered to the next login POSTs (one each, in order) instead of
     /// the password check.
     pub login_pages: Mutex<Vec<String>>,
+    /// Logged-in routes that answer HTTP 500.
+    pub failing: Mutex<Vec<&'static str>>,
+    /// Replaces the TODO list page.
+    pub todo: Mutex<Option<String>>,
 }
 impl Fake {
     pub fn requests(&self) -> Vec<Recorded> {
@@ -155,6 +159,12 @@ impl client::Http for Fake {
             });
         }
         drop(expire);
+        if self.failing.lock().unwrap().contains(&url.path()) {
+            return Ok(Response {
+                status: 500,
+                ..page("error")
+            });
+        }
         Ok(match url.path() {
             "/ilos/main/rg/regular_register_list_form.acl" => page(fixture("terms.html")),
             "/ilos/main/rg/regular_register_list.acl" => {
@@ -224,7 +234,13 @@ impl client::Http for Fake {
                 Some("RT_SEQ=7000020") => page(fixture("report_open.html")),
                 _ => page(""),
             },
-            "/ilos/mp/todo_list.acl" => page(fixture("todo.html")),
+            "/ilos/mp/todo_list.acl" => page(
+                self.todo
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .unwrap_or_else(|| fixture("todo.html")),
+            ),
             other => panic!("unexpected request {other}"),
         })
     }

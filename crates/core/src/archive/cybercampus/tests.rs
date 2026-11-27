@@ -936,3 +936,94 @@ async fn a_save_does_not_store_the_login_after_a_forget_or_a_disable_meanwhile()
     assert!(error.contains("확장 기능"), "{error}");
     assert!(setup.connector.vault.load().unwrap().is_none());
 }
+
+const VIEW: &str = "/ilos/cls/st/notice/notice_view_pop.acl";
+fn views_of(setup: &Setup, seq: &str) -> usize {
+    setup
+        .fake
+        .requests()
+        .iter()
+        .filter(|r| r.path == VIEW && field(&r.form, "ARTL_NUM") == seq)
+        .count()
+}
+fn task_titles(setup: &Setup) -> Vec<String> {
+    let mut titles = setup
+        .store
+        .lock()
+        .unwrap()
+        .cybercampus_tasks()
+        .unwrap()
+        .into_iter()
+        .map(|t| format!("{}{}", t.item_id, if t.pending { "*" } else { "" }))
+        .collect::<Vec<_>>();
+    titles.sort();
+    titles
+}
+
+#[tokio::test]
+async fn a_notice_that_never_parses_blocks_neither_deadlines_nor_the_seed_nor_a_second_view() {
+    let setup = setup(Some("right"));
+    *setup.fake.first_view.lock().unwrap() =
+        Some(FIRST_VIEW.replace("9월 1일 (화) 09:00", "날짜 없음"));
+    run(&setup).await.unwrap();
+    {
+        let store = setup.store.lock().unwrap();
+        // The good notice is archived, the bad one only recorded as skipped.
+        let page = store
+            .archive_query(&ArchiveQuery {
+                source_id: Some(SOURCE_ID.into()),
+                ..ArchiveQuery::default()
+            })
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(store.source(SOURCE_ID).unwrap().skipped_count, 1);
+        assert!(store.seed_complete(SOURCE_ID).unwrap());
+    }
+    assert_eq!(
+        task_titles(&setup),
+        ["6000001*", "7000010", "7000020*"],
+        "assignments of the course were still replaced"
+    );
+    assert_eq!(views_of(&setup, "9000001"), 1);
+
+    setup.fake.clear();
+    run(&setup).await.unwrap();
+    assert_eq!(
+        views_of(&setup, "9000001"),
+        0,
+        "unchanged: not viewed again"
+    );
+
+    // An edited row is looked at again.
+    *setup.fake.notice_list.lock().unwrap() =
+        Some(fixture("notice_list.html").replace("첫 수업은 온라인으로", "첫 수업은 대면으로"));
+    setup.fake.clear();
+    run(&setup).await.unwrap();
+    assert_eq!(views_of(&setup, "9000001"), 1);
+}
+
+#[tokio::test]
+async fn a_transient_notice_failure_still_fails_the_course_and_keeps_the_seed_open() {
+    let setup = setup(Some("right"));
+    setup.fake.failing.lock().unwrap().push(VIEW);
+    let error = run(&setup).await.unwrap_err();
+    assert!(error.contains("자료구조실습"), "{error}");
+    {
+        let store = setup.store.lock().unwrap();
+        assert!(!store.seed_complete(SOURCE_ID).unwrap());
+        // Not a skipped notice: the next sync tries it again.
+        assert_eq!(store.source(SOURCE_ID).unwrap().skipped_count, 0);
+    }
+    // The deadlines were still read for the course whose notices failed.
+    assert!(task_titles(&setup).contains(&"7000010".to_owned()));
+    setup.fake.failing.lock().unwrap().clear();
+    setup.fake.clear();
+    run(&setup).await.unwrap();
+    assert_eq!(views_of(&setup, "9000001"), 1);
+    assert!(setup
+        .store
+        .lock()
+        .unwrap()
+        .seed_complete(SOURCE_ID)
+        .unwrap());
+}
