@@ -2332,7 +2332,13 @@ fn purging_all_of_a_huge_trash_stays_below_the_variable_limit() {
         .unwrap();
     let revision = store.document(id, None).unwrap().revision_id;
     let resource = store
-        .add_resource_for_test(id, revision, "https://www.sogang.ac.kr/a.png", "x.png", "image")
+        .add_resource_for_test(
+            id,
+            revision,
+            "https://www.sogang.ac.kr/a.png",
+            "x.png",
+            "image",
+        )
         .unwrap();
     store
         .resource_result(
@@ -2375,7 +2381,13 @@ fn a_committed_purge_still_returns_its_files_when_the_recompute_fails() {
         .unwrap();
     let revision = store.document(id, None).unwrap().revision_id;
     let resource = store
-        .add_resource_for_test(id, revision, "https://www.sogang.ac.kr/a.png", "x.png", "image")
+        .add_resource_for_test(
+            id,
+            revision,
+            "https://www.sogang.ac.kr/a.png",
+            "x.png",
+            "image",
+        )
         .unwrap();
     store
         .resource_result(
@@ -3058,7 +3070,10 @@ async fn notice_date_backfill_waits_out_a_closed_gate_and_still_stops_on_shutdow
         shutdown.clone(),
     ));
     tokio::time::sleep(Duration::from_secs(60)).await;
-    assert!(!task.is_finished(), "a closed gate must not end the backfill");
+    assert!(
+        !task.is_finished(),
+        "a closed gate must not end the backfill"
+    );
     assert_eq!(extracted(&store), 0);
 
     drop(maintenance);
