@@ -56,20 +56,32 @@ pub async fn run_notice_dates(
     gate: Arc<AdmissionGate>,
     shutdown: Arc<AtomicBool>,
 ) {
+    let mut failures = 0;
     while !shutdown.load(Ordering::Acquire) {
+        // A closed gate (a backup or update at launch) only pauses the
+        // backfill; it resumes once admission reopens.
         let Ok(lease) = gate.shared().await else {
-            return;
+            tokio::time::sleep(NOTICE_DATES_RETRY).await;
+            continue;
         };
         match with_store(&store, |s| s.refresh_notice_dates(NOTICE_DATES_BATCH)) {
             Ok(0) => return,
-            Ok(_) => {}
+            Ok(_) => failures = 0,
             Err(error) => {
                 eprintln!("Archive: 공지 날짜를 정리하지 못했습니다: {error}");
-                return;
+                failures += 1;
+                if failures >= NOTICE_DATES_ATTEMPTS {
+                    return;
+                }
+                drop(lease);
+                tokio::time::sleep(NOTICE_DATES_RETRY).await;
+                continue;
             }
         }
         drop(lease);
         tokio::task::yield_now().await;
     }
 }
+const NOTICE_DATES_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
+const NOTICE_DATES_ATTEMPTS: u32 = 3;
 const NOTICE_DATES_BATCH: i64 = 200;

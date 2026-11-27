@@ -2325,6 +2325,94 @@ fn purge_returns_only_files_no_other_notice_uses() {
     assert_eq!(store.document(ids[1], None).unwrap().resources.len(), 1);
 }
 #[test]
+fn purging_all_of_a_huge_trash_stays_below_the_variable_limit() {
+    let (_directory, store) = database();
+    let (id, _) = store
+        .upsert_article("one", &article("1", "공지", "본문", "2026-11-01"), false)
+        .unwrap();
+    let revision = store.document(id, None).unwrap().revision_id;
+    let resource = store
+        .add_resource_for_test(
+            id,
+            revision,
+            "https://www.sogang.ac.kr/a.png",
+            "x.png",
+            "image",
+        )
+        .unwrap();
+    store
+        .resource_result(
+            resource,
+            "downloaded",
+            Some("image/png"),
+            Some(1),
+            Some("resources/only.png"),
+            Some(&"a".repeat(64)),
+            None,
+        )
+        .unwrap();
+    // Minimal synthetic rows, more than SQLite's default 32,766 variables.
+    store
+        .connection
+        .execute_batch(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<33000)
+             INSERT INTO documents(source_id,external_id,canonical_url,title,published_at,
+                                   body_html,body_text,content_hash,historical)
+             SELECT 'two','f'||i,'https://www.sogang.ac.kr/'||i,'t','2026-11-01','','','h'||i,1 FROM n;
+             INSERT INTO trashed_documents(document_id)
+             SELECT id FROM documents WHERE source_id='two';",
+        )
+        .unwrap();
+    store.trash_documents(&[id]).unwrap();
+    let orphaned = store.purge_trashed(None).unwrap();
+    assert_eq!(orphaned, ["resources/only.png"]);
+    let count = |sql: &str| -> i64 { store.connection.query_row(sql, [], |r| r.get(0)).unwrap() };
+    assert_eq!(count("SELECT COUNT(*) FROM documents"), 0);
+    assert_eq!(count("SELECT COUNT(*) FROM trashed_documents"), 0);
+    assert_eq!(count("SELECT COUNT(*) FROM deleted_notices"), 33001);
+    assert!(store.notice_deleted("one", "1").unwrap());
+    assert!(store.notice_deleted("two", "f33000").unwrap());
+}
+#[test]
+fn a_committed_purge_still_returns_its_files_when_the_recompute_fails() {
+    let (_directory, store) = database();
+    let (id, _) = store
+        .upsert_article("one", &article("1", "공지", "본문", "2026-11-01"), false)
+        .unwrap();
+    let revision = store.document(id, None).unwrap().revision_id;
+    let resource = store
+        .add_resource_for_test(
+            id,
+            revision,
+            "https://www.sogang.ac.kr/a.png",
+            "x.png",
+            "image",
+        )
+        .unwrap();
+    store
+        .resource_result(
+            resource,
+            "downloaded",
+            Some("image/png"),
+            Some(1),
+            Some("resources/only.png"),
+            Some(&"a".repeat(64)),
+            None,
+        )
+        .unwrap();
+    store.trash_documents(&[id]).unwrap();
+    // Make the recompute fail after the purge's own transaction.
+    store
+        .connection
+        .execute_batch(
+            "ALTER TABLE personalization_activity RENAME TO personalization_activity_gone;",
+        )
+        .unwrap();
+    assert!(store.recompute_learned().is_err());
+    assert_eq!(store.purge_trashed(None).unwrap(), ["resources/only.png"]);
+    assert!(store.document(id, None).is_err());
+}
+#[test]
 fn trashed_notices_leave_automatic_classification() {
     let (_directory, store) = database();
     let (kept, _) = store
@@ -2940,4 +3028,68 @@ fn feed_pages_and_unread_counts_keep_to_subscribed_sources() {
     store.subscribe("two", true).unwrap();
     assert_eq!(sources(&feed).len(), 2);
     assert_eq!(store.archive_summary().unwrap().unread, 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn notice_date_backfill_waits_out_a_closed_gate_and_still_stops_on_shutdown() {
+    use crate::operation_gate::AdmissionGate;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    let (_directory, store) = database();
+    store
+        .upsert_article(
+            "one",
+            &article("1", "모집", "접수 마감 11월 20일", "2026-11-02"),
+            false,
+        )
+        .unwrap();
+    store
+        .connection
+        .execute_batch("DELETE FROM notice_date_extractions;")
+        .unwrap();
+    let store = Arc::new(Mutex::new(store));
+    let extracted = |store: &Arc<Mutex<Store>>| {
+        store
+            .lock()
+            .unwrap()
+            .connection
+            .query_row("SELECT COUNT(*) FROM notice_date_extractions", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap()
+    };
+
+    let gate = Arc::new(AdmissionGate::default());
+    let maintenance = gate.close().unwrap().acquire().await.unwrap();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let task = tokio::spawn(crate::archive::run_notice_dates(
+        store.clone(),
+        gate.clone(),
+        shutdown.clone(),
+    ));
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert!(
+        !task.is_finished(),
+        "a closed gate must not end the backfill"
+    );
+    assert_eq!(extracted(&store), 0);
+
+    drop(maintenance);
+    task.await.unwrap();
+    assert_eq!(extracted(&store), 1);
+
+    // Shutdown ends a loop that is waiting on a closed gate.
+    let maintenance = gate.close().unwrap().acquire().await.unwrap();
+    let task = tokio::spawn(crate::archive::run_notice_dates(
+        store.clone(),
+        gate.clone(),
+        shutdown.clone(),
+    ));
+    tokio::time::sleep(Duration::from_secs(30)).await;
+    shutdown.store(true, Ordering::Release);
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert!(task.is_finished());
+    drop(maintenance);
 }
