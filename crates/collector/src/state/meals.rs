@@ -50,13 +50,20 @@ impl State {
         })
     }
 
-    /// Whether `image_url` already has a result of `ocr_version`.
-    pub fn meal_image_read(&self, image_url: &str, ocr_version: &str) -> Result<bool, String> {
+    /// Whether `image_url` already has a result of `ocr_version` for `week`. A
+    /// post whose title was corrected to another week offers its image again:
+    /// the result is bound to the week it was read against.
+    pub fn meal_image_read(
+        &self,
+        image_url: &str,
+        week: &str,
+        ocr_version: &str,
+    ) -> Result<bool, String> {
         self.with(|c| {
             c.query_row(
                 "SELECT 1 FROM meal_images
-                 WHERE image_url=?1 AND ocr_version=?2 AND status!='pending'",
-                params![image_url, ocr_version],
+                 WHERE image_url=?1 AND week=?2 AND ocr_version=?3 AND status!='pending'",
+                params![image_url, week, ocr_version],
                 |_| Ok(()),
             )
             .optional()

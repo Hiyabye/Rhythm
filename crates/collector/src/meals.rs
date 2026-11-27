@@ -95,7 +95,7 @@ pub async fn offer<T: Transport>(
             offers.skipped += 1;
             continue;
         };
-        if state.meal_image_read(image_url, OCR_VERSION)? {
+        if state.meal_image_read(image_url, &format_day(week), OCR_VERSION)? {
             offers.read += 1;
             continue;
         }

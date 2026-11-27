@@ -81,7 +81,7 @@ impl R2 {
             .connect_timeout(Duration::from_secs(30))
             .timeout(Duration::from_secs(300))
             .build()
-            .map_err(|e| e.to_string())?;
+            .map_err(no_url)?;
         Ok(Self {
             http,
             endpoint,
@@ -177,7 +177,7 @@ impl R2 {
                     let code = between(&text, "<Code>", "</Code>").unwrap_or_default();
                     return Err(format!("R2 {target}: HTTP {status} {code}"));
                 }
-                Err(error) => failure = error.to_string(),
+                Err(error) => failure = no_url(error),
             }
         }
         Err(format!("R2 {target}: {failure}"))
@@ -194,7 +194,7 @@ impl ObjectStore for R2 {
                 Vec::new(),
             )
             .await?;
-        let text = response.text().await.map_err(|e| e.to_string())?;
+        let text = response.text().await.map_err(no_url)?;
         parse_list(&text)
     }
 
@@ -212,7 +212,7 @@ impl ObjectStore for R2 {
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
         let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        while let Some(chunk) = response.chunk().await.map_err(no_url)? {
             if bytes.len() + chunk.len() > MAX_OBJECT {
                 return Err(format!("R2 object {key} is too large"));
             }
@@ -231,6 +231,12 @@ impl ObjectStore for R2 {
             .await?;
         Ok(())
     }
+}
+
+/// A reqwest error as text. Its Display names the request URL, whose host
+/// holds the Cloudflare account ID, and these messages reach the run log.
+fn no_url(error: reqwest::Error) -> String {
+    error.without_url().to_string()
 }
 
 /// The collector writes only plain keys, so nothing it sends needs escaping

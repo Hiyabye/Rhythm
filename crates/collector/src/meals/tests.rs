@@ -338,6 +338,48 @@ async fn a_post_that_is_not_one_image_or_not_an_image_is_never_offered() {
     );
 }
 
+#[tokio::test]
+async fn a_post_corrected_to_another_week_is_read_again() {
+    let state = State::open_in_memory().unwrap();
+    let fake = Fake::new();
+    fake.serve(&image_path("menu"), &jpeg("menu"), "image/jpeg");
+    // The title names the wrong week; the banner check fails for it.
+    post(
+        &state,
+        1,
+        "11월 23일 ~ 11월 29일 식단",
+        "2026-11-24",
+        &["menu"],
+    );
+    let folder = tempfile::tempdir().unwrap();
+    assert_eq!(offer_now(&state, &fake, folder.path()).await.offered, 1);
+    let image = state.meal_offered(OCR_VERSION).unwrap().remove(0);
+    let week = unreadable(&image);
+    state
+        .meal_record(&image, &week, Some("banner_mismatch"), NOW)
+        .unwrap();
+    // The same title and image are read once.
+    let again = tempfile::tempdir().unwrap();
+    let offers = offer_now(&state, &fake, again.path()).await;
+    assert_eq!((offers.offered, offers.read), (0, 1));
+
+    // The school corrects the title: the image is read for the new week.
+    post(
+        &state,
+        1,
+        "11월 30일 ~ 12월 6일 식단",
+        "2026-11-24",
+        &["menu"],
+    );
+    let corrected = tempfile::tempdir().unwrap();
+    let offers = offer_now(&state, &fake, corrected.path()).await;
+    assert_eq!((offers.offered, offers.read), (1, 0));
+    // One row per image URL: the new week replaces the old one, pending.
+    let pending = state.meal_offered(OCR_VERSION).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].week, "2026-11-30");
+}
+
 fn offered(external_id: &str, week: &str, published: &str) -> Offered {
     Offered {
         image_url: format!("{HOST}{}", image_path(external_id)),
