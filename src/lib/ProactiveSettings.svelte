@@ -93,6 +93,14 @@
     finally { busy = false; }
   }
 
+  // A snapshot carries only the newest part of the history and hands over a
+  // pending notification click, so keep the list already loaded and pass the
+  // click on whichever call receives it.
+  function adopt(snapshot: ProactiveSnapshot, history = data?.history ?? snapshot.history) {
+    if (snapshot.pending_activation) onactivation(snapshot.pending_activation);
+    data = { ...snapshot, history };
+  }
+
   async function save(patch: Partial<Settings>) {
     if (!data || busy) return;
     busy = true;
@@ -107,7 +115,7 @@
       const settings = { ...current.settings, ...patch,
         // Login registration is reconciled with the OS only by its lifecycle command.
         launch_at_login: lifecycle?.launch_at_login ?? current.settings.launch_at_login };
-      data = await invoke<ProactiveSnapshot>('proactive_save', { settings });
+      adopt(await invoke<ProactiveSnapshot>('proactive_save', { settings }));
       notice = '설정을 저장했습니다.';
     } catch (reason) { error = archiveError(reason); }
     finally { busy = false; }
@@ -122,7 +130,7 @@
       lifecycle = await invoke<LifecycleStatus>(command, { enabled });
       // Lifecycle setters persist these fields. Refresh the scheduler snapshot to
       // keep its full-settings payload synchronized with the authoritative value.
-      data = await invoke<ProactiveSnapshot>('proactive_snapshot');
+      adopt(await invoke<ProactiveSnapshot>('proactive_snapshot'));
       notice = '시작과 종료 설정을 저장했습니다.';
     } catch (reason) { error = archiveError(reason); }
     finally { busy = false; }
@@ -142,7 +150,7 @@
     if (!confirmed || historyBusy) return;
     historyBusy = true;
     try {
-      data = await invoke<ProactiveSnapshot>('proactive_clear_history');
+      adopt(await invoke<ProactiveSnapshot>('proactive_clear_history'), []);
       notice = '알림 기록을 비웠습니다.';
     } catch (reason) { error = archiveError(reason); }
     finally { historyBusy = false; }

@@ -208,6 +208,8 @@ mod notification_launch_queue_tests {
 /// Appended to a failed restore recovery error in its dialog.
 const RESTORE_FAILED_NOTE: &str =
     "\n\n기존 파일은 그대로 두었습니다. 원인을 확인한 뒤 다시 실행해 주세요.";
+const START_FAILED_NOTE: &str =
+    "\n\n저장된 데이터는 그대로 두었습니다. 원인을 확인한 뒤 다시 실행해 주세요.";
 
 /// Routes SIGTERM, SIGINT and SIGHUP (`kill`, Ctrl-C, logout) through the
 /// normal exit, so `RunEvent::Exit` stops jobs and reaps the embedding server
@@ -307,7 +309,19 @@ fn main() {
                         .show(move |_| handle.exit(1));
                     return Ok(());
                 }
-                Err(error) => return Err(error.into()),
+                Err(OpenError::Failed(error)) => {
+                    // The store could not be opened (a damaged or newer database,
+                    // no disk space, no permission). Nothing was changed; explain
+                    // instead of panicking out of setup with no message.
+                    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+                    let handle = app.handle().clone();
+                    app.dialog()
+                        .message(format!("{error}{START_FAILED_NOTE}"))
+                        .title("Rhythm을 시작하지 못했습니다")
+                        .kind(MessageDialogKind::Error)
+                        .show(move |_| handle.exit(1));
+                    return Ok(());
+                }
             };
             let tray_available = match core::lifecycle::install_tray(app.handle()) {
                 Ok(()) => true,
