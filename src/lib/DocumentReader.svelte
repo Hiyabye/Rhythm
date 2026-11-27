@@ -354,7 +354,7 @@
     if (!detail || busy) return;
     let confirmed = false;
     try {
-      confirmed = await confirmAction('이 공지를 영구 삭제할까요? 본문, 첨부 자료, AI 결과가 이 기기에서 지워지고, 학교 사이트에 남아 있어도 다시 가져오지 않습니다.', '영구 삭제');
+      confirmed = await confirmAction('이 공지를 영구 삭제할까요? 본문, 첨부 자료, AI 결과가 이 기기에서 지워집니다. 학교 사이트에 남아 있어도 다시 가져오지 않습니다.', '영구 삭제');
     } catch (reason) { error = archiveError(reason); return; }
     if (!confirmed || disposed) return;
     const request = ++busyGeneration;
@@ -432,7 +432,7 @@
         <div class="reader-trash" role="note"><span><strong>원문 삭제됨</strong> · 학교 사이트에서 삭제된 공지입니다. 저장해 둔 내용은 이 기기에 남아 있습니다.</span></div>
       {/if}
       {#if bodyRevised}
-        <div class="reader-trash" role="note"><span><strong>원문이 수정됨</strong> · 학교 사이트의 본문이 받아 둔 공지 요약과 달라, 학교 사이트의 현재 본문을 보관했습니다.</span></div>
+        <div class="reader-trash" role="note"><span><strong>원문이 수정됨</strong> · 학교 사이트의 본문이 받아 둔 요약과 달라서 현재 본문을 보관했습니다.</span></div>
       {/if}
       <div class="notice-meta"><time datetime={detail.item.published_at}>{archiveDate(detail.item.published_at)}</time>{#if detail.item.author}<span>{detail.item.author}</span>{/if}{#if detail.item.category}<span>{detail.item.category}</span>{/if}{#if ai && classification}<span class="ai-tag">분류 · {classification.category}{classification.low_confidence ? ' · 확신 낮음' : ''}</span>{/if}</div>
       <div class="reader-actions">
@@ -499,7 +499,7 @@
     {#if latest && dates.length}
       <section class="reader-resources" aria-labelledby="dates-heading">
         <h3 id="dates-heading">공지 속 날짜 <span class="muted">{dates.length}</span></h3>
-        <p class="footnote">본문에서 날짜 표기를 그대로 찾았습니다. 연도가 없으면 게시일로 정하므로, 원문에서 날짜와 의미를 확인하세요.</p>
+        <p class="footnote">본문에 적힌 날짜 표기를 찾았습니다. 연도가 없으면 게시일을 기준으로 정하니 원문에서 날짜와 의미를 확인하세요.</p>
         {#each dates as date (date.ordinal)}
           <div class="resource-row">
             <div><strong><span class="ai-mark notice-mark">{noticeDateMark(date, clock.format)}</span> {date.label || date.title}</strong><p>{date.end_day ? noticeDateSpan(date, clock.format) : archiveDate(date.day)}</p></div>
@@ -511,7 +511,7 @@
     {#if ai && similar.length}
       <section class="reader-resources" aria-labelledby="similar-heading">
         <h3 id="similar-heading">비슷한 공지 <span class="muted">{similar.length}</span></h3>
-        <p class="footnote">분류용으로 저장한 임베딩을 최근 공지와 비교했습니다. 제목과 본문의 날짜·시간·숫자가 모두 같을 때만 같은 공지로 표시합니다.</p>
+        <p class="footnote">분류에 쓰는 임베딩을 최근 공지와 비교했습니다. 제목과 본문의 날짜·시간·숫자가 모두 같을 때만 같은 공지로 표시합니다.</p>
         {#each similar as notice (notice.document_id)}
           <div class="resource-row">
             <div><strong>{notice.title}</strong><p>{notice.source_name} · {archiveDate(notice.published_at)}{#if notice.duplicate} · <span class="ai-tag">같은 공지</span>{/if}</p></div>
