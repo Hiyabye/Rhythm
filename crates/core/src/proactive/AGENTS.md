@@ -2,7 +2,7 @@
 
 Area instructions for `crates/core/src/proactive/` (in `rhythm-core`), the app's `src-tauri/src/proactive/` (commands and the Windows validation helper), `src-tauri/src/core/lifecycle.rs` and `storage/proactive.rs`. The root `AGENTS.md` (project-wide rules) applies too.
 
-- `crates/core/src/proactive/`: `scheduler.rs` runs persisted source tasks while the app is open (it takes the app's `Shell`, runtime handle and User-Agent at construction); `notification.rs` discovers, filters, batches and routes notification actions; `reminders.rs` sends due todo reminders from the scheduler loop. The app keeps the commands (`src-tauri/src/proactive/mod.rs`), and its `src-tauri/src/core/lifecycle.rs` owns tray/window/login behavior; settings and durable event/task state live in `storage/proactive.rs` (with `storage/proactive/{model,tasks}.rs`) and schema migrations 005–007.
+- `crates/core/src/proactive/`: `scheduler.rs` runs persisted source tasks while the app is open (`App::open` builds it with the shell, runtime handle and User-Agent the app passes in); `notification.rs` discovers, filters, batches and routes notification actions; `reminders.rs` sends due todo reminders from the scheduler loop. The app keeps the commands (`src-tauri/src/proactive/mod.rs`), and its `src-tauri/src/core/lifecycle.rs` owns tray/window/login behavior; settings and durable event/task state live in `storage/proactive.rs` (with `storage/proactive/{model,tasks}.rs`) and schema migrations 005–007.
 
 ## Invariants
 

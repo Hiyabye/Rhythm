@@ -3,7 +3,7 @@
 use super::{controller::Controller, model::AlertCandidate, rooms};
 use crate::{
     operation_gate::AdmissionGate,
-    shell::{Event, Shell},
+    shell::{Event, Ui},
     storage::SharedStore,
 };
 #[cfg(any(target_os = "macos", test))]
@@ -66,7 +66,7 @@ pub struct Notifications {
     store: SharedStore,
     controller: Weak<Controller>,
     gate: Arc<AdmissionGate>,
-    shell: Option<Arc<dyn Shell>>,
+    shell: Option<Ui>,
     /// Where the receiver runs; `start` may be called outside any runtime.
     runtime: Handle,
     control: Mutex<Option<Arc<Run>>>,
@@ -83,7 +83,7 @@ impl Notifications {
         store: SharedStore,
         controller: Weak<Controller>,
         gate: Arc<AdmissionGate>,
-        shell: Arc<dyn Shell>,
+        shell: Ui,
         runtime: Handle,
     ) -> Arc<Self> {
         Arc::new(Self {

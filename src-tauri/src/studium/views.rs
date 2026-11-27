@@ -6,6 +6,7 @@ use crate::{
     AppState,
 };
 use chrono::Timelike;
+use rhythm_core::app::BoxFuture;
 use serde::Serialize;
 use std::{
     sync::{
@@ -920,3 +921,39 @@ pub(crate) async fn studium_mini_show_main(
 
 #[cfg(test)]
 mod tests;
+
+/// Lets core pause these views for maintenance and close the mini window when
+/// Studium turns off.
+impl rhythm_core::app::StudiumViews for Views {
+    fn start(self: Arc<Self>) -> Result<(), String> {
+        Views::start(&self)
+    }
+    fn refresh(&self) {
+        Views::refresh(self);
+    }
+    fn quiesce(&self) -> BoxFuture<'_, ()> {
+        Box::pin(Views::quiesce(self))
+    }
+    fn resume_after_quiesce(self: Arc<Self>) -> BoxFuture<'static, ()> {
+        Box::pin(async move { Views::resume_after_quiesce(&self).await })
+    }
+    fn shutdown(&self) -> BoxFuture<'_, ()> {
+        Box::pin(Views::shutdown(self))
+    }
+    fn capture_close(&self) -> Option<rhythm_core::app::CloseTicket> {
+        Views::capture_close(self).map(|ticket| rhythm_core::app::CloseTicket(Box::new(ticket)))
+    }
+    fn close(
+        self: Arc<Self>,
+        ticket: rhythm_core::app::CloseTicket,
+    ) -> BoxFuture<'static, Result<(), String>> {
+        Box::pin(async move {
+            // Core hands back only tickets this owner captured.
+            let ticket = ticket
+                .0
+                .downcast::<CloseTicket>()
+                .expect("close ticket comes from capture_close");
+            self.disable(*ticket).await
+        })
+    }
+}

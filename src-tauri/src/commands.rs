@@ -2,87 +2,31 @@
 //! the calendar. Startup and shared state stay in `main.rs`.
 use crate::{
     archive::sync::with_store as locked,
-    core,
-    extensions::{self, ExtensionInfo},
+    core, extensions,
     storage::{
         calendar::{CalendarTodo, TodoInput},
         meals::Meals,
         notice_dates::{CalendarNoticeDates, NoticeDate},
-        proactive::ProactiveSettings,
-        Settings, StorageInfo,
     },
     AppState,
 };
+use rhythm_core::{app::Snapshot, storage::Settings};
 use serde::Serialize;
-use tauri::Emitter;
 
-#[derive(Serialize)]
-pub struct Snapshot {
-    settings: Settings,
-    extensions: Vec<ExtensionInfo>,
-    storage: StorageInfo,
-    proactive: ProactiveSettings,
-    onboarding_completed: bool,
-}
-pub(crate) fn storage_error(error: String) -> String {
-    eprintln!("Storage: {error}");
-    "로컬 데이터를 읽거나 저장하지 못했습니다. 저장 공간과 파일 권한을 확인해 주세요.".into()
-}
-
-fn snapshot(state: &AppState) -> Result<Snapshot, String> {
-    let store = state
-        .store
-        .lock()
-        .map_err(|_| "데이터 저장소에 접근할 수 없습니다.")?;
-    Ok(Snapshot {
-        settings: store.settings().map_err(storage_error)?,
-        extensions: state.registry.list(&store).map_err(storage_error)?,
-        storage: store.info().map_err(storage_error)?,
-        proactive: store.proactive_settings().map_err(storage_error)?,
-        onboarding_completed: store.onboarding_completed().map_err(storage_error)?,
-    })
-}
 #[tauri::command]
 pub async fn get_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
-    let _lease = state.operation_gate.shared().await?;
-    snapshot(&state)
+    state.settings().snapshot().await
 }
 #[tauri::command]
 pub async fn save_settings(
-    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     settings: Settings,
 ) -> Result<Snapshot, String> {
-    let _lease = state.operation_gate.shared().await?;
-    {
-        let store = state
-            .store
-            .lock()
-            .map_err(|_| "저장소에 접근할 수 없습니다.")?;
-        store
-            .save(&settings)
-            .and_then(|()| store.auto_trash_old())
-            .map_err(storage_error)?;
-    }
-    let _ = app.emit("rhythm://theme-changed", &settings.theme);
-    let _ = app.emit("rhythm://clock-format-changed", &settings.clock_format);
-    state.studium_views.refresh();
-    snapshot(&state)
+    state.settings().save(settings).await
 }
-/// Ends the first-run setup flow. A rerun from Settings ends the same way, so
-/// completion is never cleared.
 #[tauri::command]
 pub async fn complete_onboarding(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
-    let _lease = state.operation_gate.shared().await?;
-    {
-        state
-            .store
-            .lock()
-            .map_err(|_| "저장소에 접근할 수 없습니다.")?
-            .complete_onboarding()
-            .map_err(storage_error)?;
-    }
-    snapshot(&state)
+    state.settings().complete_onboarding().await
 }
 
 #[derive(Serialize)]
@@ -96,32 +40,11 @@ pub struct LifecycleStatus {
     tray_available: bool,
 }
 
-fn save_proactive(
-    state: &AppState,
-    update: impl FnOnce(&mut ProactiveSettings),
-) -> Result<ProactiveSettings, String> {
-    let store = state
-        .store
-        .lock()
-        .map_err(|_| "저장소에 접근할 수 없습니다.".to_string())?;
-    let mut settings = store.proactive_settings().map_err(storage_error)?;
-    update(&mut settings);
-    store
-        .proactive_save_settings(&settings)
-        .map_err(storage_error)
-}
-
-fn read_lifecycle_status(
+async fn read_lifecycle_status(
     app: &tauri::AppHandle,
     state: &AppState,
 ) -> Result<LifecycleStatus, String> {
-    let settings = {
-        let store = state
-            .store
-            .lock()
-            .map_err(|_| "저장소에 접근할 수 없습니다.".to_string())?;
-        store.proactive_settings().map_err(storage_error)?
-    };
+    let settings = state.settings().proactive().await?;
     Ok(LifecycleStatus {
         close_to_background: settings.close_to_background,
         start_hidden: settings.start_hidden,
@@ -142,8 +65,7 @@ pub async fn lifecycle_status(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<LifecycleStatus, String> {
-    let _lease = state.operation_gate.shared().await?;
-    read_lifecycle_status(&app, state.inner())
+    read_lifecycle_status(&app, state.inner()).await
 }
 
 #[tauri::command]
@@ -152,16 +74,13 @@ pub async fn lifecycle_set_close_to_background(
     state: tauri::State<'_, AppState>,
     enabled: bool,
 ) -> Result<LifecycleStatus, String> {
-    let _lease = state.operation_gate.shared().await?;
     if enabled && !state.tray_available {
         return Err(
             "시스템 트레이를 사용할 수 없어 창을 닫을 때 백그라운드로 전환할 수 없습니다.".into(),
         );
     }
-    save_proactive(state.inner(), |settings| {
-        settings.close_to_background = enabled
-    })?;
-    read_lifecycle_status(&app, state.inner())
+    state.settings().set_close_to_background(enabled).await?;
+    read_lifecycle_status(&app, state.inner()).await
 }
 
 #[tauri::command]
@@ -170,9 +89,8 @@ pub async fn lifecycle_set_start_hidden(
     state: tauri::State<'_, AppState>,
     enabled: bool,
 ) -> Result<LifecycleStatus, String> {
-    let _lease = state.operation_gate.shared().await?;
-    save_proactive(state.inner(), |settings| settings.start_hidden = enabled)?;
-    read_lifecycle_status(&app, state.inner())
+    state.settings().set_start_hidden(enabled).await?;
+    read_lifecycle_status(&app, state.inner()).await
 }
 
 #[tauri::command]
@@ -181,21 +99,18 @@ pub async fn lifecycle_set_launch_at_login(
     state: tauri::State<'_, AppState>,
     enabled: bool,
 ) -> Result<LifecycleStatus, String> {
-    let _lease = state.operation_gate.shared().await?;
-    set_launch_at_login(&app, state.inner(), enabled)?;
-    read_lifecycle_status(&app, state.inner())
+    set_launch_at_login(&app, state.inner(), enabled).await?;
+    read_lifecycle_status(&app, state.inner()).await
 }
 
 /// Changes the OS login item and the stored preference together, rolling the
 /// OS state back when the preference cannot be saved.
-fn set_launch_at_login(
+async fn set_launch_at_login(
     app: &tauri::AppHandle,
     state: &AppState,
     enabled: bool,
 ) -> Result<(), String> {
-    let _guard = state.launch_at_login.lock().map_err(|_| {
-        "자동 실행 설정을 바꾸지 못했습니다. 잠시 후 다시 시도해 주세요.".to_string()
-    })?;
+    let _guard = state.launch_at_login.lock().await;
     let previous = core::lifecycle::autostart_status(app)?;
     let changed = previous.enabled != enabled;
     #[cfg(windows)]
@@ -207,7 +122,7 @@ fn set_launch_at_login(
     if changed {
         core::lifecycle::set_autostart(app, enabled)?;
     }
-    if let Err(error) = save_proactive(state, |settings| settings.launch_at_login = enabled) {
+    if let Err(error) = state.settings().set_launch_at_login(enabled).await {
         if changed {
             #[cfg(windows)]
             let rollback = core::lifecycle::restore_autostart(
@@ -238,44 +153,12 @@ pub async fn set_extension(
     id: String,
     enabled: bool,
 ) -> Result<Snapshot, String> {
-    let _lease = state.operation_gate.shared().await?;
     // A login item is OS state the flag cannot gate, so it is removed first;
     // if that fails the extension stays on.
     if !enabled && id == extensions::PROACTIVE {
-        set_launch_at_login(&app, state.inner(), false)?;
+        set_launch_at_login(&app, state.inner(), false).await?;
     }
-    let changed = state.registry.change(&state.store, &id, enabled, || {
-        state.studium_views.capture_close()
-    })?;
-    if !enabled {
-        let view_result = match changed.captured {
-            Some(ticket) => state.studium_views.disable(ticket).await,
-            None => Ok(()),
-        };
-        if let Some(completion) = changed.notifications {
-            completion.wait().await;
-        }
-        match id.as_str() {
-            extensions::NOTICES => {
-                state.archive.wait().await;
-                state.archive.bodies.wait().await;
-            }
-            extensions::CYBERCAMPUS => state.archive.wait().await,
-            extensions::STUDIUM => {
-                crate::studium::jobs::finish_disable(&state.store, &state.studium, changed.studium)
-                    .await?;
-            }
-            // The classifier sees the extension off on its next pass and
-            // stops its process; wake it instead of waiting for the timer.
-            extensions::AI => state.classifier.wake(),
-            _ => {}
-        }
-        view_result?;
-    } else if matches!(id.as_str(), extensions::STUDIUM | extensions::PROACTIVE) {
-        state.studium_notifications.resume_after_quiesce().await;
-    }
-    state.studium_views.refresh();
-    snapshot(&state)
+    state.settings().set_extension(&id, enabled).await
 }
 
 #[cfg(test)]

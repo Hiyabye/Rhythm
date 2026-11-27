@@ -4,10 +4,9 @@
 //! tried again on a later pass while its todo is still ahead. A reserved
 //! reminder whose handoff fails is never sent again.
 use super::scheduler::{lock_store, NotificationState};
-use crate::shell::{Event, Shell};
+use crate::shell::{Event, Ui};
 use crate::{archive::sync::SharedStore, storage::calendar::DueReminder};
 use chrono::NaiveDate;
-use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::watch;
 
@@ -20,7 +19,7 @@ const UNCERTAIN: &str = "할 일 알림 전달 결과를 확인하지 못했습�
 
 pub(super) async fn deliver(
     store: &SharedStore,
-    shell: &Arc<dyn Shell>,
+    shell: &Ui,
     notifications: &mut NotificationState,
     stop: &watch::Receiver<bool>,
 ) -> Result<(), String> {
@@ -125,7 +124,7 @@ pub(super) async fn deliver(
 /// window that subscribes later.
 pub(super) fn activate(
     store: &SharedStore,
-    shell: &Arc<dyn Shell>,
+    shell: &Ui,
     pending: &Mutex<Option<String>>,
     token: &str,
 ) -> Result<bool, String> {
