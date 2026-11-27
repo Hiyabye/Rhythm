@@ -18,6 +18,11 @@ const SCOPE: &str = "model#hash";
 #[derive(Default)]
 struct Bucket {
     objects: Mutex<BTreeMap<String, Vec<u8>>>,
+    /// Keys whose PUT always fails and whose GET fails, and keys whose next
+    /// DELETE fails once.
+    failing_puts: Mutex<Vec<String>>,
+    failing_gets: Mutex<Vec<String>>,
+    failing_deletes: Mutex<Vec<String>>,
 }
 impl ObjectStore for Bucket {
     async fn list(&self, prefix: &str) -> Result<Vec<String>, String> {
@@ -29,6 +34,9 @@ impl ObjectStore for Bucket {
             .collect())
     }
     async fn get(&self, key: &str) -> Result<Object, String> {
+        if self.failing_gets.lock().unwrap().iter().any(|k| k == key) {
+            return Err(format!("R2 GET {key}: HTTP 503"));
+        }
         let objects = self.objects.lock().unwrap();
         let bytes = objects.get(key).ok_or("NoSuchKey")?.clone();
         Ok(Object {
@@ -37,10 +45,20 @@ impl ObjectStore for Bucket {
         })
     }
     async fn put(&self, key: &str, bytes: Vec<u8>) -> Result<(), String> {
+        if self.failing_puts.lock().unwrap().iter().any(|k| k == key) {
+            return Err(format!("R2 PUT {key}: HTTP 503"));
+        }
         self.objects.lock().unwrap().insert(key.into(), bytes);
         Ok(())
     }
     async fn delete(&self, key: &str) -> Result<(), String> {
+        {
+            let mut failing = self.failing_deletes.lock().unwrap();
+            if let Some(at) = failing.iter().position(|k| k == key) {
+                failing.remove(at);
+                return Err(format!("R2 DELETE {key}: HTTP 503"));
+            }
+        }
         self.objects.lock().unwrap().remove(key);
         Ok(())
     }
@@ -506,6 +524,101 @@ async fn days_are_compacted_without_gaps_and_old_files_deleted() {
     let mut late = Client::default();
     late.sync(&bucket, key);
     late.assert_mirrors(&state);
+}
+
+#[tokio::test]
+async fn a_manifest_without_its_signature_is_replaced_by_the_next_run() {
+    let state = State::open_in_memory().unwrap();
+    let bucket = Bucket::default();
+    let signer = signer();
+    let key = signer.public_key();
+    add(&state, 1, "첫 공지");
+    run(&state, &bucket, &signer, "2026-11-18T03:00:00.000Z").await;
+    let first = manifest_of(&bucket, key);
+    let first_run = format!("{PREFIX}{}", first.segments[0].records.path);
+
+    // The next day compacts the run segment, but the new signature never
+    // arrives: the bucket holds a new manifest with the old signature.
+    add(&state, 2, "둘째 공지");
+    bucket
+        .failing_puts
+        .lock()
+        .unwrap()
+        .push(format!("{PREFIX}manifest.json.sig"));
+    let now = "2026-11-19T00:30:00.000Z";
+    prepare(&state, &bucket, PREFIX, &signer, now, false)
+        .await
+        .unwrap();
+    let error = finish(&state, &bucket, PREFIX, &signer, now)
+        .await
+        .unwrap_err();
+    assert!(error.contains("PUT"), "{error}");
+    assert!(verify(
+        &bucket.bytes("manifest.json"),
+        &bucket.bytes("manifest.json.sig"),
+        &[key]
+    )
+    .is_err());
+    bucket.failing_puts.lock().unwrap().clear();
+
+    // The retired run segment has expired, but this run cannot know what the
+    // stuck manifest lists, so it deletes nothing; it publishes a manifest
+    // that verifies.
+    add(&state, 3, "셋째 공지");
+    let report = run(&state, &bucket, &signer, "2026-11-20T01:00:00.000Z").await;
+    assert_eq!(report.deleted, 0);
+    assert!(bucket.keys().contains(&first_run));
+    let manifest = manifest_of(&bucket, key);
+    assert_eq!(manifest.generated_at, "2026-11-20T01:00:00.000Z");
+    for file in &listed_keys(&manifest) {
+        assert!(bucket.keys().contains(file), "{file}");
+    }
+    let mut client = Client::default();
+    client.sync(&bucket, key);
+    client.assert_mirrors(&state);
+
+    // With a verified manifest again, cleanup resumes and removes it.
+    let report = run(&state, &bucket, &signer, "2026-11-21T01:00:00.000Z").await;
+    assert!(report.deleted > 0);
+    assert!(!bucket.keys().contains(&first_run));
+    for file in &listed_keys(&manifest_of(&bucket, key)) {
+        assert!(bucket.keys().contains(file), "{file}");
+    }
+
+    // A missing signature object is replaced the same way.
+    bucket
+        .objects
+        .lock()
+        .unwrap()
+        .remove(&format!("{PREFIX}manifest.json.sig"));
+    let report = run(&state, &bucket, &signer, "2026-11-22T01:00:00.000Z").await;
+    assert_eq!(report.deleted, 0);
+    manifest_of(&bucket, key);
+}
+
+#[tokio::test]
+async fn a_failed_read_of_the_live_manifest_still_fails_the_run() {
+    let state = State::open_in_memory().unwrap();
+    let bucket = Bucket::default();
+    let signer = signer();
+    add(&state, 1, "공지");
+    run(&state, &bucket, &signer, "2026-11-18T03:00:00.000Z").await;
+    for name in ["manifest.json", "manifest.json.sig"] {
+        let failing = format!("{PREFIX}{name}");
+        bucket.failing_gets.lock().unwrap().push(failing);
+        let error = prepare(
+            &state,
+            &bucket,
+            PREFIX,
+            &signer,
+            "2026-11-19T03:00:00.000Z",
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("HTTP 503"), "{error}");
+        bucket.failing_gets.lock().unwrap().clear();
+    }
 }
 
 #[tokio::test]

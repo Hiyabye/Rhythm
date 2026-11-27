@@ -33,12 +33,15 @@ use rhythm_feed::{
 };
 use std::{
     collections::{BTreeMap, HashSet},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 pub const BUCKET: &str = "rhythm-feed";
 const MANIFEST: &str = "manifest.json";
 const SIGNATURE: &str = "manifest.json.sig";
+/// Attempts of the signature upload, each already retried by the R2 client;
+/// the waits between them are 10, 20 and 40 seconds.
+const SIGNATURE_ATTEMPTS: u32 = 4;
 /// The secret holding the maintainer's PEM PKCS#8 signing key.
 pub const KEY_VARIABLE: &str = "RHYTHM_FEED_SIGNING_KEY";
 
@@ -68,7 +71,20 @@ pub async fn prepare<S: ObjectStore>(
     restart: bool,
 ) -> Result<Report, String> {
     let keys = store.list(prefix).await?;
-    let live = live_manifest(store, prefix, signer, &keys).await?;
+    let found = live_manifest(store, prefix, signer, &keys).await?;
+    // A manifest that does not verify is replaced, but what it lists is
+    // unknown: it is only a hint for the seq and clock checks below, and
+    // nothing is deleted while it stands.
+    let replacing = matches!(found, Live::Unverified(_));
+    let hint = match &found {
+        Live::Verified(live) => Some(live),
+        Live::Unverified(hint) => hint.as_ref(),
+        Live::Absent => None,
+    };
+    let live = match &found {
+        Live::Verified(live) => Some(live),
+        _ => None,
+    };
     let last_seq = |live: &Manifest| {
         live.segments
             .last()
@@ -78,7 +94,7 @@ pub async fn prepare<S: ObjectStore>(
     // A restart continues after every seq a client can hold, and lists only
     // a snapshot, so every old cursor falls before it.
     let restarted_after = if restart {
-        let live = live.as_ref().ok_or("--reset-feed needs a published feed")?;
+        let live = live.ok_or("--reset-feed needs a published feed that verifies")?;
         let listed = listed_files(live)
             .map(|(records, vectors)| (records.path.clone(), vectors.map(|v| v.path.clone())))
             .collect::<Vec<_>>();
@@ -88,7 +104,7 @@ pub async fn prepare<S: ObjectStore>(
         None
     };
     let next_seq = state.feed_next_seq()?;
-    if let Some(live) = &live {
+    if let Some(live) = hint {
         let last = last_seq(live);
         if last >= next_seq {
             return Err(format!(
@@ -101,7 +117,11 @@ pub async fn prepare<S: ObjectStore>(
         }
     }
     let mut report = Report {
-        deleted: clean(state, store, prefix, live.as_ref(), &keys, now).await?,
+        deleted: if replacing {
+            0
+        } else {
+            clean(state, store, prefix, live, &keys, now).await?
+        },
         ..Report::default()
     };
 
@@ -203,7 +223,20 @@ pub async fn finish<S: ObjectStore>(
     Manifest::parse(&bytes).map_err(|e| format!("the new manifest is invalid: {e}"))?;
     let signature = signer.sign(&bytes);
     store.put(&format!("{prefix}{MANIFEST}"), bytes).await?;
-    store.put(&format!("{prefix}{SIGNATURE}"), signature).await
+    // A manifest without its new signature stops every client until a later
+    // run replaces it, so this upload is retried beyond a normal PUT.
+    let key = format!("{prefix}{SIGNATURE}");
+    let mut result = Ok(());
+    for attempt in 0..SIGNATURE_ATTEMPTS {
+        if attempt > 0 && !cfg!(test) {
+            tokio::time::sleep(Duration::from_secs(5 << attempt)).await;
+        }
+        result = store.put(&key, signature.clone()).await;
+        if result.is_ok() {
+            break;
+        }
+    }
+    result
 }
 
 fn manifest(state: &State, now: &str) -> Result<Manifest, String> {
@@ -260,21 +293,56 @@ fn manifest(state: &State, now: &str) -> Result<Manifest, String> {
     })
 }
 
+/// What the bucket holds as the live manifest.
+enum Live {
+    Absent,
+    Verified(Manifest),
+    /// A manifest whose signature is missing, damaged or does not match it
+    /// (a `finish` that stopped between its two uploads). The manifest is
+    /// only its parsed content, when it parses: never trusted.
+    Unverified(Option<Manifest>),
+}
+
+/// Reads and verifies the live manifest. A read error fails the run; so does
+/// a signature made by another key, which means the wrong key is configured
+/// (replacing that feed would orphan every client). A manifest whose
+/// signature is missing, unreadable or this key's but wrong for it is
+/// `Unverified`: the next manifest replaces it.
 async fn live_manifest<S: ObjectStore>(
     store: &S,
     prefix: &str,
     signer: &Signer,
     keys: &[String],
-) -> Result<Option<Manifest>, String> {
+) -> Result<Live, String> {
     let key = format!("{prefix}{MANIFEST}");
     if !keys.contains(&key) {
-        return Ok(None);
+        return Ok(Live::Absent);
     }
     let manifest = store.get(&key).await?.bytes;
-    let signature = store.get(&format!("{prefix}{SIGNATURE}")).await?.bytes;
-    rhythm_feed::verify(&manifest, &signature, &[signer.public_key()])
-        .map(Some)
-        .map_err(|e| format!("the published manifest does not verify with this key: {e}"))
+    let hint = Manifest::parse(&manifest).ok();
+    let signature_key = format!("{prefix}{SIGNATURE}");
+    if !keys.contains(&signature_key) {
+        eprintln!("the published manifest has no signature: replacing it");
+        return Ok(Live::Unverified(hint));
+    }
+    let signature = store.get(&signature_key).await?.bytes;
+    let error = match rhythm_feed::verify(&manifest, &signature, &[signer.public_key()]) {
+        Ok(live) => return Ok(Live::Verified(live)),
+        Err(error) => error,
+    };
+    let ours = rhythm_feed::manifest::key_id(&signer.public_key());
+    match serde_json::from_slice::<rhythm_feed::manifest::Signature>(&signature) {
+        Ok(found) if found.key_id != ours => Err(format!(
+            "the published manifest does not verify with this key: {error}"
+        )),
+        _ => {
+            eprintln!(
+                "the published manifest does not verify with this key ({error}): replacing it, \
+                 keeping every old file this run"
+            );
+            Ok(Live::Unverified(hint))
+        }
+    }
 }
 
 /// The records and vectors files a manifest lists.
