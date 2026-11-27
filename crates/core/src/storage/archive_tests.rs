@@ -2325,6 +2325,49 @@ fn purge_returns_only_files_no_other_notice_uses() {
     assert_eq!(store.document(ids[1], None).unwrap().resources.len(), 1);
 }
 #[test]
+fn purging_all_of_a_huge_trash_stays_below_the_variable_limit() {
+    let (_directory, store) = database();
+    let (id, _) = store
+        .upsert_article("one", &article("1", "공지", "본문", "2026-11-01"), false)
+        .unwrap();
+    let revision = store.document(id, None).unwrap().revision_id;
+    let resource = store
+        .add_resource_for_test(id, revision, "https://www.sogang.ac.kr/a.png", "x.png", "image")
+        .unwrap();
+    store
+        .resource_result(
+            resource,
+            "downloaded",
+            Some("image/png"),
+            Some(1),
+            Some("resources/only.png"),
+            Some(&"a".repeat(64)),
+            None,
+        )
+        .unwrap();
+    // Minimal synthetic rows, more than SQLite's default 32,766 variables.
+    store
+        .connection
+        .execute_batch(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<33000)
+             INSERT INTO documents(source_id,external_id,canonical_url,title,published_at,
+                                   body_html,body_text,content_hash,historical)
+             SELECT 'two','f'||i,'https://www.sogang.ac.kr/'||i,'t','2026-11-01','','','h'||i,1 FROM n;
+             INSERT INTO trashed_documents(document_id)
+             SELECT id FROM documents WHERE source_id='two';",
+        )
+        .unwrap();
+    store.trash_documents(&[id]).unwrap();
+    let orphaned = store.purge_trashed(None).unwrap();
+    assert_eq!(orphaned, ["resources/only.png"]);
+    let count = |sql: &str| -> i64 { store.connection.query_row(sql, [], |r| r.get(0)).unwrap() };
+    assert_eq!(count("SELECT COUNT(*) FROM documents"), 0);
+    assert_eq!(count("SELECT COUNT(*) FROM trashed_documents"), 0);
+    assert_eq!(count("SELECT COUNT(*) FROM deleted_notices"), 33001);
+    assert!(store.notice_deleted("one", "1").unwrap());
+    assert!(store.notice_deleted("two", "f33000").unwrap());
+}
+#[test]
 fn trashed_notices_leave_automatic_classification() {
     let (_directory, store) = database();
     let (kept, _) = store
