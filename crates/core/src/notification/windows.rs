@@ -453,7 +453,7 @@ pub fn prepare_reminder(title: &str, body: &str, token: &str) -> Result<Prepared
     prepare_for_uri(
         title,
         body,
-        &format!("{}{token}", super::reminders::token_prefix()),
+        &format!("{}{token}", windows_identity::current().reminder_prefix),
     )
 }
 
@@ -474,7 +474,9 @@ fn prepare_for_uri(title: &str, body: &str, uri: &str) -> Result<PreparedToast, 
         && windows_identity::current()
             .studium_token_from_uri(uri)
             .is_none()
-        && super::reminders::token_from_uri(uri).is_none()
+        && windows_identity::current()
+            .reminder_token_from_uri(uri)
+            .is_none()
     {
         return Err("알림 활성화 정보가 올바르지 않습니다.".into());
     }
