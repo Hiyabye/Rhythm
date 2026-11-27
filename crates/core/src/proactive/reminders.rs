@@ -82,18 +82,12 @@ pub(super) async fn deliver(
             let operation_gate = notifications.operation_gate.clone();
             let mut stop = stop.clone();
             notifications.response_tasks.spawn(async move {
-                use mac_usernotifications::response::CloseReason;
                 let response = tokio::select! {
                     _ = stop.changed() => return,
                     response = handle.response() => response,
                 };
                 let Ok(response) = response else { return };
-                if !response.is_default_action()
-                    || matches!(
-                        response.close_reason,
-                        Some(CloseReason::Dismissed | CloseReason::Expired)
-                    )
-                {
+                if !crate::notification::is_activation(&response) {
                     return;
                 }
                 let Ok(_lease) = operation_gate.shared().await else {

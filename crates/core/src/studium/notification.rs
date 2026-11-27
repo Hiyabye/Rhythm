@@ -436,11 +436,7 @@ impl Notifications {
                     response = tokio::time::timeout(Duration::from_secs(1_805), handle.response()) => response,
                 };
                 if let Ok(Ok(response)) = response {
-                    use mac_usernotifications::response::CloseReason;
-                    if response.is_default_action()
-                        && response.close_reason != Some(CloseReason::Dismissed)
-                        && response.close_reason != Some(CloseReason::Expired)
-                    {
+                    if crate::notification::is_activation(&response) {
                         if let Err(error) = owner.activate(&run, &token).await {
                             if !owner.cancelled(&run) { owner.record_error(error); }
                         }
