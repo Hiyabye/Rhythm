@@ -1,10 +1,10 @@
 pub mod cybercampus;
+#[cfg(windows)]
+use rhythm_core::archive::windows_reveal;
 pub use rhythm_core::archive::{
     app_collected, catalog, definitions, model, network, run_auto_trash, run_notice_dates, sync,
     Client,
 };
-#[cfg(windows)]
-mod windows_reveal;
 
 use crate::AppState;
 use base64::Engine;

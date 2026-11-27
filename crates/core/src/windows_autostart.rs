@@ -32,7 +32,7 @@ impl ValueName {
 }
 
 /// Exact per-user values, including a registered but Windows-disabled entry.
-pub(crate) struct Snapshot {
+pub struct Snapshot {
     name: ValueName,
     run: Option<(REG_VALUE_TYPE, Vec<u8>)>,
     approved: Option<(REG_VALUE_TYPE, Vec<u8>)>,
@@ -235,7 +235,7 @@ fn status_of(name: &ValueName) -> Result<bool, String> {
     approval_state(name)
 }
 
-pub(super) fn status(name: &str) -> Result<bool, String> {
+pub fn status(name: &str) -> Result<bool, String> {
     status_of(&ValueName::new(name))
 }
 
@@ -250,7 +250,7 @@ fn snapshot_of(name: &ValueName) -> Result<Snapshot, String> {
     })
 }
 
-pub(crate) fn snapshot(name: &str) -> Result<Snapshot, String> {
+pub fn snapshot(name: &str) -> Result<Snapshot, String> {
     snapshot_of(&ValueName::new(name))
 }
 
@@ -268,7 +268,7 @@ fn restore_value(
     }
 }
 
-pub(crate) fn restore(snapshot: &Snapshot) -> Result<(), String> {
+pub fn restore(snapshot: &Snapshot) -> Result<(), String> {
     // A third party may have taken the name since snapshot; never overwrite it.
     checked_registration(&snapshot.name, &expected()?)?;
     let run_result = restore_value(RUN, &snapshot.name, &snapshot.run);
@@ -283,7 +283,7 @@ pub(crate) fn restore(snapshot: &Snapshot) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn set(name: &str, enabled: bool) -> Result<bool, String> {
+pub fn set(name: &str, enabled: bool) -> Result<bool, String> {
     let name = ValueName::new(name);
     let command = expected()?;
     let before = snapshot_of(&name)?;
