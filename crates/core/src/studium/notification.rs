@@ -17,8 +17,8 @@ use std::{
 };
 use tokio::{runtime::Handle, sync::Notify};
 
-#[cfg(any(windows, test))]
-pub fn token_prefix() -> &'static str {
+#[cfg(test)]
+fn token_prefix() -> &'static str {
     crate::windows_identity::current().studium_prefix.as_str()
 }
 const MAX_RESPONSES: usize = 12;
