@@ -67,7 +67,7 @@
 
   function layoutIssue(value: StudiumSeatData) {
     if (value.layout_error) return value.layout_error;
-    if (value.seat_numbers === null) return '좌석 번호와 위치를 확인하지 못했습니다. 확인된 빈 좌석 수를 이용해 주세요.';
+    if (value.seat_numbers === null) return '좌석 번호와 위치를 확인하지 못했습니다. 빈 좌석 수만 참고해 주세요.';
     if (!value.layout) return '이 조회에는 좌석 위치 정보가 없습니다. 번호 목록을 이용해 주세요.';
     return validLayout(value.layout, value.total) ? '' : '좌석 위치를 확인하지 못했습니다. 번호 목록을 이용해 주세요.';
   }
@@ -101,7 +101,7 @@
       <p class="map-summary" id={`${mapId}-summary`} role="status">{roomLabel} · 전체 {data.total}석 · 빈 좌석 {data.remaining}석 · 사용 중 {data.used}석{searchNumber !== null ? ` · 검색 결과 ${searchMatches}개` : ''}{stale ? ' · 이전 조회 기준' : ''}</p>
       <p class="map-help">원본 기준 시각 · 한국시간: <time datetime={data.source_time}>{sourceClock()}</time></p>
       {#if stale}<p class="map-warning" role="status">이전 조회의 위치와 상태입니다. 현재 빈자리 여부는 확인되지 않았습니다.</p>{/if}
-      <p class="map-help" id={`${mapId}-help`}>번호의 상대 위치만 표시합니다. 실제 좌석의 크기·형태나 벽·문을 나타내지 않습니다. 번호 목록도 함께 이용할 수 있습니다.</p>
+      <p class="map-help" id={`${mapId}-help`}>번호의 상대 위치만 보여 줍니다. 실제 좌석 크기나 모양, 벽, 문은 나타내지 않습니다. 번호 목록도 함께 볼 수 있습니다.</p>
       <ul class="map-legend" id={`${mapId}-legend`} aria-label="배치도 기호"><li>○ 빈 좌석</li><li>× 사용 중</li><li>★ 선호 설정</li>{#if searchNumber !== null}<li><span class="search-example">밑줄</span> 검색한 빈 좌석</li>{/if}</ul>
       <div class="map-controls" role="group" aria-label="배치도 보기 조절"><button class="button secondary small" disabled={zoom <= 50} onclick={() => zoom = Math.max(50, zoom - 25)}>배치도 축소</button><output aria-label="배치도 확대 비율" aria-live="polite">{zoom}%</output><button class="button secondary small" disabled={zoom >= 200} onclick={() => zoom = Math.min(200, zoom + 25)}>배치도 확대</button><button class="button secondary small" onclick={resetView}>배치도 보기 초기화</button></div>
       {#key resetGeneration}
@@ -121,7 +121,7 @@
         </svg>
       </div>
       {/key}
-      <p class="map-help">배치도에 포커스를 두고 방향키나 스크롤로 이동합니다. 확대·이동·검색은 새로 조회하지 않습니다.</p>
+      <p class="map-help">배치도를 선택하고 방향키나 스크롤로 이동합니다. 확대, 이동, 검색은 새로 조회하지 않습니다.</p>
     </div>
   {/if}
 </div>

@@ -59,7 +59,7 @@
       const accepted = await invoke<boolean>('backup_cancel', { operationId: id });
       notice = accepted
         ? '취소를 요청했습니다. 진행 중인 작업을 안전하게 정리하고 있습니다.'
-        : '이미 파일 확정 단계에 들어가 취소할 수 없습니다. 작업이 끝날 때까지 기다려 주세요.';
+        : '이미 마무리 단계라 취소할 수 없습니다. 작업이 끝날 때까지 기다려 주세요.';
     } catch (reason) {
       cancelling = false;
       error = archiveError(reason);
@@ -127,7 +127,7 @@
 </script>
 
 <div id="data-backup" aria-busy={busy}>
-  <div class="settings-group-title"><h3>백업 및 복원</h3><Hint label="백업 및 복원">설정, 보관한 공지와 첨부 자료를 암호화하지 않은 파일 하나에 담습니다. 안전한 곳에 직접 보관하세요. AI 모델 파일은 포함하지 않습니다. 복원하면 현재 데이터는 지우지 않고 복구용으로 남겨 두며, Rhythm이 종료됩니다. 다시 열면 복원이 마무리되고, 파일이 없는 설치 모델은 다시 설치해야 합니다.</Hint></div>
+  <div class="settings-group-title"><h3>백업 및 복원</h3><Hint label="백업 및 복원">설정, 보관한 공지와 첨부 자료를 파일 하나에 담습니다. 파일은 암호화되지 않으므로 안전한 곳에 직접 보관하세요. AI 모델 파일은 포함하지 않습니다. 복원하면 Rhythm이 종료되고, 현재 데이터는 복구용으로 남습니다. Rhythm을 다시 열면 복원이 마무리됩니다. 이 기기에 모델 파일이 없으면 모델을 다시 설치해야 합니다.</Hint></div>
   {#if !desktop}<p class="muted">백업과 복원은 데스크톱 앱에서 사용할 수 있습니다.</p>
   {:else}
     <div class="settings-group">
@@ -138,7 +138,7 @@
       {/if}
       {#if preview}
         <div class="settings-row stacked" aria-live="polite">
-          <div class="row-label"><h4>복원할 백업 확인</h4><span class="row-detail">공지 {preview.documents.toLocaleString('ko-KR')}건 · 첨부 자료 {preview.resources.toLocaleString('ko-KR')}개 ({archiveSize(preview.resource_bytes)}) · {createdAt(preview.created_at)} · 형식 v{preview.format_version} · 스키마 {preview.database_schema}</span><span class="row-detail">모델 가중치는 포함되지 않습니다. 복원하면 Rhythm이 종료되고 자동으로 다시 열리지 않습니다. 직접 다시 열면 복원이 마무리됩니다.</span></div>
+          <div class="row-label"><h4>복원할 백업 확인</h4><span class="row-detail">공지 {preview.documents.toLocaleString('ko-KR')}건 · 첨부 자료 {preview.resources.toLocaleString('ko-KR')}개 ({archiveSize(preview.resource_bytes)}) · {createdAt(preview.created_at)} · 형식 v{preview.format_version} · 스키마 {preview.database_schema}</span><span class="row-detail">모델 파일은 포함되지 않습니다. 복원하면 Rhythm이 종료되며 자동으로 다시 열리지 않습니다. 직접 다시 열면 복원이 마무리됩니다.</span></div>
           <div class="popover-actions"><button class="button small" disabled={busy || restoreAvailable !== true} onclick={restoreBackup}>이 백업으로 복원</button><button class="text-button" disabled={busy} onclick={() => { selected = null; preview = null; }}>취소</button></div>
         </div>
       {/if}

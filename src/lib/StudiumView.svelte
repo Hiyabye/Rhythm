@@ -199,7 +199,7 @@
     if (parts.some((part) => !/^\d+$/.test(part)) || numbers.some((number) => !Number.isSafeInteger(number) || number < 1 || number > capacity)) {
       return { numbers: [], error: `1부터 ${capacity} 사이의 좌석 번호를 쉼표나 공백으로 구분해 입력해 주세요.` };
     }
-    if (new Set(numbers).size !== numbers.length) return { numbers: [], error: '같은 좌석 번호를 중복해서 입력할 수 없습니다.' };
+    if (new Set(numbers).size !== numbers.length) return { numbers: [], error: '같은 좌석 번호는 한 번만 입력해 주세요.' };
     return { numbers: numbers.sort((a, b) => a - b), error: '' };
   }
 
@@ -284,7 +284,7 @@
 
   function automaticStatus(value: StudiumSnapshot): string {
     if (!value.automatic.active) return value.automatic.error ? '자동 확인이 중단되었습니다.' : '자동 확인이 꺼져 있습니다.';
-    if (value.running) return `자동 확인이 켜져 있습니다. 진행 중인 확인을 마친 뒤 ${value.automatic.interval_minutes}분 후 다음 확인을 시작합니다.`;
+    if (value.running) return `자동 확인이 켜져 있습니다. 진행 중인 확인이 끝나면 ${value.automatic.interval_minutes}분 뒤에 다음 확인을 시작합니다.`;
     return value.automatic.next_check_at ? `다음 자동 확인: ${clock(value.automatic.next_check_at)}` : '자동 확인을 준비하고 있습니다.';
   }
 
@@ -356,7 +356,7 @@
         void load();
       }).catch((reason) => {
         if (!mounted) return;
-        eventError = `다른 창의 좌석 상태를 구독하지 못했습니다: ${archiveError(reason)}`;
+        eventError = `다른 창의 좌석 상태를 받지 못했습니다: ${archiveError(reason)}`;
         void load();
       });
     } else loading = false;
@@ -389,7 +389,7 @@
     {:else if !snapshot}<button class="button secondary" onclick={() => void load()}>다시 불러오기</button>
     {:else}
       <section aria-labelledby="studium-targets-title">
-        <div class="section-heading"><h2 id="studium-targets-title">확인할 열람실</h2><Hint label="확인할 열람실">선택하고 저장한 열람실을 지금 확인 버튼으로 한 번에 확인합니다. 선택만 바꾸면 학교에 요청하지 않습니다. 조회 결과는 앱을 종료하면 지워집니다.</Hint></div>
+        <div class="section-heading"><h2 id="studium-targets-title">확인할 열람실</h2><Hint label="확인할 열람실">저장한 열람실을 지금 확인 버튼으로 한 번에 확인합니다. 선택을 바꾸기만 해서는 학교에 요청하지 않습니다. 조회 결과는 앱을 종료하면 지워집니다.</Hint></div>
         <fieldset class="targets" disabled={busy || snapshot.running}>
           <legend class="sr-only">확인할 열람실 선택</legend>
           {#each snapshot.rooms as item (item.id)}
@@ -400,7 +400,7 @@
       </section>
 
       <section aria-labelledby="studium-automatic-title">
-        <div class="section-heading"><h2 id="studium-automatic-title">자동 확인</h2><Hint label="자동 확인">시작하면 저장한 열람실을 바로 확인합니다. 이미 확인 중이면 그 작업을 마친 뒤 저장한 간격만큼 기다립니다. 일시정지는 진행 중인 자동 확인을 취소하고, 직접 시작한 확인은 계속합니다.</Hint></div>
+        <div class="section-heading"><h2 id="studium-automatic-title">자동 확인</h2><Hint label="자동 확인">시작하면 저장한 열람실을 바로 확인합니다. 이미 확인 중이면 그 확인이 끝난 뒤 저장한 간격만큼 기다립니다. 일시정지하면 진행 중인 자동 확인은 취소되고, 직접 시작한 확인은 계속됩니다.</Hint></div>
         <form class="automatic-interval" onsubmit={(event) => { event.preventDefault(); saveInterval(); }}>
           <label for="studium-interval">자동 확인 간격 (분)</label>
           <input id="studium-interval" type="number" min="2" max="60" step="1" inputmode="numeric" bind:value={intervalDraft} oninput={() => intervalEditing = true} disabled={busy} aria-invalid={intervalInvalid ? 'true' : undefined} aria-describedby={intervalInvalid ? 'studium-interval-help studium-interval-error' : 'studium-interval-help'} />
@@ -437,7 +437,7 @@
             {#if parsedFavorites.error}<p class="validation editor-help" id="studium-favorites-error" role="status">{parsedFavorites.error}</p>{/if}
             <p class="saved-favorites">저장한 선호 좌석: {savedFavorites.length ? savedFavorites.join(', ') + '번' : '없음'}</p>
             <p class="favorite-availability" role="status">{favoriteAvailability()}</p>
-            <p class="editor-help">표시할 열람실을 바꾸면 저장하지 않은 선호 번호와 검색을 초기화합니다. 조회 대상에서 뺀 방의 선호 설정은 유지합니다.</p>
+            <p class="editor-help">표시할 열람실을 바꾸면 저장하지 않은 선호 번호와 검색을 초기화합니다. 확인 대상에서 뺀 열람실의 선호 설정은 그대로 남습니다.</p>
           </section>
           <section class="alert-editor" aria-labelledby="studium-alert-title">
             <h4 id="studium-alert-title">좌석 알림 조건</h4>
@@ -448,13 +448,13 @@
               {#if alertKind === 'remaining'}<label for="studium-alert-minimum">알림을 보낼 최소 빈 좌석 수</label><input id="studium-alert-minimum" type="number" min="1" max={room?.capacity} step="1" bind:value={alertMinimum} oninput={() => alertEditing = true} disabled={busy} aria-invalid={alertInvalid ? 'true' : undefined} aria-describedby="studium-alert-help" />{/if}
               <div class="editor-actions"><button class="button secondary small" type="submit" disabled={busy || !alertDirty || alertInvalid}>알림 조건 저장</button><button class="button secondary small" type="button" disabled={busy || !alertEditing} onclick={cancelAlertEdit}>알림 조건 변경 취소</button></div>
             </form>
-            {#if alertKind === 'preferred' && !savedFavorites.length}<p class="validation editor-help" role="status">선호 좌석 알림을 켜려면 이 방의 선호 번호를 먼저 저장해 주세요.</p>
+            {#if alertKind === 'preferred' && !savedFavorites.length}<p class="validation editor-help" role="status">선호 좌석 알림을 켜려면 이 열람실의 선호 번호를 먼저 저장해 주세요.</p>
             {:else if alertInvalid}<p class="validation editor-help" role="status">1부터 {room?.capacity} 사이의 정수를 입력해 주세요.</p>{/if}
             <p class="saved-alert">저장한 조건: {savedAlert.enabled ? savedAlert.kind === 'remaining' ? `켜짐 · 빈 좌석 ${savedAlert.minimum}석 이상` : '켜짐 · 선호 좌석 중 빈자리' : '꺼짐'}</p>
-            <p class="editor-help" id="studium-alert-help">최신 조회가 조건을 처음 만족하면 한 번 알립니다. 이후 확인에 성공한 결과가 조건을 벗어났다가 다시 만족할 때 다시 알립니다. 조회 실패로 반복 알리지 않습니다. 조건 저장만으로 조회하거나 알리지 않습니다.</p>
+            <p class="editor-help" id="studium-alert-help">최신 조회가 조건을 처음 만족하면 한 번 알립니다. 이후 조건을 벗어났다가 다시 만족하면 다시 알립니다. 조회에 실패했을 때는 반복해서 알리지 않습니다. 조건을 저장하기만 해서는 조회하거나 알리지 않습니다.</p>
             <p class="notification-policy" role="status">{notificationLoading ? '전체 알림 설정과 권한을 확인하고 있습니다.' : notificationPolicyStatus()}</p>
             {#if notificationSettings?.quiet_hours.enabled}<p class="editor-help">조용한 시간 {wallTime(notificationSettings.quiet_hours.start, clockSetting.format)}–{wallTime(notificationSettings.quiet_hours.end, clockSetting.format)}(PC 현지 시각)에는 알리지 않습니다.</p>{/if}
-            <p class="editor-help">전체 알림의 10분당 최대 3회 제한을 함께 적용합니다. 조용한 시간이나 빈도 제한으로 보내지 못하면 다음 최신 조회에서 다시 판단합니다. 알림을 눌러도 빈자리가 유지된다고 보장하지 않습니다.</p>
+            <p class="editor-help">전체 알림의 10분당 최대 3회 제한도 적용됩니다. 조용한 시간이나 횟수 제한 때문에 보내지 못하면 다음 조회에서 다시 판단합니다. 알림을 눌렀을 때 빈자리가 남아 있다고 보장하지 않습니다.</p>
             <div class="editor-actions"><button class="button secondary small" onclick={onsettings}>{proactiveEnabled ? '알림 설정 열기' : '확장 기능 설정 열기'}</button><button class="button secondary small" disabled={notificationLoading} onclick={() => void loadNotificationContext()}>알림 상태 새로 확인</button></div>
             {#if notificationError}<p class="archive-error" role="alert">{notificationError}</p>{/if}
             {#if snapshot.alert_error}<p class="archive-error" role="alert">좌석 알림 전달 상태: {snapshot.alert_error}</p>{/if}
@@ -464,11 +464,11 @@
           {#if result?.result}
             {@const data = result.result}
             <p class="seat-count">빈 좌석 <strong>{data.remaining.toLocaleString('ko-KR')}석</strong><span> / 전체 {data.total.toLocaleString('ko-KR')}석</span></p>
-            {#if stale(data.source_time)}<p class="stale" role="status">오래되었거나 PC 시계와 맞지 않는 정보입니다. 지금 확인으로 다시 확인해 주세요.</p>{/if}
+            {#if stale(data.source_time)}<p class="stale" role="status">오래되었거나 PC 시계와 맞지 않는 정보입니다. 지금 확인을 눌러 다시 확인해 주세요.</p>{/if}
             {#if data.seat_numbers !== null}
               {#if searchActive && !searchInvalid}<p class="search-count" role="status">전체 빈 좌석 {data.remaining}석 · 검색 결과 {filteredNumbers.length}개{stale(data.source_time) ? ' · 이전 조회 기준' : ''}</p>{/if}
               <p class="seat-numbers"><span>빈 좌석 번호</span><strong>{#if searchInvalid}검색 번호를 확인해 주세요.{:else if filteredNumbers.length}{#each filteredNumbers as number, index}{#if savedFavorites.includes(number)}<mark class="preferred"><span aria-hidden="true">★ </span>{number}<span class="sr-only">번 선호 좌석</span></mark>{:else}{number}{/if}{index < filteredNumbers.length - 1 ? ', ' : '번'}{/each}{:else}{data.remaining === 0 ? '빈 좌석 없음' : '검색한 번호가 빈 좌석 목록에 없습니다.'}{/if}</strong></p>
-            {:else}<p class="seat-numbers"><span>빈 좌석 번호</span><strong>확인 불가 · 빈 좌석 수만 확인됨</strong></p>{#if searchActive}<p class="editor-help">좌석 번호를 검증하지 못해 검색할 수 없습니다.</p>{/if}{/if}
+            {:else}<p class="seat-numbers"><span>빈 좌석 번호</span><strong>확인 불가 · 빈 좌석 수만 확인됨</strong></p>{#if searchActive}<p class="editor-help">좌석 번호를 확인하지 못해 검색할 수 없습니다.</p>{/if}{/if}
             <StudiumSeatMap {data} identity={`${viewRoom}:${snapshot.job_id ?? 0}:${data.source_time}:${result.checked_at ?? ''}`} roomLabel={room?.label ?? '열람실'} favorites={savedFavorites} searchNumber={searchActive && !searchInvalid ? Number(searchDraft) : null} stale={stale(data.source_time)} onfocuslost={() => void restoreMapFocus()} />
             {#if result.error}<p class="detail-error">{result.error}</p>{/if}
             <dl class="times"><div><dt>원본 기준 시각 · 한국시간</dt><dd><time datetime={data.source_time}>{clock(data.source_time)}</time></dd></div><div><dt>조회 시각 · 한국시간</dt><dd>{#if result.checked_at}<time datetime={result.checked_at}>{clock(result.checked_at)}</time>{:else}확인 불가{/if}</dd></div></dl>
