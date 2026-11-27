@@ -549,11 +549,13 @@ fn main() {
                 maintenance_shutdown.clone(),
             ));
             tauri::async_runtime::spawn(archive::run_auto_trash(
-                app.handle().clone(),
+                state.store.clone(),
+                state.operation_gate.clone(),
                 maintenance_shutdown.clone(),
             ));
             tauri::async_runtime::spawn(archive::run_notice_dates(
-                app.handle().clone(),
+                state.store.clone(),
+                state.operation_gate.clone(),
                 maintenance_shutdown,
             ));
             if let Err(error) = app.state::<AppState>().proactive.start() {

@@ -89,7 +89,15 @@ pub trait Http: Send + Sync {
     ) -> impl Future<Output = Result<Response, String>> + Send + 'a;
 }
 
-pub struct Reqwest;
+/// The real eClass client. `user_agent` is the app's `Rhythm/<version>`.
+pub struct Reqwest {
+    user_agent: &'static str,
+}
+impl Reqwest {
+    pub fn new(user_agent: &'static str) -> Self {
+        Self { user_agent }
+    }
+}
 impl Http for Reqwest {
     async fn send(
         &self,
@@ -100,7 +108,7 @@ impl Http for Reqwest {
         cancel: &AtomicBool,
     ) -> Result<Response, String> {
         tokio::select! {
-            result = tokio::time::timeout(Duration::from_secs(30), send(url, method, cookie, limit, cancel)) => {
+            result = tokio::time::timeout(Duration::from_secs(30), send(url, method, cookie, limit, self.user_agent, cancel)) => {
                 result.map_err(|_| "사이버캠퍼스 응답 시간이 초과되었습니다.".to_string())?
             }
             _ = cancelled(cancel) => Err(CANCELLED.into()),
@@ -112,6 +120,7 @@ async fn send(
     method: &Method,
     cookie: Option<String>,
     limit: usize,
+    user_agent: &str,
     cancel: &AtomicBool,
 ) -> Result<Response, String> {
     use reqwest::header;
@@ -123,13 +132,13 @@ async fn send(
     if addresses.is_empty()
         || addresses
             .iter()
-            .any(|address| !crate::archive::network::public_ip(address.ip()))
+            .any(|address| !rhythm_sources::transport::public_ip(address.ip()))
     {
         return Err("공개 인터넷 주소가 아닌 사이버캠퍼스 요청을 차단했습니다.".into());
     }
     // Same pinned-DNS, no-proxy, no-redirect policy as the archive transport.
     let client = reqwest::Client::builder()
-        .use_preconfigured_tls(crate::archive::tls::config()?)
+        .use_preconfigured_tls(rhythm_sources::tls::config()?)
         .https_only(true)
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -137,9 +146,8 @@ async fn send(
         .connect_timeout(Duration::from_secs(8))
         .pool_max_idle_per_host(0)
         // eClass rejects requests without a browser user agent (eclass-cli).
-        .user_agent(concat!(
-            "Mozilla/5.0 (compatible) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36 Rhythm/",
-            env!("CARGO_PKG_VERSION")
+        .user_agent(format!(
+            "Mozilla/5.0 (compatible) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36 {user_agent}"
         ))
         .build()
         .map_err(|_| "안전한 HTTPS 연결을 준비하지 못했습니다.")?;
@@ -262,7 +270,7 @@ impl Session {
         state.logged_in = false;
         self.rejected.store(false, Ordering::Release);
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn unpaced() -> Self {
         Self {
             gap: Duration::ZERO,

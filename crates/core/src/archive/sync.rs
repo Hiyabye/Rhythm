@@ -323,7 +323,7 @@ impl Controller {
         }
         self.update(None, &mode, 0, "동기화를 준비하고 있습니다.");
         let controller = self.clone();
-        tauri::async_runtime::spawn(async move {
+        tokio::spawn(async move {
             let _lease = lease;
             let id = source.definition.id.clone();
             let mut outcome = controller
@@ -358,11 +358,14 @@ impl Controller {
         });
         Ok((self.status()?, task_id))
     }
-    pub fn retry_admitted(
+    /// Downloads one resource again: an eClass file through `http` and the
+    /// session, anything else through `client` under its source's robots.
+    pub fn retry_admitted<H: Http + 'static>(
         self: &Arc<Self>,
         store: SharedStore,
         root: PathBuf,
         client: network::Client,
+        http: Arc<H>,
         id: i64,
         lease: crate::operation_gate::AdmissionLease,
     ) -> Result<SyncStatus, String> {
@@ -376,14 +379,14 @@ impl Controller {
         })?;
         self.update(None, "resource", 0, "첨부 자료를 다시 내려받고 있습니다.");
         let controller = self.clone();
-        tauri::async_runtime::spawn(async move {
+        tokio::spawn(async move {
             let _lease = lease;
             let result = async {
                 if cybercampus::owns(&resource.url) {
                     let bytes = AtomicU64::new(0);
                     return cybercampus::download(
                         &controller.cybercampus,
-                        &cybercampus::client::Reqwest,
+                        &*http,
                         &store,
                         &root,
                         &controller.cancel,
@@ -550,7 +553,7 @@ mod resources;
 use articles::*;
 use pdf::*;
 pub use resources::*;
-pub(crate) use rhythm_sources::robots;
+pub use rhythm_sources::robots;
 use robots::*;
 
 #[cfg(test)]

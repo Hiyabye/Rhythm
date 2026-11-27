@@ -60,7 +60,7 @@ impl Fake {
     }
     fn detail(&self, id: u64) -> String {
         let mut value: Value = serde_json::from_str(include_str!(
-            "../../../../crates/sources/src/fixtures/main-detail.json"
+            "../../../../sources/src/fixtures/main-detail.json"
         ))
         .unwrap();
         let data = &mut value["data"];
@@ -960,7 +960,7 @@ fn viewer_fake(ids: &[(u64, &str)]) -> Fake {
     extra.insert(
         VIEWER_PDF.into(),
         Some((
-            include_bytes!("../../../../crates/sources/src/fixtures/main-pdf-551680.pdf").to_vec(),
+            include_bytes!("../../../../sources/src/fixtures/main-pdf-551680.pdf").to_vec(),
             "application/octet-stream".into(),
         )),
     );
@@ -1123,8 +1123,7 @@ async fn opening_an_admission_notice_reads_its_page_and_files() {
     let (dir, store) = setup();
     with_store(&store, |s| s.subscribe(SOURCE, true)).unwrap();
     let fake = Fake::new();
-    let page =
-        include_str!("../../../../crates/sources/src/fixtures/admission-notice-detail-29514.html");
+    let page = include_str!("../../../../sources/src/fixtures/admission-notice-detail-29514.html");
     let entry = ListingEntry {
         external_id: "29514".into(),
         url: "https://admission.sogang.ac.kr/enter/html/counsel/noticeView.asp?idx=29514".into(),
@@ -1191,8 +1190,7 @@ async fn opening_a_vendor_notice_reads_its_article_files_and_images() {
     let (dir, store) = setup();
     with_store(&store, |s| s.subscribe(SOURCE, true)).unwrap();
     let fake = Fake::new();
-    let page =
-        include_str!("../../../../crates/sources/src/fixtures/vendor-klec-notice-detail-2933.html");
+    let page = include_str!("../../../../sources/src/fixtures/vendor-klec-notice-detail-2933.html");
     let entry = ListingEntry {
         external_id: "2933".into(),
         url: "https://klec.sogang.ac.kr/index.php?bbs_idx=2933&pagekind=c&bbsid=00010".into(),
@@ -1248,8 +1246,7 @@ async fn opening_a_wordpress_notice_reads_its_post_and_upload_images() {
     let (dir, store) = setup();
     with_store(&store, |s| s.subscribe(SOURCE, true)).unwrap();
     let fake = Fake::new();
-    let page =
-        include_str!("../../../../crates/sources/src/fixtures/wordpress-creative-post-47085.json");
+    let page = include_str!("../../../../sources/src/fixtures/wordpress-creative-post-47085.json");
     let entry = ListingEntry {
         external_id: "47085".into(),
         url: "https://creative.sogang.ac.kr/?p=47085".into(),

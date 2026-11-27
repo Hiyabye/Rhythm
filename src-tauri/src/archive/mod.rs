@@ -1,27 +1,19 @@
 pub mod cybercampus;
-pub use rhythm_core::archive::{definitions, model};
-pub mod sync;
-pub(crate) use rhythm_sources::{catalog, parser, pdf, selector, tls, transport as network};
+pub use rhythm_core::archive::{
+    app_collected, catalog, definitions, model, network, run_auto_trash, run_notice_dates, sync,
+    Client,
+};
 #[cfg(windows)]
 mod windows_reveal;
 
 use crate::AppState;
 use base64::Engine;
 use model::*;
-pub use network::Client;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::Arc;
 use sync::with_store;
-use tauri::{Manager, State};
+use tauri::State;
 use url::Url;
 
-/// Whether the app collects this source itself: only Cybercampus. Public
-/// boards arrive through the feed (#177, #178).
-pub(crate) fn app_collected(id: &str) -> bool {
-    id == catalog::CYBERCAMPUS_SOURCE_ID
-}
 /// The sources an `archive_start` request may collect: every request names
 /// only app-collected sources, and none means all of them.
 fn collected_ids(ids: Option<Vec<String>>) -> Result<Vec<String>, String> {
@@ -203,48 +195,6 @@ pub async fn archive_purge(
     }
     Ok(())
 }
-/// Moves old notices to 휴지통 at launch and then hourly while the app is open,
-/// so a notice that crosses the chosen age moves without a sync or a settings
-/// change. Sync jobs and saving settings also run it.
-pub async fn run_auto_trash(app: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
-    while !shutdown.load(Ordering::Acquire) {
-        if let Some(state) = app.try_state::<AppState>() {
-            if let Ok(_lease) = state.operation_gate.shared().await {
-                if let Err(error) = with_store(&state.store, |s| s.auto_trash_old()) {
-                    eprintln!("Archive: 오래된 공지를 휴지통으로 옮기지 못했습니다: {error}");
-                }
-            }
-        }
-        tokio::time::sleep(AUTO_TRASH_WAKE).await;
-    }
-}
-const AUTO_TRASH_WAKE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
-
-/// Extracts dates for notices archived before the dates table existed or by an
-/// older extractor, once per launch. New and changed notices are extracted when
-/// they are written. Batches release the store between them so commands and
-/// sync are not held up.
-pub async fn run_notice_dates(app: tauri::AppHandle, shutdown: Arc<AtomicBool>) {
-    while !shutdown.load(Ordering::Acquire) {
-        let Some(state) = app.try_state::<AppState>() else {
-            return;
-        };
-        let Ok(lease) = state.operation_gate.shared().await else {
-            return;
-        };
-        match with_store(&state.store, |s| s.refresh_notice_dates(NOTICE_DATES_BATCH)) {
-            Ok(0) => return,
-            Ok(_) => {}
-            Err(error) => {
-                eprintln!("Archive: 공지 날짜를 정리하지 못했습니다: {error}");
-                return;
-            }
-        }
-        drop(lease);
-        tokio::task::yield_now().await;
-    }
-}
-const NOTICE_DATES_BATCH: i64 = 200;
 #[tauri::command]
 pub async fn archive_start(
     state: State<'_, AppState>,
@@ -258,7 +208,7 @@ pub async fn archive_start(
         .start_tracked_admitted(
             state.store.clone(),
             state.data_root.clone(),
-            Arc::new(cybercampus::client::Reqwest),
+            Arc::new(cybercampus::client::Reqwest::new(crate::USER_AGENT)),
             Some(source_ids),
             mode,
             lease,
@@ -286,6 +236,7 @@ pub async fn archive_retry_resource(
         state.store.clone(),
         state.data_root.clone(),
         state.network.clone(),
+        Arc::new(cybercampus::client::Reqwest::new(crate::USER_AGENT)),
         id,
         lease,
     )

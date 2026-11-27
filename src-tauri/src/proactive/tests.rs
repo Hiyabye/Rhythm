@@ -690,7 +690,7 @@ async fn scheduled_controller_collects_cybercampus_and_runs_again() {
     use crate::{
         archive::{
             self,
-            cybercampus::{credentials::Credentials, tests::Fake, Connector},
+            cybercampus::{credentials::Credentials, fake::Fake, Connector},
             sync::Controller,
         },
         storage::{

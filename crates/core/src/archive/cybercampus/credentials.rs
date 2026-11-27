@@ -42,7 +42,7 @@ impl Credentials {
 
 enum Backend {
     Native,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     Memory(Mutex<Option<String>>),
 }
 pub struct Vault {
@@ -57,7 +57,7 @@ impl Vault {
             cached: Mutex::new(None),
         }
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn memory() -> Self {
         Self {
             backend: Backend::Memory(Mutex::new(None)),
@@ -70,7 +70,7 @@ impl Vault {
         }
         let stored = match &self.backend {
             Backend::Native => native_get()?,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Backend::Memory(value) => value.lock().map_err(|_| LOCKED)?.clone(),
         };
         let credentials = stored.and_then(|value| serde_json::from_str(&value).ok());
@@ -83,7 +83,7 @@ impl Vault {
         let encoded = serde_json::to_string(credentials).map_err(|_| LOCKED)?;
         match &self.backend {
             Backend::Native => native_set(&encoded)?,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Backend::Memory(value) => *value.lock().map_err(|_| LOCKED)? = Some(encoded),
         }
         if let Ok(mut cached) = self.cached.lock() {
@@ -94,7 +94,7 @@ impl Vault {
     pub fn clear(&self) -> Result<(), String> {
         match &self.backend {
             Backend::Native => native_clear()?,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Backend::Memory(value) => *value.lock().map_err(|_| LOCKED)? = None,
         }
         if let Ok(mut cached) = self.cached.lock() {

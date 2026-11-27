@@ -3983,6 +3983,7 @@ dependencies = [
 name = "rhythm-core"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "dirs 7.0.0",
  "encoding_rs",
