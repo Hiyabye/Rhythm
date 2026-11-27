@@ -31,6 +31,9 @@ pub use rhythm_sources::catalog::{
 /// pages, so this bounds a malformed total, not a real board.
 const NOTICE_PAGES: u32 = 25;
 const NOTICE_DISPLAY: u32 = 20;
+/// Rows asked of the TODO list; the response carries no total, so a page this
+/// full may continue.
+const TODO_DISPLAY: usize = 50;
 
 const LOCKED: &str = "사이버캠퍼스 로그인 정보에 접근하지 못했습니다.";
 
@@ -116,6 +119,27 @@ fn canonical_url() -> String {
 fn fingerprint(row: &parser::NoticeRow) -> String {
     let digest = Sha256::digest(format!("{}\n{}", row.title, row.preview));
     format!("list:{:x}", digest)[..37].to_owned()
+}
+/// Carries the TODO list's contribution of the last successful sync into a
+/// fresh task list: the `pending` flag of rows both have and the stored rows
+/// (`pending` ones are the TODO-only quizzes and lectures) the fresh list lacks.
+fn keep_todo_rows(stored: &HashMap<(String, String), TaskInput>, tasks: &mut Vec<TaskInput>) {
+    for task in tasks.iter_mut() {
+        let key = (task.category.clone(), task.item_id.clone());
+        task.pending |= stored.get(&key).is_some_and(|known| known.pending);
+    }
+    let mut kept = stored
+        .values()
+        .filter(|known| {
+            known.pending
+                && !tasks
+                    .iter()
+                    .any(|task| task.category == known.category && task.item_id == known.item_id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    kept.sort_by(|a, b| (&a.category, &a.item_id).cmp(&(&b.category, &b.item_id)));
+    tasks.extend(kept);
 }
 fn text(response: &client::Response) -> Result<String, String> {
     String::from_utf8(response.bytes.clone())
@@ -214,7 +238,9 @@ pub async fn sync<H: Http>(
                 )
                 .await?,
             )?)?;
-            notices(
+            // The deadlines do not depend on the notices: a notice step that
+            // failed still lets them refresh, and its error is the one reported.
+            let noticed = notices(
                 connector,
                 http,
                 store,
@@ -226,10 +252,19 @@ pub async fn sync<H: Http>(
                 historical,
                 resource_bytes,
             )
-            .await?;
-            let assignments = assignments(connector, http, store, cancel, course).await?;
-            tasks.insert(course.key.clone(), assignments);
-            Ok::<_, String>(())
+            .await;
+            if cancel.load(Ordering::Acquire) {
+                return noticed;
+            }
+            let assigned = assignments(connector, http, store, cancel, course).await;
+            match (noticed, assigned) {
+                (noticed, Ok(assigned)) => {
+                    tasks.insert(course.key.clone(), assigned);
+                    noticed
+                }
+                (Err(error), Err(_)) => Err(error),
+                (Ok(()), Err(error)) => Err(error),
+            }
         }
         .await;
         if let Err(error) = outcome {
@@ -259,8 +294,12 @@ pub async fn sync<H: Http>(
     .await
     .and_then(|page| text(&page))
     .map(|page| parser::todo(&page));
+    // Whether `tasks` holds everything the TODO list would have said: a failed
+    // request says nothing, and a full page may have more rows behind it.
+    let mut todo_complete = false;
     match todo {
         Ok(items) => {
+            todo_complete = items.len() < TODO_DISPLAY;
             for item in items {
                 let Some(course_tasks) = tasks.get_mut(&item.course_key) else {
                     continue;
@@ -286,9 +325,12 @@ pub async fn sync<H: Http>(
         Err(error) if cancel.load(Ordering::Acquire) => return Err(error),
         Err(error) => failures.push(format!("할 일 목록: {error}")),
     }
-    for (course_key, course_tasks) in &tasks {
+    for (course_key, course_tasks) in &mut tasks {
         with_store(store, |s| {
             sync::ensure_active(cancel)?;
+            if !todo_complete {
+                keep_todo_rows(&s.cybercampus_stored_tasks(course_key)?, course_tasks);
+            }
             s.cybercampus_replace_tasks(course_key, course_tasks)
         })?;
     }
@@ -368,6 +410,14 @@ async fn notices<H: Http>(
                 continue;
             }
         }
+        // A notice that could not be read is not fetched again until its row changes.
+        if existing.is_none()
+            && with_store(store, |s| {
+                s.skipped_unchanged(SOURCE_ID, &external_id, &skipped_marker(&marker))
+            })?
+        {
+            continue;
+        }
         match notice(
             connector,
             http,
@@ -381,7 +431,7 @@ async fn notices<H: Http>(
         )
         .await
         {
-            Ok(Some(article)) => {
+            Ok(Fetched::Article(article)) => {
                 let (id, _) = with_store(store, |s| {
                     sync::ensure_active(cancel)?;
                     s.upsert_article(SOURCE_ID, &article, historical)
@@ -390,9 +440,10 @@ async fn notices<H: Http>(
                 current.archived += 1;
                 pending(connector, http, store, root, cancel, id, resource_bytes).await?;
             }
-            Ok(None) => {
-                // A notice with neither body nor attachments has nothing to
-                // archive; it is listed as skipped instead of silently dropped.
+            Ok(Fetched::Unusable(reason)) => {
+                // Neither body nor attachments, or a page that never parses:
+                // listed as skipped instead of silently dropped, and not a
+                // failure of the course.
                 let entry = ListingEntry {
                     external_id: external_id.clone(),
                     url: canonical_url(),
@@ -400,13 +451,14 @@ async fn notices<H: Http>(
                     modified_at: None,
                     title: None,
                 };
+                let title = row.title.chars().take(80).collect::<String>();
                 with_store(store, |s| {
                     s.record_skipped(
                         SOURCE_ID,
                         &entry,
                         historical,
-                        &format!("{}: 본문과 첨부 파일이 없는 공지입니다.", row.title),
-                        &marker,
+                        &format!("{title}: {reason}"),
+                        &skipped_marker(&marker),
                     )
                 })?;
             }
@@ -422,6 +474,17 @@ async fn notices<H: Http>(
     failure.map_or(Ok(()), Err)
 }
 
+/// What a notice's pages came to.
+enum Fetched {
+    Article(Box<ArticleInput>),
+    /// Fetched fine but nothing to archive; the reason is shown to the user.
+    Unusable(String),
+}
+/// `skipped_articles` keeps a 64-character hash of the list fingerprint.
+fn skipped_marker(marker: &str) -> String {
+    format!("{:x}", Sha256::digest(marker))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn notice<H: Http>(
     connector: &Connector,
@@ -433,7 +496,7 @@ async fn notice<H: Http>(
     external_id: &str,
     marker: &str,
     year: i32,
-) -> Result<Option<ArticleInput>, String> {
+) -> Result<Fetched, String> {
     let page = connector
         .session
         .request(
@@ -447,7 +510,13 @@ async fn notice<H: Http>(
         )
         .await?;
     let body = text(&page)?;
-    let view = parser::notice_view(&body)?;
+    // Transport and session errors above fail the course. A page that is
+    // fetched but cannot be read comes out the same on every sync, so it
+    // is reported as unusable instead.
+    let view = match parser::notice_view(&body) {
+        Ok(view) => view,
+        Err(error) => return Ok(Fetched::Unusable(error.to_string())),
+    };
     let mut original = body;
     let mut resources = Vec::new();
     if let Some(files) = &view.files {
@@ -481,19 +550,28 @@ async fn notice<H: Http>(
         original.push_str(&fragment);
     }
     let (body_html, body_text, inline) =
-        super::parser::sanitize(&view.body_html, &format!("{}/ilos/", parser::ORIGIN))?;
+        match super::parser::sanitize(&view.body_html, &format!("{}/ilos/", parser::ORIGIN)) {
+            Ok(parts) => parts,
+            Err(error) => return Ok(Fetched::Unusable(error)),
+        };
     for image in inline {
         if !resources.iter().any(|resource| resource.url == image.url) {
             resources.push(image);
         }
     }
     if body_text.trim().is_empty() && body_html.trim().is_empty() && resources.is_empty() {
-        return Ok(None);
+        return Ok(Fetched::Unusable(
+            "본문과 첨부 파일이 없는 공지입니다.".into(),
+        ));
     }
-    let published_at = parser::month_day(&view.posted, year)
-        .and_then(|value| value.get(..10).map(str::to_owned))
-        .ok_or("공지 게시일을 확인하지 못했습니다.")?;
-    Ok(Some(ArticleInput {
+    let Some(published_at) =
+        parser::month_day(&view.posted, year).and_then(|value| value.get(..10).map(str::to_owned))
+    else {
+        return Ok(Fetched::Unusable(
+            "공지 게시일을 확인하지 못했습니다.".into(),
+        ));
+    };
+    Ok(Fetched::Article(Box::new(ArticleInput {
         external_id: external_id.into(),
         canonical_url: canonical_url(),
         title: if view.title.is_empty() {
@@ -512,7 +590,7 @@ async fn notice<H: Http>(
         resources,
         etag: None,
         last_modified: None,
-    }))
+    })))
 }
 
 /// Assignments of the entered course. A closed assignment already stored is
