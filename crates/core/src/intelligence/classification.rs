@@ -135,6 +135,16 @@ fn select_model(preferences: &AiPreferences, model: Option<AiModel>) -> Option<(
         })
 }
 
+/// `select_model` on the stored effective preferences.
+fn selected_model(store: &Store) -> Result<Option<(AiModel, String)>, String> {
+    let preferences = store.ai_effective_preferences()?;
+    let model = preferences
+        .embedding_model_id
+        .as_ref()
+        .and_then(|id| store.ai_model(id).ok().flatten());
+    Ok(select_model(&preferences, model))
+}
+
 impl Controller {
     pub fn new(llama: &Path, runtime: &Path) -> Self {
         let pooling = catalog()
@@ -337,25 +347,16 @@ impl Controller {
         if self.paused.load(Ordering::Acquire) || shutdown.load(Ordering::Acquire) {
             return;
         }
-        let preferences = {
+        let selected = {
             let Ok(store) = store.try_lock() else {
                 return;
             };
-            let Ok(preferences) = store.ai_effective_preferences() else {
+            let Ok(selected) = selected_model(&store) else {
                 return;
             };
-            preferences
+            selected
         };
-        let model = {
-            let Ok(store) = store.try_lock() else {
-                return;
-            };
-            preferences
-                .embedding_model_id
-                .as_ref()
-                .and_then(|id| store.ai_model(id).ok().flatten())
-        };
-        let Some((model, identity)) = select_model(&preferences, model) else {
+        let Some((model, identity)) = selected else {
             self.unload_if_idle(true).await;
             return;
         };
@@ -506,6 +507,13 @@ impl Controller {
             let Ok(store) = store.try_lock() else {
                 return;
             };
+            // The request can take minutes. Store nothing when the extension,
+            // the switch or the model changed meanwhile; the next pass stops
+            // the engine.
+            let current = selected_model(&store).ok().flatten();
+            if current.is_none_or(|(_, current)| current != identity) {
+                return;
+            }
             for (document_id, revision_id, vector) in results {
                 if vector.len() != dimension
                     || store
@@ -1005,6 +1013,44 @@ mod tests {
             .embed_query(directory.path(), &model, &identity, "장학")
             .await
             .is_some());
+        controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_batch_answered_after_the_extension_was_turned_off_is_not_stored() {
+        let (directory, controller, model) = fake_controller();
+        let identity = model.sha256.clone().unwrap();
+        *controller.verified.lock().unwrap() = Some(identity.clone());
+        let (_data, store) = store_with_notice(&model);
+        let models = models::Controller::new("Rhythm/test");
+        let shutdown = AtomicBool::new(false);
+        seed_prototypes(&controller, &identity).await;
+        // The engine holds its answer until the extension is off.
+        std::fs::write(directory.path().join("hold"), b"").unwrap();
+        let turn_off = async {
+            while embedding_requests(directory.path()) == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            store
+                .lock()
+                .unwrap()
+                .set_enabled(crate::extensions::AI, false)
+                .unwrap();
+            std::fs::remove_file(directory.path().join("hold")).unwrap();
+        };
+        tokio::join!(
+            controller.advance(&store, &models, directory.path(), &shutdown),
+            turn_off
+        );
+        assert_eq!(controller.status().processed, 0);
+        {
+            let store = store.lock().unwrap();
+            store.set_enabled(crate::extensions::AI, true).unwrap();
+            let waiting = store
+                .ai_embedding_candidates(&identity, config_hash(), BATCH)
+                .unwrap();
+            assert_eq!(waiting.len(), 1, "nothing was stored for the notice");
+        }
         controller.shutdown().await;
     }
 

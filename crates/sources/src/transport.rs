@@ -48,7 +48,7 @@ pub struct Client {
     inflight: Arc<Semaphore>,
     // Tests replace only DNS and the wire response. URL validation, TLS client
     // construction, pacing, deadlines and response handling stay on this path.
-    #[cfg(all(test, feature = "studium"))]
+    #[cfg(test)]
     test_io: Option<Arc<client_tests::Script>>,
 }
 /// A failed request. `status` is the HTTP status when the server answered
@@ -114,7 +114,7 @@ impl Client {
             user_agent,
             gates: Arc::default(),
             inflight: Arc::new(Semaphore::new(MAX_HOSTS)),
-            #[cfg(all(test, feature = "studium"))]
+            #[cfg(test)]
             test_io: None,
         })
     }
@@ -172,7 +172,7 @@ impl Client {
         Ok(last)
     }
     async fn resolve(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, Failure> {
-        #[cfg(all(test, feature = "studium"))]
+        #[cfg(test)]
         if let Some(script) = &self.test_io {
             return script.resolve(host, port);
         }
@@ -186,7 +186,7 @@ impl Client {
             })
     }
     async fn send(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response, Failure> {
-        #[cfg(all(test, feature = "studium"))]
+        #[cfg(test)]
         if let Some(script) = &self.test_io {
             return script.send(request).await;
         }
@@ -557,7 +557,7 @@ impl Transport for Client {
 }
 #[cfg(test)]
 const TEST_AGENT: &str = "Rhythm-test";
-#[cfg(all(test, feature = "studium"))]
+#[cfg(test)]
 #[path = "transport/client_tests.rs"]
 mod client_tests;
 
