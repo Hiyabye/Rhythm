@@ -562,7 +562,7 @@ pub(super) async fn run_scheduled_task<H: archive::cybercampus::client::Http + '
             root.to_path_buf(),
             http.clone(),
             Some(vec![source_id.to_string()]),
-            "incremental".into(),
+            crate::archive::model::SyncMode::Incremental,
         ) {
             Ok((_, task_id)) => {
                 match wait_scheduled_job(store, archive, task_id, source_id, stop).await? {

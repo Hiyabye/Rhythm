@@ -1,7 +1,7 @@
 use super::client::{self, Method, Response};
 use super::credentials::Credentials;
 use super::*;
-use crate::archive::model::ArchiveQuery;
+use crate::archive::model::{ArchiveQuery, SourceStatus, SyncMode};
 use crate::storage::Store;
 use std::sync::Arc;
 
@@ -693,7 +693,7 @@ fn controller(setup: &Setup) -> Arc<crate::archive::sync::Controller> {
         .unwrap();
     controller
 }
-fn source_status(setup: &Setup) -> String {
+fn source_status(setup: &Setup) -> SourceStatus {
     with_store(&setup.store, |s| s.source(SOURCE_ID))
         .unwrap()
         .status
@@ -711,10 +711,10 @@ async fn the_controller_collects_cybercampus_and_keeps_only_scheduler_outcomes()
         );
         match lease {
             Some(lease) => {
-                controller.start_tracked_admitted(store, root, http, None, "refresh".into(), lease)
+                controller.start_tracked_admitted(store, root, http, None, SyncMode::Refresh, lease)
             }
             None => {
-                controller.start_tracked_with_transport(store, root, http, None, "refresh".into())
+                controller.start_tracked_with_transport(store, root, http, None, SyncMode::Refresh)
             }
         }
         .unwrap()
@@ -724,7 +724,7 @@ async fn the_controller_collects_cybercampus_and_keeps_only_scheduler_outcomes()
     controller.wait().await;
     let outcome = controller.take_task_outcome(tracked).unwrap().unwrap();
     assert!(outcome.result.is_ok(), "{outcome:?}");
-    assert_eq!(source_status(&setup), "completed");
+    assert_eq!(source_status(&setup), SourceStatus::Completed);
     assert_eq!(
         with_store(&setup.store, |s| s.archive_query(&ArchiveQuery::default()))
             .unwrap()
@@ -744,36 +744,41 @@ async fn the_controller_collects_cybercampus_and_keeps_only_scheduler_outcomes()
     let outcome = controller.take_task_outcome(failed).unwrap().unwrap();
     assert!(outcome.result.unwrap_err().contains(client::NO_LOGIN));
     assert!(!outcome.cancelled);
-    assert_eq!(source_status(&setup), "failed");
+    assert_eq!(source_status(&setup), SourceStatus::Failed);
 }
 
 #[tokio::test]
 async fn admission_takes_only_cybercampus_with_its_extension_on() {
     let setup = setup(Some("right"));
     let controller = crate::archive::sync::Controller::with_connector(Connector::memory());
-    let start = |ids: Option<&[&str]>, mode: &str| {
+    let start = |ids: Option<&[&str]>, mode: SyncMode| {
         let started = controller.start_tracked_with_transport(
             setup.store.clone(),
             setup.root.clone(),
             Arc::new(Fake::default()),
             ids.map(|ids| ids.iter().map(|id| id.to_string()).collect()),
-            mode.into(),
+            mode,
         );
         started.map(|_| ())
     };
     // The notices extension does not cover the Cybercampus source.
-    assert!(start(Some(&[SOURCE_ID]), "refresh").is_err());
+    assert!(start(Some(&[SOURCE_ID]), SyncMode::Refresh).is_err());
     with_store(&setup.store, |s| s.set_enabled("cybercampus", true)).unwrap();
     // Public boards come from the feed, and crawl-only modes are gone.
     with_store(&setup.store, |s| s.subscribe("sogang-academic", true)).unwrap();
-    assert!(start(Some(&["sogang-academic"]), "refresh").is_err());
-    assert!(start(Some(&[SOURCE_ID, "sogang-academic"]), "refresh").is_err());
-    assert!(start(None, "historical").is_err());
-    for mode in ["refresh", "incremental", "skipped", "resources"] {
+    assert!(start(Some(&["sogang-academic"]), SyncMode::Refresh).is_err());
+    assert!(start(Some(&[SOURCE_ID, "sogang-academic"]), SyncMode::Refresh).is_err());
+    // A file retry is not a job, and old crawl modes no longer parse.
+    assert!(start(None, SyncMode::Resource).is_err());
+    for retired in ["historical", "resource", ""] {
+        assert!(retired.parse::<SyncMode>().is_err(), "{retired}");
+    }
+    for name in ["refresh", "incremental", "skipped", "resources"] {
+        let mode: SyncMode = name.parse().unwrap();
         start(None, mode).unwrap();
         controller.wait().await;
     }
-    start(Some(&[SOURCE_ID]), "refresh").unwrap();
+    start(Some(&[SOURCE_ID]), SyncMode::Refresh).unwrap();
     controller.wait().await;
 }
 
@@ -795,10 +800,10 @@ async fn unsubscribing_stops_the_sync_and_cancelling_cancels_the_job() {
             }),
         };
         let outcome = controller
-            .execute(&setup.store, &setup.root, &http, source, "refresh")
+            .execute(&setup.store, &setup.root, &http, source, SyncMode::Refresh)
             .await;
         assert_eq!(outcome.is_ok(), unsubscribe, "{outcome:?}");
-        assert_eq!(source_status(&setup), "cancelled");
+        assert_eq!(source_status(&setup), SourceStatus::Cancelled);
         assert_eq!(http.fake.count("/ilos/cls/st/notice/notice_list.acl"), 1);
     }
 }

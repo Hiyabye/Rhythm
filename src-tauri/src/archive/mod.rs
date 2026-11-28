@@ -106,7 +106,8 @@ pub async fn archive_start(
     source_ids: Option<Vec<String>>,
     mode: String,
 ) -> Result<SyncStatus, String> {
-    state.archive().start(source_ids, mode).await
+    // A malformed mode is refused here with the controller's message.
+    state.archive().start(source_ids, mode.parse()?).await
 }
 #[tauri::command]
 pub async fn archive_cancel(state: State<'_, AppState>) -> Result<SyncStatus, String> {

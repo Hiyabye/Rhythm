@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { FeedBoardHealth, SourceGroup, SourceInfo, SubscribeResult, SyncStatus } from './types';
+  import type { FeedBoardHealth, SourceGroup, SourceInfo, SubscribeResult, SyncMode, SyncStatus } from './types';
   import { archiveDate, archiveError, organizationLabel, sourceStatus } from './archive-format';
   import { clock } from './clock.svelte';
   import Icon from './Icon.svelte';
@@ -176,11 +176,11 @@
   }
 
   function runningLabel(value: SyncStatus) {
-    const labels: Record<string, string> = { refresh: '새로고침 준비 중', incremental: '새 소식 확인 중', historical: '이전 공지 가져오는 중', resource: '첨부 자료 내려받는 중', skipped: '가져오지 못한 공지 다시 확인 중', resources: '첨부 자료 모두 내려받는 중' };
+    const labels: Record<SyncMode, string> = { refresh: '새로고침 준비 중', incremental: '새 소식 확인 중', resource: '첨부 자료 내려받는 중', skipped: '가져오지 못한 공지 다시 확인 중', resources: '첨부 자료 모두 내려받는 중' };
     const boards = value.active.filter((board) => sources.some((item) => item.id === board.source_id));
     if (boards.length > 1) return `게시판 ${boards.length}개를 동시에 가져오는 중`;
     const board = boards[0];
-    const mode = labels[board?.mode ?? value.mode] ?? '새 소식 확인 중';
+    const mode = labels[board?.mode ?? value.mode ?? 'incremental'];
     const source = sources.find((item) => item.id === board?.source_id)?.name;
     return [mode, source, board && board.page > 0 ? `${board.page}쪽` : ''].filter(Boolean).join(' · ');
   }

@@ -1,36 +1,6 @@
 //! Persisted shapes of the proactive settings, events, tasks and scheduler status.
 use super::*;
 
-macro_rules! sql_text_enum {
-    ($name:ident { $($variant:ident => $value:literal),+ $(,)? }) => {
-        impl $name {
-            pub fn as_str(self) -> &'static str {
-                match self {
-                    $(Self::$variant => $value),+
-                }
-            }
-            fn from_db(value: &str) -> Option<Self> {
-                match value {
-                    $($value => Some(Self::$variant),)+
-                    _ => None,
-                }
-            }
-        }
-        impl FromSql for $name {
-            fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-                Self::from_db(value.as_str()?).ok_or(FromSqlError::InvalidType)
-            }
-        }
-        impl ToSql for $name {
-            fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-                Ok(ToSqlOutput::Borrowed(ValueRef::Text(
-                    self.as_str().as_bytes(),
-                )))
-            }
-        }
-    };
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationSensitivity {

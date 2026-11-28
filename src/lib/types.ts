@@ -176,6 +176,10 @@ export interface Snapshot {
   /** False only for a profile that has not finished or skipped the first-run setup flow. */
   onboarding_completed: boolean;
 }
+/** `sources.status`; `limited` survives only on profiles upgraded from the retired app crawler. */
+export type SourceStatus = 'idle' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'limited';
+/** An archive job's mode; a started job takes one of the first four, `resource` is one file's retry. */
+export type SyncMode = 'incremental' | 'refresh' | 'skipped' | 'resources' | 'resource';
 export interface SourceInfo {
   id: string;
   name: string;
@@ -195,7 +199,7 @@ export interface SourceInfo {
   last_error: string | null;
   next_page: number;
   history_complete: boolean;
-  status: string;
+  status: SourceStatus;
   discovered: number;
   archived: number;
   failed: number;
@@ -371,7 +375,8 @@ export interface ArchiveSummary {
 /** Boards on different hosts collect at once; `active` lists those collecting now. */
 export interface SyncStatus {
   running: boolean;
-  mode: string;
+  /** `null` before the first job. */
+  mode: SyncMode | null;
   message: string;
   active: ActiveSource[];
 }
@@ -398,7 +403,7 @@ export interface FeedBoard {
 }
 export interface ActiveSource {
   source_id: string;
-  mode: string;
+  mode: SyncMode;
   page: number;
   message: string;
 }

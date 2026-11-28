@@ -567,7 +567,7 @@ impl Store {
     pub fn source_progress(
         &self,
         id: &str,
-        status: &str,
+        status: SourceStatus,
         next_page: u32,
         history_complete: bool,
         discovered: u64,
@@ -577,16 +577,6 @@ impl Store {
         success: bool,
     ) -> Result<(), String> {
         if next_page == 0
-            || ![
-                "idle",
-                "running",
-                "completed",
-                "failed",
-                "cancelled",
-                "interrupted",
-                "limited",
-            ]
-            .contains(&status)
             || [discovered, archived, failed]
                 .iter()
                 .any(|n| *n > i64::MAX as u64)

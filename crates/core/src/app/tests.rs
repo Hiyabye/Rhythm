@@ -1046,3 +1046,137 @@ async fn the_scheduler_keeps_running_after_maintenance_and_a_re_enable() {
     assert!(app.proactive.running(), "stopped after a re-enable");
     app.shutdown().await;
 }
+
+#[tokio::test]
+async fn cybercampus_opens_only_while_its_extension_is_on_and_a_login_can_always_be_forgotten() {
+    use crate::{archive::cybercampus::credentials::Credentials, extensions::CYBERCAMPUS};
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+    let off = |error: String| assert_eq!(error, "사이버캠퍼스 확장 기능이 꺼져 있습니다.");
+    let login = Credentials::new("20201234", "secret").unwrap();
+    app.archive.cybercampus.vault.save(&login).unwrap();
+
+    let cybercampus = app.cybercampus();
+    off(cybercampus.status().await.unwrap_err());
+    off(cybercampus.courses().await.unwrap_err());
+    off(cybercampus.tasks().await.unwrap_err());
+    assert_eq!(
+        cybercampus
+            .save_login("20201234", "secret")
+            .await
+            .unwrap_err(),
+        "사이버캠퍼스 확장 기능을 먼저 켜 주세요."
+    );
+
+    app.settings()
+        .set_extension(CYBERCAMPUS, true)
+        .await
+        .unwrap();
+    let cybercampus = app.cybercampus();
+    let status = cybercampus.status().await.unwrap();
+    assert_eq!(status.id.as_deref(), Some("20201234"));
+    assert!(!status.rejected && status.courses.is_empty());
+    assert!(cybercampus.courses().await.unwrap().is_empty());
+    assert!(cybercampus.tasks().await.unwrap().is_empty());
+
+    // Removing the credential works with the extension off too.
+    app.settings()
+        .set_extension(CYBERCAMPUS, false)
+        .await
+        .unwrap();
+    assert_eq!(app.cybercampus().forget_login().await.unwrap().id, None);
+    assert_eq!(app.archive.cybercampus.vault.load().unwrap(), None);
+    app.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_feed_status_opens_only_while_notices_is_on() {
+    use crate::extensions::NOTICES;
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+    let off = |error: String| assert_eq!(error, "서강대학교 공지 기능이 꺼져 있습니다.");
+
+    off(app.feed().status().await.unwrap_err());
+    off(app.feed().sync().await.unwrap_err());
+    assert!(!app.feed.running());
+
+    // A sync now would reach the live feed; the status read is enough.
+    app.settings().set_extension(NOTICES, true).await.unwrap();
+    let status = app.feed().status().await.unwrap();
+    assert!(!status.running && status.checked_at.is_none());
+    app.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_backup_restored_through_the_app_exits_once_and_the_next_launch_reports_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("profile.rhythm-backup");
+    let app = open(directory.path()).unwrap();
+    assert!(app.backup().restore_outcome().is_none());
+    app.backup().restore_support().unwrap();
+    let theme = |theme: &str| {
+        let theme = theme.to_owned();
+        let app = &app;
+        async move {
+            let mut settings = app.settings().snapshot().await.unwrap().settings;
+            settings.theme = theme;
+            app.settings().save(settings).await.unwrap();
+        }
+    };
+    theme("dark").await;
+    app.backup()
+        .create(file.clone(), "app-backup".into())
+        .await
+        .unwrap();
+    app.backup()
+        .inspect(file.clone(), "app-inspect".into())
+        .await
+        .unwrap();
+    theme("light").await;
+
+    let exits = Arc::new(AtomicUsize::new(0));
+    let counted = exits.clone();
+    let exit = move || {
+        counted.fetch_add(1, Ordering::AcqRel);
+    };
+    assert_eq!(
+        app.backup()
+            .restore(file.clone(), false, "app-unconfirmed".into(), exit.clone())
+            .await
+            .unwrap_err(),
+        "복원을 시작하려면 확인이 필요합니다."
+    );
+    assert_eq!(count(&exits), 0);
+    app.backup()
+        .restore(file, true, "app-restore".into(), exit)
+        .await
+        .unwrap();
+    assert_eq!(count(&exits), 1);
+    // Maintenance stays closed until the process exits: new work is refused.
+    assert!(app.operation_gate.ensure_open().is_err());
+    assert!(app.settings().snapshot().await.is_err());
+    tokio::time::timeout(Duration::from_secs(10), app.shutdown())
+        .await
+        .expect("shutdown waits for nothing the restore holds");
+    drop(app);
+    let journal = directory
+        .path()
+        .join("data")
+        .join(".rhythm-restore-journal.json");
+    assert!(journal.exists());
+
+    // The held maintenance guard keeps the database open until the process
+    // exits, and Windows cannot move an open file, so reopening in this
+    // process works only off Windows; `backup::tests` covers the next launch
+    // there.
+    #[cfg(not(windows))]
+    {
+        let app = open(directory.path()).unwrap();
+        assert!(app.backup().restore_outcome().is_some());
+        assert_eq!(
+            app.settings().snapshot().await.unwrap().settings.theme,
+            "dark"
+        );
+        app.shutdown().await;
+    }
+}

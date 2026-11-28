@@ -46,11 +46,11 @@ test('Cybercampus collects only on request, reports each step, cancels and downl
   await page.getByRole('button', { name: '새로고침', exact: true }).click();
   await expect.poll(starts).toEqual([{ sourceIds: ['cybercampus'], mode: 'refresh' }]);
   await expect(page.locator('.collect-status')).toContainText('새로고침 준비 중');
-  // The one job reports each step, so the label follows new notices into the backlog.
+  // The job reports each step, so the label follows its mode and page.
   await syncMode(page, 'incremental');
   await expect(page.locator('.collect-status')).toContainText('새 소식 확인 중');
-  await syncMode(page, 'historical', 2);
-  await expect(page.locator('.collect-status')).toContainText('이전 공지 가져오는 중 · 강의 공지 · 2쪽');
+  await syncMode(page, 'resources', 2);
+  await expect(page.locator('.collect-status')).toContainText('첨부 자료 모두 내려받는 중 · 강의 공지 · 2쪽');
   await expect(page.locator('.board-state.spinning')).toHaveCount(1);
   await page.getByRole('button', { name: '가져오기 중단', exact: true }).click();
   await expect(page.locator('.source-manager > .archive-feedback')).toContainText('저장한 공지는 남습니다');

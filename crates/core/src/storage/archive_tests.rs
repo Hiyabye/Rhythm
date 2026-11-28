@@ -190,18 +190,38 @@ fn catalog_refresh_preserves_subscriptions_progress_and_interruption_checkpoint(
     assert!(store.subscribe("missing", true).is_err());
     store.subscribe("one", true).unwrap();
     store
-        .source_progress("one", "running", 7, false, 130, 120, 10, None, false)
+        .source_progress(
+            "one",
+            SourceStatus::Running,
+            7,
+            false,
+            130,
+            120,
+            10,
+            None,
+            false,
+        )
         .unwrap();
     let attempt = store.source("one").unwrap().last_attempt;
     assert!(attempt.is_some());
     store
-        .source_progress("one", "completed", 7, false, 130, 120, 10, None, true)
+        .source_progress(
+            "one",
+            SourceStatus::Completed,
+            7,
+            false,
+            130,
+            120,
+            10,
+            None,
+            true,
+        )
         .unwrap();
     let success = store.source("one").unwrap().last_success;
     store
         .source_progress(
             "one",
-            "failed",
+            SourceStatus::Failed,
             7,
             false,
             130,
@@ -219,12 +239,22 @@ fn catalog_refresh_preserves_subscriptions_progress_and_interruption_checkpoint(
     assert!(store.source("one").unwrap().subscribed);
     assert_eq!(store.source("one").unwrap().next_page, 7);
     store
-        .source_progress("one", "running", 7, false, 130, 120, 10, None, false)
+        .source_progress(
+            "one",
+            SourceStatus::Running,
+            7,
+            false,
+            130,
+            120,
+            10,
+            None,
+            false,
+        )
         .unwrap();
     drop(store);
     let reopened = Store::open(&directory.path().join("db")).unwrap();
     let source = reopened.source("one").unwrap();
-    assert_eq!(source.status, "interrupted");
+    assert_eq!(source.status, SourceStatus::Interrupted);
     assert_eq!(source.next_page, 7);
     assert!(source.subscribed);
     assert_eq!(source.last_success, success);
@@ -778,13 +808,43 @@ fn released_schema_two_reopen_preserves_archive_preferences_and_checkpoint() {
     store.set_enabled("sogang_notices", true).unwrap();
     store.subscribe("one", true).unwrap();
     store
-        .source_progress("one", "running", 8, false, 80, 79, 1, None, false)
+        .source_progress(
+            "one",
+            SourceStatus::Running,
+            8,
+            false,
+            80,
+            79,
+            1,
+            None,
+            false,
+        )
         .unwrap();
     store
-        .source_progress("one", "completed", 8, false, 80, 79, 1, None, true)
+        .source_progress(
+            "one",
+            SourceStatus::Completed,
+            8,
+            false,
+            80,
+            79,
+            1,
+            None,
+            true,
+        )
         .unwrap();
     store
-        .source_progress("two", "running", 3, false, 20, 19, 1, None, false)
+        .source_progress(
+            "two",
+            SourceStatus::Running,
+            3,
+            false,
+            20,
+            19,
+            1,
+            None,
+            false,
+        )
         .unwrap();
     let mut input = article("42", "처음 공지", "보존할 첫 본문", "2026-10-01");
     input.resources.push(ResourceInput {
@@ -845,7 +905,7 @@ fn released_schema_two_reopen_preserves_archive_preferences_and_checkpoint() {
         source_before
     );
     let interrupted = reopened.source("two").unwrap();
-    assert_eq!(interrupted.status, "interrupted");
+    assert_eq!(interrupted.status, SourceStatus::Interrupted);
     assert_eq!(interrupted.next_page, 3);
     assert!(!interrupted.history_complete);
     assert_eq!(
@@ -1590,7 +1650,7 @@ fn invalid_content_does_not_partially_create_documents() {
     assert!(store.upsert_article("one", &input, true).is_err());
     assert_eq!(store.archive_summary().unwrap().documents, 0);
     assert!(store
-        .source_progress("one", "running", 0, false, 0, 0, 0, None, false)
+        .source_progress("one", SourceStatus::Running, 0, false, 0, 0, 0, None, false)
         .is_err());
 }
 #[test]
@@ -2875,10 +2935,20 @@ fn schema_40_clears_public_board_crawl_state_and_keeps_cybercampus() {
         store.catalog(&crate::archive::definitions()).unwrap();
         for id in ["sogang-academic", "cybercampus"] {
             store
-                .source_progress(id, "completed", 1, false, 0, 0, 0, None, true)
+                .source_progress(id, SourceStatus::Completed, 1, false, 0, 0, 0, None, true)
                 .unwrap();
             store
-                .source_progress(id, "failed", 7, true, 3, 2, 1, Some("오류"), false)
+                .source_progress(
+                    id,
+                    SourceStatus::Failed,
+                    7,
+                    true,
+                    3,
+                    2,
+                    1,
+                    Some("오류"),
+                    false,
+                )
                 .unwrap();
             store
                 .proactive_save_task(&ProactiveTaskInput {
@@ -3092,4 +3162,54 @@ async fn notice_date_backfill_waits_out_a_closed_gate_and_still_stops_on_shutdow
     tokio::time::sleep(Duration::from_secs(10)).await;
     assert!(task.is_finished());
     drop(maintenance);
+}
+
+/// The UI and older profiles read these names: each status is stored and
+/// sent under the same name, and every stored name reads back.
+#[test]
+fn sync_modes_and_source_statuses_keep_their_names() {
+    use SourceStatus::*;
+    let statuses = [
+        (Idle, "idle"),
+        (Running, "running"),
+        (Completed, "completed"),
+        (Failed, "failed"),
+        (Cancelled, "cancelled"),
+        (Interrupted, "interrupted"),
+        (Limited, "limited"),
+    ];
+    let (_directory, store) = database();
+    for (status, name) in statuses {
+        assert_eq!(status.as_str(), name);
+        assert_eq!(serde_json::to_value(status).unwrap(), name);
+        let read: SourceStatus = store
+            .connection
+            .query_row("SELECT ?1", [name], |row| row.get(0))
+            .unwrap();
+        assert_eq!(read, status);
+    }
+    assert!(store
+        .connection
+        .query_row("SELECT 'historical'", [], |row| row
+            .get::<_, SourceStatus>(0))
+        .is_err());
+    for (mode, name) in [
+        (SyncMode::Incremental, "incremental"),
+        (SyncMode::Refresh, "refresh"),
+        (SyncMode::Skipped, "skipped"),
+        (SyncMode::Resources, "resources"),
+        (SyncMode::Resource, "resource"),
+    ] {
+        assert_eq!(serde_json::to_value(mode).unwrap(), name);
+    }
+    let idle = SyncStatus {
+        running: false,
+        mode: None,
+        message: String::new(),
+        active: Vec::new(),
+    };
+    assert_eq!(
+        serde_json::to_value(idle).unwrap()["mode"],
+        serde_json::Value::Null
+    );
 }

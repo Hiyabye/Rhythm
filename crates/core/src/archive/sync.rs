@@ -77,7 +77,7 @@ impl Controller {
             cancel: AtomicBool::new(false),
             status: Mutex::new(SyncStatus {
                 running: false,
-                mode: String::new(),
+                mode: None,
                 message: "동기화 대기 중".into(),
                 active: Vec::new(),
             }),
@@ -117,17 +117,17 @@ impl Controller {
     }
     /// Reports progress: of the collecting source when `source_id` is set,
     /// else of the job.
-    fn update(&self, source_id: Option<String>, mode: &str, page: u32, message: &str) {
+    fn update(&self, source_id: Option<String>, mode: SyncMode, page: u32, message: &str) {
         if let Ok(mut status) = self.status.lock() {
             status.running = true;
             status.message = message.into();
             let Some(source_id) = source_id else {
-                status.mode = mode.into();
+                status.mode = Some(mode);
                 return;
             };
             status.active = vec![ActiveSource {
                 source_id,
-                mode: mode.into(),
+                mode,
                 page,
                 message: message.into(),
             }];
@@ -291,7 +291,7 @@ impl Controller {
         root: PathBuf,
         http: Arc<H>,
         ids: Option<Vec<String>>,
-        mode: String,
+        mode: SyncMode,
     ) -> Result<(SyncStatus, u64), String> {
         self.start_tracked_with_lease(store, root, http, ids, mode, None)
     }
@@ -301,7 +301,7 @@ impl Controller {
         root: PathBuf,
         http: Arc<H>,
         ids: Option<Vec<String>>,
-        mode: String,
+        mode: SyncMode,
         lease: crate::operation_gate::AdmissionLease,
     ) -> Result<(SyncStatus, u64), String> {
         self.start_tracked_with_lease(store, root, http, ids, mode, Some(lease))
@@ -312,10 +312,10 @@ impl Controller {
         root: PathBuf,
         http: Arc<H>,
         ids: Option<Vec<String>>,
-        mode: String,
+        mode: SyncMode,
         lease: Option<crate::operation_gate::AdmissionLease>,
     ) -> Result<(SyncStatus, u64), String> {
-        if !["incremental", "refresh", "skipped", "resources"].contains(&mode.as_str()) {
+        if mode == SyncMode::Resource {
             return Err("동기화 방식을 확인해 주세요.".into());
         }
         // The same lock serializes extension disabling and job admission.
@@ -358,20 +358,20 @@ impl Controller {
                 .map_err(|_| "동기화 완료 상태를 기록할 수 없습니다.")?
                 .insert(task_id, Arc::new(Notify::new()));
         }
-        self.update(None, &mode, 0, "동기화를 준비하고 있습니다.");
+        self.update(None, mode, 0, "동기화를 준비하고 있습니다.");
         let controller = self.clone();
         tokio::spawn(async move {
             let _lease = lease;
             let id = source.definition.id.clone();
             let mut outcome = controller
-                .execute(&store, &root, &*http, source, &mode)
+                .execute(&store, &root, &*http, source, mode)
                 .await;
-            if outcome.is_ok() && !matches!(mode.as_str(), "skipped" | "resources") {
+            if outcome.is_ok() && !mode.is_retry() {
                 // A source unsubscribed while it ran was stopped on purpose.
                 outcome = match with_store(&store, |store| {
-                    store
-                        .source(&id)
-                        .map(|source| source.status == "completed" || !source.subscribed)
+                    store.source(&id).map(|source| {
+                        source.status == SourceStatus::Completed || !source.subscribed
+                    })
                 }) {
                     Ok(true) => Ok(()),
                     Ok(false) => Err("안전 한도에 걸려 동기화를 끝내지 못했습니다.".into()),
@@ -424,7 +424,12 @@ impl Controller {
             self.reserve_task(0, owner)?;
             Ok((resource, from_cybercampus))
         })?;
-        self.update(None, "resource", 0, "첨부 자료를 다시 내려받고 있습니다.");
+        self.update(
+            None,
+            SyncMode::Resource,
+            0,
+            "첨부 자료를 다시 내려받고 있습니다.",
+        );
         let controller = self.clone();
         tokio::spawn(async move {
             let _lease = lease;
@@ -484,7 +489,7 @@ impl Controller {
         root: &Path,
         http: &H,
         source: SourceInfo,
-        mode: &str,
+        mode: SyncMode,
     ) -> Result<(), String> {
         let id = source.definition.id.clone();
         let cancel = {
@@ -511,26 +516,26 @@ impl Controller {
         root: &Path,
         http: &H,
         source: SourceInfo,
-        mode: &str,
+        mode: SyncMode,
         cancel: &AtomicBool,
     ) -> Result<(), String> {
         // Retrying skipped notices and downloading missing files are not syncs of
         // the source, so they leave its status, counters and last error as they are.
-        let retry = matches!(mode, "skipped" | "resources");
+        let retry = mode.is_retry();
         let mut current = source;
         if !retry {
-            current.status = "running".into();
+            current.status = SourceStatus::Running;
             // Progress counters describe this attempt; checkpoints stay cumulative.
             current.failed = 0;
             current.discovered = 0;
             current.archived = 0;
-            persist(store, &current, "running", None, false)?;
+            persist(store, &current, SourceStatus::Running, None, false)?;
         }
         let resource_bytes = AtomicU64::new(0);
         let outcome = match mode {
             // Its skipped notices have no body to retry; the next sync lists them again.
-            "skipped" => Ok(()),
-            "resources" => {
+            SyncMode::Skipped => Ok(()),
+            SyncMode::Resources => {
                 cybercampus::download_missing(
                     &self.cybercampus,
                     http,
@@ -556,7 +561,7 @@ impl Controller {
                 )
                 .await
                 {
-                    Ok(()) => persist(store, &current, "completed", None, true),
+                    Ok(()) => persist(store, &current, SourceStatus::Completed, None, true),
                     Err(error) => Err(error),
                 }
             }
@@ -575,9 +580,9 @@ impl Controller {
                 store,
                 &current,
                 if stopped || unsubscribed {
-                    "cancelled"
+                    SourceStatus::Cancelled
                 } else {
-                    "failed"
+                    SourceStatus::Failed
                 },
                 Some(&error),
                 false,

@@ -19,7 +19,8 @@
   let active = true;
 
   onMount(() => {
-    void load();
+    // The backend refuses the feed status while the notices extension is off.
+    if (enabled) void load();
     // A scheduled sync can start at any time; poll faster only while one runs.
     let wait = 0;
     const timer = window.setInterval(() => {

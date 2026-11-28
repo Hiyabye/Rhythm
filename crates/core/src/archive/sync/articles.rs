@@ -5,7 +5,7 @@ use super::*;
 pub(super) fn persist(
     store: &SharedStore,
     source: &SourceInfo,
-    status: &str,
+    status: SourceStatus,
     error: Option<&str>,
     success: bool,
 ) -> Result<(), String> {
