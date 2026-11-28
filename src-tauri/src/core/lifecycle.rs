@@ -1,10 +1,10 @@
 //! Native desktop lifecycle: tray, window restore, close behavior and login
 //! registration.
 //!
-//! Persistence is owned by `storage::proactive`. This module reads the two
-//! lifecycle preferences through [`LifecyclePreferences`], which `main.rs`
-//! implements over the store, so a settings save from another command is
-//! observed immediately instead of through a stale cache.
+//! Persistence is owned by `storage::proactive`. `main.rs` reads the two
+//! lifecycle preferences on demand through `App::settings().lifecycle()`, so
+//! a settings save from another command is observed immediately instead of
+//! through a stale cache.
 //!
 //! Autostart registration is never performed during startup. It only changes
 //! through the explicit commands in `main.rs`, and every change is read back
@@ -65,17 +65,6 @@ pub fn autostart_name(identifier: &str) -> String {
 const TRAY_SHOW: &str = "tray.show";
 const TRAY_QUIT: &str = "tray.quit";
 const TRAY_ID: &str = "rhythm-status";
-
-/// The lifecycle preferences owned by persisted settings.
-pub trait LifecyclePreferences: Send + Sync + 'static {
-    /// Whether closing the main window should keep the application running in
-    /// the background instead of quitting. Effective only when a tray icon was
-    /// installed successfully.
-    fn close_to_background(&self) -> bool;
-    /// Whether an OS login launch should stay hidden. This governs only the
-    /// `--autostart` launch path and never a normal manual launch.
-    fn start_hidden(&self) -> bool;
-}
 
 /// How this process was started.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

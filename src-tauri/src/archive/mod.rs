@@ -135,7 +135,7 @@ pub async fn archive_reveal_resource(state: State<'_, AppState>, id: i64) -> Res
     let path = state.archive().resource_to_reveal(id).await?;
     #[cfg(windows)]
     {
-        let root = state.data_root.clone();
+        let root = state.data_root().to_path_buf();
         tokio::task::spawn_blocking(move || windows_reveal::reveal(&root, &path))
             .await
             .map_err(|_| {

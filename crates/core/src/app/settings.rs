@@ -24,6 +24,16 @@ pub fn storage_error(error: String) -> String {
     "로컬 데이터를 읽거나 저장하지 못했습니다. 저장 공간과 파일 권한을 확인해 주세요.".into()
 }
 
+/// The lifecycle preferences the shell applies; see [`Settings::lifecycle`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Lifecycle {
+    /// Closing the main window keeps the app running in the background
+    /// (only when the shell has a tray to restore it from).
+    pub close_to_background: bool,
+    /// An OS login launch stays hidden.
+    pub start_hidden: bool,
+}
+
 pub struct Settings<'a>(pub(super) &'a App);
 
 impl Settings<'_> {
@@ -89,6 +99,66 @@ impl Settings<'_> {
     pub async fn set_launch_at_login(&self, enabled: bool) -> Result<(), String> {
         let _lease = self.0.operation_gate.shared().await?;
         self.update_proactive(|settings| settings.launch_at_login = enabled)
+    }
+
+    /// The two lifecycle switches as they apply now (`proactive` off turns
+    /// both off). Read on demand, so a save from another call is seen at once;
+    /// an unreadable store falls back to the default behavior.
+    pub fn lifecycle(&self) -> Lifecycle {
+        match self
+            .0
+            .store
+            .lock()
+            .map_err(|_| "저장소에 접근할 수 없습니다.".to_string())
+            .and_then(|store| store.proactive_effective_settings().map_err(storage_error))
+        {
+            Ok(settings) => Lifecycle {
+                close_to_background: settings.close_to_background,
+                start_hidden: settings.start_hidden,
+            },
+            Err(error) => {
+                eprintln!("Lifecycle: 백그라운드 설정을 읽지 못해 기본 동작을 사용합니다: {error}");
+                Lifecycle::default()
+            }
+        }
+    }
+
+    /// Whether the automatic update check is on. The check itself is the
+    /// shell's (the updater).
+    pub fn update_check(&self) -> Result<bool, String> {
+        self.0
+            .store
+            .lock()
+            .map_err(|_| "설정 저장소를 사용할 수 없습니다.".to_string())?
+            .update_check_enabled()
+    }
+
+    pub fn set_update_check(&self, enabled: bool) -> Result<bool, String> {
+        let store = self
+            .0
+            .store
+            .lock()
+            .map_err(|_| "설정 저장소를 사용할 수 없습니다.".to_string())?;
+        store.set_update_check(enabled)?;
+        store.update_check_enabled()
+    }
+
+    /// Whether an automatic update check is due; false when it is off or the
+    /// store cannot be read.
+    pub fn update_check_due(&self) -> bool {
+        self.0
+            .store
+            .lock()
+            .ok()
+            .and_then(|store| store.update_check_due().ok())
+            .unwrap_or(false)
+    }
+
+    /// Records a finished automatic check, so the next one waits a day.
+    pub fn record_update_check(&self) {
+        if let Ok(store) = self.0.store.lock() {
+            let _ = store.record_update_check();
+        }
     }
 
     /// Turns an extension on or off and waits for the work it stops. Before

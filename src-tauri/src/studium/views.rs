@@ -9,7 +9,7 @@ use crate::{
     AppState,
 };
 use chrono::Timelike;
-use rhythm_core::app::BoxFuture;
+use rhythm_core::app::{BoxFuture, StudiumViewParts};
 use serde::Serialize;
 use std::{
     sync::{
@@ -146,12 +146,12 @@ pub(crate) struct Views {
 }
 
 impl Views {
-    pub(crate) fn new(
-        store: SharedStore,
-        controller: Weak<Controller>,
-        gate: Arc<AdmissionGate>,
-        app: AppHandle,
-    ) -> Arc<Self> {
+    pub(crate) fn new(parts: StudiumViewParts, app: AppHandle) -> Arc<Self> {
+        let StudiumViewParts {
+            store,
+            controller,
+            gate,
+        } = parts;
         Arc::new(Self {
             store,
             controller,
@@ -887,7 +887,7 @@ pub(crate) async fn studium_open_mini(
 }
 #[tauri::command]
 pub(crate) async fn studium_close_mini(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
+    let _lease = state.studium_views.gate.shared().await?;
     state.studium_views.enabled()?;
     if let Some(ticket) = state.studium_views.capture_close() {
         state.studium_views.disable(ticket).await?;
@@ -898,7 +898,7 @@ pub(crate) async fn studium_close_mini(state: tauri::State<'_, AppState>) -> Res
 pub(crate) async fn studium_mini_status(
     state: tauri::State<'_, AppState>,
 ) -> Result<MiniStatus, String> {
-    let _lease = state.operation_gate.shared().await?;
+    let _lease = state.studium_views.gate.shared().await?;
     state.studium_views.status()
 }
 #[tauri::command]
@@ -912,7 +912,7 @@ pub(crate) async fn studium_mini_set_on_top(
 pub(crate) async fn studium_mini_show_main(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
+    let _lease = state.studium_views.gate.shared().await?;
     state.studium_views.enabled()?;
     state
         .studium_views
