@@ -2,7 +2,11 @@
 //! Studium views. No window, network request or embedding server.
 use super::*;
 use crate::extensions::STUDIUM;
-use std::{path::Path, sync::atomic::AtomicUsize, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::AtomicUsize,
+    time::Duration,
+};
 
 struct NoWindow;
 
@@ -483,9 +487,138 @@ async fn a_running_seat_check_refuses_new_targets_and_is_cancelled_by_its_id() {
     app.shutdown().await;
 }
 
+fn classifier_loop_running(app: &App) -> bool {
+    let running = app.classifier_loop.lock().unwrap();
+    running.as_ref().is_some_and(|l| !l.task.is_finished())
+}
+
+#[tokio::test]
+async fn the_classifier_loop_runs_only_while_its_extension_is_on() {
+    use crate::extensions::AI;
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+
+    // Before `start` nothing runs, whatever the stored choice.
+    app.settings().set_extension(AI, true).await.unwrap();
+    assert!(!classifier_loop_running(&app));
+    app.settings().set_extension(AI, false).await.unwrap();
+    app.start(None);
+    assert!(!classifier_loop_running(&app));
+
+    app.settings().set_extension(AI, true).await.unwrap();
+    assert!(classifier_loop_running(&app));
+    // Another extension's change leaves the loop alone.
+    app.settings().set_extension(STUDIUM, true).await.unwrap();
+    assert!(classifier_loop_running(&app));
+
+    // The disable returns only after the loop ended and released its engine.
+    app.settings().set_extension(AI, false).await.unwrap();
+    assert!(app.classifier_loop.lock().unwrap().is_none());
+    assert_eq!(app.classifier.status().state, "disabled");
+    app.settings().set_extension(AI, true).await.unwrap();
+    assert!(classifier_loop_running(&app));
+    app.shutdown().await;
+    drop(app);
+
+    // On at launch: `start` starts it.
+    let app = open(directory.path()).unwrap();
+    assert!(!classifier_loop_running(&app));
+    app.start(None);
+    assert!(classifier_loop_running(&app));
+    app.shutdown().await;
+}
+
+// `install` is called only with an id the catalog does not have: a real id
+// would start a model download from a test.
+#[tokio::test]
+async fn ai_opens_only_while_its_extension_is_on() {
+    use crate::extensions::AI;
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+    let picked = directory.path().join("picked");
+    std::fs::create_dir(&picked).unwrap();
+    let off = |error: String| assert!(error.contains("확장 기능"), "{error}");
+
+    // Everything off: the inventory, the switches and stored AI output are
+    // closed. Only a cancel is never refused.
+    off(app.ai().snapshot().await.err().unwrap());
+    off(app.ai().model_directory().await.unwrap_err());
+    off(app
+        .ai()
+        .set_model_directory(picked.clone())
+        .await
+        .unwrap_err());
+    off(app.ai().reset_model_directory().await.unwrap_err());
+    off(app.ai().install("no-such-model".into()).await.unwrap_err());
+    off(app
+        .ai()
+        .remove("no-such-model".into(), true, false)
+        .await
+        .unwrap_err());
+    off(app.ai().set_classification(false).await.unwrap_err());
+    off(app.ai().classifications(&[1]).await.unwrap_err());
+    off(app.ai().classification(1, 1).await.unwrap_err());
+    off(app.ai().similar_notices(1).await.unwrap_err());
+    off(app.ai().duplicate_notices(&[1]).await.err().unwrap());
+    app.ai().cancel_download().await.unwrap();
+
+    app.settings().set_extension(AI, true).await.unwrap();
+    let fresh = app.ai().snapshot().await.ok().unwrap();
+    assert!(!fresh.catalog.is_empty() && fresh.models.is_empty() && !fresh.busy);
+    assert!(fresh.preferences.classification_enabled);
+    assert!(fresh.preferences.model_directory.is_none());
+
+    app.ai().set_classification(false).await.unwrap();
+    assert_eq!(app.ai().model_directory().await.unwrap(), app.data_root);
+    app.ai().set_model_directory(picked.clone()).await.unwrap();
+    let changed = app.ai().snapshot().await.ok().unwrap();
+    assert!(!changed.preferences.classification_enabled);
+    let folder = changed.preferences.model_directory.unwrap();
+    assert!(folder.ends_with("picked"), "{folder}");
+    // The picker reopens on the chosen folder.
+    assert_eq!(
+        app.ai().model_directory().await.unwrap(),
+        PathBuf::from(&folder)
+    );
+    // A folder that does not exist is refused and changes nothing.
+    assert!(app
+        .ai()
+        .set_model_directory(directory.path().join("missing"))
+        .await
+        .is_err());
+    app.ai().reset_model_directory().await.unwrap();
+    let reset = app.ai().snapshot().await.ok().unwrap();
+    assert!(reset.preferences.model_directory.is_none());
+
+    // Input checks stay in core.
+    let unknown = app.ai().install("no-such-model".into()).await.unwrap_err();
+    assert!(unknown.contains("모델 목록"), "{unknown}");
+    assert!(!app.models.busy());
+    let unconfirmed = app.ai().remove("no-such-model".into(), false, false).await;
+    assert!(unconfirmed.unwrap_err().contains("확인"));
+    assert!(app.ai().classifications(&[0]).await.is_err());
+    assert!(app.ai().classifications(&[1; 201]).await.is_err());
+    assert!(app.ai().classification(1, 0).await.is_err());
+    assert!(app.ai().similar_notices(0).await.is_err());
+    assert!(app.ai().duplicate_notices(&[-1]).await.is_err());
+    // Nothing is stored for these notices yet.
+    assert!(app.ai().classifications(&[1, 2]).await.unwrap().is_empty());
+    assert!(app.ai().classification(1, 1).await.unwrap().is_none());
+    assert!(app.ai().similar_notices(1).await.unwrap().is_empty());
+    assert!(app
+        .ai()
+        .duplicate_notices(&[1])
+        .await
+        .ok()
+        .unwrap()
+        .is_empty());
+    app.shutdown().await;
+}
+
 /// The core is the all-off state: nothing an extension owns is on or running.
-/// The classifier loop, scheduler and Studium receiver start idle, so only
-/// their effective settings and the absence of work and processes are asserted.
+/// The scheduler and Studium receiver start idle, so only their effective
+/// settings and the absence of work and processes are asserted; the classifier
+/// loop does not exist at all.
 async fn assert_core_only(app: &App) {
     {
         let store = app.store.lock().unwrap();
@@ -517,6 +650,7 @@ async fn assert_core_only(app: &App) {
         .await
         .expect("a body fetch is running");
     assert!(matches!(app.classifier.status().state, "idle" | "disabled"));
+    assert!(app.classifier_loop.lock().unwrap().is_none());
     // No embedding server: its private run directory holds no socket or pid.
     let run = app.data_root.join("run").join("embedding");
     if let Ok(mut entries) = std::fs::read_dir(run) {
@@ -548,7 +682,7 @@ async fn a_fresh_profile_runs_only_the_core_and_returns_to_it_after_each_extensi
 
 #[test]
 fn every_extension_is_declared_once_and_its_links_exist() {
-    use crate::extensions::{Tokens, Work, BUILT_IN};
+    use crate::extensions::{Loop, Tokens, BUILT_IN};
     assert_eq!(BUILT_IN.len(), 11);
     let mut ids: Vec<_> = BUILT_IN.iter().map(|e| e.id).collect();
     ids.sort_unstable();
@@ -556,16 +690,21 @@ fn every_extension_is_declared_once_and_its_links_exist() {
     assert_eq!(ids.len(), BUILT_IN.len());
     for extension in BUILT_IN {
         assert!(crate::extensions::is_built_in(extension.id));
-        // Everything a disable awaits it also signals, except the classifier,
-        // which stops itself and is only woken.
+        // Everything a disable awaits it also signals.
         for work in extension.settles {
             assert!(
-                *work == Work::Classifier || extension.cancels.contains(work),
+                extension.cancels.contains(work),
                 "{} settles work it never cancels",
                 extension.id
             );
         }
     }
+    // The classifier loop belongs to the AI extension alone.
+    let runs = |id: &str| crate::extensions::declaration(id).unwrap().runs;
+    assert_eq!(runs(crate::extensions::AI), [Loop::Classifier]);
+    assert!(BUILT_IN
+        .iter()
+        .all(|e| e.id == crate::extensions::AI || e.runs.is_empty()));
     // The cross-extension links: proactive's disable clears both token kinds.
     let clears = |id: &str| crate::extensions::declaration(id).unwrap().clears;
     assert_eq!(

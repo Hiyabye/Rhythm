@@ -7,6 +7,7 @@
 //! The fields are public while the command areas move here one by one; once
 //! every area has its handle they become private.
 
+mod ai;
 mod archive;
 mod calendar;
 mod meals;
@@ -15,6 +16,7 @@ mod studium;
 #[cfg(test)]
 mod tests;
 
+pub use ai::{Ai, AiSnapshot, DuplicateNotices};
 pub use archive::{original_link, Archive};
 pub use calendar::Calendar;
 pub use meals::Meals;
@@ -24,7 +26,7 @@ pub use studium::{Studium, StudiumMini};
 use crate::{
     archive::sync,
     data_lock::{lock_data_dir, DataDirLock},
-    extensions::Registry,
+    extensions::{Loop, Registry, BUILT_IN},
     feed, intelligence,
     operation_gate::{self, AdmissionGate},
     paths, proactive,
@@ -129,6 +131,14 @@ pub struct App {
     runtime: Handle,
     views: OnceLock<Arc<dyn StudiumViews>>,
     started: AtomicBool,
+    /// The classification loop, present only while its extension is on.
+    classifier_loop: Mutex<Option<ExtensionLoop>>,
+}
+
+/// A running background loop that an extension owns.
+struct ExtensionLoop {
+    stop: Arc<AtomicBool>,
+    task: tokio::task::JoinHandle<()>,
 }
 
 impl App {
@@ -219,6 +229,7 @@ impl App {
             runtime: config.runtime,
             views: OnceLock::new(),
             started: AtomicBool::new(false),
+            classifier_loop: Mutex::new(None),
         })
     }
 
@@ -229,8 +240,9 @@ impl App {
     }
 
     /// Starts the background work: seat alerts, the shell's Studium views, the
-    /// classifier, the 휴지통 and notice-date loops and the scheduler. Call it
-    /// once, after the shell can serve the UI's calls.
+    /// 휴지통 and notice-date loops, the scheduler and the loops of the
+    /// extensions that are on (the classifier). Call it once, after the shell
+    /// can serve the UI's calls.
     pub fn start(&self, views: Option<Arc<dyn StudiumViews>>) {
         if self.started.swap(true, Ordering::AcqRel) {
             return;
@@ -247,13 +259,8 @@ impl App {
             }
         }
         let shutdown = &self.maintenance_shutdown;
-        self.runtime.spawn(intelligence::classification::run(
-            self.classifier.clone(),
-            self.store.clone(),
-            self.models.clone(),
-            self.data_root.clone(),
-            shutdown.clone(),
-        ));
+        // Nothing to stop yet: no loop runs before this call.
+        drop(self.match_loops());
         self.runtime.spawn(crate::archive::run_auto_trash(
             self.store.clone(),
             self.operation_gate.clone(),
@@ -279,6 +286,10 @@ impl App {
         Archive(self)
     }
 
+    pub fn ai(&self) -> Ai<'_> {
+        Ai(self)
+    }
+
     pub fn calendar(&self) -> Calendar<'_> {
         Calendar(self)
     }
@@ -294,6 +305,65 @@ impl App {
     /// The narrower handle for the Studium mini window.
     pub fn studium_mini(&self) -> StudiumMini<'_> {
         StudiumMini(self)
+    }
+
+    /// Starts or stops each extension-owned loop to match the stored choices
+    /// and returns the loops it stopped, for the caller to join. The choices
+    /// are read under the loop slot's lock, so whichever call runs last
+    /// leaves the loops matching the store. Before [`App::start`] and during
+    /// exit nothing starts.
+    fn match_loops(&self) -> Vec<ExtensionLoop> {
+        let mut stopped = Vec::new();
+        let Ok(mut classifier) = self.classifier_loop.lock() else {
+            return stopped;
+        };
+        let live = self.started.load(Ordering::Acquire)
+            && !self.maintenance_shutdown.load(Ordering::Acquire);
+        let wanted = |which: Loop| {
+            live && crate::storage::with_store(&self.store, |store| {
+                for extension in BUILT_IN {
+                    if extension.runs.contains(&which) && store.enabled(extension.id)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            })
+            .unwrap_or(false)
+        };
+        let running = classifier
+            .as_ref()
+            .is_some_and(|running| !running.task.is_finished());
+        match (wanted(Loop::Classifier), running) {
+            (true, false) => {
+                let stop = Arc::new(AtomicBool::new(false));
+                let task = self.runtime.spawn(intelligence::classification::run(
+                    self.classifier.clone(),
+                    self.store.clone(),
+                    self.models.clone(),
+                    self.data_root.clone(),
+                    self.maintenance_shutdown.clone(),
+                    stop.clone(),
+                ));
+                *classifier = Some(ExtensionLoop { stop, task });
+            }
+            (false, _) => {
+                if let Some(running) = classifier.take() {
+                    running.stop.store(true, Ordering::Release);
+                    stopped.push(running);
+                }
+                self.classifier.wake();
+            }
+            (true, true) => {}
+        }
+        stopped
+    }
+
+    /// Brings the extension-owned loops in line with the stored choices and
+    /// waits for the ones it stopped, which release their engine first.
+    async fn settle_loops(&self) {
+        for stopped in self.match_loops() {
+            let _ = stopped.task.await;
+        }
     }
 
     fn views(&self) -> Option<&Arc<dyn StudiumViews>> {

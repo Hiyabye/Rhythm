@@ -1,87 +1,26 @@
-use super::{classification, models};
+//! The AI commands: one-line wrappers over `App::ai()`, except the folder
+//! picker, whose native dialog belongs to the shell.
 use crate::{
-    storage::intelligence::{AiClassification, AiModel, AiPreferences, SimilarNotice},
+    storage::intelligence::{AiClassification, SimilarNotice},
     AppState,
 };
-use serde::Serialize;
-use std::{path::PathBuf, sync::atomic::Ordering};
-
-const EXIT_ERROR: &str = "앱을 종료하고 있습니다.";
-fn check_open(state: &AppState) -> Result<(), String> {
-    if state.maintenance_shutdown.load(Ordering::Acquire) {
-        Err(EXIT_ERROR.into())
-    } else {
-        state.operation_gate.ensure_open()
-    }
-}
-
-#[derive(Serialize)]
-pub struct Snapshot {
-    catalog: Vec<models::CatalogEntry>,
-    models: Vec<AiModel>,
-    preferences: AiPreferences,
-    hardware: models::Hardware,
-    model_storage: super::model_storage::Status,
-    busy: bool,
-    classification: classification::Status,
-}
-fn with_store<T>(
-    state: &AppState,
-    f: impl FnOnce(&crate::Store) -> Result<T, String>,
-) -> Result<T, String> {
-    let store = state
-        .store
-        .lock()
-        .map_err(|_| "저장소에 접근할 수 없습니다.")?;
-    f(&store).map_err(crate::storage_error)
-}
+use rhythm_core::app::{AiSnapshot, DuplicateNotices};
 
 #[tauri::command]
-pub async fn ai_snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
-    let _lease = state.operation_gate.shared().await?;
-    let (models, preferences) = with_store(&state, |s| Ok((s.ai_models()?, s.ai_preferences()?)))?;
-    let initial_hardware = state.hardware.clone();
-    let root = state.data_root.clone();
-    let directory = preferences.model_directory.clone();
-    let (hardware, model_storage) = tokio::task::spawn_blocking(move || {
-        (
-            models::refresh_disk_space(initial_hardware, &root),
-            super::model_storage::status(&root, directory.as_deref()),
-        )
-    })
-    .await
-    .map_err(|_| "저장 공간 정보를 확인하지 못했습니다.")?;
-    Ok(Snapshot {
-        catalog: models::catalog(),
-        models,
-        preferences,
-        hardware,
-        model_storage,
-        busy: state.models.busy(),
-        classification: state.classifier.status(),
-    })
+pub async fn ai_snapshot(state: tauri::State<'_, AppState>) -> Result<AiSnapshot, String> {
+    state.ai().snapshot().await
 }
 
-fn check_storage_change(state: &AppState) -> Result<(), String> {
-    check_open(state)?;
-    if state.models.busy() {
-        return Err("진행 중인 모델 설치를 완료하거나 취소한 뒤 설치 폴더를 변경해 주세요.".into());
-    }
-    Ok(())
-}
-
+/// Asks for a folder and makes it the model folder. Core holds no admission
+/// lease or AI gate while the dialog is open, so a backup, restore or update
+/// never waits for it; the change is checked again after the pick.
 #[tauri::command]
 pub async fn ai_choose_model_directory(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<bool, String> {
     use tauri_plugin_dialog::DialogExt;
-    let _lease = state.operation_gate.shared().await?;
-    let _gate = state.ai_gate.lock().await;
-    check_storage_change(&state)?;
-    let initial = with_store(&state, |s| Ok(s.ai_preferences()?.model_directory))?
-        .map(PathBuf::from)
-        .unwrap_or_else(|| state.data_root.clone());
+    let initial = state.ai().model_directory().await?;
     let selected = tokio::task::spawn_blocking(move || {
         app.dialog()
             .file()
@@ -94,25 +33,16 @@ pub async fn ai_choose_model_directory(
     let Some(selected) = selected else {
         return Ok(false);
     };
-    check_storage_change(&state)?;
     let path = selected
         .into_path()
         .map_err(|_| "선택한 폴더 경로를 읽지 못했습니다.")?;
-    let directory =
-        tokio::task::spawn_blocking(move || super::model_storage::prepare_selection(&path))
-            .await
-            .map_err(|_| "설치 폴더를 확인하지 못했습니다.")??;
-    check_storage_change(&state)?;
-    with_store(&state, |s| s.ai_save_model_directory(Some(&directory)))?;
+    state.ai().set_model_directory(path).await?;
     Ok(true)
 }
 
 #[tauri::command]
 pub async fn ai_reset_model_directory(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
-    let _gate = state.ai_gate.lock().await;
-    check_storage_change(&state)?;
-    with_store(&state, |s| s.ai_save_model_directory(None))
+    state.ai().reset_model_directory().await
 }
 
 #[tauri::command]
@@ -120,21 +50,11 @@ pub async fn ai_install(
     state: tauri::State<'_, AppState>,
     catalog_id: String,
 ) -> Result<(), String> {
-    let lease = state.operation_gate.shared().await?;
-    let _gate = state.ai_gate.lock().await;
-    check_open(&state)?;
-    state.models.start_admitted(
-        state.store.clone(),
-        state.data_root.clone(),
-        catalog_id,
-        lease,
-    )
+    state.ai().install(catalog_id).await
 }
 #[tauri::command]
 pub async fn ai_cancel_download(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
-    state.models.cancel();
-    Ok(())
+    state.ai().cancel_download().await
 }
 #[tauri::command]
 pub async fn ai_remove(
@@ -143,154 +63,48 @@ pub async fn ai_remove(
     confirmed: bool,
     keep_files: Option<bool>,
 ) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
-    if !confirmed {
-        return Err("모델 삭제를 확인해 주세요.".into());
-    }
-    let _gate = state.ai_gate.lock().await;
-    check_open(&state)?;
-    if state.models.busy() {
-        return Err("진행 중인 모델 설치를 먼저 취소하거나 완료해 주세요.".into());
-    }
-    let kind = with_store(&state, |s| Ok(s.ai_model(&id)?.map(|model| model.kind)))?;
-    let _classifier_paused = if kind.as_deref() == Some("embedding") {
-        // Windows cannot unlink a file mapped by the embedding process. Hold
-        // classification paused until inventory and file removal finish.
-        let guard = state.classifier.quiesce().await;
-        state.classifier.stop_worker().await?;
-        Some(guard)
-    } else {
-        None
-    };
-    models::remove_and_deselect(
-        state.store.clone(),
-        state.data_root.clone(),
-        id,
-        confirmed,
-        keep_files.unwrap_or(false),
-    )
-    .await
+    state
+        .ai()
+        .remove(id, confirmed, keep_files.unwrap_or(false))
+        .await
 }
-/// The only command that changes automatic classification. It quiesces the
-/// running batch so the saved preference and the worker cannot disagree.
 #[tauri::command]
 pub async fn ai_classification_preferences(
     state: tauri::State<'_, AppState>,
     enabled: bool,
 ) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
-    let _gate = state.ai_gate.lock().await;
-    check_open(&state)?;
-    let _paused = state.classifier.quiesce().await;
-    let result = with_store(&state, |store| {
-        let mut preferences = store.ai_preferences()?;
-        preferences.classification_enabled = enabled;
-        store.ai_save_preferences(&preferences)
-    });
-    state.classifier.invalidate();
-    result
+    state.ai().set_classification(enabled).await
 }
 
-/// SHA-256 of the selected, installed embedding model. Turning automatic
-/// classification off keeps existing rows visible, so the switch is not checked.
-fn embedding_model_sha(state: &AppState) -> Result<Option<String>, String> {
-    with_store(state, |store| store.ai_embedding_model_sha())
-}
-
-/// Latest-revision classifications for the visible page: the feed's, plus the
-/// local model's for other notices while one is installed.
 #[tauri::command]
 pub async fn ai_classifications(
     state: tauri::State<'_, AppState>,
     document_ids: Vec<i64>,
 ) -> Result<Vec<AiClassification>, String> {
-    if document_ids.len() > 200 || document_ids.iter().any(|id| *id <= 0) {
-        return Err("분류 조회 범위를 확인해 주세요.".into());
-    }
-    let sha = embedding_model_sha(&state)?;
-    with_store(&state, |store| {
-        store.ai_classifications_for_documents(
-            &document_ids,
-            sha.as_deref()
-                .map(|sha| (sha, classification::config_hash())),
-        )
-    })
+    state.ai().classifications(&document_ids).await
 }
 
-/// Revision-scoped classification for the reader. Older revisions without a
-/// stored row return `None`; they are classified only through the latest-revision
-/// background pass.
 #[tauri::command]
 pub async fn ai_classification(
     state: tauri::State<'_, AppState>,
     document_id: i64,
     revision_id: i64,
 ) -> Result<Option<AiClassification>, String> {
-    if document_id <= 0 || revision_id <= 0 {
-        return Err("분류 조회 식별자가 올바르지 않습니다.".into());
-    }
-    let sha = embedding_model_sha(&state)?;
-    with_store(&state, |store| {
-        store.ai_classification(
-            document_id,
-            revision_id,
-            sha.as_deref()
-                .map(|sha| (sha, classification::config_hash())),
-        )
-    })
+    state.ai().classification(document_id, revision_id).await
 }
 
-/// Similar notices for the reader, from stored vectors only (no model call):
-/// the feed's, plus the local model's while one is installed.
 #[tauri::command]
 pub async fn ai_similar_notices(
     state: tauri::State<'_, AppState>,
     document_id: i64,
 ) -> Result<Vec<SimilarNotice>, String> {
-    if document_id <= 0 {
-        return Err("비슷한 공지 조회 식별자가 올바르지 않습니다.".into());
-    }
-    let sha = embedding_model_sha(&state)?;
-    with_store(&state, |store| {
-        Ok(store
-            .ai_similar_notices(&[document_id], sha.as_deref(), 5)?
-            .pop()
-            .map(|(_, similar)| similar)
-            .unwrap_or_default())
-    })
+    state.ai().similar_notices(document_id).await
 }
 
-/// Likely cross-posts of each visible notice, for grouping list rows. Only
-/// documents with at least one duplicate are returned.
 #[tauri::command]
 pub async fn ai_duplicate_notices(
     state: tauri::State<'_, AppState>,
     document_ids: Vec<i64>,
 ) -> Result<Vec<DuplicateNotices>, String> {
-    if document_ids.len() > 200 || document_ids.iter().any(|id| *id <= 0) {
-        return Err("비슷한 공지 조회 범위를 확인해 주세요.".into());
-    }
-    let sha = embedding_model_sha(&state)?;
-    with_store(&state, |store| {
-        Ok(store
-            .ai_similar_notices(&document_ids, sha.as_deref(), 1)?
-            .into_iter()
-            .filter_map(|(document_id, similar)| {
-                let duplicates = similar
-                    .into_iter()
-                    .filter(|notice| notice.duplicate)
-                    .collect::<Vec<_>>();
-                (!duplicates.is_empty()).then_some(DuplicateNotices {
-                    document_id,
-                    duplicates,
-                })
-            })
-            .collect())
-    })
-}
-
-#[derive(Serialize)]
-pub struct DuplicateNotices {
-    document_id: i64,
-    duplicates: Vec<SimilarNotice>,
+    state.ai().duplicate_notices(&document_ids).await
 }
