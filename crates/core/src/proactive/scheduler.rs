@@ -162,7 +162,10 @@ impl Scheduler {
         if running {
             return Ok(None);
         }
-        let _ = control.sender.send(false);
+        // `send` changes nothing once every receiver is gone, which is the
+        // case after any stop; the new loop would inherit the old stop and end
+        // at its first tick.
+        control.sender.send_replace(false);
         let mut stop = control.sender.subscribe();
         let store = self.store.clone();
         let archive = self.archive.clone();

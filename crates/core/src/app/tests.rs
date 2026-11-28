@@ -1019,3 +1019,30 @@ async fn proactive_opens_only_while_its_extension_is_on_and_keeps_lifecycle_sett
     assert!(reopened.settings.notifications_enabled && !reopened.settings.launch_at_login);
     app.shutdown().await;
 }
+
+// A loop that `running` reports right after a start has not yet ticked; a
+// restarted loop that inherited the old stop signal ends at its first tick.
+#[tokio::test]
+async fn the_scheduler_keeps_running_after_maintenance_and_a_re_enable() {
+    use crate::extensions::PROACTIVE;
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+    app.settings().set_extension(PROACTIVE, true).await.unwrap();
+    app.start(None);
+    let ticked = || tokio::time::sleep(Duration::from_millis(200));
+    ticked().await;
+    assert!(app.proactive.running());
+
+    drop(app.exclusive_maintenance().await.unwrap());
+    ticked().await;
+    assert!(app.proactive.running(), "stopped after maintenance");
+
+    app.settings()
+        .set_extension(PROACTIVE, false)
+        .await
+        .unwrap();
+    app.settings().set_extension(PROACTIVE, true).await.unwrap();
+    ticked().await;
+    assert!(app.proactive.running(), "stopped after a re-enable");
+    app.shutdown().await;
+}
