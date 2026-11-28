@@ -258,7 +258,7 @@ async fn detail_layout_and_numbers_are_published_together_without_extra_requests
         (&snapshot.results[0], "5", vec![4]),
         (&snapshot.results[1], "6", vec![8, 16, 24]),
     ] {
-        assert_eq!(state.status, "ready");
+        assert_eq!(state.status, RoomStatus::Ready);
         let result = state.result.as_ref().unwrap();
         assert_eq!(result.source_url, rooms::get(id).unwrap().url());
         assert_eq!(result.remaining, available.len() as u32);
@@ -330,7 +330,7 @@ async fn a_new_cycle_clears_and_replaces_the_complete_layout_number_and_time_res
     ]);
     h.start(fake.clone()).await;
     block.entered().await;
-    assert_eq!(h.snapshot().results[0].status, "loading");
+    assert_eq!(h.snapshot().results[0].status, RoomStatus::Loading);
     assert!(h.snapshot().results[0].result.is_none());
     block.release.add_permits(1);
     h.wait().await;
@@ -377,7 +377,7 @@ async fn geometry_failure_does_not_reuse_old_layout_or_discard_new_valid_numbers
     h.start(fake.clone()).await;
     h.wait().await;
     let snapshot = h.snapshot();
-    assert_eq!(snapshot.results[0].status, "ready");
+    assert_eq!(snapshot.results[0].status, RoomStatus::Ready);
     assert!(snapshot.results[0].error.is_none());
     let result = snapshot.results[0].result.as_ref().unwrap();
     assert_eq!(result.remaining, 1);
@@ -421,7 +421,7 @@ async fn older_or_wrong_room_detail_cannot_restore_the_previous_layout_or_number
         h.start(fake.clone()).await;
         h.wait().await;
         let snapshot = h.snapshot();
-        assert_eq!(snapshot.results[0].status, "count_only");
+        assert_eq!(snapshot.results[0].status, RoomStatus::CountOnly);
         assert!(snapshot.results[0].error.is_some());
         let result = snapshot.results[0].result.as_ref().unwrap();
         assert_eq!(result.remaining, 2);
@@ -464,11 +464,11 @@ async fn a_late_valid_layout_from_an_old_job_cannot_populate_a_new_loading_gener
     old.cancel.store(false, Ordering::Release);
     assert!(h
         .controller
-        .publish(&old, &h.store, result("5", "ready", data, None))
+        .publish(&old, &h.store, result("5", RoomStatus::Ready, data, None))
         .is_err());
     let snapshot = h.snapshot();
     assert!(snapshot.job_id.unwrap() > old.id);
-    assert_eq!(snapshot.results[0].status, "loading");
+    assert_eq!(snapshot.results[0].status, RoomStatus::Loading);
     assert!(snapshot.results[0].result.is_none());
     h.controller.cancel();
     h.wait().await;
@@ -511,7 +511,7 @@ async fn common_is_fetched_once_and_each_selected_room_has_one_detail_request() 
     assert!(snapshot
         .results
         .iter()
-        .all(|room| room.status == "ready" && room.error.is_none()));
+        .all(|room| room.status == RoomStatus::Ready && room.error.is_none()));
     assert_eq!(
         snapshot.results[0].result.as_ref().unwrap().seat_numbers,
         Some(vec![3])
@@ -541,10 +541,10 @@ async fn malformed_common_room_fails_only_that_room_and_skips_its_detail() {
     h.wait().await;
     fake.exhausted();
     let snapshot = h.snapshot();
-    assert_eq!(snapshot.results[0].status, "failed");
+    assert_eq!(snapshot.results[0].status, RoomStatus::Failed);
     assert!(snapshot.results[0].result.is_none());
     assert!(snapshot.results[0].error.is_some());
-    assert_eq!(snapshot.results[1].status, "ready");
+    assert_eq!(snapshot.results[1].status, RoomStatus::Ready);
     assert_eq!(fake.requests().len(), 3);
 }
 
@@ -568,7 +568,7 @@ async fn malformed_detail_and_older_detail_keep_only_verified_common_counts() {
     h.wait().await;
     fake.exhausted();
     for room in h.snapshot().results {
-        assert_eq!(room.status, "count_only");
+        assert_eq!(room.status, RoomStatus::CountOnly);
         let result = room.result.unwrap();
         assert_eq!(result.remaining, 2);
         assert_eq!(result.seat_numbers, None);
@@ -603,9 +603,9 @@ async fn detail_network_failure_is_count_only_and_next_room_still_completes() {
         h.wait().await;
         fake.exhausted();
         let snapshot = h.snapshot();
-        assert_eq!(snapshot.results[0].status, "count_only", "{error}");
+        assert_eq!(snapshot.results[0].status, RoomStatus::CountOnly, "{error}");
         assert_eq!(snapshot.results[0].error.as_deref(), Some(error.as_str()));
-        assert_eq!(snapshot.results[1].status, "ready");
+        assert_eq!(snapshot.results[1].status, RoomStatus::Ready);
     }
 }
 
@@ -632,9 +632,9 @@ async fn access_denials_fail_the_room_without_fallback_or_retry() {
         h.wait().await;
         fake.exhausted();
         let snapshot = h.snapshot();
-        assert_eq!(snapshot.results[0].status, "failed");
+        assert_eq!(snapshot.results[0].status, RoomStatus::Failed);
         assert!(snapshot.results[0].result.is_none());
-        assert_eq!(snapshot.results[1].status, "ready");
+        assert_eq!(snapshot.results[1].status, RoomStatus::Ready);
         assert_eq!(fake.requests().len(), 4);
     }
 }
@@ -660,7 +660,7 @@ async fn rate_limit_fails_pending_rooms_and_stops_without_retrying() {
         .snapshot()
         .results
         .iter()
-        .all(|room| room.status == "failed"
+        .all(|room| room.status == RoomStatus::Failed
             && room.result.is_none()
             && room.error.as_deref()
                 == Some("학교 서버가 요청을 제한했습니다. 잠시 후 지금 확인을 다시 눌러 주세요.")));
@@ -702,7 +702,7 @@ async fn new_cycle_clears_old_numbers_and_global_failure_clears_all_targets() {
         .snapshot()
         .results
         .iter()
-        .all(|room| room.status == "loading" && room.result.is_none()));
+        .all(|room| room.status == RoomStatus::Loading && room.result.is_none()));
     block.entered().await;
     block.release.add_permits(1);
     h.wait().await;
@@ -711,7 +711,7 @@ async fn new_cycle_clears_old_numbers_and_global_failure_clears_all_targets() {
         .snapshot()
         .results
         .iter()
-        .all(|room| room.status == "failed"
+        .all(|room| room.status == RoomStatus::Failed
             && room.result.is_none()
             && room.error.is_some()
             && room.checked_at.is_some()));
@@ -735,7 +735,7 @@ async fn common_access_failure_has_no_detail_requests() {
         .snapshot()
         .results
         .iter()
-        .all(|room| room.status == "failed" && room.result.is_none()));
+        .all(|room| room.status == RoomStatus::Failed && room.result.is_none()));
     assert_eq!(fake.requests(), ["/robots.txt", COMMON]);
 }
 
@@ -775,9 +775,12 @@ async fn view_changes_and_profile_reopen_do_not_fetch_or_restore_live_results() 
         .unwrap();
     assert!(!fresh.running);
     assert!(fresh.job_id.is_none());
-    assert!(fresh.results.iter().all(|room| room.status == "not_checked"
-        && room.result.is_none()
-        && room.checked_at.is_none()));
+    assert!(fresh
+        .results
+        .iter()
+        .all(|room| room.status == RoomStatus::NotChecked
+            && room.result.is_none()
+            && room.checked_at.is_none()));
     assert_eq!(fake.requests(), before);
 }
 
@@ -808,7 +811,7 @@ async fn cancellation_drops_blocked_fetch_and_releases_maintenance_lease_before_
         .snapshot()
         .results
         .iter()
-        .all(|room| room.status == "cancelled" && room.result.is_none()));
+        .all(|room| room.status == RoomStatus::Cancelled && room.result.is_none()));
     // A zero-timeout poll must acquire immediately after wait() returns.
     let guard = tokio::time::timeout(Duration::ZERO, maintenance)
         .await
@@ -838,18 +841,18 @@ async fn cancellation_preserves_completed_room_and_prevents_later_room_fetches()
     ]);
     h.start(fake.clone()).await;
     block.entered().await;
-    assert_eq!(h.snapshot().results[0].status, "ready");
+    assert_eq!(h.snapshot().results[0].status, RoomStatus::Ready);
     h.controller.cancel();
     h.wait().await;
     let snapshot = h.snapshot();
-    assert_eq!(snapshot.results[0].status, "ready");
+    assert_eq!(snapshot.results[0].status, RoomStatus::Ready);
     assert_eq!(
         snapshot.results[0].result.as_ref().unwrap().seat_numbers,
         Some(vec![4])
     );
     assert!(snapshot.results[1..]
         .iter()
-        .all(|room| room.status == "cancelled" && room.result.is_none()));
+        .all(|room| room.status == RoomStatus::Cancelled && room.result.is_none()));
     assert_eq!(fake.requests().len(), 4);
     fake.exhausted();
 }
@@ -899,7 +902,7 @@ async fn duplicate_start_is_rejected_and_old_cancel_cannot_cancel_a_new_job() {
     second_block.release.add_permits(1);
     h.wait().await;
     fake.exhausted();
-    assert_eq!(h.snapshot().results[0].status, "ready");
+    assert_eq!(h.snapshot().results[0].status, RoomStatus::Ready);
 }
 
 #[tokio::test]
@@ -924,9 +927,9 @@ async fn disabled_extension_rejects_late_publication_even_without_cancel_signal(
     block.release.add_permits(1);
     h.wait().await;
     assert!(h.snapshot().results[0].result.is_none());
-    assert_eq!(h.snapshot().results[0].status, "failed");
+    assert_eq!(h.snapshot().results[0].status, RoomStatus::Failed);
     h.controller.clear();
-    assert_eq!(h.snapshot().results[0].status, "not_checked");
+    assert_eq!(h.snapshot().results[0].status, RoomStatus::NotChecked);
     assert_eq!(
         h.store.lock().unwrap().studium_preferences().unwrap(),
         h.preferences
@@ -954,7 +957,7 @@ async fn disable_cancel_clear_cannot_be_undone_by_job_completion() {
     h.wait().await;
     let snapshot = h.snapshot();
     assert!(!snapshot.running);
-    assert_eq!(snapshot.results[0].status, "not_checked");
+    assert_eq!(snapshot.results[0].status, RoomStatus::NotChecked);
     assert!(snapshot.results[0].result.is_none());
     assert!(block.dropped.load(Ordering::Acquire));
 }
@@ -985,7 +988,7 @@ async fn an_old_job_cannot_publish_into_the_next_jobs_results() {
         .controller
         .publish(&old, &h.store, failed("5", "stale task".into()))
         .is_err());
-    assert_eq!(h.snapshot().results[0].status, "loading");
+    assert_eq!(h.snapshot().results[0].status, RoomStatus::Loading);
     assert!(h.snapshot().results[0].error.is_none());
     h.controller.cancel();
     h.wait().await;
@@ -1031,7 +1034,7 @@ async fn a_captured_completion_joins_its_generation_after_a_new_job_starts() {
     let snapshot = h.snapshot();
     assert_eq!(snapshot.job_id, Some(current_id));
     assert!(snapshot.running);
-    assert_eq!(snapshot.results[0].status, "loading");
+    assert_eq!(snapshot.results[0].status, RoomStatus::Loading);
     assert!(!second.dropped.load(Ordering::Acquire));
     h.controller.cancel();
     h.wait().await;

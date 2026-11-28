@@ -1,6 +1,9 @@
 //! Native views share the controller's memory. No display operation fetches
 //! school pages, enables automatic checks or persists seat results.
-use super::{controller::Controller, model::Snapshot};
+use super::{
+    controller::Controller,
+    model::{RoomStatus, Snapshot},
+};
 use crate::{
     archive::sync::SharedStore, operation_gate::AdmissionGate, storage::studium::MiniGeometry,
     AppState,
@@ -725,8 +728,10 @@ fn summary_rows(snapshot: &Snapshot, now: i64, clock_format: &str) -> Vec<String
             let room = snapshot.rooms.iter().find(|room| room.id == id)?;
             let value = snapshot.results.iter().find(|value| &value.room_id == id);
             let status = match value {
-                Some(value) if value.status == "loading" => "확인 중".into(),
-                Some(value) if matches!(value.status.as_str(), "ready" | "count_only") => {
+                Some(value) if value.status == RoomStatus::Loading => "확인 중".into(),
+                Some(value)
+                    if matches!(value.status, RoomStatus::Ready | RoomStatus::CountOnly) =>
+                {
                     match &value.result {
                         Some(data) => {
                             let source =
@@ -761,7 +766,7 @@ fn summary_rows(snapshot: &Snapshot, now: i64, clock_format: &str) -> Vec<String
                                 if stale { "오래됨 · " } else { "" },
                                 data.remaining,
                                 time,
-                                if value.status == "count_only" {
+                                if value.status == RoomStatus::CountOnly {
                                     " · 번호 미확인"
                                 } else {
                                     ""
@@ -771,8 +776,8 @@ fn summary_rows(snapshot: &Snapshot, now: i64, clock_format: &str) -> Vec<String
                         None => "미조회".into(),
                     }
                 }
-                Some(value) if value.status == "failed" => "조회 실패".into(),
-                Some(value) if value.status == "cancelled" => "취소됨".into(),
+                Some(value) if value.status == RoomStatus::Failed => "조회 실패".into(),
+                Some(value) if value.status == RoomStatus::Cancelled => "취소됨".into(),
                 _ => "미조회".into(),
             };
             Some(format!("{} · {status}", room.label))

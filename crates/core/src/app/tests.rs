@@ -338,6 +338,151 @@ async fn the_menu_opens_only_while_its_extension_is_on() {
     app.shutdown().await;
 }
 
+// `start` and `automatic_start` are never called here: they use the real seat
+// client, so a regression in their admission would send a school request from a
+// test. `studium::jobs::tests` covers their refusals with a fake transport.
+#[tokio::test]
+async fn studium_opens_only_while_its_extension_is_on_and_keeps_its_settings() {
+    use crate::studium::model::AlertRuleInput;
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+    let views = Arc::new(Views::default());
+    let _ = app.views.set(views.clone());
+    // In catalog order, as the store returns them.
+    let rooms = ["19".to_string(), "5".to_string()];
+    let rule = AlertRuleInput {
+        enabled: true,
+        kind: "remaining".into(),
+        minimum: 3,
+    };
+    let off = |error: String| assert!(error.contains("확장 기능"), "{error}");
+
+    // Everything off: the page's read and every settings write are closed.
+    off(app.studium().snapshot().await.unwrap_err());
+    off(app.studium_mini().snapshot().await.unwrap_err());
+    off(app
+        .studium()
+        .save_preferences(&rooms, "19")
+        .await
+        .unwrap_err());
+    off(app.studium().set_view_room("5").await.unwrap_err());
+    off(app.studium().save_interval(5).await.unwrap_err());
+    off(app
+        .studium()
+        .save_favorites("5", &[3, 1])
+        .await
+        .unwrap_err());
+    off(app.studium().save_alert("5", &rule).await.unwrap_err());
+    assert_eq!(count(&views.refreshes), 0);
+    assert_eq!(app.studium().notification_activation().await.unwrap(), None);
+
+    app.settings().set_extension(STUDIUM, true).await.unwrap();
+    let fresh = app.studium().snapshot().await.unwrap();
+    assert!(!fresh.running && fresh.job_id.is_none() && !fresh.automatic.active);
+    let before = count(&views.refreshes);
+
+    let saved = app.studium().save_preferences(&rooms, "19").await.unwrap();
+    assert_eq!(saved.preferences.room_ids, rooms);
+    assert_eq!(saved.preferences.view_room, "19");
+    let saved = app.studium().set_view_room("5").await.unwrap();
+    assert_eq!(saved.preferences.view_room, "5");
+    let saved = app.studium().save_interval(5).await.unwrap();
+    assert_eq!(saved.automatic.interval_minutes, 5);
+    let saved = app.studium().save_favorites("5", &[3, 1]).await.unwrap();
+    assert_eq!(saved.favorites["5"], [1, 3]);
+    let saved = app.studium().save_alert("5", &rule).await.unwrap();
+    assert!(saved.alert_rules["5"].enabled && saved.alert_rules["5"].minimum == 3);
+    // Each save asks the shell's views to redraw, and none starts a check.
+    assert_eq!(count(&views.refreshes), before + 5);
+    assert!(!saved.running && saved.job_id.is_none() && !saved.automatic.active);
+
+    // The mini window's handle reads the same state and may switch the room.
+    let foundation = app.studium_mini().app_snapshot().await.unwrap();
+    assert!(foundation
+        .extensions
+        .iter()
+        .any(|e| e.id == STUDIUM && e.enabled));
+    let mini = app.studium_mini().set_view_room("19").await.unwrap();
+    assert_eq!(mini.preferences.view_room, "19");
+    assert_eq!(
+        app.studium_mini()
+            .snapshot()
+            .await
+            .unwrap()
+            .preferences
+            .view_room,
+        "19"
+    );
+
+    // Off keeps every setting; a reopen keeps them too.
+    app.settings().set_extension(STUDIUM, false).await.unwrap();
+    off(app.studium().snapshot().await.unwrap_err());
+    app.settings().set_extension(STUDIUM, true).await.unwrap();
+    app.shutdown().await;
+    drop(app);
+    let app = open(directory.path()).unwrap();
+    let kept = app.studium().snapshot().await.unwrap();
+    assert_eq!(kept.preferences.room_ids, rooms);
+    assert_eq!(kept.preferences.view_room, "19");
+    assert_eq!(kept.automatic.interval_minutes, 5);
+    assert_eq!(kept.favorites["5"], [1, 3]);
+    assert!(kept.alert_rules["5"].enabled);
+    assert!(!kept.running && !kept.automatic.active);
+    app.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_running_seat_check_refuses_new_targets_and_is_cancelled_by_its_id() {
+    use crate::studium::{
+        jobs::{start_with_transport, tests::BlockedTransport},
+        model::RoomStatus,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+    app.settings().set_extension(STUDIUM, true).await.unwrap();
+    // The handle's own `start` uses the real seat client; the same admission
+    // with a transport that never answers keeps the check in flight.
+    let transport = BlockedTransport::new();
+    let started = start_with_transport(
+        &app.studium,
+        &app.operation_gate,
+        &app.maintenance_shutdown,
+        &app.store,
+        transport.clone(),
+    )
+    .await
+    .unwrap();
+    transport.entered().await;
+    let job = started.job_id.unwrap();
+
+    let running = app.studium().snapshot().await.unwrap();
+    assert!(running.running && running.job_id == Some(job));
+    assert!(running
+        .results
+        .iter()
+        .all(|room| room.status == RoomStatus::Loading));
+    let refused = app.studium().save_preferences(&["19".into()], "19").await;
+    assert!(refused.unwrap_err().contains("좌석 확인 중"));
+    // Favorites may change during a check; the check keeps its generation.
+    let saved = app.studium().save_favorites("5", &[7]).await.unwrap();
+    assert!(saved.running && saved.job_id == Some(job));
+
+    // Another id cancels nothing.
+    assert!(app.studium().cancel(job + 1).await.unwrap().running);
+    app.studium().cancel(job).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), app.studium.wait())
+        .await
+        .expect("the cancelled check never ended");
+    let ended = app.studium().snapshot().await.unwrap();
+    assert!(!ended.running);
+    assert!(ended
+        .results
+        .iter()
+        .all(|room| room.status == RoomStatus::Cancelled && room.result.is_none()));
+    assert_eq!(transport.requests(), 1);
+    app.shutdown().await;
+}
+
 /// The core is the all-off state: nothing an extension owns is on or running.
 /// The classifier loop, scheduler and Studium receiver start idle, so only
 /// their effective settings and the absence of work and processes are asserted.

@@ -2,7 +2,7 @@
 //! operating-system tray evidence. No application window or transport exists.
 use super::*;
 use crate::studium::{
-    model::{AutomaticStatus, Preferences, RoomState, SeatData},
+    model::{AutomaticStatus, Preferences, RoomState, RoomStatus, SeatData},
     parser, rooms,
 };
 use std::{
@@ -212,13 +212,13 @@ fn failed_creation_rolls_back_only_its_current_uncreated_generation() {
 fn fixture() -> Snapshot {
     let catalog = rooms::all();
     let statuses = [
-        "ready",
-        "ready",
-        "count_only",
-        "failed",
-        "loading",
-        "not_checked",
-        "cancelled",
+        RoomStatus::Ready,
+        RoomStatus::Ready,
+        RoomStatus::CountOnly,
+        RoomStatus::Failed,
+        RoomStatus::Loading,
+        RoomStatus::NotChecked,
+        RoomStatus::Cancelled,
     ];
     Snapshot {
         preferences: Preferences {
@@ -230,22 +230,24 @@ fn fixture() -> Snapshot {
             .zip(statuses)
             .map(|(room, status)| RoomState {
                 room_id: room.id.into(),
-                status: status.into(),
+                status,
                 error: None,
                 checked_at: Some("2026-11-09T15:00:01Z".into()),
-                result: matches!(status, "ready" | "count_only").then(|| SeatData {
-                    total: room.capacity,
-                    used: room.capacity,
-                    remaining: 0,
-                    source_time: "2026-11-09T15:00:00Z".into(),
-                    seat_numbers: (status == "ready").then(Vec::new),
-                    source_url: if status == "ready" {
-                        room.url()
-                    } else {
-                        rooms::STATUS_URL.into()
-                    },
-                    layout: None,
-                    layout_error: None,
+                result: matches!(status, RoomStatus::Ready | RoomStatus::CountOnly).then(|| {
+                    SeatData {
+                        total: room.capacity,
+                        used: room.capacity,
+                        remaining: 0,
+                        source_time: "2026-11-09T15:00:00Z".into(),
+                        seat_numbers: (status == RoomStatus::Ready).then(Vec::new),
+                        source_url: if status == RoomStatus::Ready {
+                            room.url()
+                        } else {
+                            rooms::STATUS_URL.into()
+                        },
+                        layout: None,
+                        layout_error: None,
+                    }
                 }),
             })
             .collect(),

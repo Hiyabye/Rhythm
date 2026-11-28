@@ -135,3 +135,6 @@ pub async fn finish_disable(
     }
     Ok(())
 }
+
+#[cfg(test)]
+pub(crate) mod tests;

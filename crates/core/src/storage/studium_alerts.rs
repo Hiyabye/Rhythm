@@ -4,7 +4,7 @@ use super::{proactive, Store};
 use crate::{
     extensions,
     studium::{
-        model::{AlertCandidate, AlertRule, AlertRuleInput, RoomState, SeatData},
+        model::{AlertCandidate, AlertRule, AlertRuleInput, RoomState, RoomStatus, SeatData},
         parser, rooms,
     },
 };
@@ -165,7 +165,7 @@ impl Store {
         state: &RoomState,
     ) -> Result<Option<AlertCandidate>, String> {
         if job_id == 0
-            || !matches!(state.status.as_str(), "ready" | "count_only")
+            || !matches!(state.status, RoomStatus::Ready | RoomStatus::CountOnly)
             || !self.enabled(extensions::STUDIUM)?
         {
             return Ok(None);
@@ -177,7 +177,7 @@ impl Store {
         else {
             return Ok(None);
         };
-        if (state.status == "ready") != data.seat_numbers.is_some() {
+        if (state.status == RoomStatus::Ready) != data.seat_numbers.is_some() {
             return Ok(None);
         }
         let (rule, armed) = read_rule(&self.connection, &state.room_id)?;
@@ -189,7 +189,7 @@ impl Store {
         {
             return Ok(None);
         }
-        if rule.kind == "preferred" && state.status == "count_only" {
+        if rule.kind == "preferred" && state.status == RoomStatus::CountOnly {
             return Ok(None);
         }
         match self.alert_condition(&state.room_id, &rule, data)? {

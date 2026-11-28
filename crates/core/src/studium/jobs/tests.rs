@@ -1,25 +1,17 @@
-//! Exercises the exact command/lifecycle helpers with an isolated Store and a
-//! transport blocked inside fetch. No Tauri window, OS sender or school request.
+//! Exercises the admission and lifecycle helpers with an isolated Store and a
+//! transport blocked inside fetch. No window, OS sender or school request.
 use super::*;
 use crate::{
-    archive::{
-        network::{Access, Fetch, FetchError},
-        sync::{SharedStore, Transport},
-    },
-    commands::change_extension,
+    archive::network::{Access, Fetch, FetchError},
     extensions::{Registry, STUDIUM},
-    operation_gate::AdmissionGate,
-    studium::{
-        controller::Controller,
-        jobs::{cancel_at_boundary, finish_disable, register, reserve_maintenance},
-    },
+    studium::model::RoomStatus,
 };
 use std::{
     future::{pending, Future},
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
     },
     task::Poll,
     time::Duration,
@@ -27,8 +19,10 @@ use std::{
 use tokio::sync::Semaphore;
 use url::Url;
 
+/// A seat transport that counts its requests and never answers, so a check
+/// stays in flight until its owner drops the request.
 #[derive(Clone)]
-struct BlockedTransport(Arc<FetchState>);
+pub(crate) struct BlockedTransport(Arc<FetchState>);
 
 struct FetchState {
     requests: AtomicUsize,
@@ -44,7 +38,7 @@ impl Drop for FetchGuard {
 }
 
 impl BlockedTransport {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self(Arc::new(FetchState {
             requests: AtomicUsize::new(0),
             dropped: AtomicUsize::new(0),
@@ -52,7 +46,7 @@ impl BlockedTransport {
         }))
     }
 
-    async fn entered(&self) {
+    pub(crate) async fn entered(&self) {
         tokio::time::timeout(Duration::from_secs(2), self.0.entered.acquire())
             .await
             .expect("command did not start its fetch")
@@ -60,9 +54,30 @@ impl BlockedTransport {
             .forget();
     }
 
-    fn requests(&self) -> usize {
+    pub(crate) fn requests(&self) -> usize {
         self.0.requests.load(Ordering::Acquire)
     }
+}
+
+fn change_extension(
+    registry: &Registry,
+    store: &SharedStore,
+    id: &str,
+    enabled: bool,
+) -> Result<Option<CompletionHandle>, String> {
+    registry
+        .change(store, id, enabled, || None::<()>)
+        .map(|changed| changed.studium)
+}
+
+fn save_favorites(
+    controller: &Controller,
+    store: &Store,
+    room_id: &str,
+    seat_numbers: &[u32],
+) -> Result<Snapshot, String> {
+    store.studium_save_favorites(room_id, seat_numbers)?;
+    snapshot_with_store(controller, store)
 }
 
 impl Transport for BlockedTransport {
@@ -105,12 +120,15 @@ async fn saving_favorites_during_a_check_preserves_its_generation_without_anothe
     transport.entered().await;
     {
         let store = h.store.lock().unwrap();
-        let saved = save_favorites_with_store(&h.controller, &store, "5", &[102, 1]).unwrap();
+        let saved = save_favorites(&h.controller, &store, "5", &[102, 1]).unwrap();
         assert_eq!(saved.favorites["5"], [1, 102]);
         assert_eq!(saved.job_id, started.job_id);
         assert!(saved.running);
-        assert!(saved.results.iter().all(|room| room.status == "loading"));
-        assert!(save_favorites_with_store(&h.controller, &store, "5", &[103]).is_err());
+        assert!(saved
+            .results
+            .iter()
+            .all(|room| room.status == RoomStatus::Loading));
+        assert!(save_favorites(&h.controller, &store, "5", &[103]).is_err());
         assert_eq!(
             snapshot_with_store(&h.controller, &store)
                 .unwrap()
@@ -264,7 +282,7 @@ async fn extension_disable_commits_joins_without_store_lock_and_clears_results()
         .snapshot()
         .results
         .iter()
-        .all(|r| r.status == "not_checked"));
+        .all(|r| r.status == RoomStatus::NotChecked));
 }
 
 #[tokio::test]
@@ -286,7 +304,10 @@ async fn delayed_disable_completion_does_not_clear_reenabled_generation() {
     let current = h.snapshot();
     assert!(current.running);
     assert_eq!(current.job_id, second.job_id);
-    assert!(current.results.iter().all(|r| r.status == "loading"));
+    assert!(current
+        .results
+        .iter()
+        .all(|r| r.status == RoomStatus::Loading));
     h.stop().await;
 }
 
@@ -309,7 +330,10 @@ async fn failed_extension_write_preserves_enabled_flag_and_running_result() {
     let after = h.snapshot();
     assert!(after.running);
     assert_eq!(after.job_id, before.job_id);
-    assert!(after.results.iter().all(|r| r.status == "loading"));
+    assert!(after
+        .results
+        .iter()
+        .all(|r| r.status == RoomStatus::Loading));
     assert_eq!(transport.0.dropped.load(Ordering::Acquire), 0);
     h.stop().await;
 }
