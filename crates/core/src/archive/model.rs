@@ -4,6 +4,70 @@ pub use rhythm_sources::model::{
     ArticleInput, ListingEntry, ResourceInput, SourceDefinition, SourceGroup,
 };
 
+/// What an archive job does. `archive_start` takes the first four.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncMode {
+    /// New notices since the last sync.
+    Incremental,
+    /// 새로고침: the same sync, started by the user.
+    Refresh,
+    /// Retries the skipped notices; leaves the source's status as it was.
+    Skipped,
+    /// Downloads the missing files of archived notices; leaves the source's
+    /// status as it was.
+    Resources,
+    /// One file's retry (`archive_retry_resource`), never a started job.
+    Resource,
+}
+
+impl SyncMode {
+    /// A retry, not a sync of the source: its status and counters stay.
+    pub fn is_retry(self) -> bool {
+        matches!(self, Self::Skipped | Self::Resources)
+    }
+}
+
+impl std::str::FromStr for SyncMode {
+    type Err = String;
+    /// The modes a job can start with.
+    fn from_str(value: &str) -> Result<Self, String> {
+        match value {
+            "incremental" => Ok(Self::Incremental),
+            "refresh" => Ok(Self::Refresh),
+            "skipped" => Ok(Self::Skipped),
+            "resources" => Ok(Self::Resources),
+            _ => Err("동기화 방식을 확인해 주세요.".into()),
+        }
+    }
+}
+
+/// How a source's last sync stands, stored in `sources.status`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceStatus {
+    Idle,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    /// Was running when the last process ended (`Store::open` recovery).
+    Interrupted,
+    /// Stopped at a safety limit; only the retired app crawler wrote it, so
+    /// only upgraded profiles hold it.
+    Limited,
+}
+
+crate::storage::sql_text_enum!(SourceStatus {
+    Idle => "idle",
+    Running => "running",
+    Completed => "completed",
+    Failed => "failed",
+    Cancelled => "cancelled",
+    Interrupted => "interrupted",
+    Limited => "limited",
+});
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourceInfo {
     #[serde(flatten)]
@@ -19,7 +83,7 @@ pub struct SourceInfo {
     pub last_error: Option<String>,
     pub next_page: u32,
     pub history_complete: bool,
-    pub status: String,
+    pub status: SourceStatus,
     pub discovered: u64,
     pub archived: u64,
     pub failed: u64,
@@ -205,7 +269,8 @@ pub struct ArchiveSummary {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SyncStatus {
     pub running: bool,
-    pub mode: String,
+    /// The running or last job's mode; `None` before the first.
+    pub mode: Option<SyncMode>,
     pub message: String,
     /// The source collecting now, if any.
     pub active: Vec<ActiveSource>,
@@ -218,7 +283,7 @@ pub struct SubscribeResult {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActiveSource {
     pub source_id: String,
-    pub mode: String,
+    pub mode: SyncMode,
     pub page: u32,
     pub message: String,
 }

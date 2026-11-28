@@ -806,7 +806,7 @@ async fn scheduled_controller_collects_cybercampus_and_runs_again() {
             directory.path().to_path_buf(),
             transport.clone(),
             Some(vec!["cybercampus".into()]),
-            "incremental".into(),
+            crate::archive::model::SyncMode::Incremental,
         )
         .unwrap();
     controller.wait().await;
@@ -816,7 +816,7 @@ async fn scheduled_controller_collects_cybercampus_and_runs_again() {
             directory.path().to_path_buf(),
             transport.clone(),
             Some(vec!["cybercampus".into()]),
-            "incremental".into(),
+            crate::archive::model::SyncMode::Incremental,
         )
         .unwrap();
     let preserved = scheduler::cancel_or_take_scheduled_outcome(&controller, completed_job)

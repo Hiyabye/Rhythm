@@ -15,6 +15,38 @@ macro_rules! source_label {
     };
 }
 
+/// A Rust enum stored as one of its `TEXT` names; `as_str` gives the name.
+macro_rules! sql_text_enum {
+    ($name:ident { $($variant:ident => $value:literal),+ $(,)? }) => {
+        impl $name {
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $value),+
+                }
+            }
+            fn from_db(value: &str) -> Option<Self> {
+                match value {
+                    $($value => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+        }
+        impl rusqlite::types::FromSql for $name {
+            fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+                Self::from_db(value.as_str()?).ok_or(rusqlite::types::FromSqlError::InvalidType)
+            }
+        }
+        impl rusqlite::types::ToSql for $name {
+            fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+                Ok(rusqlite::types::ToSqlOutput::Borrowed(rusqlite::types::ValueRef::Text(
+                    self.as_str().as_bytes(),
+                )))
+            }
+        }
+    };
+}
+pub(crate) use sql_text_enum;
+
 mod archive;
 pub mod calendar;
 pub mod cybercampus;
