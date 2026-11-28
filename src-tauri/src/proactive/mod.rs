@@ -50,17 +50,5 @@ pub async fn proactive_clear_history(
     snapshot(&store, state.proactive.take_activation()?)
 }
 
-/// One-shot fallback for a reminder click received before the UI subscribed to
-/// `calendar://reminder-clicked`: the todo's day while the calendar is still on.
-#[tauri::command]
-pub async fn calendar_reminder_activation(
-    state: State<'_, AppState>,
-) -> Result<Option<String>, String> {
-    let _lease = state.operation_gate.shared().await?;
-    let store = scheduler::lock_store(&state.store)?;
-    let day = state.proactive.take_reminder_activation()?;
-    Ok(day.filter(|_| store.enabled(crate::extensions::CALENDAR).unwrap_or(false)))
-}
-
 #[cfg(all(test, windows))]
 mod native_validation;

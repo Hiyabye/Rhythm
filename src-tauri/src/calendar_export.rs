@@ -7,6 +7,8 @@ pub async fn calendar_export(
     state: tauri::State<'_, AppState>,
     destination: String,
 ) -> Result<CalendarExport, String> {
-    let _lease = state.operation_gate.shared().await?;
-    rhythm_core::calendar_export::export(&state.store, std::path::Path::new(&destination)).await
+    state
+        .calendar()
+        .export(std::path::Path::new(&destination))
+        .await
 }

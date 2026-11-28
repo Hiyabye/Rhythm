@@ -207,8 +207,9 @@ const COLUMNS: &str = "id,title,day,time,memo,done,
 const NOT_FOUND: &str = "할 일을 찾을 수 없습니다. 이미 삭제되었을 수 있습니다.";
 
 impl Store {
-    /// With the 캘린더 extension off its todos are kept but cannot change.
-    fn calendar_writable(&self) -> Result<(), String> {
+    /// Refuses while the 캘린더 extension is off: its todos are kept, but they
+    /// cannot change and its page's reads and switches are closed.
+    pub(crate) fn calendar_on(&self) -> Result<(), String> {
         if self.enabled(crate::extensions::CALENDAR)? {
             Ok(())
         } else {
@@ -266,7 +267,7 @@ impl Store {
             .ok_or_else(|| NOT_FOUND.into())
     }
     pub fn calendar_create_todo(&self, input: &TodoInput) -> Result<CalendarTodo, String> {
-        self.calendar_writable()?;
+        self.calendar_on()?;
         let (title, time, memo) = validated(input)?;
         let count: i64 = self
             .connection
@@ -314,7 +315,7 @@ impl Store {
         self.calendar_todo(self.connection.last_insert_rowid())
     }
     pub fn calendar_update_todo(&self, id: i64, input: &TodoInput) -> Result<CalendarTodo, String> {
-        self.calendar_writable()?;
+        self.calendar_on()?;
         let (title, time, memo) = validated(input)?;
         let changed = self
             .connection
@@ -332,7 +333,7 @@ impl Store {
         self.calendar_todo(id)
     }
     pub fn calendar_set_todo_done(&self, id: i64, done: bool) -> Result<CalendarTodo, String> {
-        self.calendar_writable()?;
+        self.calendar_on()?;
         let changed = self
             .connection
             .execute(
@@ -504,7 +505,7 @@ impl Store {
     }
     /// Deleting a todo that is already gone succeeds, so a repeated click is harmless.
     pub fn calendar_delete_todo(&self, id: i64) -> Result<(), String> {
-        self.calendar_writable()?;
+        self.calendar_on()?;
         self.connection
             .execute("DELETE FROM calendar_todos WHERE id=?1", [id])
             .map_err(|e| e.to_string())?;

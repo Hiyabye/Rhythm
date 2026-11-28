@@ -1,7 +1,6 @@
-//! Tauri commands for settings, onboarding, lifecycle preferences, extensions and
-//! the calendar. Startup and shared state stay in `main.rs`.
+//! Tauri commands for settings, onboarding, lifecycle preferences, extensions,
+//! the calendar and the menu. Startup and shared state stay in `main.rs`.
 use crate::{
-    archive::sync::with_store as locked,
     core, extensions,
     storage::{
         calendar::{CalendarTodo, TodoInput},
@@ -178,66 +177,47 @@ pub async fn calendar_todos(
     from: String,
     to: String,
 ) -> Result<Vec<CalendarTodo>, String> {
-    let _lease = state.operation_gate.shared().await?;
-    locked(&state.store, |s| s.calendar_todos(&from, &to))
+    state.calendar().todos(&from, &to).await
 }
-/// Dates found in notice text for the calendar range: saved notices' dates, plus
-/// every notice's deadlines when the user turned that on.
 #[tauri::command]
 pub async fn calendar_notice_dates(
     state: tauri::State<'_, AppState>,
     from: String,
     to: String,
 ) -> Result<CalendarNoticeDates, String> {
-    let _lease = state.operation_gate.shared().await?;
-    locked(&state.store, |s| s.calendar_notice_dates(&from, &to))
+    state.calendar().notice_dates(&from, &to).await
 }
 #[tauri::command]
 pub async fn calendar_set_all_deadlines(
     state: tauri::State<'_, AppState>,
     enabled: bool,
 ) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
-    locked(&state.store, |s| s.set_calendar_all_deadlines(enabled))
+    state.calendar().set_all_deadlines(enabled).await
 }
-/// Shows or hides the academic calendar (학사 일정) layer (#319).
 #[tauri::command]
 pub async fn calendar_set_academic(
     state: tauri::State<'_, AppState>,
     enabled: bool,
 ) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
-    locked(&state.store, |s| s.set_calendar_academic(enabled))
+    state.calendar().set_academic(enabled).await
 }
-/// The dormitory menu's current and next week for the 식단 page (#318).
-/// Menu weeks come only from the feed; this starts no network work.
 #[tauri::command]
 pub async fn meal_weeks(state: tauri::State<'_, AppState>) -> Result<Meals, String> {
-    let _lease = state.operation_gate.shared().await?;
-    if !locked(&state.store, |s| s.enabled(extensions::MEALS))? {
-        return Err("식단 확장 기능이 꺼져 있습니다.".into());
-    }
-    // Menu weeks are Korean dates; the page opens on today there.
-    let today = (chrono::Utc::now() + chrono::Duration::hours(9))
-        .format("%Y-%m-%d")
-        .to_string();
-    locked(&state.store, |s| s.meal_weeks(&today))
+    state.meals().weeks().await
 }
 #[tauri::command]
 pub async fn notice_dates(
     state: tauri::State<'_, AppState>,
     document_id: i64,
 ) -> Result<Vec<NoticeDate>, String> {
-    let _lease = state.operation_gate.shared().await?;
-    locked(&state.store, |s| s.notice_dates(document_id))
+    state.archive().document_dates(document_id).await
 }
 #[tauri::command]
 pub async fn calendar_create_todo(
     state: tauri::State<'_, AppState>,
     todo: TodoInput,
 ) -> Result<CalendarTodo, String> {
-    let _lease = state.operation_gate.shared().await?;
-    locked(&state.store, |s| s.calendar_create_todo(&todo))
+    state.calendar().create_todo(&todo).await
 }
 #[tauri::command]
 pub async fn calendar_update_todo(
@@ -245,8 +225,7 @@ pub async fn calendar_update_todo(
     id: i64,
     todo: TodoInput,
 ) -> Result<CalendarTodo, String> {
-    let _lease = state.operation_gate.shared().await?;
-    locked(&state.store, |s| s.calendar_update_todo(id, &todo))
+    state.calendar().update_todo(id, &todo).await
 }
 #[tauri::command]
 pub async fn calendar_set_todo_done(
@@ -254,14 +233,18 @@ pub async fn calendar_set_todo_done(
     id: i64,
     done: bool,
 ) -> Result<CalendarTodo, String> {
-    let _lease = state.operation_gate.shared().await?;
-    locked(&state.store, |s| s.calendar_set_todo_done(id, done))
+    state.calendar().set_todo_done(id, done).await
 }
 #[tauri::command]
 pub async fn calendar_delete_todo(
     state: tauri::State<'_, AppState>,
     id: i64,
 ) -> Result<(), String> {
-    let _lease = state.operation_gate.shared().await?;
-    locked(&state.store, |s| s.calendar_delete_todo(id))
+    state.calendar().delete_todo(id).await
+}
+#[tauri::command]
+pub async fn calendar_reminder_activation(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    state.calendar().reminder_activation().await
 }

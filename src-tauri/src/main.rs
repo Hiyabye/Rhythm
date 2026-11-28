@@ -443,7 +443,7 @@ fn main() {
             commands::calendar_set_todo_done,
             commands::calendar_delete_todo,
             calendar_export::calendar_export,
-            proactive::calendar_reminder_activation,
+            commands::calendar_reminder_activation,
             intelligence::commands::ai_snapshot,
             intelligence::commands::ai_choose_model_directory,
             intelligence::commands::ai_reset_model_directory,
