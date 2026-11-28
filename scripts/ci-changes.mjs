@@ -15,7 +15,7 @@ const rules = {
     /^src-tauri\/tauri[^/]*\.conf\.json$/, /^assets\/licenses\//,
     // tests/ui/interest-picker.spec.ts reads the sensitive-topic markers.
     /^crates\/core\/src\/storage\/personalization\/topics\.rs$/],
-  rust: [/^src-tauri\//, /^crates\//, /^Cargo\.(toml|lock)$/, /^\.cargo\//, /^rust-toolchain/,
+  rust: [/^src-tauri\//, /^crates\//, /^apps\//, /^Cargo\.(toml|lock)$/, /^\.cargo\//, /^rust-toolchain/,
     /^(rustfmt|clippy)\.toml$/,
     // Windows CI runs these PowerShell scripts before its Rust tests.
     /^scripts\/[^/]+\.ps1$/,

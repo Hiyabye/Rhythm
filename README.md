@@ -37,7 +37,7 @@ macOS(Apple Silicon)와 Windows 11 x64를 지원합니다. [Releases](https://gi
 
 ## 소스에서 빌드
 
-Node.js 22.12+, Rust 1.90+, [Tauri 사전 준비](https://v2.tauri.app/start/prerequisites/)가 필요합니다.
+Node.js 22.12+, Rust 1.98+, [Tauri 사전 준비](https://v2.tauri.app/start/prerequisites/)가 필요합니다.
 
 ```sh
 npm ci

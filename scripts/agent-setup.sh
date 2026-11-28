@@ -17,7 +17,7 @@ npm ci --no-audit --no-fund
 
 if command -v cargo >/dev/null; then
   minor=$(rustc --version | sed -E 's/^rustc 1\.([0-9]+).*/\1/')
-  if [ "$minor" -lt 90 ] && command -v rustup >/dev/null; then
+  if [ "$minor" -lt 98 ] && command -v rustup >/dev/null; then
     rustup toolchain install stable --profile minimal --component clippy,rustfmt
     rustup default stable
   fi
