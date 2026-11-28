@@ -68,7 +68,10 @@ export interface FixtureOptions {
   aiInstallError?: boolean;
   aiDelay?: number;
   revisions?: boolean;
+  // Delays `archive_query`; tests also set it on `__fixture.options` mid-run.
+  queryDelay?: number;
   initialInterests?: PersonalInterest[];
+  feedbackReadDelay?: number;
   feedbackWriteDelay?: number;
   profileSaveDelay?: number;
   interestSaveDelay?: number;
@@ -104,6 +107,8 @@ export interface FixtureOptions {
   updaterConfigured?: boolean;
   dialogError?: boolean;
   updaterCheckError?: string;
+  // `updater_check` finds nothing newer (the backend's `None`).
+  updaterUpToDate?: boolean;
   updaterInstallError?: boolean;
   updaterRestartError?: boolean;
   // Automatic update checks: whether a check already found 1.1.1 before the window subscribed.
@@ -405,6 +410,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
           case 'updater_configured': return options.updaterConfigured ?? false;
           case 'updater_check':
             if (options.updaterCheckError) throw options.updaterCheckError;
+            if (options.updaterUpToDate) return null;
             return { version: '1.1.1', currentVersion: '1.1.0', date: null, body: '안정 버전 업데이트' };
           case 'updater_auto_check':
             return { enabled: autoUpdateCheck, available: options.updaterConfigured && options.autoUpdateFound

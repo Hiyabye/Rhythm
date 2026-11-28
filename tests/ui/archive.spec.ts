@@ -94,7 +94,11 @@ test('initial query error is not presented as a successful empty archive and can
   await expect(page.getByRole('alert')).toContainText('로컬 검색을 완료하지 못했습니다');
   await expect(page.getByText('아직 보관된 공지가 없습니다', { exact: true })).toHaveCount(0);
   await page.evaluate(() => (window as any).__fixture.options.queryError = false);
+  const queries = await callCount(page, 'archive_query');
   await page.getByRole('button', { name: '다시 시도', exact: true }).click();
+  // The retry itself reloads, before any navigation would.
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(await callCount(page, 'archive_query')).toBeGreaterThan(queries);
   await navigate(page, '받은 소식');
   await expect(page.locator('.notice-list > li')).toHaveCount(2);
 });
@@ -105,11 +109,12 @@ test('saving an item admits only one pending write and announces feedback', asyn
   await navigate(page, '받은 소식');
   await page.evaluate(() => (window as any).__fixture.stateDelay = 400);
   const save = page.getByRole('button', { name: '한국어 공지 01 보관함에 저장', exact: true });
-  await save.click();
+  // Two clicks in one task: the second arrives before the button is disabled.
+  await save.evaluate((button: HTMLButtonElement) => { button.click(); button.click(); });
   await expect(save).toBeDisabled();
-  await expect.poll(() => callCount(page, 'archive_state')).toBe(1);
   await expect(page.getByRole('button', { name: '한국어 공지 01 저장 해제', exact: true })).not.toHaveAttribute('aria-pressed');
   await expect(page.locator('.archive-feedback')).toContainText('보관함에 저장했습니다');
+  expect(await callCount(page, 'archive_state')).toBe(1);
 });
 
 test('navigation, local searches, filters, safe highlighting and empty-result announcement', async ({ page }) => {

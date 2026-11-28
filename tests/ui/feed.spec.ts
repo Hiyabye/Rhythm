@@ -27,6 +27,21 @@ test('the board settings show the feed age and failing boards and sync on reques
   expect(await callCount(page, 'feed_sync')).toBe(1);
 });
 
+test('a sync that is refused reports why and leaves the button usable', async ({ page }) => {
+  await mockDesktop(page, { feedSyncError: '서강대학교 공지 기능이 꺼져 있습니다.' });
+  await page.goto('/');
+  await openSettings(page, '게시판');
+  const feed = page.getByRole('region', { name: '공지 피드', exact: true });
+  await expect(feed.getByRole('alert')).toHaveCount(0);
+  const sync = feed.getByRole('button', { name: '지금 받기', exact: true });
+  await sync.click();
+  await expect(feed.getByRole('alert')).toHaveText('서강대학교 공지 기능이 꺼져 있습니다.');
+  // The status is read again, so "받는 중" does not stay.
+  await expect(feed.getByRole('status')).toContainText('2026년 11월 18일');
+  await expect(sync).toBeEnabled();
+  expect(await callCount(page, 'feed_sync')).toBe(1);
+});
+
 test('an offline feed stays quiet in settings and explains itself in the list', async ({ page }) => {
   await mockDesktop(page, { feed: { result: 'offline', error: '공지 피드에 연결하지 못했습니다.', stale: true } });
   await page.goto('/');
