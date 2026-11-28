@@ -287,3 +287,36 @@ fn prefixes_are_plain_directories() {
         assert!(validate_prefix(prefix).is_err(), "{prefix}");
     }
 }
+
+/// A zstd frame of `size` zero bytes with the frame checksum, built in chunks
+/// so the test never holds the whole state in memory.
+fn zeros(size: u64) -> Vec<u8> {
+    let mut encoder = zstd::Encoder::new(Vec::new(), 1).unwrap();
+    encoder.include_checksum(true).unwrap();
+    io::copy(&mut io::repeat(0).take(size), &mut encoder).unwrap();
+    encoder.finish().unwrap()
+}
+
+#[tokio::test]
+async fn a_state_over_512_mib_downloads() {
+    // Production stopped on 2026-11-27 when the state passed 512 MiB.
+    let size = 512 * 1024 * 1024 + 1;
+    let bucket = Bucket::default();
+    bucket
+        .put("state/20251117T000000Z.sqlite3.zst", zeros(size))
+        .await
+        .unwrap();
+    let run = Run::new();
+    let path = run.path("large.sqlite3");
+    download(&bucket, PREFIX, &path, false).await.unwrap();
+    assert_eq!(fs::metadata(&path).unwrap().len(), size);
+}
+
+#[test]
+fn a_state_over_the_limit_is_refused() {
+    let mut out = Vec::new();
+    decompress_into(&zeros(100), &mut out, 100).unwrap();
+    assert_eq!(out.len(), 100);
+    let error = decompress_into(&zeros(101), &mut Vec::new(), 100).unwrap_err();
+    assert!(error.contains("too large"), "{error}");
+}

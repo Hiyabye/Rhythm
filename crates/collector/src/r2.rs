@@ -15,7 +15,7 @@ use url::Url;
 const REGION: &str = "auto";
 const SERVICE: &str = "s3";
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-/// The largest object the collector reads back, far above the ~100 MB state (#172).
+/// The largest object the collector reads back: the compressed state and feed files.
 pub const MAX_OBJECT: usize = 512 * 1024 * 1024;
 /// Every request is idempotent (PUT only writes new keys), so transient
 /// failures are retried.
