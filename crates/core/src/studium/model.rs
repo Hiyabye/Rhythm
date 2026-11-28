@@ -61,10 +61,24 @@ pub struct SeatData {
     pub layout_error: Option<String>,
 }
 
+/// Where one room's check stands. The UI reads these as snake_case strings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomStatus {
+    NotChecked,
+    Loading,
+    /// Counts and seat numbers from one consistent observation.
+    Ready,
+    /// Counts only: the seat numbers could not be validated.
+    CountOnly,
+    Failed,
+    Cancelled,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct RoomState {
     pub room_id: String,
-    pub status: String,
+    pub status: RoomStatus,
     pub result: Option<SeatData>,
     pub error: Option<String>,
     pub checked_at: Option<String>,
@@ -113,4 +127,25 @@ pub struct Snapshot {
     pub favorites: std::collections::BTreeMap<String, Vec<u32>>,
     pub alert_rules: std::collections::BTreeMap<String, AlertRule>,
     pub alert_error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RoomStatus;
+
+    // The UI compares these strings, so a renamed variant must not change them.
+    #[test]
+    fn room_status_keeps_its_wire_names() {
+        let names = [
+            (RoomStatus::NotChecked, "not_checked"),
+            (RoomStatus::Loading, "loading"),
+            (RoomStatus::Ready, "ready"),
+            (RoomStatus::CountOnly, "count_only"),
+            (RoomStatus::Failed, "failed"),
+            (RoomStatus::Cancelled, "cancelled"),
+        ];
+        for (status, name) in names {
+            assert_eq!(serde_json::to_value(status).unwrap(), name);
+        }
+    }
 }

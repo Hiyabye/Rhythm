@@ -29,7 +29,11 @@ fn observation(room_id: &str, remaining: u32, detail: bool) -> RoomState {
     let room = rooms::get(room_id).unwrap();
     RoomState {
         room_id: room_id.into(),
-        status: if detail { "ready" } else { "count_only" }.into(),
+        status: if detail {
+            RoomStatus::Ready
+        } else {
+            RoomStatus::CountOnly
+        },
         result: Some(SeatData {
             total: room.capacity,
             used: room.capacity - remaining,
@@ -119,7 +123,7 @@ fn uncertainty_does_not_rearm_and_successful_nonmatch_rearms_across_reopen() {
     assert!(store.studium_alert_reserve(&first, &token(1)).unwrap());
     assert!(!store.studium_alert_reserve(&first, &token(2)).unwrap());
     let mut failed = observation("5", 0, true);
-    failed.status = "failed".into();
+    failed.status = RoomStatus::Failed;
     failed.result = None;
     assert!(store.studium_alert_observe(2, &failed).unwrap().is_none());
     let mut old = observation("5", 0, true);
@@ -189,7 +193,7 @@ fn malformed_status_shape_and_stale_candidates_never_rearm_or_reserve() {
     let issued = candidate(&store, "5", 3);
     assert!(store.studium_alert_reserve(&issued, &token(1)).unwrap());
     let mut wrong_status = observation("5", 0, true);
-    wrong_status.status = "count_only".into();
+    wrong_status.status = RoomStatus::CountOnly;
     assert!(store
         .studium_alert_observe(2, &wrong_status)
         .unwrap()

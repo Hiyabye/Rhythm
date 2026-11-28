@@ -354,7 +354,7 @@ async fn starting_then_pausing_automatic_preserves_an_existing_manual_job() {
     block.release.add_permits(1);
     until(|| !h.snapshot().running).await;
     assert_eq!(fake.count(), 3);
-    assert_eq!(h.snapshot().results[0].status, "ready");
+    assert_eq!(h.snapshot().results[0].status, RoomStatus::Ready);
     tokio::time::advance(Duration::from_secs(3600)).await;
     tokio::task::yield_now().await;
     assert_eq!(fake.count(), 3);
@@ -534,7 +534,7 @@ async fn disabling_automatic_joins_its_fetch_clears_results_and_enable_does_not_
         .snapshot()
         .results
         .iter()
-        .all(|room| room.status == "not_checked"));
+        .all(|room| room.status == RoomStatus::NotChecked));
     let count = fake.count();
     block.release.add_permits(1);
     h.store.lock().unwrap().set_enabled(STUDIUM, true).unwrap();

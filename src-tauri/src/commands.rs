@@ -160,17 +160,6 @@ pub async fn set_extension(
     state.settings().set_extension(&id, enabled).await
 }
 
-#[cfg(test)]
-pub(crate) fn change_extension(
-    registry: &extensions::Registry,
-    shared_store: &crate::archive::sync::SharedStore,
-    id: &str,
-    enabled: bool,
-) -> Result<Option<crate::studium::controller::CompletionHandle>, String> {
-    registry
-        .change(shared_store, id, enabled, || None::<()>)
-        .map(|changed| changed.studium)
-}
 #[tauri::command]
 pub async fn calendar_todos(
     state: tauri::State<'_, AppState>,

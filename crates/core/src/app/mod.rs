@@ -11,6 +11,7 @@ mod archive;
 mod calendar;
 mod meals;
 mod settings;
+mod studium;
 #[cfg(test)]
 mod tests;
 
@@ -18,6 +19,7 @@ pub use archive::{original_link, Archive};
 pub use calendar::Calendar;
 pub use meals::Meals;
 pub use settings::{storage_error, Settings, Snapshot};
+pub use studium::{Studium, StudiumMini};
 
 use crate::{
     archive::sync,
@@ -28,7 +30,6 @@ use crate::{
     paths, proactive,
     shell::{Event, Shell, Ui},
     storage::Store,
-    studium,
 };
 use std::{
     any::Any,
@@ -109,8 +110,8 @@ pub struct App {
     pub proactive: Arc<proactive::Scheduler>,
     pub archive: Arc<sync::Controller>,
     pub feed: Arc<feed::Controller>,
-    pub studium: Arc<studium::controller::Controller>,
-    pub studium_notifications: Arc<studium::notification::Notifications>,
+    pub studium: Arc<crate::studium::controller::Controller>,
+    pub studium_notifications: Arc<crate::studium::notification::Notifications>,
     pub network: crate::archive::Client,
     pub registry: Registry,
     pub classifier: Arc<intelligence::classification::Controller>,
@@ -158,8 +159,8 @@ impl App {
         let ui = Ui::new(config.shell);
         let operation_gate = Arc::new(AdmissionGate::default());
         let archive = sync::Controller::for_identifier(&config.identifier);
-        let studium = studium::controller::Controller::new();
-        let studium_notifications = studium::notification::Notifications::new(
+        let studium = crate::studium::controller::Controller::new();
+        let studium_notifications = crate::studium::notification::Notifications::new(
             store.clone(),
             Arc::downgrade(&studium),
             operation_gate.clone(),
@@ -286,6 +287,15 @@ impl App {
         Meals(self)
     }
 
+    pub fn studium(&self) -> Studium<'_> {
+        Studium(self)
+    }
+
+    /// The narrower handle for the Studium mini window.
+    pub fn studium_mini(&self) -> StudiumMini<'_> {
+        StudiumMini(self)
+    }
+
     fn views(&self) -> Option<&Arc<dyn StudiumViews>> {
         self.views.get()
     }
@@ -302,9 +312,10 @@ impl App {
         self.maintenance_shutdown.store(true, Ordering::Release);
         // Serialize cancellation against a start already admitted by the
         // gate but not yet registered. Starts recheck shutdown under Store.
-        let studium_completion = studium::jobs::cancel_at_boundary(&self.store, &self.studium)
-            .ok()
-            .flatten();
+        let studium_completion =
+            crate::studium::jobs::cancel_at_boundary(&self.store, &self.studium)
+                .ok()
+                .flatten();
         self.registry.stop_all();
         self.models.cancel();
         if let Some(views) = self.views() {
@@ -330,8 +341,11 @@ impl App {
     /// them, for backup, restore and update installs. Dropping the guard
     /// restarts the work.
     pub async fn exclusive_maintenance(&self) -> Result<MaintenanceGuard, String> {
-        let (reservation, studium_completion) =
-            studium::jobs::reserve_maintenance(&self.operation_gate, &self.store, &self.studium)?;
+        let (reservation, studium_completion) = crate::studium::jobs::reserve_maintenance(
+            &self.operation_gate,
+            &self.store,
+            &self.studium,
+        )?;
         let mut preparation = MaintenancePreparation {
             reservation: Some(reservation),
             proactive: self.proactive.clone(),
@@ -387,7 +401,7 @@ impl App {
 pub struct MaintenanceGuard {
     _gate: operation_gate::MaintenanceGuard,
     proactive: Arc<proactive::Scheduler>,
-    studium_notifications: Arc<studium::notification::Notifications>,
+    studium_notifications: Arc<crate::studium::notification::Notifications>,
     views: Option<Arc<dyn StudiumViews>>,
     classifier_guard: Option<intelligence::classification::PauseGuard>,
 }
@@ -425,7 +439,7 @@ impl Drop for MaintenanceGuard {
 struct MaintenancePreparation {
     reservation: Option<operation_gate::MaintenanceReservation>,
     proactive: Arc<proactive::Scheduler>,
-    studium_notifications: Arc<studium::notification::Notifications>,
+    studium_notifications: Arc<crate::studium::notification::Notifications>,
     views: Option<Arc<dyn StudiumViews>>,
     runtime: Handle,
     armed: bool,

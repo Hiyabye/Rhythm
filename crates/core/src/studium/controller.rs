@@ -1,6 +1,6 @@
 use super::{
     cancelled,
-    model::{Preferences, RoomState, SeatData, Snapshot},
+    model::{Preferences, RoomState, RoomStatus, SeatData, Snapshot},
     network::Session,
     parser, rooms,
 };
@@ -153,7 +153,7 @@ impl Controller {
                 job.id == candidate.job_id && !job.cancel.load(Ordering::Acquire)
             }) && state.results.iter().any(|room| {
                 room.room_id == candidate.room_id
-                    && matches!(room.status.as_str(), "ready" | "count_only")
+                    && matches!(room.status, RoomStatus::Ready | RoomStatus::CountOnly)
                     && room.result.as_ref() == Some(&candidate.data)
             })
         })
@@ -187,7 +187,7 @@ impl Controller {
                     .iter()
                     .find(|r| &r.room_id == id)
                     .cloned()
-                    .unwrap_or_else(|| empty(id, "not_checked"))
+                    .unwrap_or_else(|| empty(id, RoomStatus::NotChecked))
             })
             .collect();
         Ok(Snapshot {
@@ -250,7 +250,7 @@ impl Controller {
         state.results = preferences
             .room_ids
             .iter()
-            .map(|id| empty(id, "loading"))
+            .map(|id| empty(id, RoomStatus::Loading))
             .collect();
         state.job = Some(job.clone());
         self.changed.notify_waiters();
@@ -331,13 +331,12 @@ impl Controller {
                 return;
             }
             for room in &mut state.results {
-                if room.status == "loading" {
+                if room.status == RoomStatus::Loading {
                     room.status = if job.cancel.load(Ordering::Acquire) {
-                        "cancelled"
+                        RoomStatus::Cancelled
                     } else {
-                        "failed"
-                    }
-                    .into();
+                        RoomStatus::Failed
+                    };
                     room.error = Some(error.into());
                     room.result = None;
                     room.checked_at = Some(parser::now_timestamp());
@@ -419,13 +418,13 @@ impl Controller {
                             if parser::timestamp_seconds(&detail.source_time)?
                                 >= parser::timestamp_seconds(&summary.source_time)? =>
                         {
-                            result(id, "ready", detail, None)
+                            result(id, RoomStatus::Ready, detail, None)
                         }
                         Ok(_) => {
                             summary.seat_numbers = None;
                             result(
                                 id,
-                                "count_only",
+                                RoomStatus::CountOnly,
                                 summary,
                                 Some("좌석 배치가 공통 현황보다 오래되었습니다.".into()),
                             )
@@ -437,7 +436,7 @@ impl Controller {
                         Err(error) if error.access_denied() => failed(id, error.into()),
                         Err(error) => {
                             summary.seat_numbers = None;
-                            result(id, "count_only", summary, Some(error.into()))
+                            result(id, RoomStatus::CountOnly, summary, Some(error.into()))
                         }
                     }
                 }
@@ -448,10 +447,10 @@ impl Controller {
     }
 }
 
-fn empty(id: &str, status: &str) -> RoomState {
+fn empty(id: &str, status: RoomStatus) -> RoomState {
     RoomState {
         room_id: id.into(),
-        status: status.into(),
+        status,
         result: None,
         error: None,
         checked_at: None,
@@ -461,10 +460,10 @@ fn failed(id: &str, error: String) -> RoomState {
     RoomState {
         error: Some(error),
         checked_at: Some(parser::now_timestamp()),
-        ..empty(id, "failed")
+        ..empty(id, RoomStatus::Failed)
     }
 }
-fn result(id: &str, status: &str, data: SeatData, error: Option<String>) -> RoomState {
+fn result(id: &str, status: RoomStatus, data: SeatData, error: Option<String>) -> RoomState {
     RoomState {
         result: Some(data),
         error,

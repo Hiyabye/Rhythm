@@ -108,7 +108,7 @@ impl Store {
         room_id: &str,
         seat_numbers: &[u32],
     ) -> Result<BTreeMap<String, Vec<u32>>, String> {
-        self.studium_writable()?;
+        self.studium_on()?;
         let room = rooms::get(room_id)?;
         if seat_numbers.len() > room.capacity as usize
             || seat_numbers.iter().copied().collect::<HashSet<_>>().len() != seat_numbers.len()
@@ -181,7 +181,7 @@ impl Store {
 
     /// Saves the interval without enabling automatic work or changing targets.
     pub fn studium_save_auto_interval(&self, interval_minutes: u32) -> Result<u32, String> {
-        self.studium_writable()?;
+        self.studium_on()?;
         if !(2..=60).contains(&interval_minutes) {
             return Err("자동 확인 간격은 2분에서 60분 사이로 정해 주세요.".into());
         }
@@ -236,7 +236,9 @@ impl Store {
         })
     }
 
-    fn studium_writable(&self) -> Result<(), String> {
+    /// Refuses while the 열람실 extension is off: its settings are kept, but
+    /// they cannot change and its page's reads are closed.
+    pub(crate) fn studium_on(&self) -> Result<(), String> {
         if self.enabled(crate::extensions::STUDIUM)? {
             Ok(())
         } else {
@@ -251,7 +253,7 @@ impl Store {
         room_ids: &[String],
         view_room: &str,
     ) -> Result<Preferences, String> {
-        self.studium_writable()?;
+        self.studium_on()?;
         let selected: HashSet<&str> = room_ids.iter().map(String::as_str).collect();
         if room_ids.is_empty()
             || room_ids.len() > rooms::all().len()
@@ -308,7 +310,7 @@ impl Store {
 
     /// Changes only the displayed room, never targets or live work.
     pub fn studium_set_view_room(&self, room_id: &str) -> Result<Preferences, String> {
-        self.studium_writable()?;
+        self.studium_on()?;
         let current = self.studium_preferences()?;
         if !current.room_ids.iter().any(|id| id == room_id) {
             return Err("표시할 열람실은 확인할 열람실 중에서 선택해 주세요.".into());
