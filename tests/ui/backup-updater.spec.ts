@@ -115,7 +115,7 @@ test('unconfigured updater shows manual update guidance instead of a failing che
   await expect(updater).toContainText('데이터는 앱과 따로 저장되어 지워지지 않습니다.');
   await expect(updater.getByRole('button', { name: '업데이트 확인', exact: true })).toHaveCount(0);
   await expect(updater.getByRole('alert')).toHaveCount(0);
-  await expect(updater).toContainText('2.4.0');
+  await expect(updater).toContainText('2.4.1');
   expect(await callCount(page, 'updater_configured')).toBe(1);
   expect(await callCount(page, 'updater_check')).toBe(0);
 });
