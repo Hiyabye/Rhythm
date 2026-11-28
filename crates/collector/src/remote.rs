@@ -9,7 +9,7 @@ use crate::{
 };
 use std::{
     fs::{self, OpenOptions},
-    io::{Read, Write},
+    io::{self, Read, Write},
     path::Path,
     time::SystemTime,
 };
@@ -19,8 +19,14 @@ pub const BUCKET: &str = "rhythm-state";
 pub const KEEP: usize = 48;
 const SUFFIX: &str = ".sqlite3.zst";
 /// A mid level: level 19 (#172's feed figures) costs tens of seconds on a
-/// ~100 MB state every run, for little gain on a private copy.
+/// state of several hundred MB every run, for little gain on a private copy.
 const LEVEL: i32 = 9;
+/// The largest decompressed state a run accepts, a bound against a damaged or
+/// hostile object rather than a size target. The state outgrew 512 MiB on
+/// 2026-11-27 with about 53,000 notices, their vectors and a run segment that
+/// republished every notice; the compressed object must also stay under
+/// `r2::MAX_OBJECT`.
+const MAX_STATE: u64 = 4 * 1024 * 1024 * 1024;
 
 /// A prefix names one state history, such as `state/`.
 pub fn validate_prefix(prefix: &str) -> Result<(), String> {
@@ -91,16 +97,21 @@ pub async fn download<S: ObjectStore>(
     if object.sha256.as_deref() != Some(sha256_hex(&object.bytes).as_str()) {
         return Err(format!("{key} does not match its recorded SHA-256"));
     }
-    let bytes = decompress(&object.bytes).map_err(|e| format!("{key}: {e}"))?;
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    if let Err(error) = file.write_all(&bytes).and_then(|()| file.sync_all()) {
+    let written = decompress_into(&object.bytes, &mut file, MAX_STATE)
+        .map_err(|e| format!("{key}: {e}"))
+        .and_then(|()| {
+            file.sync_all()
+                .map_err(|e| format!("{}: {e}", path.display()))
+        });
+    if let Err(error) = written {
         drop(file);
         let _ = fs::remove_file(path);
-        return Err(format!("{}: {error}", path.display()));
+        return Err(error);
     }
     Ok(Some(key))
 }
@@ -161,17 +172,15 @@ fn compress(bytes: &[u8]) -> Result<Vec<u8>, String> {
     encoder.finish().map_err(|e| e.to_string())
 }
 
-fn decompress(bytes: &[u8]) -> Result<Vec<u8>, String> {
+/// Streams the decompressed state into `out`, so a large state never sits in
+/// memory twice, and refuses one over `limit` bytes.
+fn decompress_into(bytes: &[u8], out: &mut impl Write, limit: u64) -> Result<(), String> {
     let decoder = zstd::Decoder::new(bytes).map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-    decoder
-        .take(r2::MAX_OBJECT as u64 + 1)
-        .read_to_end(&mut out)
-        .map_err(|e| e.to_string())?;
-    if out.len() > r2::MAX_OBJECT {
+    let written = io::copy(&mut decoder.take(limit + 1), out).map_err(|e| e.to_string())?;
+    if written > limit {
         return Err("decompressed state is too large".into());
     }
-    Ok(out)
+    Ok(())
 }
 
 #[cfg(test)]
