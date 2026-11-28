@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mockDesktop, openSettings } from './fixture';
+import { mockDesktop, callCount, openSettings } from './fixture';
 
 const none = { sogang_notices: false, cybercampus: false, search: false, saved: false, recommendations: false, week: false, calendar: false, ai: false, proactive: false };
 
@@ -61,4 +61,8 @@ test('without the AI extension the list and reader hide stored classifications a
   await page.locator('#notice-1').click();
   await expect(page.locator('.reader-body')).toBeVisible();
   await expect(page.getByRole('region', { name: /비슷한 공지/ })).toHaveCount(0);
+  // The backend refuses these reads while the extension is off, so none is sent.
+  for (const command of ['ai_snapshot', 'ai_classifications', 'ai_classification', 'ai_similar_notices', 'ai_duplicate_notices']) {
+    expect(await callCount(page, command), command).toBe(0);
+  }
 });

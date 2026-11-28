@@ -52,8 +52,9 @@
   onMount(() => {
     void load(initialRevisionId, true);
     // Similar notices come from the latest revision's stored vector, so they
-    // do not change with the selected revision and are optional.
-    void invoke<SimilarNotice[]>('ai_similar_notices', { documentId: id })
+    // do not change with the selected revision and are optional. The backend
+    // refuses AI reads while the extension is off.
+    if (ai) void invoke<SimilarNotice[]>('ai_similar_notices', { documentId: id })
       .then((value) => { if (!disposed) similar = value; })
       .catch(() => {});
     void loadDates();
@@ -138,7 +139,7 @@
       if (disposed || request !== generation || documentId !== id) return;
       // Classification is independent of the body; render the article first and
       // let the label fill in without delaying reading.
-      void invoke<AiClassification | null>('ai_classification', { documentId, revisionId: result.revision_id })
+      if (ai) void invoke<AiClassification | null>('ai_classification', { documentId, revisionId: result.revision_id })
         .then((value) => {
           if (!disposed && request === generation && documentId === id) classification = value;
         })

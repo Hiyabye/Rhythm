@@ -351,6 +351,9 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       },
       invoke: async (command: string, args: any = {}) => {
         fixture.calls.push({ command, args: copy(args) });
+        // The backend refuses AI reads while the extension is off.
+        if (['ai_snapshot', 'ai_classifications', 'ai_classification', 'ai_similar_notices', 'ai_duplicate_notices'].includes(command)
+          && !snapshot.extensions.some((extension) => extension.id === 'ai' && extension.enabled)) throw 'AI 분류 확장 기능이 꺼져 있습니다.';
         switch (command) {
           case 'plugin:event|listen':
             if (args.event === 'updater://progress') updaterHandler = args.handler;

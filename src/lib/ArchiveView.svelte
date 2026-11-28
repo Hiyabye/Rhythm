@@ -207,6 +207,8 @@
       // Saving, closing the reader and sync completion each refresh; an older answer must not overwrite a newer one.
       if (active && request === contextRequest) { summary = counts; sources = catalog; groups = tree; status = sync; oncontext({ summary: counts, sources: catalog, groups: tree, status: sync }); }
     } catch (reason) { if (active) error = archiveError(reason); }
+    // The backend refuses AI reads while the extension is off.
+    if (!ai) { if (active && request === contextRequest) aiSnapshot = null; return; }
     try {
       const snapshot = await invoke<AiSnapshot>('ai_snapshot');
       if (active && request === contextRequest) aiSnapshot = snapshot;
@@ -286,7 +288,7 @@
 
   async function loadEmbeddingLabels(ids: number[]) {
     const request = ++labelRequest;
-    if (!ids.length) { classifications = {}; duplicates = {}; return; }
+    if (!ai || !ids.length) { classifications = {}; duplicates = {}; return; }
     try {
       const rows = await invoke<AiClassification[]>('ai_classifications', { documentIds: ids });
       if (request === labelRequest) classifications = Object.fromEntries(rows.map((row) => [row.document_id, row]));

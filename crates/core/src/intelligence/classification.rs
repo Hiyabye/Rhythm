@@ -616,10 +616,20 @@ impl Controller {
         if models.busy() {
             return None;
         }
-        let vector = self
-            .embed_query(data_root, &model, &identity, query)
-            .await?;
-        Some((identity, vector))
+        let vector = self.embed_query(data_root, &model, &identity, query).await;
+        // Only the loop unloads an idle engine, and it runs only while the
+        // extension is on. A search that overlapped the turn-off must not
+        // leave the engine loaded with no loop to release it.
+        let still_on = store.lock().ok().is_some_and(|store| {
+            store
+                .ai_effective_preferences()
+                .is_ok_and(|preferences| preferences.classification_enabled)
+        });
+        if !still_on {
+            self.unload_if_idle(true).await;
+            return None;
+        }
+        Some((identity, vector?))
     }
 
     /// The query vector, from the last search or one embedding request. The
@@ -676,27 +686,44 @@ impl Controller {
 }
 
 /// The background loop: one bounded batch at a time, woken by new work or
-/// every five seconds, until `shutdown`; then the engine is stopped.
+/// every five seconds. `shutdown` (exit) ends it and stops the engine for
+/// good. `stop` (its extension turned off) ends it after a batch or search in
+/// flight, releases the engine and leaves the controller ready for a later
+/// loop.
 pub async fn run(
     classifier: Arc<Controller>,
     store: Arc<Mutex<Store>>,
     models: models::Controller,
     data_root: std::path::PathBuf,
     shutdown: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
 ) {
+    let ending = || shutdown.load(Ordering::Acquire) || stop.load(Ordering::Acquire);
     loop {
-        tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
-            _ = classifier.wake.notified() => {}
+        let woken = classifier.wake.notified();
+        tokio::pin!(woken);
+        // Registered before the flags are read, so an end signalled between
+        // the read and the wait still wakes this pass.
+        woken.as_mut().enable();
+        if !ending() {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                _ = &mut woken => {}
+            }
         }
         if shutdown.load(Ordering::Acquire) {
+            classifier.shutdown().await;
+            return;
+        }
+        if stop.load(Ordering::Acquire) {
             break;
         }
         classifier
             .advance(&store, &models, &data_root, &shutdown)
             .await;
     }
-    classifier.shutdown().await;
+    let _paused = classifier.quiesce().await;
+    classifier.unload_if_idle(true).await;
 }
 
 #[cfg(test)]
@@ -801,32 +828,32 @@ mod tests {
         controller.shutdown().await;
     }
 
+    fn store_article(external_id: &str) -> crate::archive::model::ArticleInput {
+        crate::archive::model::ArticleInput {
+            external_id: external_id.into(),
+            canonical_url: format!("https://eclass.sogang.ac.kr/{external_id}"),
+            title: "공지".into(),
+            author: None,
+            category: None,
+            published_at: "2026-03-01".into(),
+            modified_at: None,
+            original: "본문".into(),
+            unsupported_body: false,
+            body_html: "<p>본문</p>".into(),
+            body_text: "본문".into(),
+            resources: vec![],
+            etag: None,
+            last_modified: None,
+        }
+    }
+
     /// A store with one Cybercampus notice and `model` selected and installed.
     fn store_with_notice(model: &AiModel) -> (tempfile::TempDir, Mutex<Store>) {
         let (data, store) = crate::storage::temp_store();
         store.catalog(&crate::archive::definitions()).unwrap();
         store.set_enabled(crate::extensions::AI, true).unwrap();
         store
-            .upsert_article(
-                "cybercampus",
-                &crate::archive::model::ArticleInput {
-                    external_id: "1".into(),
-                    canonical_url: "https://eclass.sogang.ac.kr/1".into(),
-                    title: "공지".into(),
-                    author: None,
-                    category: None,
-                    published_at: "2026-03-01".into(),
-                    modified_at: None,
-                    original: "본문".into(),
-                    unsupported_body: false,
-                    body_html: "<p>본문</p>".into(),
-                    body_text: "본문".into(),
-                    resources: vec![],
-                    etag: None,
-                    last_modified: None,
-                },
-                true,
-            )
+            .upsert_article("cybercampus", &store_article("1"), true)
             .unwrap();
         let mut installed = model.clone();
         installed.bytes = 1;
@@ -1051,6 +1078,125 @@ mod tests {
                 .unwrap();
             assert_eq!(waiting.len(), 1, "nothing was stored for the notice");
         }
+        controller.shutdown().await;
+    }
+
+    async fn engine_loaded(controller: &Controller) -> bool {
+        controller.worker.lock().await.status().model.is_some()
+    }
+
+    #[tokio::test]
+    async fn a_search_answered_after_the_extension_was_turned_off_unloads_the_engine() {
+        let (directory, controller, model) = fake_controller();
+        let identity = model.sha256.clone().unwrap();
+        *controller.verified.lock().unwrap() = Some(identity.clone());
+        let (_data, store) = store_with_notice(&model);
+        let models = models::Controller::new("Rhythm/test");
+        // The engine holds its answer until the extension is off.
+        std::fs::write(directory.path().join("hold"), b"").unwrap();
+        let turn_off = async {
+            while embedding_requests(directory.path()) == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            store
+                .lock()
+                .unwrap()
+                .set_enabled(crate::extensions::AI, false)
+                .unwrap();
+            std::fs::remove_file(directory.path().join("hold")).unwrap();
+        };
+        let (answer, ()) = tokio::join!(
+            controller.query_vector(&store, &models, directory.path(), "장학"),
+            turn_off
+        );
+        // No loop runs while the extension is off, so nothing else would
+        // release the engine.
+        assert!(answer.is_none());
+        assert!(!engine_loaded(&controller).await);
+        assert_eq!(controller.status().state, "disabled");
+
+        // While it is on a search keeps the engine for the loop to unload.
+        store
+            .lock()
+            .unwrap()
+            .set_enabled(crate::extensions::AI, true)
+            .unwrap();
+        *controller.verified.lock().unwrap() = Some(identity.clone());
+        let answer = controller
+            .query_vector(&store, &models, directory.path(), "학사")
+            .await;
+        assert_eq!(answer.unwrap().0, identity);
+        assert!(engine_loaded(&controller).await);
+        controller.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_stopped_loop_releases_the_engine_and_a_later_loop_classifies_again() {
+        let (directory, controller, model) = fake_controller();
+        let identity = model.sha256.clone().unwrap();
+        *controller.verified.lock().unwrap() = Some(identity.clone());
+        let (_data, store) = store_with_notice(&model);
+        seed_prototypes(&controller, &identity).await;
+        let (controller, store) = (Arc::new(controller), Arc::new(store));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let start = |stop: &Arc<AtomicBool>| {
+            tokio::spawn(run(
+                controller.clone(),
+                store.clone(),
+                models::Controller::new("Rhythm/test"),
+                directory.path().to_owned(),
+                shutdown.clone(),
+                stop.clone(),
+            ))
+        };
+        let classified = |count: u64| {
+            let controller = controller.clone();
+            async move {
+                tokio::time::timeout(Duration::from_secs(20), async {
+                    while controller.status().processed < count {
+                        controller.wake();
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .expect("the loop never classified the notice");
+            }
+        };
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let task = start(&stop);
+        classified(1).await;
+        assert!(engine_loaded(&controller).await);
+        stop.store(true, Ordering::Release);
+        controller.wake();
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .expect("the loop did not end on its stop")
+            .unwrap();
+        assert!(!engine_loaded(&controller).await);
+        assert_eq!(controller.status().state, "disabled");
+        // Stopped for its extension, not for exit: nothing stays paused.
+        assert!(!controller.paused.load(Ordering::Acquire));
+
+        // The fake GGUF cannot pass the integrity check a reload repeats.
+        *controller.verified.lock().unwrap() = Some(identity.clone());
+        let mut second = store_article("2");
+        second.title = "장학 공지".into();
+        store
+            .lock()
+            .unwrap()
+            .upsert_article("cybercampus", &second, true)
+            .unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let task = start(&stop);
+        classified(2).await;
+        stop.store(true, Ordering::Release);
+        controller.wake();
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .expect("the second loop did not end on its stop")
+            .unwrap();
+        assert!(!engine_loaded(&controller).await);
         controller.shutdown().await;
     }
 

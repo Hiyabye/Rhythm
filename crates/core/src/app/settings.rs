@@ -100,6 +100,9 @@ impl Settings<'_> {
         let changed = app.registry.change(&app.store, id, enabled, || {
             app.views().and_then(|views| views.capture_close())
         })?;
+        // Starts the loops of an extension turned on and joins those of one
+        // turned off. First, so that a failure below cannot skip it.
+        app.settle_loops().await;
         if !enabled {
             let view_result = match (changed.captured, app.views()) {
                 (Some(ticket), Some(views)) => views.clone().close(ticket).await,
@@ -122,10 +125,6 @@ impl Settings<'_> {
                         )
                         .await?;
                     }
-                    // The classifier sees the extension off on its next pass
-                    // and stops its process; wake it instead of waiting for
-                    // the timer.
-                    Work::Classifier => app.classifier.wake(),
                     Work::Feed => {}
                 }
             }

@@ -35,8 +35,13 @@ pub enum Work {
     /// The Studium generation. Its disable also needs the view close ticket
     /// and `studium::jobs::finish_disable`, which `App::set_extension` runs.
     Studium,
-    /// The classifier loop, which stops its own process once it sees the
-    /// extension off; a disable only wakes it (never cancelled or awaited).
+}
+
+/// A background loop an extension owns. It runs only while the extension is
+/// on: `App::start` and an enable start it, a disable stops and joins it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Loop {
+    /// The classification loop and its embedding process.
     Classifier,
 }
 
@@ -58,9 +63,10 @@ pub struct Extension {
     /// Signalled by `Registry::set` under the Store lock when this turns off,
     /// in order.
     pub cancels: &'static [Work],
-    /// What `App::set_extension` awaits (or, for the classifier, wakes) after
-    /// that lock is released, in order.
+    /// What `App::set_extension` awaits after that lock is released, in order.
     pub settles: &'static [Work],
+    /// Background loops that run only while this is on.
+    pub runs: &'static [Loop],
     /// Cleared in the same transaction that records the disable.
     pub clears: &'static [Tokens],
     /// Turning this on moves the notification baseline to the newest archived
@@ -76,6 +82,7 @@ impl Extension {
             description,
             cancels: &[],
             settles: &[],
+            runs: &[],
             clears: &[],
             announces_from_enable: false,
         }
@@ -86,6 +93,10 @@ impl Extension {
     }
     const fn settles(mut self, work: &'static [Work]) -> Self {
         self.settles = work;
+        self
+    }
+    const fn runs(mut self, loops: &'static [Loop]) -> Self {
+        self.runs = loops;
         self
     }
     const fn clears(mut self, tokens: &'static [Tokens]) -> Self {
@@ -143,7 +154,7 @@ pub const BUILT_IN: &[Extension] = &[
         "AI 분류",
         "이 기기에서 공지를 주제별로 나눕니다. 비슷한 공지, 뜻으로 찾는 검색, 기회 화면도 함께 켜집니다.",
     )
-    .settles(&[Work::Classifier]),
+    .runs(&[Loop::Classifier]),
     Extension::new(
         PROACTIVE,
         "알림·백그라운드",
@@ -227,7 +238,7 @@ impl Registry {
     /// Records the choice. Disabling a source extension signals archive
     /// cancellation under the caller's store lock, the same lock job admission
     /// takes, so no job of its sources can start or continue afterwards. Work
-    /// that needs to await (AI, lifecycle) is stopped by the calling command.
+    /// that needs to await (jobs, loops, lifecycle) is settled by the caller.
     pub fn set(&self, store: &Store, id: &str, enabled: bool) -> Result<(), String> {
         let Some(extension) = declaration(id) else {
             return Err("등록되지 않은 확장 기능입니다.".into());
@@ -246,7 +257,6 @@ impl Registry {
                         self.studium.cancel();
                         self.studium.clear();
                     }
-                    Work::Classifier => {}
                 }
             }
         }
