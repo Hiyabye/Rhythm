@@ -15,8 +15,9 @@ use std::{
 };
 
 pub const BUCKET: &str = "rhythm-state";
-/// About two days of rollback at hourly runs (user decision).
-pub const KEEP: usize = 48;
+/// About a day of rollback at hourly runs, small enough to stay in R2's free
+/// storage (user decision, 2026-11-28).
+pub const KEEP: usize = 24;
 const SUFFIX: &str = ".sqlite3.zst";
 /// A mid level: level 19 (#172's feed figures) costs tens of seconds on a
 /// state of several hundred MB every run, for little gain on a private copy.
