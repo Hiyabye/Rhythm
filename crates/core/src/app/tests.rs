@@ -1159,12 +1159,24 @@ async fn a_backup_restored_through_the_app_exits_once_and_the_next_launch_report
         .await
         .expect("shutdown waits for nothing the restore holds");
     drop(app);
+    let journal = directory
+        .path()
+        .join("data")
+        .join(".rhythm-restore-journal.json");
+    assert!(journal.exists());
 
-    let app = open(directory.path()).unwrap();
-    assert!(app.backup().restore_outcome().is_some());
-    assert_eq!(
-        app.settings().snapshot().await.unwrap().settings.theme,
-        "dark"
-    );
-    app.shutdown().await;
+    // The held maintenance guard keeps the database open until the process
+    // exits, and Windows cannot move an open file, so reopening in this
+    // process works only off Windows; `backup::tests` covers the next launch
+    // there.
+    #[cfg(not(windows))]
+    {
+        let app = open(directory.path()).unwrap();
+        assert!(app.backup().restore_outcome().is_some());
+        assert_eq!(
+            app.settings().snapshot().await.unwrap().settings.theme,
+            "dark"
+        );
+        app.shutdown().await;
+    }
 }
