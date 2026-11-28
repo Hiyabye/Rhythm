@@ -132,6 +132,20 @@ test('configured updater reports genuine check failures', async ({ page }) => {
   expect(await callCount(page, 'updater_check')).toBe(1);
 });
 
+test('a check that finds nothing newer says so and offers no install', async ({ page }) => {
+  await mockDesktop(page, { updaterConfigured: true, updaterUpToDate: true });
+  await page.goto('/');
+  const updater = await openUpdater(page);
+  await expect(updater.getByText('최신 버전입니다.', { exact: true })).toHaveCount(0);
+  await updater.getByRole('button', { name: '업데이트 확인', exact: true }).click();
+
+  await expect(updater.getByText('최신 버전입니다.', { exact: true })).toHaveAttribute('role', 'status');
+  await expect(updater.getByRole('alert')).toHaveCount(0);
+  await expect(updater.getByRole('button', { name: '다운로드 및 설치', exact: true })).toHaveCount(0);
+  await expect(updater.getByRole('button', { name: '업데이트 확인', exact: true })).toBeEnabled();
+  expect(await callCount(page, 'updater_check')).toBe(1);
+});
+
 test('updater installation errors remain recoverable', async ({ page }) => {
   await mockDesktop(page, { updaterConfigured: true, updaterInstallError: true });
   await page.goto('/');
