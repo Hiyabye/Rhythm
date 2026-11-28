@@ -43,6 +43,11 @@ pub enum Work {
 pub enum Loop {
     /// The classification loop and its embedding process.
     Classifier,
+    /// The feed timer: at launch, then every 30 minutes (#177 P2).
+    Feed,
+    /// The proactive scheduler: Cybercampus source tasks, notice
+    /// notifications and todo reminders.
+    Scheduler,
 }
 
 /// Activation tokens a disable clears: one-use records that would otherwise
@@ -123,7 +128,8 @@ pub const BUILT_IN: &[Extension] = &[
         "학교 게시판 공지를 받아 이 기기에 보관합니다.",
     )
     .cancels(&[Work::Archive, Work::Feed, Work::Bodies])
-    .settles(&[Work::Archive, Work::Bodies]),
+    .settles(&[Work::Archive, Work::Bodies])
+    .runs(&[Loop::Feed]),
     Extension::new(
         CYBERCAMPUS,
         "사이버캠퍼스",
@@ -160,6 +166,7 @@ pub const BUILT_IN: &[Extension] = &[
         "알림·백그라운드",
         "앱이 켜져 있는 동안 새 공지를 알립니다. 로그인 시 실행도 정합니다.",
     )
+    .runs(&[Loop::Scheduler])
     .clears(&[Tokens::StudiumAlerts, Tokens::CalendarReminders])
     .announces_from_enable(),
     Extension::new(STUDIUM, "열람실", "열람실의 빈 좌석을 확인합니다.")
@@ -176,6 +183,27 @@ pub const BUILT_IN: &[Extension] = &[
 /// The declaration of built-in extension `id`.
 pub fn declaration(id: &str) -> Option<&'static Extension> {
     BUILT_IN.iter().find(|extension| extension.id == id)
+}
+
+/// Whether an extension that runs `which` is on.
+pub fn runs(store: &Store, which: Loop) -> Result<bool, String> {
+    for extension in BUILT_IN {
+        if extension.runs.contains(&which) && store.enabled(extension.id)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether every extension that feeds the Studium seat alerts is on (Studium
+/// and `proactive`): only then does the alert receiver run.
+pub fn studium_alerts_on(store: &Store) -> Result<bool, String> {
+    for extension in BUILT_IN.iter().filter(|e| e.feeds_studium_alerts()) {
+        if !store.enabled(extension.id)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// The extension that owns a catalog source family.

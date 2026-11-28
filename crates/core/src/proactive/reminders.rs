@@ -35,7 +35,7 @@ pub(super) async fn deliver(
         return Ok(());
     }
     let authorization = crate::notification::permission::notification_authorization_status().await;
-    if !super::scheduler::notification_authorization_permits(&authorization, false) {
+    if !super::scheduler::notification_authorization_permits(authorization, false) {
         return Ok(());
     }
     for reminder in due {

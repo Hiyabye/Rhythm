@@ -1,9 +1,10 @@
 //! Feed sync (docs/FEED.md "Applying the feed", #177): verifies the signed
 //! manifest, follows `moved_to`, picks the cursor or snapshot path and applies
 //! each listed file in its own store transaction. Runs at launch and every 30
-//! minutes from the scheduler loop while `sogang_notices` is on, and on demand
-//! (user decision P2).
+//! minutes from its own loop ([`run_loop`]) while `sogang_notices` is on, and
+//! on demand (user decision P2).
 use crate::job::{Busy, Slot};
+use crate::operation_gate::AdmissionGate;
 use crate::storage::{
     feed::{FeedResult, FeedStatus, Unmirrored},
     with_store, SharedStore, Store,
@@ -11,13 +12,14 @@ use crate::storage::{
 use rhythm_feed::{record, FileRef, Manifest};
 use std::{
     collections::HashSet,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Mutex,
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
+use tokio::sync::Notify;
 
 pub mod transport;
 use transport::{Base, FetchError, Transport};
@@ -34,6 +36,8 @@ const MAX_MOVES: usize = 3;
 const INTERVAL: Duration = Duration::from_secs(30 * 60);
 /// After a failed one, so a launch without a network catches up soon.
 const RETRY: Duration = Duration::from_secs(5 * 60);
+/// How often [`run_loop`] checks whether a sync is due.
+const WAKE: Duration = Duration::from_secs(15);
 
 /// Why a sync stopped; `result` is what the status reports.
 #[derive(Debug, PartialEq)]
@@ -352,11 +356,24 @@ pub(crate) async fn sync(
 #[derive(Default)]
 pub struct Controller {
     active: Slot,
-    /// When the scheduler may start the next sync; `None` at launch.
+    /// When [`run_loop`] may start the next sync; `None` at launch.
     next: Mutex<Option<Instant>>,
+    /// Ends [`run_loop`]'s wait early, so a stop is seen at once.
+    wake: Notify,
 }
 
 impl Controller {
+    pub fn wake(&self) {
+        self.wake.notify_waiters();
+    }
+
+    /// Makes the next sync due in 30 minutes, so a test can run the loop
+    /// without a request.
+    #[cfg(test)]
+    pub(crate) fn postpone(&self) {
+        *self.next.lock().unwrap() = Some(Instant::now() + INTERVAL);
+    }
+
     pub fn running(&self) -> bool {
         self.active.running()
     }
@@ -431,6 +448,54 @@ impl Controller {
             })?,
         }
         Ok(true)
+    }
+}
+
+/// The feed timer (#177 P2): a sync at launch and then whenever the
+/// controller says one is due. `App` runs it only while `sogang_notices` is
+/// on. Each sync holds a shared lease, so backup, restore and updates find
+/// none running; `shutdown` (exit) and `stop` (the extension turned off) end
+/// the loop, and a sync already running is cancelled by its owner.
+pub async fn run_loop(
+    feed: Arc<Controller>,
+    store: SharedStore,
+    data_root: PathBuf,
+    transport: impl Transport + Send + 'static,
+    gate: Arc<AdmissionGate>,
+    shutdown: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+) {
+    let ending = || shutdown.load(Ordering::Acquire) || stop.load(Ordering::Acquire);
+    loop {
+        let woken = feed.wake.notified();
+        tokio::pin!(woken);
+        // Registered before the flags are read, so an end signalled between
+        // the read and the wait still wakes this pass.
+        woken.as_mut().enable();
+        if ending() {
+            return;
+        }
+        // A sync refuses to start while the extension is off.
+        if feed.due() {
+            // A lease can wait behind a backup that is waiting for the caller
+            // of a stop to finish, so a stop must not wait for the lease.
+            let lease = tokio::select! {
+                lease = gate.shared() => lease,
+                _ = &mut woken => continue,
+            };
+            if let Ok(_lease) = lease {
+                if ending() {
+                    return;
+                }
+                if let Err(error) = feed.run(&store, &data_root, &transport).await {
+                    eprintln!("Feed: {error}");
+                }
+            }
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(WAKE) => {}
+            _ = &mut woken => {}
+        }
     }
 }
 

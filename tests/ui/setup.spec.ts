@@ -89,6 +89,8 @@ test('choosing no extension finishes with only Today', async ({ page }) => {
   await page.getByRole('button', { name: '시작하기', exact: true }).click();
   await expect(page.getByRole('heading', { name: '오늘을 채울 확장 기능을 켜 보세요', exact: true })).toBeVisible();
   expect(await callCount(page, 'set_extension')).toBe(0);
+  // The backend refuses the proactive snapshot while that extension is off.
+  expect(await callCount(page, 'proactive_snapshot')).toBe(0);
 });
 
 test('the last step fetches Cybercampus only when asked, never the public boards', async ({ page }) => {

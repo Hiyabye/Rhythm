@@ -20,8 +20,10 @@ impl Shell for NoWindow {
     }
 }
 
+/// The feed loop starts with the notices extension; its first sync is put
+/// off so that no test sends a request.
 fn open(root: &Path) -> Result<App, OpenError> {
-    App::open_in(
+    let app = App::open_in(
         root.join("data"),
         &root.join("resources"),
         Config {
@@ -30,7 +32,9 @@ fn open(root: &Path) -> Result<App, OpenError> {
             runtime: Handle::current(),
             shell: Arc::new(NoWindow),
         },
-    )
+    )?;
+    app.feed.postpone();
+    Ok(app)
 }
 
 /// Counts what core asks of the shell's Studium views. `open` says whether a
@@ -488,8 +492,11 @@ async fn a_running_seat_check_refuses_new_targets_and_is_cancelled_by_its_id() {
 }
 
 fn classifier_loop_running(app: &App) -> bool {
-    let running = app.classifier_loop.lock().unwrap();
-    running.as_ref().is_some_and(|l| !l.task.is_finished())
+    let loops = app.loops.lock().unwrap();
+    loops
+        .classifier
+        .as_ref()
+        .is_some_and(|l| !l.task.is_finished())
 }
 
 #[tokio::test]
@@ -513,7 +520,7 @@ async fn the_classifier_loop_runs_only_while_its_extension_is_on() {
 
     // The disable returns only after the loop ended and released its engine.
     app.settings().set_extension(AI, false).await.unwrap();
-    assert!(app.classifier_loop.lock().unwrap().is_none());
+    assert!(app.loops.lock().unwrap().classifier.is_none());
     assert_eq!(app.classifier.status().state, "disabled");
     app.settings().set_extension(AI, true).await.unwrap();
     assert!(classifier_loop_running(&app));
@@ -615,10 +622,8 @@ async fn ai_opens_only_while_its_extension_is_on() {
     app.shutdown().await;
 }
 
-/// The core is the all-off state: nothing an extension owns is on or running.
-/// The scheduler and Studium receiver start idle, so only their effective
-/// settings and the absence of work and processes are asserted; the classifier
-/// loop does not exist at all.
+/// The core is the all-off state: nothing an extension owns is on or running,
+/// and no extension's loop exists.
 async fn assert_core_only(app: &App) {
     {
         let store = app.store.lock().unwrap();
@@ -650,7 +655,12 @@ async fn assert_core_only(app: &App) {
         .await
         .expect("a body fetch is running");
     assert!(matches!(app.classifier.status().state, "idle" | "disabled"));
-    assert!(app.classifier_loop.lock().unwrap().is_none());
+    {
+        let loops = app.loops.lock().unwrap();
+        assert!(loops.classifier.is_none() && loops.feed.is_none());
+    }
+    assert!(!app.proactive.running());
+    assert!(!app.studium_notifications.running());
     // No embedding server: its private run directory holds no socket or pid.
     let run = app.data_root.join("run").join("embedding");
     if let Ok(mut entries) = std::fs::read_dir(run) {
@@ -699,12 +709,20 @@ fn every_extension_is_declared_once_and_its_links_exist() {
             );
         }
     }
-    // The classifier loop belongs to the AI extension alone.
-    let runs = |id: &str| crate::extensions::declaration(id).unwrap().runs;
-    assert_eq!(runs(crate::extensions::AI), [Loop::Classifier]);
-    assert!(BUILT_IN
-        .iter()
-        .all(|e| e.id == crate::extensions::AI || e.runs.is_empty()));
+    // Each loop belongs to one extension.
+    let owners = [
+        (crate::extensions::AI, Loop::Classifier),
+        (crate::extensions::NOTICES, Loop::Feed),
+        (crate::extensions::PROACTIVE, Loop::Scheduler),
+    ];
+    for extension in BUILT_IN {
+        let owned: Vec<_> = owners
+            .iter()
+            .filter(|(id, _)| *id == extension.id)
+            .map(|(_, which)| *which)
+            .collect();
+        assert_eq!(extension.runs, owned, "{}", extension.id);
+    }
     // The cross-extension links: proactive's disable clears both token kinds.
     let clears = |id: &str| crate::extensions::declaration(id).unwrap().clears;
     assert_eq!(
@@ -749,9 +767,7 @@ async fn hold_feed(app: &Arc<App>) -> tokio::task::JoinHandle<Result<bool, Strin
 // feed sync can be held through public API and a fake transport; the archive
 // job (needs an eClass login), body fetches (need a stored pending notice) and
 // model downloads (need a real catalog download) have no such hook, so a job
-// type missing from either list is caught here only for the feed. Even then
-// the scheduler's quiesce also cancels the feed, so this pins the outcome
-// (the job is joined), not that each site's own feed cancel is present.
+// type missing from either list is caught here only for the feed.
 #[tokio::test]
 async fn shutdown_and_maintenance_leave_no_feed_job_running() {
     let directory = tempfile::tempdir().unwrap();
@@ -777,4 +793,229 @@ async fn shutdown_and_maintenance_leave_no_feed_job_running() {
         .expect("shutdown waits for the feed job");
     assert!(!app.feed.running());
     assert_eq!(task.await.unwrap(), Ok(true));
+}
+
+fn feed_loop_running(app: &App) -> bool {
+    let loops = app.loops.lock().unwrap();
+    loops.feed.as_ref().is_some_and(|l| !l.task.is_finished())
+}
+
+#[tokio::test]
+async fn the_feed_and_scheduler_loops_run_only_while_their_extensions_are_on() {
+    use crate::extensions::{NOTICES, PROACTIVE};
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+
+    // Before `start` nothing runs, whatever the stored choices.
+    app.settings().set_extension(NOTICES, true).await.unwrap();
+    app.settings().set_extension(PROACTIVE, true).await.unwrap();
+    assert!(!feed_loop_running(&app) && !app.proactive.running());
+    app.start(None);
+    assert!(feed_loop_running(&app) && app.proactive.running());
+
+    // Each follows its own extension, and a disable returns after its loop
+    // ended.
+    app.settings().set_extension(NOTICES, false).await.unwrap();
+    assert!(app.loops.lock().unwrap().feed.is_none());
+    assert!(app.proactive.running());
+    app.settings()
+        .set_extension(PROACTIVE, false)
+        .await
+        .unwrap();
+    assert!(!app.proactive.running());
+    app.settings().set_extension(NOTICES, true).await.unwrap();
+    assert!(feed_loop_running(&app) && !app.proactive.running());
+
+    // An enable that comes while a stopped loop still winds down starts a
+    // new one, and the old one still ends.
+    crate::storage::with_store(&app.store, |s| s.set_enabled(PROACTIVE, true)).unwrap();
+    assert!(app.proactive.start().unwrap().is_none());
+    crate::storage::with_store(&app.store, |s| s.set_enabled(PROACTIVE, false)).unwrap();
+    let stopping = app.proactive.start().unwrap().expect("a running loop");
+    crate::storage::with_store(&app.store, |s| s.set_enabled(PROACTIVE, true)).unwrap();
+    assert!(app.proactive.start().unwrap().is_none());
+    assert!(app.proactive.running());
+    tokio::time::timeout(Duration::from_secs(5), stopping)
+        .await
+        .expect("the stopped loop ends")
+        .unwrap();
+    assert!(app.proactive.running());
+    app.settings()
+        .set_extension(PROACTIVE, false)
+        .await
+        .unwrap();
+    assert!(!app.proactive.running());
+
+    // Maintenance stops the scheduler; its guard restarts it only while
+    // `proactive` is on.
+    drop(app.exclusive_maintenance().await.unwrap());
+    assert!(!app.proactive.running());
+    app.settings().set_extension(PROACTIVE, true).await.unwrap();
+    let guard = app.exclusive_maintenance().await.unwrap();
+    assert!(!app.proactive.running());
+    drop(guard);
+    assert!(app.proactive.running());
+    assert!(feed_loop_running(&app));
+
+    // Exit ends both, and nothing restarts them.
+    app.shutdown().await;
+    assert!(app.loops.lock().unwrap().feed.is_none());
+    assert!(!app.proactive.running());
+    assert!(app.proactive.start().unwrap().is_none());
+    assert!(!app.proactive.running());
+}
+
+#[tokio::test]
+async fn seat_alerts_are_received_only_while_studium_and_proactive_are_on() {
+    use crate::extensions::PROACTIVE;
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+    app.start(None);
+    assert!(!app.studium_notifications.running());
+
+    app.settings().set_extension(STUDIUM, true).await.unwrap();
+    assert!(!app.studium_notifications.running());
+    app.settings().set_extension(PROACTIVE, true).await.unwrap();
+    assert!(app.studium_notifications.running());
+
+    // Maintenance pauses it; the guard restarts it while both are on.
+    let guard = app.exclusive_maintenance().await.unwrap();
+    assert!(!app.studium_notifications.running());
+    drop(guard);
+    assert!(app.studium_notifications.running());
+
+    // Either one turned off stops it, and its return alone does not restart
+    // it while the other is off.
+    app.settings().set_extension(STUDIUM, false).await.unwrap();
+    assert!(!app.studium_notifications.running());
+    app.settings()
+        .set_extension(PROACTIVE, false)
+        .await
+        .unwrap();
+    app.settings().set_extension(STUDIUM, true).await.unwrap();
+    assert!(!app.studium_notifications.running());
+    drop(app.exclusive_maintenance().await.unwrap());
+    assert!(!app.studium_notifications.running());
+    app.settings().set_extension(PROACTIVE, true).await.unwrap();
+    assert!(app.studium_notifications.running());
+    app.shutdown().await;
+    assert!(!app.studium_notifications.running());
+}
+
+#[tokio::test]
+async fn personalization_opens_its_list_and_pane_only_while_recommendations_is_on() {
+    use crate::extensions::RECOMMENDATIONS;
+    use crate::storage::personalization::{PersonalInterestInput, PersonalizationProfile};
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+    let off = |error: String| assert_eq!(error, "나를 위한 소식 확장 기능이 꺼져 있습니다.");
+    let profile = PersonalizationProfile {
+        university: "서강대학교".into(),
+        department: "컴퓨터공학과".into(),
+        study_level: "undergraduate".into(),
+    };
+    let interest = || PersonalInterestInput {
+        id: None,
+        name: "장학".into(),
+        aliases: vec!["scholarship".into()],
+        priority: 3,
+        polarity: "positive".into(),
+    };
+
+    let personalization = app.personalization();
+    off(personalization.snapshot().await.err().unwrap());
+    off(personalization
+        .save_profile(profile.clone())
+        .await
+        .err()
+        .unwrap());
+    off(personalization
+        .save_interest(interest())
+        .await
+        .err()
+        .unwrap());
+    off(personalization.remove_interest(1).await.err().unwrap());
+    off(personalization.set_learning(false).await.err().unwrap());
+    off(personalization.reset().await.err().unwrap());
+    off(personalization.recommendations(8).await.err().unwrap());
+    // The reader's feedback is core: these reach the store, which knows no
+    // notice 1.
+    assert_eq!(personalization.feedback(1).await.unwrap(), None);
+    assert_eq!(
+        personalization
+            .set_feedback(1, Some("interested".into()))
+            .await
+            .unwrap_err(),
+        "보관된 항목을 찾을 수 없습니다."
+    );
+
+    app.settings()
+        .set_extension(RECOMMENDATIONS, true)
+        .await
+        .unwrap();
+    let personalization = app.personalization();
+    personalization.save_profile(profile.clone()).await.unwrap();
+    let saved = personalization.save_interest(interest()).await.unwrap();
+    assert_eq!(saved.interests.len(), 1);
+    assert!(personalization
+        .recommendations(8)
+        .await
+        .unwrap()
+        .items
+        .is_empty());
+    app.shutdown().await;
+    drop(app);
+
+    let app = open(directory.path()).unwrap();
+    let reopened = app.personalization().snapshot().await.unwrap();
+    assert_eq!(reopened.profile.department, "컴퓨터공학과");
+    assert_eq!(reopened.interests[0].name, "장학");
+    let reset = app.personalization().reset().await.unwrap();
+    assert!(reset.interests.is_empty());
+    app.shutdown().await;
+}
+
+// `authorization` and `request_permission` are called only while the
+// extension is off: on, they would ask the test process's OS.
+#[tokio::test]
+async fn proactive_opens_only_while_its_extension_is_on_and_keeps_lifecycle_settings() {
+    use crate::extensions::PROACTIVE;
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+    let off = |error: String| assert_eq!(error, "알림·백그라운드 확장 기능이 꺼져 있습니다.");
+
+    let proactive = app.proactive();
+    off(proactive.snapshot().await.err().unwrap());
+    let settings = crate::storage::with_store(&app.store, |s| s.proactive_settings()).unwrap();
+    off(proactive.save(settings.clone()).await.err().unwrap());
+    off(proactive.history(None).await.err().unwrap());
+    off(proactive.clear_history().await.err().unwrap());
+    off(proactive.authorization().await.unwrap_err());
+    off(proactive.request_permission().await.err().unwrap());
+
+    app.settings().set_extension(PROACTIVE, true).await.unwrap();
+    let proactive = app.proactive();
+    assert!(proactive
+        .snapshot()
+        .await
+        .unwrap()
+        .pending_activation
+        .is_none());
+    let mut changed = settings.clone();
+    changed.notifications_enabled = true;
+    changed.launch_at_login = true;
+    changed.close_to_background = true;
+    let saved = proactive.save(changed).await.unwrap();
+    assert!(saved.settings.notifications_enabled);
+    // Lifecycle switches have their own commands.
+    assert!(!saved.settings.launch_at_login && !saved.settings.close_to_background);
+    assert!(proactive.history(Some(5)).await.unwrap().is_empty());
+    assert!(proactive.clear_history().await.unwrap().history.is_empty());
+    app.shutdown().await;
+    drop(app);
+
+    let app = open(directory.path()).unwrap();
+    let reopened = app.proactive().snapshot().await.unwrap();
+    assert!(reopened.settings.notifications_enabled && !reopened.settings.launch_at_login);
+    app.shutdown().await;
 }

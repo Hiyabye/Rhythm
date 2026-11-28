@@ -780,3 +780,16 @@ test('turning Studium off clears memory and re-enabling never queries automatica
   await expect(page.getByRole('region', { name: '로욜라 인벤툼 II 좌석 정보' })).toContainText('아직 확인하지 않았습니다');
   expect(await callCount(page, 'studium_start')).toBe(0);
 });
+
+test('with 알림·백그라운드 off neither the app nor the 열람실 page asks for notification state', async ({ page }) => {
+  await mockDesktop(page, { extensions: { studium: true, proactive: false } });
+  await page.goto('/');
+  await nav(page).getByRole('button', { name: '열람실', exact: true }).click();
+  await expect(page.getByText('알림·백그라운드 확장 기능이 꺼져 있어 좌석 알림을 보내지 않습니다.')).toBeVisible();
+  await page.getByRole('button', { name: '알림 상태 새로 확인', exact: true }).click();
+  await expect(page.getByText('알림·백그라운드 확장 기능이 꺼져 있어 좌석 알림을 보내지 않습니다.')).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  // The backend refuses these while the extension is off.
+  expect(await callCount(page, 'proactive_snapshot')).toBe(0);
+  expect(await callCount(page, 'notification_authorization')).toBe(0);
+});

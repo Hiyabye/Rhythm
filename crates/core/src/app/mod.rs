@@ -11,6 +11,8 @@ mod ai;
 mod archive;
 mod calendar;
 mod meals;
+mod personalization;
+mod proactive;
 mod settings;
 mod studium;
 #[cfg(test)]
@@ -20,16 +22,18 @@ pub use ai::{Ai, AiSnapshot, DuplicateNotices};
 pub use archive::{original_link, Archive};
 pub use calendar::Calendar;
 pub use meals::Meals;
+pub use personalization::Personalization;
+pub use proactive::Proactive;
 pub use settings::{storage_error, Settings, Snapshot};
 pub use studium::{Studium, StudiumMini};
 
 use crate::{
     archive::sync,
     data_lock::{lock_data_dir, DataDirLock},
-    extensions::{Loop, Registry, BUILT_IN},
+    extensions::{self, Loop, Registry},
     feed, intelligence,
     operation_gate::{self, AdmissionGate},
-    paths, proactive,
+    paths,
     shell::{Event, Shell, Ui},
     storage::Store,
 };
@@ -44,7 +48,7 @@ use std::{
         Arc, Mutex, OnceLock,
     },
 };
-use tokio::{runtime::Handle, sync::broadcast};
+use tokio::{runtime::Handle, sync::broadcast, task::JoinHandle};
 
 /// What the shell hands [`App::open`].
 pub struct Config {
@@ -109,7 +113,7 @@ pub struct App {
     _instance_lock: DataDirLock,
     pub store: sync::SharedStore,
     pub data_root: PathBuf,
-    pub proactive: Arc<proactive::Scheduler>,
+    pub proactive: Arc<crate::proactive::Scheduler>,
     pub archive: Arc<sync::Controller>,
     pub feed: Arc<feed::Controller>,
     pub studium: Arc<crate::studium::controller::Controller>,
@@ -131,14 +135,53 @@ pub struct App {
     runtime: Handle,
     views: OnceLock<Arc<dyn StudiumViews>>,
     started: AtomicBool,
-    /// The classification loop, present only while its extension is on.
-    classifier_loop: Mutex<Option<ExtensionLoop>>,
+    /// The loops the app owns, each present only while its extension is on.
+    /// The scheduler's loop is the Scheduler's own.
+    loops: Mutex<Loops>,
+}
+
+#[derive(Default)]
+struct Loops {
+    classifier: Option<ExtensionLoop>,
+    feed: Option<ExtensionLoop>,
 }
 
 /// A running background loop that an extension owns.
 struct ExtensionLoop {
     stop: Arc<AtomicBool>,
-    task: tokio::task::JoinHandle<()>,
+    task: JoinHandle<()>,
+}
+
+impl ExtensionLoop {
+    /// Starts or stops the loop in `slot` to match `wanted`; returns the task
+    /// it stopped. `wake` ends the loop's wait so it sees the stop at once.
+    fn rematch(
+        slot: &mut Option<Self>,
+        wanted: bool,
+        wake: impl FnOnce(),
+        spawn: impl FnOnce(Arc<AtomicBool>) -> JoinHandle<()>,
+    ) -> Option<JoinHandle<()>> {
+        let running = slot.as_ref().is_some_and(|l| !l.task.is_finished());
+        match (wanted, running) {
+            (true, false) => {
+                let stop = Arc::new(AtomicBool::new(false));
+                *slot = Some(Self {
+                    stop: stop.clone(),
+                    task: spawn(stop),
+                });
+                None
+            }
+            (false, _) => {
+                let stopped = slot.take().map(|running| {
+                    running.stop.store(true, Ordering::Release);
+                    running.task
+                });
+                wake();
+                stopped
+            }
+            (true, true) => None,
+        }
+    }
 }
 
 impl App {
@@ -184,10 +227,9 @@ impl App {
         );
         let network = crate::archive::network::Client::new(archive_agent).map_err(failed)?;
         let feed = Arc::new(feed::Controller::default());
-        let proactive = proactive::Scheduler::new(
+        let proactive = crate::proactive::Scheduler::new(
             store.clone(),
             archive.clone(),
-            feed.clone(),
             data_root.clone(),
             ui.clone(),
             config.runtime.clone(),
@@ -229,7 +271,7 @@ impl App {
             runtime: config.runtime,
             views: OnceLock::new(),
             started: AtomicBool::new(false),
-            classifier_loop: Mutex::new(None),
+            loops: Mutex::default(),
         })
     }
 
@@ -239,10 +281,10 @@ impl App {
         self.ui.subscribe()
     }
 
-    /// Starts the background work: seat alerts, the shell's Studium views, the
-    /// 휴지통 and notice-date loops, the scheduler and the loops of the
-    /// extensions that are on (the classifier). Call it once, after the shell
-    /// can serve the UI's calls.
+    /// Starts the background work: seat alerts (while Studium and `proactive`
+    /// are on), the shell's Studium views, the 휴지통 and notice-date loops and
+    /// the loops of the extensions that are on (feed, scheduler, classifier).
+    /// Call it once, after the shell can serve the UI's calls.
     pub fn start(&self, views: Option<Arc<dyn StudiumViews>>) {
         if self.started.swap(true, Ordering::AcqRel) {
             return;
@@ -271,11 +313,6 @@ impl App {
             self.operation_gate.clone(),
             shutdown.clone(),
         ));
-        if let Err(error) = self.proactive.start() {
-            // Proactive operation is optional. A scheduler start failure must
-            // not take away archive, AI or settings access.
-            eprintln!("Proactive: 스케줄러를 시작하지 못했습니다: {error}");
-        }
     }
 
     pub fn settings(&self) -> Settings<'_> {
@@ -298,6 +335,14 @@ impl App {
         Meals(self)
     }
 
+    pub fn personalization(&self) -> Personalization<'_> {
+        Personalization(self)
+    }
+
+    pub fn proactive(&self) -> Proactive<'_> {
+        Proactive(self)
+    }
+
     pub fn studium(&self) -> Studium<'_> {
         Studium(self)
     }
@@ -312,48 +357,56 @@ impl App {
     /// are read under the loop slot's lock, so whichever call runs last
     /// leaves the loops matching the store. Before [`App::start`] and during
     /// exit nothing starts.
-    fn match_loops(&self) -> Vec<ExtensionLoop> {
-        let mut stopped = Vec::new();
-        let Ok(mut classifier) = self.classifier_loop.lock() else {
-            return stopped;
-        };
+    fn match_loops(&self) -> Vec<JoinHandle<()>> {
         let live = self.started.load(Ordering::Acquire)
             && !self.maintenance_shutdown.load(Ordering::Acquire);
-        let wanted = |which: Loop| {
-            live && crate::storage::with_store(&self.store, |store| {
-                for extension in BUILT_IN {
-                    if extension.runs.contains(&which) && store.enabled(extension.id)? {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
-            })
-            .unwrap_or(false)
-        };
-        let running = classifier
-            .as_ref()
-            .is_some_and(|running| !running.task.is_finished());
-        match (wanted(Loop::Classifier), running) {
-            (true, false) => {
-                let stop = Arc::new(AtomicBool::new(false));
-                let task = self.runtime.spawn(intelligence::classification::run(
-                    self.classifier.clone(),
-                    self.store.clone(),
-                    self.models.clone(),
-                    self.data_root.clone(),
-                    self.maintenance_shutdown.clone(),
-                    stop.clone(),
-                ));
-                *classifier = Some(ExtensionLoop { stop, task });
+        let mut stopped = Vec::new();
+        if let Ok(mut loops) = self.loops.lock() {
+            let wanted = |which: Loop| {
+                live && crate::storage::with_store(&self.store, |s| extensions::runs(s, which))
+                    .unwrap_or(false)
+            };
+            stopped.extend(ExtensionLoop::rematch(
+                &mut loops.classifier,
+                wanted(Loop::Classifier),
+                || self.classifier.wake(),
+                |stop| {
+                    self.runtime.spawn(intelligence::classification::run(
+                        self.classifier.clone(),
+                        self.store.clone(),
+                        self.models.clone(),
+                        self.data_root.clone(),
+                        self.maintenance_shutdown.clone(),
+                        stop,
+                    ))
+                },
+            ));
+            stopped.extend(ExtensionLoop::rematch(
+                &mut loops.feed,
+                wanted(Loop::Feed),
+                || self.feed.wake(),
+                |stop| {
+                    self.runtime.spawn(feed::run_loop(
+                        self.feed.clone(),
+                        self.store.clone(),
+                        self.data_root.clone(),
+                        feed::transport::HttpsTransport::new(self.user_agent),
+                        self.operation_gate.clone(),
+                        self.maintenance_shutdown.clone(),
+                        stop,
+                    ))
+                },
+            ));
+        }
+        // The scheduler decides under its own lock; exit stops it through
+        // `shutdown`.
+        if live {
+            match self.proactive.start() {
+                Ok(task) => stopped.extend(task),
+                // Proactive operation is optional. A scheduler start failure
+                // must not take away archive, AI or settings access.
+                Err(error) => eprintln!("Proactive: 스케줄러를 시작하지 못했습니다: {error}"),
             }
-            (false, _) => {
-                if let Some(running) = classifier.take() {
-                    running.stop.store(true, Ordering::Release);
-                    stopped.push(running);
-                }
-                self.classifier.wake();
-            }
-            (true, true) => {}
         }
         stopped
     }
@@ -362,7 +415,7 @@ impl App {
     /// waits for the ones it stopped, which release their engine first.
     async fn settle_loops(&self) {
         for stopped in self.match_loops() {
-            let _ = stopped.task.await;
+            let _ = stopped.await;
         }
     }
 
@@ -393,6 +446,17 @@ impl App {
         }
         self.studium_notifications.shutdown().await;
         self.proactive.shutdown().await;
+        // Joined before waiting for the sync, so it cannot start another.
+        let feed_loop = self
+            .loops
+            .lock()
+            .ok()
+            .and_then(|mut loops| loops.feed.take());
+        if let Some(feed_loop) = feed_loop {
+            feed_loop.stop.store(true, Ordering::Release);
+            self.feed.wake();
+            let _ = feed_loop.task.await;
+        }
         self.archive.wait().await;
         self.archive.bodies.wait().await;
         self.feed.wait().await;
@@ -470,7 +534,7 @@ impl App {
 
 pub struct MaintenanceGuard {
     _gate: operation_gate::MaintenanceGuard,
-    proactive: Arc<proactive::Scheduler>,
+    proactive: Arc<crate::proactive::Scheduler>,
     studium_notifications: Arc<crate::studium::notification::Notifications>,
     views: Option<Arc<dyn StudiumViews>>,
     classifier_guard: Option<intelligence::classification::PauseGuard>,
@@ -492,6 +556,8 @@ impl MaintenanceGuard {
 impl Drop for MaintenanceGuard {
     fn drop(&mut self) {
         drop(self.classifier_guard.take());
+        // Nothing to join: maintenance stopped the loop, and while
+        // `proactive` is off it stays stopped.
         if let Err(error) = self.proactive.start() {
             eprintln!("Proactive: 유지보수 후 스케줄러를 다시 시작하지 못했습니다: {error}");
         }
@@ -508,7 +574,7 @@ impl Drop for MaintenanceGuard {
 
 struct MaintenancePreparation {
     reservation: Option<operation_gate::MaintenanceReservation>,
-    proactive: Arc<proactive::Scheduler>,
+    proactive: Arc<crate::proactive::Scheduler>,
     studium_notifications: Arc<crate::studium::notification::Notifications>,
     views: Option<Arc<dyn StudiumViews>>,
     runtime: Handle,

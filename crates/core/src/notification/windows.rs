@@ -27,6 +27,7 @@ use windows::{
     },
 };
 
+use super::permission::Authorization;
 use crate::windows_identity;
 
 const SETTING_NOT_FOUND: i32 = 0x80070490_u32 as i32;
@@ -56,12 +57,12 @@ enum SettingState {
 }
 
 impl SettingState {
-    fn status(&self) -> &'static str {
+    fn status(&self) -> Authorization {
         match self {
-            Self::Authorized => "authorized",
-            Self::Denied => "denied",
-            Self::SetupRequired => "not_determined",
-            Self::Unavailable => "unavailable",
+            Self::Authorized => Authorization::Authorized,
+            Self::Denied => Authorization::Denied,
+            Self::SetupRequired => Authorization::NotDetermined,
+            Self::Unavailable => Authorization::Unavailable,
         }
     }
 }
@@ -335,20 +336,20 @@ pub fn new_token() -> Result<String, String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-pub fn authorization() -> &'static str {
+pub fn authorization() -> Authorization {
     if !protocol_registered_to_current_exe() {
-        return "unavailable";
+        return Authorization::Unavailable;
     }
     let Ok(_runtime) = RuntimeGuard::initialize() else {
-        return "unavailable";
+        return Authorization::Unavailable;
     };
     if !shortcut_matches_current_exe() {
-        return "unavailable";
+        return Authorization::Unavailable;
     }
     let Ok(notifier) = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
         windows_identity::current().aumid.as_str(),
     )) else {
-        return "unavailable";
+        return Authorization::Unavailable;
     };
     classify_setting(notifier.Setting().map_err(|error| error.code().0)).status()
 }
@@ -356,26 +357,26 @@ pub fn authorization() -> &'static str {
 /// User-invoked connection test, separate from the ordinary delivery ledger.
 /// A not-found error is unknown, never permission. Only this explicit action
 /// may submit a neutral test toast, which lets Windows initialize its sender.
-pub fn request_connection_test() -> Result<(&'static str, bool), String> {
+pub fn request_connection_test() -> Result<(Authorization, bool), String> {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
     static LAST_TEST: Mutex<Option<Instant>> = Mutex::new(None);
 
     if !protocol_registered_to_current_exe() {
-        return Ok(("unavailable", false));
+        return Ok((Authorization::Unavailable, false));
     }
     let _runtime = match RuntimeGuard::initialize() {
         Ok(runtime) => runtime,
-        Err(_) => return Ok(("unavailable", false)),
+        Err(_) => return Ok((Authorization::Unavailable, false)),
     };
     if !shortcut_matches_current_exe() {
-        return Ok(("unavailable", false));
+        return Ok((Authorization::Unavailable, false));
     }
     let notifier = match ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
         windows_identity::current().aumid.as_str(),
     )) {
         Ok(notifier) => notifier,
-        Err(_) => return Ok(("unavailable", false)),
+        Err(_) => return Ok((Authorization::Unavailable, false)),
     };
     let state = classify_setting(notifier.Setting().map_err(|error| error.code().0));
     if state != SettingState::SetupRequired {
@@ -549,7 +550,7 @@ mod tests {
         );
         assert_ne!(
             classify_setting(Err(SETTING_NOT_FOUND)).status(),
-            "authorized"
+            Authorization::Authorized
         );
     }
     #[test]

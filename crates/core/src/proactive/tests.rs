@@ -230,26 +230,26 @@ fn notifications_are_discovered_without_scheduler_enablement() {
 
 #[test]
 fn authorization_policy_matches_each_platform_sender() {
+    use crate::notification::permission::Authorization::*;
     if cfg!(windows) {
-        for status in ["unavailable", "denied", "not_determined", "unknown"] {
+        for status in [Unavailable, Denied, NotDetermined, Unknown] {
             assert!(!scheduler::notification_authorization_permits(
                 status, false
             ));
             assert!(!scheduler::notification_authorization_permits(status, true));
         }
         assert!(scheduler::notification_authorization_permits(
-            "authorized",
-            false
+            Authorized, false
         ));
     } else {
-        for status in ["denied", "not_determined"] {
+        for status in [Denied, NotDetermined] {
             assert!(!scheduler::notification_authorization_permits(
                 status, false
             ));
             // Quiet hours still claim and defer so the events are not lost.
             assert!(scheduler::notification_authorization_permits(status, true));
         }
-        for status in ["authorized", "provisional", "ephemeral", "unavailable"] {
+        for status in [Authorized, Provisional, Ephemeral, Unavailable] {
             assert!(scheduler::notification_authorization_permits(status, false));
         }
     }

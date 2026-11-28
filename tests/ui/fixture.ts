@@ -354,6 +354,14 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         // The backend refuses AI reads while the extension is off.
         if (['ai_snapshot', 'ai_classifications', 'ai_classification', 'ai_similar_notices', 'ai_duplicate_notices'].includes(command)
           && !snapshot.extensions.some((extension) => extension.id === 'ai' && extension.enabled)) throw 'AI 분류 확장 기능이 꺼져 있습니다.';
+        // So are the recommendation list and the 개인화 pane while 나를 위한 소식 is off (reader
+        // feedback stays), and every 알림·백그라운드 read while that is off.
+        if (['personalization_get', 'personalization_save_profile', 'personalization_save_interest', 'personalization_remove_interest',
+          'personalization_set_learning', 'personalization_reset', 'personalization_recommendations'].includes(command)
+          && !snapshot.extensions.some((extension) => extension.id === 'recommendations' && extension.enabled)) throw '나를 위한 소식 확장 기능이 꺼져 있습니다.';
+        if (['proactive_snapshot', 'proactive_save', 'proactive_history', 'proactive_clear_history', 'notification_authorization',
+          'notification_request_permission'].includes(command)
+          && !snapshot.extensions.some((extension) => extension.id === 'proactive' && extension.enabled)) throw '알림·백그라운드 확장 기능이 꺼져 있습니다.';
         switch (command) {
           case 'plugin:event|listen':
             if (args.event === 'updater://progress') updaterHandler = args.handler;

@@ -109,7 +109,8 @@
   $effect(() => {
     if (current !== 'done') return;
     summaryError = '';
-    void Promise.all([invoke<SourceInfo[]>('archive_sources'), invoke<ProactiveSnapshot>('proactive_snapshot')])
+    // The backend refuses the proactive snapshot while that extension is off.
+    void Promise.all([invoke<SourceInfo[]>('archive_sources'), enabled.has('proactive') ? invoke<ProactiveSnapshot>('proactive_snapshot') : Promise.resolve(null)])
       .then(([nextSources, nextProactive]) => { sources = nextSources; proactive = nextProactive; })
       .catch((reason) => { summaryError = archiveError(reason); });
   });

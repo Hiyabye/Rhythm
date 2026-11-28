@@ -1,5 +1,5 @@
-//! The in-app scheduler (source tasks and the feed sync), the notice
-//! notification pipeline and todo reminders. The app keeps the commands.
+//! The in-app scheduler (Cybercampus source tasks), the notice notification
+//! pipeline and todo reminders. The UI's calls are `App::proactive()`.
 mod notification;
 mod reminders;
 pub mod scheduler;

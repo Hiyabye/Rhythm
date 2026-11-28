@@ -309,10 +309,14 @@
       snapshot = await invoke<Snapshot>('get_snapshot');
       theme = snapshot.settings.theme;
       showSetup = !snapshot.onboarding_completed;
-      try {
-        const proactive = await invoke<ProactiveSnapshot>('proactive_snapshot');
-        if (proactive.pending_activation) handleProactiveActivation(proactive.pending_activation);
-      } catch { /* The archive remains usable if proactive state is unavailable. */ }
+      // A click that arrived before the UI subscribed; no notice notification
+      // is sent while 알림·백그라운드 is off, and the backend refuses the read then.
+      if (snapshot.extensions.some((extension) => extension.id === 'proactive' && extension.enabled)) {
+        try {
+          const proactive = await invoke<ProactiveSnapshot>('proactive_snapshot');
+          if (proactive.pending_activation) handleProactiveActivation(proactive.pending_activation);
+        } catch { /* The archive remains usable if proactive state is unavailable. */ }
+      }
       try { restoreOutcome = await invoke<RestoreOutcome | null>('backup_restore_outcome'); }
       catch { /* A missing report must not block the restored archive. */ }
       if (pendingStudiumRoom) handleStudiumActivation(pendingStudiumRoom);

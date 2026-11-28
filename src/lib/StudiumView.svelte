@@ -254,6 +254,8 @@
 
   async function loadNotificationContext() {
     if (!desktop || notificationLoading) return;
+    // The backend refuses these reads while 알림·백그라운드 is off; the status line says so.
+    if (!proactiveEnabled) { notificationSettings = null; notificationAuthorization = 'unknown'; notificationError = ''; return; }
     notificationLoading = true;
     notificationError = '';
     const [settings, authorization] = await Promise.allSettled([
