@@ -162,11 +162,7 @@ pub fn updater_auto_check(
     updater: tauri::State<'_, State>,
     state: tauri::State<'_, crate::AppState>,
 ) -> Result<AutoCheck, String> {
-    let enabled = state
-        .store
-        .lock()
-        .map_err(|_| "설정 저장소를 사용할 수 없습니다.".to_string())?
-        .update_check_enabled()?;
+    let enabled = state.settings().update_check()?;
     let available = updater
         .available
         .lock()
@@ -180,12 +176,7 @@ pub fn updater_set_auto_check(
     state: tauri::State<'_, crate::AppState>,
     enabled: bool,
 ) -> Result<bool, String> {
-    let store = state
-        .store
-        .lock()
-        .map_err(|_| "설정 저장소를 사용할 수 없습니다.".to_string())?;
-    store.set_update_check(enabled)?;
-    store.update_check_enabled()
+    state.settings().set_update_check(enabled)
 }
 
 /// The first wake leaves startup alone; later wakes are hourly, so a failed or
@@ -198,12 +189,15 @@ const AUTO_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 /// key and the user has not turned automatic checks off. Failures stay quiet:
 /// the manual check in Settings reports errors. It only announces; downloading
 /// and installing remain explicit.
-pub async fn run_auto_check(app: AppHandle, shutdown: Arc<AtomicBool>) {
+pub async fn run_auto_check(app: AppHandle) {
     if !updater_configured() {
         return;
     }
     tokio::time::sleep(AUTO_CHECK_FIRST_WAKE).await;
-    while !shutdown.load(Ordering::Acquire) {
+    while !app
+        .try_state::<crate::AppState>()
+        .is_none_or(|state| state.exiting())
+    {
         auto_check_once(&app).await;
         tokio::time::sleep(AUTO_CHECK_WAKE).await;
     }
@@ -214,13 +208,7 @@ async fn auto_check_once(app: &AppHandle) {
         return;
     };
     // Never hold the store lock across the network request.
-    let due = state
-        .store
-        .lock()
-        .ok()
-        .and_then(|store| store.update_check_due().ok())
-        .unwrap_or(false);
-    if !due {
+    if !state.settings().update_check_due() {
         return;
     }
     let Ok(updater) = app.updater_builder().timeout(AUTO_CHECK_TIMEOUT).build() else {
@@ -229,9 +217,7 @@ async fn auto_check_once(app: &AppHandle) {
     let Ok(update) = updater.check().await else {
         return;
     };
-    if let Ok(store) = state.store.lock() {
-        let _ = store.record_update_check();
-    }
+    state.settings().record_update_check();
     let found = update.as_ref().map(info);
     remember(&app.state::<State>(), found.as_ref());
     if let Some(found) = found {
@@ -301,9 +287,8 @@ pub async fn updater_restart(
     // skipping the normal shutdown), and on macOS it would keep running from
     // the replaced bundle. The maintenance guard keeps classification paused,
     // so nothing restarts it before install.
-    state
-        .classifier
-        .stop_worker()
+    operation
+        .stop_ai_engine()
         .await
         .map_err(|e| format!("AI 엔진을 멈추지 못해 업데이트를 설치하지 않았습니다. {e}"))?;
     let mut staged = updater

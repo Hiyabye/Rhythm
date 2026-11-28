@@ -4,8 +4,9 @@
 //! later) keeps only windows, tray, menus and OS integration, and forwards
 //! [`Event`]s from [`App::events`] to its UI.
 //!
-//! Every domain command area has its handle. The fields stay public while
-//! shell code (the mini window, the updater, startup) still reads them.
+//! Every domain command area has its handle; the fields are private, and the
+//! few things the shell itself needs (the data root, the exit flag, the parts
+//! its native Studium views read) have their own accessors.
 
 mod ai;
 mod archive;
@@ -30,7 +31,7 @@ pub use feed::Feed;
 pub use meals::Meals;
 pub use personalization::Personalization;
 pub use proactive::Proactive;
-pub use settings::{storage_error, Settings, Snapshot};
+pub use settings::{storage_error, Lifecycle, Settings, Snapshot};
 pub use studium::{Studium, StudiumMini};
 
 use crate::{
@@ -47,7 +48,7 @@ use std::{
     any::Any,
     fmt,
     future::Future,
-    path::PathBuf,
+    path::{Path, PathBuf},
     pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -117,25 +118,25 @@ pub trait StudiumViews: Send + Sync + 'static {
 
 pub struct App {
     _instance_lock: DataDirLock,
-    pub store: sync::SharedStore,
-    pub data_root: PathBuf,
-    pub proactive: Arc<crate::proactive::Scheduler>,
-    pub archive: Arc<sync::Controller>,
-    pub feed: Arc<crate::feed::Controller>,
-    pub studium: Arc<crate::studium::controller::Controller>,
-    pub studium_notifications: Arc<crate::studium::notification::Notifications>,
-    pub network: crate::archive::Client,
-    pub registry: Registry,
-    pub classifier: Arc<intelligence::classification::Controller>,
-    pub models: intelligence::models::Controller,
-    pub hardware: intelligence::models::Hardware,
+    store: sync::SharedStore,
+    data_root: PathBuf,
+    proactive: Arc<crate::proactive::Scheduler>,
+    archive: Arc<sync::Controller>,
+    feed: Arc<crate::feed::Controller>,
+    studium: Arc<crate::studium::controller::Controller>,
+    studium_notifications: Arc<crate::studium::notification::Notifications>,
+    network: crate::archive::Client,
+    registry: Registry,
+    classifier: Arc<intelligence::classification::Controller>,
+    models: intelligence::models::Controller,
+    hardware: intelligence::models::Hardware,
     /// Serializes model installs, removals and folder changes.
-    pub ai_gate: tokio::sync::Mutex<()>,
+    ai_gate: tokio::sync::Mutex<()>,
     /// Set once at exit; background loops and new jobs stop on it.
-    pub maintenance_shutdown: Arc<AtomicBool>,
-    pub operation_gate: Arc<AdmissionGate>,
+    maintenance_shutdown: Arc<AtomicBool>,
+    operation_gate: Arc<AdmissionGate>,
     /// What the restore finished at this launch reported, for the UI.
-    pub restore_outcome: Option<crate::backup::RestoreOutcome>,
+    restore_outcome: Option<crate::backup::RestoreOutcome>,
     user_agent: &'static str,
     ui: Ui,
     runtime: Handle,
@@ -375,6 +376,43 @@ impl App {
         StudiumMini(self)
     }
 
+    /// The data directory this app opened.
+    pub fn data_root(&self) -> &Path {
+        &self.data_root
+    }
+
+    /// Whether exit has begun. Loops the shell runs itself stop on it.
+    pub fn exiting(&self) -> bool {
+        self.maintenance_shutdown.load(Ordering::Acquire)
+    }
+
+    /// What the shell's native Studium views (mini window and tray summary)
+    /// read. They hold the Store lock while they check their window state, so
+    /// a window open is ordered against Studium turning off; the display loop
+    /// moves into core with the mini window (#349).
+    pub fn studium_view_parts(&self) -> StudiumViewParts {
+        StudiumViewParts {
+            store: self.store.clone(),
+            controller: Arc::downgrade(&self.studium),
+            gate: self.operation_gate.clone(),
+        }
+    }
+
+    /// Hands a Windows toast activation (its protocol URI) to the seat alerts,
+    /// the todo reminders or the notice digest that sent it.
+    #[cfg(windows)]
+    pub async fn notification_activation(&self, uri: &str) -> Result<bool, String> {
+        if crate::studium::notification::token_from_uri(uri).is_some() {
+            self.studium_notifications
+                .handle_windows_activation(uri)
+                .await
+        } else if uri.starts_with(crate::proactive::reminder_prefix()) {
+            self.proactive.handle_windows_reminder(uri).await
+        } else {
+            self.proactive.handle_windows_activation(uri).await
+        }
+    }
+
     /// Starts or stops each extension-owned loop to match the stored choices
     /// and returns the loops it stopped, for the caller to join. The choices
     /// are read under the loop slot's lock, so whichever call runs last
@@ -542,6 +580,7 @@ impl App {
         // classifier quiesces still restarts the work, exactly once.
         let mut guard = MaintenanceGuard {
             _gate: gate,
+            classifier: self.classifier.clone(),
             proactive: self.proactive.clone(),
             studium_notifications: self.studium_notifications.clone(),
             views: self.views().cloned(),
@@ -555,8 +594,16 @@ impl App {
     }
 }
 
+/// See [`App::studium_view_parts`].
+pub struct StudiumViewParts {
+    pub store: sync::SharedStore,
+    pub controller: std::sync::Weak<crate::studium::controller::Controller>,
+    pub gate: Arc<AdmissionGate>,
+}
+
 pub struct MaintenanceGuard {
     _gate: operation_gate::MaintenanceGuard,
+    classifier: Arc<intelligence::classification::Controller>,
     proactive: Arc<crate::proactive::Scheduler>,
     studium_notifications: Arc<crate::studium::notification::Notifications>,
     views: Option<Arc<dyn StudiumViews>>,
@@ -564,6 +611,14 @@ pub struct MaintenanceGuard {
 }
 
 impl MaintenanceGuard {
+    /// Stops the embedding server, which maintenance leaves running while it
+    /// only pauses classification. An update install needs it gone: it runs
+    /// from the install folder the installer replaces. The guard keeps
+    /// classification paused, so nothing restarts it.
+    pub async fn stop_ai_engine(&self) -> Result<(), String> {
+        self.classifier.stop_worker().await
+    }
+
     /// Keeps maintenance closed and work stopped for the rest of the process.
     /// [`App::shutdown`] stops the classifier by taking its batch guard, so an
     /// exit requested while this guard is held must release that guard first,

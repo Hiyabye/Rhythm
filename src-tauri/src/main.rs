@@ -3,7 +3,6 @@ mod archive;
 mod backup;
 mod calendar_export;
 mod commands;
-pub(crate) use rhythm_core::app::storage_error;
 mod core;
 mod extensions;
 mod feed;
@@ -18,8 +17,9 @@ use rhythm_core::storage;
 mod studium;
 mod updater;
 use rhythm_core::app::{App, OpenError};
-use std::sync::{Arc, Mutex};
-use storage::{proactive::ProactiveSettings, Store};
+use std::sync::Arc;
+#[cfg(windows)]
+use std::sync::Mutex;
 use tauri::Manager;
 
 /// The User-Agent of the app's own requests (models, feed): `Rhythm/<version>`.
@@ -28,10 +28,9 @@ pub(crate) const USER_AGENT: &str = concat!("Rhythm/", env!("CARGO_PKG_VERSION")
 
 /// The core app plus what only this Tauri shell owns: tray, login item and
 /// the native Studium mini window. It derefs to the core `App`, so commands
-/// still reach core handles as `state.store`, `state.settings()` and so on.
+/// reach core handles as `state.settings()` and so on.
 pub(crate) struct AppState {
     core: App,
-    lifecycle: Arc<dyn core::lifecycle::LifecyclePreferences>,
     tray_available: bool,
     /// Serializes login-item changes, which span an OS call and a store write.
     launch_at_login: tokio::sync::Mutex<()>,
@@ -42,40 +41,6 @@ impl std::ops::Deref for AppState {
     type Target = App;
     fn deref(&self) -> &App {
         &self.core
-    }
-}
-
-/// Reads lifecycle preferences directly from persisted settings. Reading on
-/// demand avoids a cache that could go stale when another command saves the
-/// full proactive settings object.
-struct StoredLifecycle(Arc<Mutex<Store>>);
-
-impl StoredLifecycle {
-    fn settings(&self) -> Option<ProactiveSettings> {
-        match self
-            .0
-            .lock()
-            .map_err(|_| "저장소에 접근할 수 없습니다.".to_string())
-            .and_then(|store| store.proactive_effective_settings().map_err(storage_error))
-        {
-            Ok(settings) => Some(settings),
-            Err(error) => {
-                eprintln!("Lifecycle: 백그라운드 설정을 읽지 못해 기본 동작을 사용합니다: {error}");
-                None
-            }
-        }
-    }
-}
-
-impl core::lifecycle::LifecyclePreferences for StoredLifecycle {
-    fn close_to_background(&self) -> bool {
-        self.settings()
-            .is_some_and(|settings| settings.close_to_background)
-    }
-
-    fn start_hidden(&self) -> bool {
-        self.settings()
-            .is_some_and(|settings| settings.start_hidden)
     }
 }
 
@@ -119,17 +84,7 @@ fn spawn_notification_activation(app: &tauri::AppHandle, uri: String) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Some(state) = app.try_state::<AppState>() {
-            let result = if studium::notification::token_from_uri(&uri).is_some() {
-                state
-                    .studium_notifications
-                    .handle_windows_activation(&uri)
-                    .await
-            } else if uri.starts_with(proactive::reminder_prefix()) {
-                state.proactive.handle_windows_reminder(&uri).await
-            } else {
-                state.proactive.handle_windows_activation(&uri).await
-            };
-            if let Err(error) = result {
+            if let Err(error) = state.notification_activation(&uri).await {
                 eprintln!("알림을 열지 못했습니다: {error}");
             }
         } else {
@@ -332,30 +287,23 @@ fn main() {
                     false
                 }
             };
-            let lifecycle: Arc<dyn core::lifecycle::LifecyclePreferences> =
-                Arc::new(StoredLifecycle(core.store.clone()));
             let launch = core::lifecycle::LaunchMode::current();
             // A hidden login launch requires the tray as its restore path.
             // Without it reveal the window without taking focus; manual
             // `--hidden` launches retain their explicit behavior.
-            if !launch.start_hidden(lifecycle.start_hidden(), tray_available) {
+            if !launch.start_hidden(core.settings().lifecycle().start_hidden, tray_available) {
                 if launch.autostart {
                     core::lifecycle::reveal_main_window(app.handle())?;
                 } else {
                     core::lifecycle::show_main_window(app.handle())?;
                 }
             }
-            let studium_views = studium::views::Views::new(
-                core.store.clone(),
-                Arc::downgrade(&core.studium),
-                core.operation_gate.clone(),
-                app.handle().clone(),
-            );
+            let studium_views =
+                studium::views::Views::new(core.studium_view_parts(), app.handle().clone());
             shell::forward_events(app.handle().clone(), core.events());
             app.manage(updater::State::default());
             app.manage(AppState {
                 core,
-                lifecycle,
                 tray_available,
                 launch_at_login: tokio::sync::Mutex::new(()),
                 studium_views,
@@ -370,10 +318,7 @@ fn main() {
             );
             #[cfg(windows)]
             notification_launches_ready(app.handle());
-            tauri::async_runtime::spawn(updater::run_auto_check(
-                app.handle().clone(),
-                state.maintenance_shutdown.clone(),
-            ));
+            tauri::async_runtime::spawn(updater::run_auto_check(app.handle().clone()));
             #[cfg(unix)]
             tauri::async_runtime::spawn(quit_on_signal(app.handle().clone()));
             Ok(())
@@ -495,7 +440,8 @@ fn main() {
             let Some(state) = handle.try_state::<AppState>() else {
                 return;
             };
-            let close_to_background = state.tray_available && state.lifecycle.close_to_background();
+            let close_to_background =
+                state.tray_available && state.settings().lifecycle().close_to_background;
             core::lifecycle::handle_main_close(handle, &label, &api, close_to_background);
         }
         #[cfg(target_os = "macos")]

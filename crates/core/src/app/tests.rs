@@ -124,6 +124,44 @@ async fn saved_settings_reach_subscribers_and_survive_reopen() {
 }
 
 #[tokio::test]
+async fn the_shell_reads_lifecycle_and_update_check_through_settings() {
+    use crate::extensions::PROACTIVE;
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+    assert_eq!(app.data_root(), directory.path().join("data"));
+    let both = Lifecycle {
+        close_to_background: true,
+        start_hidden: true,
+    };
+
+    // A new profile checks for updates automatically (#38).
+    let settings = app.settings();
+    assert!(settings.update_check().unwrap());
+    assert!(settings.update_check_due());
+    settings.record_update_check();
+    assert!(!settings.update_check_due());
+    assert!(!settings.set_update_check(false).unwrap());
+
+    settings.set_close_to_background(true).await.unwrap();
+    settings.set_start_hidden(true).await.unwrap();
+    // Both switches apply only while `proactive` is on.
+    assert_eq!(settings.lifecycle(), Lifecycle::default());
+    settings.set_extension(PROACTIVE, true).await.unwrap();
+    assert_eq!(app.settings().lifecycle(), both);
+
+    assert!(!app.exiting());
+    app.shutdown().await;
+    assert!(app.exiting());
+    drop(app);
+
+    let app = open(directory.path()).unwrap();
+    assert_eq!(app.settings().lifecycle(), both);
+    assert!(!app.settings().update_check().unwrap());
+    assert!(!app.settings().update_check_due());
+    app.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_second_open_of_the_same_data_directory_is_locked() {
     let directory = tempfile::tempdir().unwrap();
     let app = open(directory.path()).unwrap();
@@ -169,6 +207,12 @@ async fn maintenance_pauses_the_views_and_its_guard_restarts_them() {
     assert_eq!(count(&views.starts), 0);
     // Admission is closed while maintenance holds the data directory.
     assert!(app.settings().snapshot().await.is_err());
+    // An update install stops the engine while the guard keeps classification
+    // paused; with no engine loaded that returns at once.
+    tokio::time::timeout(Duration::from_secs(5), guard.stop_ai_engine())
+        .await
+        .expect("the paused classifier does not hold the engine")
+        .unwrap();
     drop(guard);
     assert_eq!(count(&views.starts), 1);
     assert!(app.settings().snapshot().await.is_ok());
