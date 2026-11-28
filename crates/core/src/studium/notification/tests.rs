@@ -6,6 +6,7 @@ use crate::{
         sync::Transport,
     },
     extensions::{PROACTIVE, STUDIUM},
+    notification::permission::Authorization,
     studium::{jobs::start_with_transport, model::AlertRuleInput},
 };
 use chrono::{Datelike, Timelike};
@@ -27,7 +28,7 @@ impl Drop for PermissionGuard {
 }
 
 pub(super) struct Wire {
-    authorization: Mutex<String>,
+    authorization: Mutex<Authorization>,
     block: Mutex<Option<Arc<PermissionBlock>>>,
     sent: Mutex<Vec<(AlertCandidate, String)>>,
     fail: AtomicBool,
@@ -36,21 +37,21 @@ pub(super) struct Wire {
 impl Wire {
     fn new() -> Arc<Self> {
         Arc::new(Self {
-            authorization: Mutex::new("authorized".into()),
+            authorization: Mutex::new(Authorization::Authorized),
             block: Mutex::new(None),
             sent: Mutex::new(Vec::new()),
             fail: AtomicBool::new(false),
         })
     }
 
-    pub(super) async fn authorization(&self) -> String {
+    pub(super) async fn authorization(&self) -> Authorization {
         let blocked = self.block.lock().unwrap().take();
         if let Some(block) = blocked {
             let _guard = PermissionGuard(block.clone());
             block.entered.store(true, Ordering::Release);
             block.release.acquire().await.unwrap().forget();
         }
-        self.authorization.lock().unwrap().clone()
+        *self.authorization.lock().unwrap()
     }
 
     pub(super) fn send(&self, candidate: &AlertCandidate, token: &str) -> Result<(), String> {
@@ -266,11 +267,11 @@ async fn fresh_manual_results_notify_once_and_only_a_successful_miss_rearms() {
 async fn denied_permission_waits_for_a_new_observation_without_consuming_the_latch() {
     let h = Harness::new();
     let fake = Fake::default();
-    *h.wire.authorization.lock().unwrap() = "denied".into();
+    *h.wire.authorization.lock().unwrap() = Authorization::Denied;
     h.check(&fake).await;
     until(|| h.notifications.last_error().is_some()).await;
     assert_eq!(h.wire.count(), 0);
-    *h.wire.authorization.lock().unwrap() = "authorized".into();
+    *h.wire.authorization.lock().unwrap() = Authorization::Authorized;
     tokio::time::advance(Duration::from_secs(3600)).await;
     tokio::task::yield_now().await;
     assert_eq!(h.wire.count(), 0);

@@ -915,3 +915,82 @@ async fn menu_weeks_an_older_version_skipped_are_backfilled_once() {
     // Menus never touch notices or unread counts.
     assert_eq!(titles(&store), ["첫 공지"]);
 }
+
+/// The loop owns its transport; the test keeps the fake to count requests.
+struct Shared(Arc<Fake>);
+impl Transport for Shared {
+    async fn get(&self, url: &Url, limit: u64, cancel: &AtomicBool) -> Result<Vec<u8>, FetchError> {
+        self.0.get(url, limit, cancel).await
+    }
+}
+
+async fn requests_reach(fake: &Fake, count: usize) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fake.requests.lock().unwrap().len() < count {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the loop sent no request");
+}
+
+/// What a woken loop does is done once it waits again.
+async fn settle() {
+    tokio::time::sleep(Duration::from_millis(100)).await;
+}
+
+#[tokio::test]
+async fn the_loop_syncs_when_due_outside_maintenance_and_ends_on_stop() {
+    let (directory, store) = store();
+    let fake = Arc::new(Fake::default());
+    // Every sync ends offline after one request and is due again in minutes.
+    fake.fail(&format!("{BASE}manifest.json"), FetchError::Offline);
+    let controller = Arc::new(Controller::default());
+    let gate = Arc::new(AdmissionGate::default());
+    let stop = Arc::new(AtomicBool::new(false));
+    let task = tokio::spawn(run_loop(
+        controller.clone(),
+        store.clone(),
+        directory.path().into(),
+        Shared(fake.clone()),
+        gate.clone(),
+        Arc::new(AtomicBool::new(false)),
+        stop.clone(),
+    ));
+    let sent = || fake.requests.lock().unwrap().len();
+
+    // Due at launch.
+    requests_reach(&fake, 1).await;
+    // A wake re-checks; nothing is due yet.
+    controller.wake();
+    settle().await;
+    assert_eq!(sent(), 1);
+
+    // Due again, but maintenance has closed admission.
+    *controller.next.lock().unwrap() = None;
+    let guard = gate.close().unwrap().acquire().await.unwrap();
+    controller.wake();
+    settle().await;
+    assert_eq!(sent(), 1);
+    drop(guard);
+    controller.wake();
+    requests_reach(&fake, 2).await;
+
+    // Due while the extension is off: no sync.
+    store
+        .lock()
+        .unwrap()
+        .set_enabled(crate::extensions::NOTICES, false)
+        .unwrap();
+    *controller.next.lock().unwrap() = None;
+    controller.wake();
+    settle().await;
+    assert_eq!(sent(), 2);
+
+    stop.store(true, Ordering::Release);
+    controller.wake();
+    tokio::time::timeout(Duration::from_secs(1), task)
+        .await
+        .expect("a stopped loop ends at once")
+        .unwrap();
+}

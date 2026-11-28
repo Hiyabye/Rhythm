@@ -103,8 +103,20 @@ impl Notifications {
     }
 
     /// Starts an idle receiver only; startup/recovery never evaluates old data.
+    /// It runs only while every extension that feeds it (Studium and
+    /// `proactive`) is on; otherwise this does nothing.
     pub fn start(self: &Arc<Self>) -> Result<(), String> {
         if self.shutdown.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        // Store before control, as everywhere: a disable cancels the receiver
+        // under the Store lock, so it cannot slip between this read and the
+        // start.
+        let store = self
+            .store
+            .lock()
+            .map_err(|_| "좌석 알림 설정에 접근하지 못했습니다.")?;
+        if !crate::extensions::studium_alerts_on(&store)? {
             return Ok(());
         }
         let mut control = self
@@ -134,6 +146,14 @@ impl Notifications {
         };
         self.runtime.spawn(task);
         Ok(())
+    }
+
+    /// Whether a receiver runs and has not been told to stop.
+    #[cfg(test)]
+    pub(crate) fn running(&self) -> bool {
+        self.control.lock().unwrap().as_ref().is_some_and(|run| {
+            !run.cancel.load(Ordering::Acquire) && !run.finished.load(Ordering::Acquire)
+        })
     }
 
     /// Called under Store for extension disable. The captured handle cannot
@@ -328,10 +348,7 @@ impl Notifications {
         #[cfg(not(test))]
         let authorization =
             crate::notification::permission::notification_authorization_status().await;
-        if !matches!(
-            authorization.as_str(),
-            "authorized" | "provisional" | "ephemeral"
-        ) {
+        if !authorization.allows_delivery() {
             return Err(
                 "운영체제 알림 권한을 확인해 주세요. 다음 좌석 확인 결과부터 다시 판단합니다."
                     .into(),

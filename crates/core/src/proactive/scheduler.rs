@@ -1,4 +1,5 @@
 use super::notification::{self, DeliveryItem};
+use crate::notification::permission::Authorization;
 use crate::shell::{Event, Ui};
 use crate::{
     archive::{
@@ -11,7 +12,7 @@ use crate::{
             ProactiveClaim, ProactiveEventKey, ProactiveOutcome, ProactiveSettings, ProactiveTask,
             ProactiveTaskInput, SchedulerOutcome,
         },
-        Settings, Store,
+        with_store, Settings, Store,
     },
 };
 use std::{
@@ -34,12 +35,11 @@ const WAKE_INTERVAL: Duration = Duration::from_secs(15);
 pub struct Scheduler {
     store: sync::SharedStore,
     archive: Arc<Controller>,
-    feed: Arc<crate::feed::Controller>,
     root: PathBuf,
     shell: Ui,
     /// Where the loop runs; `start` is called from setup, outside any runtime.
     runtime: Handle,
-    /// The app's `Rhythm/<version>` for the feed and eClass requests.
+    /// The app's `Rhythm/<version>` for the eClass requests.
     user_agent: &'static str,
     operation_gate: Arc<AdmissionGate>,
     control: Mutex<Control>,
@@ -101,7 +101,6 @@ impl Scheduler {
     pub fn new(
         store: sync::SharedStore,
         archive: Arc<Controller>,
-        feed: Arc<crate::feed::Controller>,
         root: PathBuf,
         shell: Ui,
         runtime: Handle,
@@ -115,7 +114,6 @@ impl Scheduler {
         Self {
             store,
             archive,
-            feed,
             root,
             shell,
             runtime,
@@ -133,23 +131,41 @@ impl Scheduler {
         }
     }
 
-    pub fn start(&self) -> Result<(), String> {
+    /// Runs the loop exactly while an extension that owns it (`proactive`) is
+    /// on: starts it when it should run and is not, stops it when it should
+    /// not run. The choice is read under the control lock, so whichever call
+    /// comes last leaves the loop matching the store. Returns a loop it
+    /// stopped, for the caller to join. Nothing starts after [`Self::shutdown`].
+    pub fn start(&self) -> Result<Option<JoinHandle<()>>, String> {
         let mut control = self
             .control
             .lock()
             .map_err(|_| "스케줄러를 시작할 수 없습니다.")?;
-        if control
-            .task_done
-            .as_mut()
-            .is_some_and(|done| matches!(done.try_recv(), Err(oneshot::error::TryRecvError::Empty)))
-        {
-            return Ok(());
+        let running = control.task_done.as_mut().is_some_and(|done| {
+            matches!(done.try_recv(), Err(oneshot::error::TryRecvError::Empty))
+        });
+        let wanted = self.accepting_callbacks.load(Ordering::Acquire)
+            && with_store(&self.store, |s| {
+                crate::extensions::runs(s, crate::extensions::Loop::Scheduler)
+            })?;
+        if !wanted {
+            if !running {
+                return Ok(None);
+            }
+            // The stopped loop keeps its own channel, which stays stopped;
+            // a later start gets a new one and need not wait for it to end.
+            let _ = control.sender.send(true);
+            control.sender = watch::channel(true).0;
+            control.task_done = None;
+            return Ok(control.task.take());
+        }
+        if running {
+            return Ok(None);
         }
         let _ = control.sender.send(false);
         let mut stop = control.sender.subscribe();
         let store = self.store.clone();
         let archive = self.archive.clone();
-        let feed = self.feed.clone();
         let root = self.root.clone();
         let shell = self.shell.clone();
         let user_agent = self.user_agent;
@@ -180,11 +196,17 @@ impl Scheduler {
                         if stop_requested(&stop) {
                             break;
                         }
-                        if let Ok(_lease) = operation_gate.shared().await {
+                        // A lease can wait behind a backup that is waiting
+                        // for the caller of a stop, so a stop must not wait
+                        // for the lease.
+                        let lease = tokio::select! {
+                            lease = operation_gate.shared() => lease,
+                            _ = stop.wait_for(|stopped| *stopped) => break,
+                        };
+                        if let Ok(_lease) = lease {
                             if stop_requested(&stop) {
                                 break;
                             }
-                            run_feed(&store, &feed, &root, user_agent).await;
                             if let Err(error) = cycle(
                                 &store,
                                 &archive,
@@ -206,7 +228,7 @@ impl Scheduler {
             let _ = done_sender.send(());
         }));
         control.task_done = Some(done_receiver);
-        Ok(())
+        Ok(None)
     }
 
     pub async fn shutdown(&self) {
@@ -220,7 +242,6 @@ impl Scheduler {
         let task = if let Ok(mut control) = self.control.lock() {
             let _ = control.sender.send(true);
             self.archive.cancel();
-            self.feed.cancel();
             control.task.take()
         } else {
             None
@@ -247,6 +268,7 @@ impl Scheduler {
             };
             if stopped {
                 self.archive.wait().await;
+                // Nothing to join: the loop has stopped.
                 if let Err(error) = self.start() {
                     eprintln!(
                         "Proactive: 유지보수 취소 후 스케줄러를 다시 시작하지 못했습니다: {error}"
@@ -263,6 +285,17 @@ impl Scheduler {
             .lock()
             .map(|mut activation| activation.take())
             .map_err(|_| "알림 이동 정보를 확인할 수 없습니다.".into())
+    }
+
+    /// Whether the loop runs.
+    #[cfg(test)]
+    pub(crate) fn running(&self) -> bool {
+        self.control
+            .lock()
+            .unwrap()
+            .task_done
+            .as_mut()
+            .is_some_and(|done| matches!(done.try_recv(), Err(oneshot::error::TryRecvError::Empty)))
     }
 
     /// Records a clicked reminder's day as its click callback would.
@@ -359,18 +392,14 @@ pub(super) fn resolved_interval(requested: u32, profile: &str) -> u32 {
     }
 }
 
-pub fn lock_store(store: &sync::SharedStore) -> Result<std::sync::MutexGuard<'_, Store>, String> {
+/// The Store guard with the message of [`with_store`], for a caller that
+/// keeps the lock across several steps.
+pub(super) fn lock_store(
+    store: &sync::SharedStore,
+) -> Result<std::sync::MutexGuard<'_, Store>, String> {
     store
         .lock()
         .map_err(|_| "로컬 저장소에 접근할 수 없습니다.".to_string())
-}
-
-fn with_store<T>(
-    store: &sync::SharedStore,
-    operation: impl FnOnce(&Store) -> Result<T, String>,
-) -> Result<T, String> {
-    let guard = lock_store(store)?;
-    operation(&guard)
 }
 
 fn settings(store: &sync::SharedStore) -> Result<(ProactiveSettings, Settings), String> {
@@ -405,7 +434,7 @@ pub(super) fn reconcile_tasks(
         .map(|task| (task.task_id.clone(), task))
         .collect::<std::collections::HashMap<_, _>>();
     // Only sources the app collects itself have tasks; public boards come
-    // from the feed, whose sync runs on every wake.
+    // from the feed, whose sync has its own loop.
     for source in sources.into_iter().filter(|source| {
         source.definition.supported && archive::app_collected(&source.definition.id)
     }) {
@@ -557,31 +586,6 @@ pub(super) async fn run_scheduled_task<H: archive::cybercampus::client::Http + '
             .map(|_| ())
     })?;
     Ok(outcome)
-}
-
-/// The feed sync (#177 P2): at launch and then on the feed controller's
-/// schedule while the notices extension is on, whether or not the opt-in
-/// scheduler is. Maintenance and exit cancel it through `quiesce`.
-async fn run_feed(
-    store: &sync::SharedStore,
-    feed: &crate::feed::Controller,
-    root: &Path,
-    user_agent: &'static str,
-) {
-    if !feed.due() || !with_store(store, |s| s.enabled(crate::extensions::NOTICES)).unwrap_or(false)
-    {
-        return;
-    }
-    if let Err(error) = feed
-        .run(
-            store,
-            root,
-            &crate::feed::transport::HttpsTransport::new(user_agent),
-        )
-        .await
-    {
-        eprintln!("Feed: {error}");
-    }
 }
 
 async fn cycle(
@@ -751,11 +755,18 @@ pub(super) fn should_discover_notifications(prefs: &ProactiveSettings) -> bool {
 /// (quiet hours still defer). Windows WinRT requires a verified installed
 /// identity and protocol owner; otherwise nothing is claimed, even in quiet
 /// hours, because no sender could ever display it.
-pub(super) fn notification_authorization_permits(authorization: &str, quiet: bool) -> bool {
+pub(super) fn notification_authorization_permits(
+    authorization: Authorization,
+    quiet: bool,
+) -> bool {
     if cfg!(windows) {
-        authorization == "authorized"
+        authorization == Authorization::Authorized
     } else {
-        quiet || !matches!(authorization, "denied" | "not_determined")
+        quiet
+            || !matches!(
+                authorization,
+                Authorization::Denied | Authorization::NotDetermined
+            )
     }
 }
 
@@ -1090,7 +1101,7 @@ async fn discover_and_deliver(
         None
     };
     let authorization = crate::notification::permission::notification_authorization_status().await;
-    if !notification_authorization_permits(&authorization, quiet) {
+    if !notification_authorization_permits(authorization, quiet) {
         return Ok(());
     }
     #[cfg(windows)]

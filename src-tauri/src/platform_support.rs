@@ -25,11 +25,7 @@ pub async fn platform_capabilities(
         },
     };
     let authorization = crate::notification_permission::notification_authorization_status().await;
-    // macOS provisional/ephemeral authorization also permits delivery.
-    let available = matches!(
-        authorization.as_str(),
-        "authorized" | "granted" | "provisional" | "ephemeral"
-    );
+    let available = authorization.allows_delivery();
     #[cfg(windows)]
     let notification_hint = "Windows 알림 설정과 앱 설치 상태를 확인해 주세요.";
     #[cfg(not(windows))]
