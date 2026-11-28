@@ -14,7 +14,7 @@ Rhythm supports Windows 11 x64 alongside macOS Apple Silicon. The port came from
 
 - Windows 11 x64, Node.js 22.12+ and npm, Microsoft Edge WebView2 Runtime, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 - Visual Studio Build Tools with x64 MSVC and the Windows 11 SDK (observed: Build Tools 17.14.44, MSVC 14.44.35207, SDK 10.0.26100.0).
-- Stable Rust `x86_64-pc-windows-msvc`, 1.90+.
+- Stable Rust `x86_64-pc-windows-msvc`, 1.98+.
 - No LLVM or CMake: `scripts/stage-llama.mjs` downloads the pinned llama.cpp build (network access) and checks their size and SHA-256.
 
 ### Project-local toolchain (optional)

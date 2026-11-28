@@ -29,6 +29,10 @@ test('each area selects only its own jobs', () => {
   assert.deepEqual(classify(['src-tauri/vendor/mac-usernotifications/src/lib.rs']), { ...none, rust: true });
   assert.deepEqual(classify(['src-tauri/vendor/mac-usernotifications/Cargo.toml']), { ...none, rust: true });
   assert.deepEqual(classify(['crates/sources/src/parser.rs']), { ...none, rust: true });
+  // The GPUI app (#343) builds in the Rust jobs only; its docs build nothing.
+  assert.deepEqual(classify(['apps/desktop/src/main.rs']), { ...none, rust: true });
+  assert.deepEqual(classify(['apps/desktop/Cargo.toml']), { ...none, rust: true });
+  assert.deepEqual(classify(['apps/desktop/README.md']), none);
   assert.deepEqual(classify(['crates/sources/src/fixtures/main-detail.json']), { ...none, rust: true });
   assert.deepEqual(classify(['crates/sources/Cargo.toml']), { ...none, rust: true, packaging: true });
   assert.deepEqual(classify(['Cargo.lock']), { ...none, rust: true, packaging: true });

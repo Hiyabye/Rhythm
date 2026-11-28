@@ -1,0 +1,14 @@
+[package]
+name = "rhythm-desktop"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.98"
+publish = false
+license = "GPL-3.0-or-later"
+description = "The GPUI desktop app for Rhythm (v3, not shipped yet)"
+
+[dependencies]
+# Exact pin, upgraded only on purpose (#343). `x11` (Linux) is off.
+gpui-kit = { version = "=0.11.0", default-features = false, features = ["component", "assets"] }
+rhythm-core = { path = "../../crates/core" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
