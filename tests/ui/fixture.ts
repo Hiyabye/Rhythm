@@ -220,7 +220,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
     const studiumStates = (status: 'not_checked' | 'loading' | 'cancelled') => studium.preferences.room_ids.map((room_id) => ({ room_id, status, result: null, error: null, checked_at: null }));
     if (!options.studium?.results) studium.results = studiumStates('not_checked');
     type Board = { source_id: string; mode: string; page: number; message: string };
-    let sync = { running: false, mode: 'historical', message: '수집 대기 중입니다.', active: [] as Board[] };
+    let sync = { running: false, mode: null as string | null, message: '수집 대기 중입니다.', active: [] as Board[] };
     const filledBodies = new Set<number>();
     const resourceRows: ResourceRecord[] = copy(options.resources ?? []);
     let bodyFailures = options.feedBody?.result === 'fail' ? 1 : 0;
@@ -323,7 +323,7 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
       },
       completeSync: () => { sync = { ...sync, running: false, message: '가져오기를 마쳤습니다.', active: [] }; },
       syncMode: (mode: string, page = 1) => { sync = { ...sync, running: true, mode, active: [board(mode, page)] }; },
-      syncBoards: (ids: string[]) => { sync = { ...sync, running: true, mode: 'refresh', active: ids.map((id) => board('historical', 1, id)) }; } };
+      syncBoards: (ids: string[]) => { sync = { ...sync, running: true, mode: 'refresh', active: ids.map((id) => board('refresh', 1, id)) }; } };
     let calendarTodos = copy(options.calendarTodos ?? []);
     const noticeDates = copy(options.noticeDates ?? []);
     let calendarAllDeadlines = options.calendarAllDeadlines ?? false;
@@ -362,6 +362,13 @@ export async function mockDesktop(page: Page, options: FixtureOptions = {}) {
         if (['proactive_snapshot', 'proactive_save', 'proactive_history', 'proactive_clear_history', 'notification_authorization',
           'notification_request_permission'].includes(command)
           && !snapshot.extensions.some((extension) => extension.id === 'proactive' && extension.enabled)) throw '알림·백그라운드 확장 기능이 꺼져 있습니다.';
+        // The feed and the Cybercampus reads too; forgetting a login always works.
+        if (['feed_status', 'feed_sync'].includes(command)
+          && !snapshot.extensions.some((extension) => extension.id === 'sogang_notices' && extension.enabled)) throw '서강대학교 공지 기능이 꺼져 있습니다.';
+        if (['cybercampus_status', 'cybercampus_courses', 'cybercampus_tasks'].includes(command)
+          && !snapshot.extensions.some((extension) => extension.id === 'cybercampus' && extension.enabled)) throw '사이버캠퍼스 확장 기능이 꺼져 있습니다.';
+        if (command === 'cybercampus_save_login'
+          && !snapshot.extensions.some((extension) => extension.id === 'cybercampus' && extension.enabled)) throw '사이버캠퍼스 확장 기능을 먼저 켜 주세요.';
         switch (command) {
           case 'plugin:event|listen':
             if (args.event === 'updater://progress') updaterHandler = args.handler;

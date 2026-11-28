@@ -1,6 +1,6 @@
 # Cybercampus connector
 
-Area instructions for `crates/core/src/archive/cybercampus/` (in `rhythm-core`), its commands in `src-tauri/src/archive/cybercampus.rs`, `CybercampusSettings.svelte`, `CybercampusTasks.svelte` and `storage/cybercampus.rs`. The root `AGENTS.md` (project-wide rules) applies too.
+Area instructions for `crates/core/src/archive/cybercampus/` (in `rhythm-core`), its core handle `crates/core/src/app/cybercampus.rs` (`App::cybercampus()`) and the commands over it in `src-tauri/src/archive/cybercampus.rs`, `CybercampusSettings.svelte`, `CybercampusTasks.svelte` and `storage/cybercampus.rs`. The root `AGENTS.md` (project-wide rules) applies too.
 
 - `crates/core/src/archive/cybercampus/`: the opt-in eClass connector (#86, user decisions): `client.rs` session transport (`Reqwest::new` takes the app's `Rhythm/<version>` User-Agent), `credentials.rs` OS credential store, `parser.rs`, sync and the `Status` payload in `mod.rs`, synthetic `fixtures/`, and `fake.rs`, the scripted eClass that the app's tests also use (`test-support`). The app keeps only the `cybercampus_*` commands. Courses/deadlines persist in `storage/cybercampus.rs`.
 - **Contract:** `docs/ARCHITECTURE.md` "Cybercampus connector" (data model, sync, session and credentials, read-only boundary, privacy). Read it before changing the connector and change it with the code.

@@ -8,7 +8,7 @@ use crate::{
         cybercampus::client::Reqwest,
         model::{
             ArchivePage, ArchiveQuery, ArchiveSummary, DocumentDetail, SourceGroup, SourceInfo,
-            SubscribeResult, SyncStatus,
+            SubscribeResult, SyncMode, SyncStatus,
         },
         sync::{self, with_store},
     },
@@ -182,7 +182,7 @@ impl Archive<'_> {
     pub async fn start(
         &self,
         source_ids: Option<Vec<String>>,
-        mode: String,
+        mode: SyncMode,
     ) -> Result<SyncStatus, String> {
         let app = self.0;
         let source_ids = collected_ids(source_ids)?;

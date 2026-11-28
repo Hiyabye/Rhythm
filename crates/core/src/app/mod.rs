@@ -4,12 +4,15 @@
 //! later) keeps only windows, tray, menus and OS integration, and forwards
 //! [`Event`]s from [`App::events`] to its UI.
 //!
-//! The fields are public while the command areas move here one by one; once
-//! every area has its handle they become private.
+//! Every domain command area has its handle. The fields stay public while
+//! shell code (the mini window, the updater, startup) still reads them.
 
 mod ai;
 mod archive;
+mod backup;
 mod calendar;
+mod cybercampus;
+mod feed;
 mod meals;
 mod personalization;
 mod proactive;
@@ -20,7 +23,10 @@ mod tests;
 
 pub use ai::{Ai, AiSnapshot, DuplicateNotices};
 pub use archive::{original_link, Archive};
+pub use backup::Backup;
 pub use calendar::Calendar;
+pub use cybercampus::Cybercampus;
+pub use feed::Feed;
 pub use meals::Meals;
 pub use personalization::Personalization;
 pub use proactive::Proactive;
@@ -31,7 +37,7 @@ use crate::{
     archive::sync,
     data_lock::{lock_data_dir, DataDirLock},
     extensions::{self, Loop, Registry},
-    feed, intelligence,
+    intelligence,
     operation_gate::{self, AdmissionGate},
     paths,
     shell::{Event, Shell, Ui},
@@ -115,7 +121,7 @@ pub struct App {
     pub data_root: PathBuf,
     pub proactive: Arc<crate::proactive::Scheduler>,
     pub archive: Arc<sync::Controller>,
-    pub feed: Arc<feed::Controller>,
+    pub feed: Arc<crate::feed::Controller>,
     pub studium: Arc<crate::studium::controller::Controller>,
     pub studium_notifications: Arc<crate::studium::notification::Notifications>,
     pub network: crate::archive::Client,
@@ -211,7 +217,12 @@ impl App {
         let store = Arc::new(Mutex::new(store));
         let ui = Ui::new(config.shell);
         let operation_gate = Arc::new(AdmissionGate::default());
+        // Tests never reach the operating system's credential store.
+        #[cfg(not(test))]
         let archive = sync::Controller::for_identifier(&config.identifier);
+        #[cfg(test)]
+        let archive =
+            sync::Controller::with_connector(crate::archive::cybercampus::Connector::memory());
         let studium = crate::studium::controller::Controller::new();
         let studium_notifications = crate::studium::notification::Notifications::new(
             store.clone(),
@@ -226,7 +237,7 @@ impl App {
             format!("{} (local university notice archive)", config.user_agent).into_boxed_str(),
         );
         let network = crate::archive::network::Client::new(archive_agent).map_err(failed)?;
-        let feed = Arc::new(feed::Controller::default());
+        let feed = Arc::new(crate::feed::Controller::default());
         let proactive = crate::proactive::Scheduler::new(
             store.clone(),
             archive.clone(),
@@ -327,8 +338,20 @@ impl App {
         Ai(self)
     }
 
+    pub fn backup(&self) -> Backup<'_> {
+        Backup(self)
+    }
+
     pub fn calendar(&self) -> Calendar<'_> {
         Calendar(self)
+    }
+
+    pub fn cybercampus(&self) -> Cybercampus<'_> {
+        Cybercampus(self)
+    }
+
+    pub fn feed(&self) -> Feed<'_> {
+        Feed(self)
     }
 
     pub fn meals(&self) -> Meals<'_> {
@@ -386,11 +409,11 @@ impl App {
                 wanted(Loop::Feed),
                 || self.feed.wake(),
                 |stop| {
-                    self.runtime.spawn(feed::run_loop(
+                    self.runtime.spawn(crate::feed::run_loop(
                         self.feed.clone(),
                         self.store.clone(),
                         self.data_root.clone(),
-                        feed::transport::HttpsTransport::new(self.user_agent),
+                        crate::feed::transport::HttpsTransport::new(self.user_agent),
                         self.operation_gate.clone(),
                         self.maintenance_shutdown.clone(),
                         stop,

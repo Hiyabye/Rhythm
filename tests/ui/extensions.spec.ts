@@ -17,6 +17,10 @@ test('a blank profile shows only Today and the core settings', async ({ page }) 
   const panes = page.getByRole('navigation', { name: '설정 항목', exact: true }).getByRole('button');
   await expect(panes).toHaveText(['확장 기능', '일반', '데이터 및 정보']);
   await expect(page.getByRole('switch', { checked: true })).toHaveCount(0);
+  // The backend refuses the feed and Cybercampus reads while their extensions are off, so none is sent.
+  for (const command of ['feed_status', 'feed_sync', 'cybercampus_status', 'cybercampus_courses', 'cybercampus_tasks']) {
+    expect(await callCount(page, command), command).toBe(0);
+  }
 });
 
 test('turning an extension on adds its page, widget and settings, and off removes them', async ({ page }) => {
