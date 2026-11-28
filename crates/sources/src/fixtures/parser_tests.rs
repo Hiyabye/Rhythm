@@ -605,15 +605,21 @@ fn wrapped_iframe_body_is_iframe_only_but_wrapped_text_is_not() {
     assert_eq!(archived.resources.len(), 3, "attachments stay referenced");
     assert_eq!(viewer_pdf_resources(&archived).len(), 1);
     let mut value: Value = serde_json::from_str(captured).unwrap();
+    // Readable text beside the iframe is archived as an ordinary body.
+    value["data"]["content"] =
+        "<div class=\"iframe-wrapper\"><iframe src=\"/a\"></iframe><p>안내</p></div>".into();
+    let parsed = article(&source, &entry, &value.to_string()).unwrap();
+    assert!(!parsed.unsupported_body);
+    assert_eq!(parsed.body_text, "안내");
+    // An iframe wrapped in anything but the known viewer markup is an
+    // unexpected page, never an iframe-only notice.
     for content in [
-        "<div class=\"iframe-wrapper\"><iframe src=\"/a\"></iframe><p>안내</p></div>",
         "<div><table><tr><td><iframe src=\"/a\"></iframe></td></tr></table></div>",
         &format!("{}<iframe src=\"/a\"></iframe>", "<div>".repeat(100)),
     ] {
         value["data"]["content"] = content.into();
-        let parsed = article(&source, &entry, &value.to_string());
         assert!(
-            parsed.is_err() || !parsed.unwrap().unsupported_body,
+            article(&source, &entry, &value.to_string()).is_err(),
             "{content}"
         );
     }

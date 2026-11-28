@@ -6,7 +6,12 @@ use std::{collections::VecDeque, sync::Mutex as StdMutex};
 
 enum Reply {
     Http(u16),
+    /// A 302 to this `Location`.
+    Redirect(&'static str),
+    /// A 200 whose body of this many bytes arrives at once, with its length known.
+    Body(usize),
     ConnectionFailure,
+    #[cfg(feature = "studium")]
     Pending,
     /// A 200 whose body arrives as `chunks` blocks of `CHUNK` bytes, one
     /// every `every`.
@@ -87,7 +92,21 @@ impl Script {
                 .body("synthetic response")
                 .unwrap()
                 .into()),
+            Reply::Redirect(location) => Ok(http::Response::builder()
+                .status(302)
+                .header("Location", location)
+                .body("")
+                .unwrap()
+                .into()),
+            Reply::Body(size) => Ok(http::Response::builder()
+                .status(200)
+                .header("Content-Type", "text/html")
+                .header("ETag", "\"v2\"")
+                .body(vec![b'a'; size])
+                .unwrap()
+                .into()),
             Reply::ConnectionFailure => Err(Failure::Retry(CONNECTION_FAILED.into())),
+            #[cfg(feature = "studium")]
             Reply::Pending => std::future::pending().await,
             Reply::Trickle { chunks, every } => Ok(http::Response::builder()
                 .status(200)
@@ -102,6 +121,7 @@ impl Script {
         }
     }
 
+    #[cfg(feature = "studium")]
     fn assert_one_request(&self, url: &Url) {
         assert_eq!(
             self.lookups.lock().unwrap().as_slice(),
@@ -114,20 +134,24 @@ impl Script {
     }
 }
 
+#[cfg(feature = "studium")]
 fn public_addresses() -> Vec<SocketAddr> {
     vec!["8.8.8.8:444".parse().unwrap()]
 }
 
+#[cfg(feature = "studium")]
 fn status_url() -> Url {
     Url::parse(crate::studium::STATUS_URL).unwrap()
 }
 
+#[cfg(feature = "studium")]
 async fn get(client: &Client, url: &Url) -> Result<Fetch, FetchError> {
     client
         .get(url, None, 1024, &AtomicBool::new(false), Access::Studium)
         .await
 }
 
+#[cfg(feature = "studium")]
 #[tokio::test]
 async fn studium_client_makes_one_attempt_on_retriable_http_or_connection_failure() {
     for reply in [
@@ -142,6 +166,7 @@ async fn studium_client_makes_one_attempt_on_retriable_http_or_connection_failur
     }
 }
 
+#[cfg(feature = "studium")]
 #[tokio::test]
 async fn studium_client_refuses_each_redirect_without_a_second_request() {
     for status in [301, 302, 303, 307, 308] {
@@ -155,6 +180,7 @@ async fn studium_client_refuses_each_redirect_without_a_second_request() {
     }
 }
 
+#[cfg(feature = "studium")]
 #[tokio::test]
 async fn studium_client_only_missing_robots_policies_become_empty() {
     let url = Url::parse("https://libseat.sogang.ac.kr:444/robots.txt").unwrap();
@@ -187,6 +213,7 @@ async fn studium_client_only_missing_robots_policies_become_empty() {
     assert!(get(&client, &status_url()).await.is_err());
 }
 
+#[cfg(feature = "studium")]
 #[tokio::test]
 async fn studium_client_resolves_port_444_and_checks_every_dns_answer_before_send() {
     for addresses in [
@@ -218,6 +245,7 @@ async fn studium_client_resolves_port_444_and_checks_every_dns_answer_before_sen
     script.assert_one_request(&status_url());
 }
 
+#[cfg(feature = "studium")]
 #[tokio::test]
 async fn studium_client_rejects_unapproved_routes_before_resolving() {
     let (client, script) = Script::client(public_addresses(), vec![]);
@@ -233,6 +261,7 @@ async fn studium_client_rejects_unapproved_routes_before_resolving() {
     assert!(script.requests.lock().unwrap().is_empty());
 }
 
+#[cfg(feature = "studium")]
 #[tokio::test(start_paused = true)]
 async fn studium_client_deadline_ends_a_hung_attempt_without_retry() {
     let (client, script) = Script::client(public_addresses(), vec![Reply::Pending]);
@@ -246,6 +275,7 @@ async fn studium_client_deadline_ends_a_hung_attempt_without_retry() {
     script.assert_one_request(&status_url());
 }
 
+#[cfg(feature = "studium")]
 #[tokio::test(start_paused = true)]
 async fn studium_client_cancellation_stops_a_hung_attempt_without_retry() {
     let (client, script) = Script::client(public_addresses(), vec![Reply::Pending]);
@@ -271,12 +301,14 @@ async fn studium_client_cancellation_stops_a_hung_attempt_without_retry() {
     script.assert_one_request(&status_url());
 }
 
+#[cfg(feature = "studium")]
 async fn get_large(client: &Client, url: &Url) -> Result<Fetch, FetchError> {
     client
         .get(url, None, 4 << 20, &AtomicBool::new(false), Access::Studium)
         .await
 }
 
+#[cfg(feature = "studium")]
 #[tokio::test(start_paused = true)]
 async fn a_slow_body_within_its_deadline_completes() {
     // 1.25 MB over 60 s: what the collector's runner saw on se.sogang.ac.kr,
@@ -295,6 +327,7 @@ async fn a_slow_body_within_its_deadline_completes() {
     script.assert_one_request(&status_url());
 }
 
+#[cfg(feature = "studium")]
 #[tokio::test(start_paused = true)]
 async fn a_body_past_its_deadline_is_reported_as_a_timeout() {
     let (client, script) = Script::client(
@@ -400,4 +433,199 @@ async fn only_the_calendar_hosts_missing_robots_policy_becomes_empty() {
         BLOCKED
     );
     assert!(script.requests.lock().unwrap().is_empty());
+}
+
+const PAGE: &str = "https://klec.sogang.ac.kr/index.php?bbs_idx=1&pagekind=c&bbsid=00010";
+
+fn school_addresses() -> Vec<SocketAddr> {
+    vec!["8.8.8.8:443".parse().unwrap()]
+}
+
+async fn fetch(
+    client: &Client,
+    url: &str,
+    validators: Option<(Option<String>, Option<String>)>,
+    max_bytes: usize,
+    access: Access,
+) -> Result<Fetch, FetchError> {
+    let url = Url::parse(url).unwrap();
+    client
+        .get(&url, validators, max_bytes, &AtomicBool::new(false), access)
+        .await
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_body_over_the_callers_limit_is_refused_without_a_retry() {
+    // Announced by its length: refused before any byte is read.
+    let (client, script) = Script::client(school_addresses(), vec![Reply::Body(1025)]);
+    let error = fetch(&client, PAGE, None, 1024, Access::Source)
+        .await
+        .unwrap_err();
+    assert_eq!(error.message, TOO_LARGE);
+    assert_eq!(script.requests.lock().unwrap().len(), 1);
+    // Exactly the limit arrives.
+    let (client, _) = Script::client(school_addresses(), vec![Reply::Body(1024)]);
+    match fetch(&client, PAGE, None, 1024, Access::Source)
+        .await
+        .unwrap()
+    {
+        Fetch::Body { bytes, .. } => assert_eq!(bytes.len(), 1024),
+        _ => panic!("a body at the limit must arrive"),
+    }
+    // Without a length the limit applies while streaming.
+    let trickle = Reply::Trickle {
+        chunks: 3,
+        every: Duration::from_millis(10),
+    };
+    let (client, script) = Script::client(school_addresses(), vec![trickle]);
+    let error = fetch(&client, PAGE, None, 2 * CHUNK.len(), Access::Source)
+        .await
+        .unwrap_err();
+    assert_eq!(error.message, TOO_LARGE);
+    assert_eq!(script.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_source_request_is_tried_three_times_and_resolves_before_each() {
+    let replies = vec![Reply::Http(503), Reply::ConnectionFailure, Reply::Body(4)];
+    let (client, script) = Script::client(school_addresses(), replies);
+    let started = tokio::time::Instant::now();
+    assert!(matches!(
+        fetch(&client, PAGE, None, 1024, Access::Source).await,
+        Ok(Fetch::Body { .. })
+    ));
+    // Pauses of 1 s and 2 s between the attempts.
+    assert!(started.elapsed() >= Duration::from_secs(3));
+    assert_eq!(script.requests.lock().unwrap().len(), 3);
+    // Every attempt checks the DNS answers again before it connects.
+    assert_eq!(
+        script.lookups.lock().unwrap().as_slice(),
+        vec![("klec.sogang.ac.kr".to_string(), 443); 3]
+    );
+    // The third failure is final, and a refusal is never retried.
+    let replies = vec![Reply::Http(500), Reply::Http(500), Reply::Http(500)];
+    let (client, script) = Script::client(school_addresses(), replies);
+    let error = fetch(&client, PAGE, None, 1024, Access::Source)
+        .await
+        .unwrap_err();
+    assert_eq!(error.status, Some(500));
+    assert_eq!(script.requests.lock().unwrap().len(), 3);
+    let (client, script) = Script::client(school_addresses(), vec![Reply::Http(404)]);
+    let error = fetch(&client, PAGE, None, 1024, Access::Source)
+        .await
+        .unwrap_err();
+    assert_eq!(error.status, Some(404));
+    assert_eq!(script.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_redirect_is_returned_only_when_its_target_passes_the_policy() {
+    let target = "https://klec.sogang.ac.kr/index.php?bbs_idx=2&pagekind=c&bbsid=00010";
+    for location in [target, "/index.php?bbs_idx=2&pagekind=c&bbsid=00010"] {
+        let (client, script) = Script::client(school_addresses(), vec![Reply::Redirect(location)]);
+        match fetch(&client, PAGE, None, 1024, Access::Source)
+            .await
+            .unwrap()
+        {
+            Fetch::Redirect(url) => assert_eq!(url.as_str(), target),
+            _ => panic!("the client must hand the redirect to its caller"),
+        }
+        // The client itself never follows it.
+        assert_eq!(script.requests.lock().unwrap().len(), 1);
+    }
+    for location in [
+        "https://example.com/index.php?bbs_idx=2&pagekind=c&bbsid=00010",
+        "http://klec.sogang.ac.kr/index.php?bbs_idx=2&pagekind=c&bbsid=00010",
+        "https://klec.sogang.ac.kr/admin.php",
+        "https://127.0.0.1/",
+    ] {
+        let (client, script) = Script::client(school_addresses(), vec![Reply::Redirect(location)]);
+        let error = fetch(&client, PAGE, None, 1024, Access::Source)
+            .await
+            .unwrap_err();
+        assert_eq!(error.message, BLOCKED, "{location}");
+        assert_eq!(script.requests.lock().unwrap().len(), 1);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn only_another_hosts_unavailable_robots_policy_means_no_rules_for_an_image() {
+    let other = "https://images.example.com/robots.txt";
+    for status in [401, 403, 404, 410] {
+        let (client, _) = Script::client(school_addresses(), vec![Reply::Http(status)]);
+        match fetch(&client, other, None, 1024, Access::EmbeddedImage)
+            .await
+            .unwrap()
+        {
+            Fetch::Body { bytes, mime, .. } => {
+                assert!(bytes.is_empty());
+                assert_eq!(mime.as_deref(), Some("text/plain"));
+            }
+            _ => panic!("an unavailable robots policy must be an empty body"),
+        }
+    }
+    // A rate limit or a server error is not "no rules".
+    for (status, replies) in [(429, 1), (500, 3)] {
+        let replies = (0..replies).map(|_| Reply::Http(status)).collect();
+        let (client, _) = Script::client(school_addresses(), replies);
+        let error = fetch(&client, other, None, 1024, Access::EmbeddedImage)
+            .await
+            .unwrap_err();
+        assert_eq!(error.status, Some(status));
+    }
+    // Nor is a school host's error, nor another host's missing image.
+    for url in [
+        "https://scec.sogang.ac.kr/robots.txt",
+        "https://images.example.com/a.png",
+    ] {
+        let (client, _) = Script::client(school_addresses(), vec![Reply::Http(404)]);
+        let error = fetch(&client, url, None, 1024, Access::EmbeddedImage)
+            .await
+            .unwrap_err();
+        assert_eq!(error.status, Some(404), "{url}");
+    }
+    // Ordinary source access never reaches another host at all.
+    let (client, script) = Script::client(school_addresses(), vec![]);
+    let error = fetch(&client, other, None, 1024, Access::Source)
+        .await
+        .unwrap_err();
+    assert_eq!(error.message, BLOCKED);
+    assert!(script.lookups.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn not_modified_needs_the_validators_the_request_sent() {
+    let validators = Some((Some("\"v1\"".to_string()), Some("yesterday".to_string())));
+    let (client, script) = Script::client(school_addresses(), vec![Reply::Http(304)]);
+    assert!(matches!(
+        fetch(&client, PAGE, validators, 1024, Access::Source).await,
+        Ok(Fetch::NotModified)
+    ));
+    {
+        let requests = script.requests.lock().unwrap();
+        assert_eq!(requests[0].headers()[header::IF_NONE_MATCH], "\"v1\"");
+        assert_eq!(
+            requests[0].headers()[header::IF_MODIFIED_SINCE],
+            "yesterday"
+        );
+    }
+    // A 304 to a request that sent none would leave the caller without a document.
+    for validators in [None, Some((None, None))] {
+        let (client, _) = Script::client(school_addresses(), vec![Reply::Http(304)]);
+        assert!(fetch(&client, PAGE, validators, 1024, Access::Source)
+            .await
+            .is_err());
+    }
+    // A changed document carries its new validator.
+    let (client, _) = Script::client(school_addresses(), vec![Reply::Body(4)]);
+    match fetch(&client, PAGE, None, 1024, Access::Source)
+        .await
+        .unwrap()
+    {
+        Fetch::Body { etag, mime, .. } => {
+            assert_eq!(etag.as_deref(), Some("\"v2\""));
+            assert_eq!(mime.as_deref(), Some("text/html"));
+        }
+        _ => panic!("a 200 must be a body"),
+    }
 }

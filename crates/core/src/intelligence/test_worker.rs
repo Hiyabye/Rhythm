@@ -171,6 +171,7 @@ fn embeddings(dir: &std::path::Path, mode: &str, body: &str) -> (u16, String) {
     if dir.join("delay").exists() || (dir.join("embed-delay").exists() && first) {
         std::thread::sleep(std::time::Duration::from_secs(60));
     }
+    while dir.join("hold").exists() { std::thread::sleep(std::time::Duration::from_millis(10)); }
     match mode {
         "crash-on-embed" => std::process::exit(1),
         "bad-json" => return (200, "not-json".into()),
