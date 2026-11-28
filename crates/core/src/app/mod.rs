@@ -8,11 +8,15 @@
 //! every area has its handle they become private.
 
 mod archive;
+mod calendar;
+mod meals;
 mod settings;
 #[cfg(test)]
 mod tests;
 
 pub use archive::{original_link, Archive};
+pub use calendar::Calendar;
+pub use meals::Meals;
 pub use settings::{storage_error, Settings, Snapshot};
 
 use crate::{
@@ -272,6 +276,14 @@ impl App {
 
     pub fn archive(&self) -> Archive<'_> {
         Archive(self)
+    }
+
+    pub fn calendar(&self) -> Calendar<'_> {
+        Calendar(self)
+    }
+
+    pub fn meals(&self) -> Meals<'_> {
+        Meals(self)
     }
 
     fn views(&self) -> Option<&Arc<dyn StudiumViews>> {

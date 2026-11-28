@@ -265,6 +265,12 @@ impl Scheduler {
             .map_err(|_| "알림 이동 정보를 확인할 수 없습니다.".into())
     }
 
+    /// Records a clicked reminder's day as its click callback would.
+    #[cfg(test)]
+    pub(crate) fn set_reminder_activation(&self, day: &str) {
+        *self.pending_reminder.lock().unwrap() = Some(day.into());
+    }
+
     pub fn take_reminder_activation(&self) -> Result<Option<String>, String> {
         self.pending_reminder
             .lock()

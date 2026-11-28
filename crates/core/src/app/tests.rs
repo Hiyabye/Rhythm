@@ -238,6 +238,106 @@ async fn a_source_subscribes_only_while_its_extension_is_on() {
     app.shutdown().await;
 }
 
+#[tokio::test]
+async fn the_calendar_opens_only_while_its_extension_is_on() {
+    use crate::{
+        extensions::{CALENDAR, WEEK},
+        storage::calendar::TodoInput,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+    let (from, to) = ("2026-12-01", "2026-12-07");
+    let todo = TodoInput {
+        title: "보고서 제출".into(),
+        day: "2026-12-03".into(),
+        ..TodoInput::default()
+    };
+    let file = directory.path().join("calendar.ics");
+    let off = |error: String| assert!(error.contains("확장 기능"), "{error}");
+
+    // Everything off: the page's reads, switches, writes and export are closed.
+    off(app.calendar().todos(from, to).await.unwrap_err());
+    off(app.calendar().notice_dates(from, to).await.unwrap_err());
+    off(app.calendar().set_all_deadlines(true).await.unwrap_err());
+    off(app.calendar().set_academic(false).await.unwrap_err());
+    off(app.calendar().create_todo(&todo).await.unwrap_err());
+    off(app.calendar().export(&file).await.unwrap_err());
+    assert!(!file.exists());
+    // The reader is core: a notice's own dates need no extension.
+    assert!(app.archive().document_dates(1).await.unwrap().is_empty());
+
+    // The week pane shares the notice dates, nothing else.
+    app.settings().set_extension(WEEK, true).await.unwrap();
+    let dates = app.calendar().notice_dates(from, to).await.unwrap();
+    assert!(!dates.all_deadlines && dates.academic);
+    off(app.calendar().todos(from, to).await.unwrap_err());
+    off(app.calendar().set_all_deadlines(true).await.unwrap_err());
+
+    app.settings().set_extension(CALENDAR, true).await.unwrap();
+    let created = app.calendar().create_todo(&todo).await.unwrap();
+    assert_eq!(app.calendar().todos(from, to).await.unwrap(), [created]);
+    app.calendar().set_all_deadlines(true).await.unwrap();
+    app.calendar().set_academic(false).await.unwrap();
+    let dates = app.calendar().notice_dates(from, to).await.unwrap();
+    assert!(dates.all_deadlines && !dates.academic);
+    let exported = app.calendar().export(&file).await.unwrap();
+    assert_eq!((exported.todos, exported.deadlines), (1, 0));
+    assert!(std::fs::read_to_string(&file)
+        .unwrap()
+        .contains("SUMMARY:보고서 제출"));
+
+    // Off again: the todo and both switches are kept, and the week pane still
+    // reads the dates.
+    app.settings().set_extension(CALENDAR, false).await.unwrap();
+    off(app.calendar().todos(from, to).await.unwrap_err());
+    let dates = app.calendar().notice_dates(from, to).await.unwrap();
+    assert!(dates.all_deadlines && !dates.academic);
+    app.settings().set_extension(WEEK, false).await.unwrap();
+    off(app.calendar().notice_dates(from, to).await.unwrap_err());
+    app.settings().set_extension(CALENDAR, true).await.unwrap();
+    assert_eq!(app.calendar().todos(from, to).await.unwrap().len(), 1);
+    app.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_clicked_reminder_is_handed_over_once_and_only_while_the_calendar_is_on() {
+    use crate::extensions::CALENDAR;
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+
+    // A click that arrives with the calendar off is dropped, not kept for later.
+    app.proactive.set_reminder_activation("2026-12-03");
+    assert_eq!(app.calendar().reminder_activation().await.unwrap(), None);
+    app.settings().set_extension(CALENDAR, true).await.unwrap();
+    assert_eq!(app.calendar().reminder_activation().await.unwrap(), None);
+
+    app.proactive.set_reminder_activation("2026-12-03");
+    assert_eq!(
+        app.calendar().reminder_activation().await.unwrap(),
+        Some("2026-12-03".into())
+    );
+    assert_eq!(app.calendar().reminder_activation().await.unwrap(), None);
+    app.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_menu_opens_only_while_its_extension_is_on() {
+    use crate::extensions::MEALS;
+    let directory = tempfile::tempdir().unwrap();
+    let app = open(directory.path()).unwrap();
+    assert!(app.meals().weeks().await.unwrap_err().contains("식단"));
+
+    app.settings().set_extension(MEALS, true).await.unwrap();
+    let meals = app.meals().weeks().await.unwrap();
+    // No feed has synced, so there is no week; today is a calendar day.
+    assert!(meals.weeks.is_empty());
+    assert!(chrono::NaiveDate::parse_from_str(&meals.today, "%Y-%m-%d").is_ok());
+
+    app.settings().set_extension(MEALS, false).await.unwrap();
+    assert!(app.meals().weeks().await.is_err());
+    app.shutdown().await;
+}
+
 /// The core is the all-off state: nothing an extension owns is on or running.
 /// The classifier loop, scheduler and Studium receiver start idle, so only
 /// their effective settings and the absence of work and processes are asserted.

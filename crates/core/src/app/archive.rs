@@ -2,14 +2,17 @@
 //! Cybercampus jobs and local resources.
 
 use super::App;
-use crate::archive::{
-    app_collected, catalog,
-    cybercampus::client::Reqwest,
-    model::{
-        ArchivePage, ArchiveQuery, ArchiveSummary, DocumentDetail, SourceGroup, SourceInfo,
-        SubscribeResult, SyncStatus,
+use crate::{
+    archive::{
+        app_collected, catalog,
+        cybercampus::client::Reqwest,
+        model::{
+            ArchivePage, ArchiveQuery, ArchiveSummary, DocumentDetail, SourceGroup, SourceInfo,
+            SubscribeResult, SyncStatus,
+        },
+        sync::{self, with_store},
     },
-    sync::{self, with_store},
+    storage::notice_dates::NoticeDate,
 };
 use base64::Engine;
 use std::{path::PathBuf, sync::Arc};
@@ -112,6 +115,13 @@ impl Archive<'_> {
     ) -> Result<DocumentDetail, String> {
         let _lease = self.0.operation_gate.shared().await?;
         with_store(&self.0.store, |s| s.document(id, revision_id))
+    }
+
+    /// The dates found in one notice's text, for its reader. The reader is
+    /// core, so no extension gates them.
+    pub async fn document_dates(&self, id: i64) -> Result<Vec<NoticeDate>, String> {
+        let _lease = self.0.operation_gate.shared().await?;
+        with_store(&self.0.store, |s| s.notice_dates(id))
     }
 
     /// Fetches the body of an opened feed notice from the school; the reader
