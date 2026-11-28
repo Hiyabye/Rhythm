@@ -320,3 +320,12 @@ fn a_state_over_the_limit_is_refused() {
     let error = decompress_into(&zeros(101), &mut Vec::new(), 100).unwrap_err();
     assert!(error.contains("too large"), "{error}");
 }
+
+#[test]
+fn a_compressed_state_the_next_run_could_not_read_is_refused() {
+    let state = b"collector state";
+    let size = compress(state, usize::MAX).unwrap().len();
+    assert_eq!(compress(state, size).unwrap().len(), size);
+    let error = compress(state, size - 1).unwrap_err();
+    assert!(error.contains("not uploading"), "{error}");
+}

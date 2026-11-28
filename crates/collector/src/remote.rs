@@ -151,7 +151,7 @@ pub async fn upload<S: ObjectStore>(
         .vacuum_into(snapshot)
         .and_then(|()| fs::read(snapshot).map_err(|e| e.to_string()));
     let _ = fs::remove_file(snapshot);
-    store.put(&key, compress(&bytes?)?).await?;
+    store.put(&key, compress(&bytes?, r2::MAX_OBJECT)?).await?;
     Ok(key)
 }
 
@@ -165,12 +165,21 @@ pub async fn prune<S: ObjectStore>(store: &S, prefix: &str) -> Result<usize, Str
     Ok(old)
 }
 
-fn compress(bytes: &[u8]) -> Result<Vec<u8>, String> {
+/// Compresses the state and refuses a result over `limit` bytes: the next run
+/// could not read such a version back, and every run after it would fail.
+fn compress(bytes: &[u8], limit: usize) -> Result<Vec<u8>, String> {
     let mut encoder = zstd::Encoder::new(Vec::new(), LEVEL).map_err(|e| e.to_string())?;
     // The frame checksum catches a damaged object even before SQLite reads it.
     encoder.include_checksum(true).map_err(|e| e.to_string())?;
     encoder.write_all(bytes).map_err(|e| e.to_string())?;
-    encoder.finish().map_err(|e| e.to_string())
+    let compressed = encoder.finish().map_err(|e| e.to_string())?;
+    if compressed.len() > limit {
+        return Err(format!(
+            "the compressed state is {} bytes, over the {limit} a run can read back; not uploading",
+            compressed.len()
+        ));
+    }
+    Ok(compressed)
 }
 
 /// Streams the decompressed state into `out`, so a large state never sits in
